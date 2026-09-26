@@ -175,6 +175,9 @@ class FakePerms:
     def forget(self, chat_id):
         pass
 
+    async def admin_users(self, bot, chat_id):
+        return [a.user for a in await bot.get_chat_administrators(chat_id)]
+
 
 class FakeGreeter:
     def __init__(self):

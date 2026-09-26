@@ -6,6 +6,7 @@ from enum import IntEnum
 
 from telegram import Bot
 from telegram.constants import ChatMemberStatus
+from telegram.error import NetworkError, TelegramError, TimedOut
 
 from .config import Config
 from .db import DB, register_schema
@@ -40,6 +41,7 @@ class Permissions:
         self.db = db
         self._admin_cache: dict[int, tuple[float, set[int]]] = {}
         self._forgotten: set[int] = set()
+        self._admin_users: dict[int, tuple[float, list]] = {}  # 관리자 이름 (사칭 검사용)
         self.on_admins = None  # async fn(bot, chat_id, admins) — services 조립 때 연결
         self._owners: set[int] | None = None
         self.claim_code: str | None = None  # 오너가 없을 때만 생성, 서버 로그에만 출력
@@ -93,7 +95,15 @@ class Permissions:
                     "SELECT user_id FROM chat_admins WHERE chat_id=?", (chat_id,))}
                 self._admin_cache[chat_id] = (row["ts"], ids)
                 return ids
-        admins = await bot.get_chat_administrators(chat_id)
+        try:
+            admins = await bot.get_chat_administrators(chat_id)
+        except (TimedOut, NetworkError) as e:
+            # 텔레그램 연결이 잠깐 끊겨도 메시지 처리가 통째로 죽지 않게: 오래된 목록이라도 쓴다
+            stale = cached[1] if cached else await self._stored_admins(chat_id)
+            if stale is None:
+                raise
+            log.warning("관리자 목록 조회 실패(%s) → 저장된 목록 사용: chat %s", e, chat_id)
+            return stale
         ids = {a.user.id for a in admins if a.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)}
         if self.on_admins is not None:  # 관리자 이름도 이름 기록에 (namehist)
             try:
@@ -101,9 +111,30 @@ class Permissions:
             except Exception:
                 log.exception("admin name record failed")
         self._admin_cache[chat_id] = (now, ids)
+        self._admin_users[chat_id] = (now, [a.user for a in admins if a.status in (
+            ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)])
         self._forgotten.discard(chat_id)
         await self._store_admins(chat_id, ids, int(now))
         return ids
+
+    async def admin_users(self, bot: Bot, chat_id: int) -> list:
+        """관리자 User 목록 (이름 비교용). 캐시가 있으면 텔레그램에 다시 묻지 않는다. 연결 오류면 오래된 목록 / 빈 목록."""
+        cached = self._admin_users.get(chat_id)
+        if cached and time.time() - cached[0] < ADMIN_TTL:
+            return cached[1]
+        if not cached:  # DB 캐시엔 이름이 없어서 새로 받아야 함
+            self.forget(chat_id)
+        try:
+            await self.telegram_admins(bot, chat_id)
+        except TelegramError as e:
+            log.warning("관리자 이름 조회 실패: chat %s: %s", chat_id, e)
+        got = self._admin_users.get(chat_id) or cached
+        return got[1] if got else []
+
+    async def _stored_admins(self, chat_id: int) -> set[int] | None:
+        if not await self.db._one("SELECT 1 FROM chat_admins_fetched WHERE chat_id=?", (chat_id,)):
+            return None
+        return {r["user_id"] for r in await self.db._all("SELECT user_id FROM chat_admins WHERE chat_id=?", (chat_id,))}
 
     async def _store_admins(self, chat_id: int, ids: set[int], ts: int) -> None:
         conn = self.db.conn

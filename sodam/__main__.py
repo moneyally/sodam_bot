@@ -84,6 +84,9 @@ def main() -> None:
     app = (ApplicationBuilder()
            .token(cfg.telegram_token)
            .concurrent_updates(True)  # AI 응답을 기다리는 동안에도 도배 검사 등은 계속 돌게
+           # 기본 5초는 서버 네트워크가 잠깐 느려지면 메시지 처리가 끊김 → 넉넉하게
+           .connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
+           .get_updates_read_timeout(30)
            .post_init(post_init)
            .post_shutdown(post_shutdown)
            .build())

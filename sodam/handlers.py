@@ -286,7 +286,11 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await svc.db.touch_member(chat_id, user.id)
 
     text = msg.text or msg.caption or ""
-    role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
+    try:
+        role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
+    except TelegramError as e:  # 관리자 목록을 처음 받는 중 연결 오류: 일반 멤버로 보고 계속 (명령·게임·AI 는 동작)
+        log.warning("role lookup failed in %s: %s", chat_id, e)
+        role = Role.MEMBER
     scan = security.scan(text)
     if text:
         await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked)
@@ -300,9 +304,13 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             task = asyncio.create_task(_cas_background(context, chat_id, user))
             tasks.add(task)  # 참조를 잡아둬야 도중에 가비지 컬렉션되지 않음
             task.add_done_callback(tasks.discard)
-        notice = await svc.mod.check_impersonation(bot, chat_id, user)
-        if not notice:
-            notice = await svc.mod.check_message(bot, msg, text, game_active=svc.games.is_active(chat_id))
+        try:
+            notice = await svc.mod.check_impersonation(bot, chat_id, user)
+            if not notice:
+                notice = await svc.mod.check_message(bot, msg, text, game_active=svc.games.is_active(chat_id))
+        except (TimedOut, NetworkError) as e:  # 연결이 잠깐 끊겨도 메시지 처리(명령·게임·AI)는 계속
+            log.warning("moderation check skipped (network): %s", e)
+            notice = None
         if notice:
             await send_temp(context, chat_id, notice)
             return

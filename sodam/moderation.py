@@ -220,8 +220,7 @@ class Moderator:
             return None
 
         suspicious = None
-        for admin in await bot.get_chat_administrators(chat_id):
-            a = admin.user
+        for a in await self.perms.admin_users(bot, chat_id):
             if a.id == user.id or a.is_bot:
                 continue
             a_full = _squash(f"{a.first_name or ''}{a.last_name or ''}")
