@@ -161,15 +161,18 @@ class Billing:
             ts = int(t.get("block_timestamp", 0)) // 1000
             inv = next((p for p in pending if p["amount_units"] == value
                         and p["created"] - 120 <= ts <= p["expires"]), None)
-            # 거래 ID 는 한 번만 기록된다 (UNIQUE). 이미 본 거래면 건너뜀 → 이중 적용 불가
-            if not await self.db.record_payment(tx_id, inv["id"] if inv else None,
-                                                inv["chat_id"] if inv else None, value, t.get("from", ""), ts):
+            # 거래 ID 는 한 번만 기록된다 (UNIQUE). 이미 본 거래면 건너뜀 → 이중 적용 불가.
+            # 단, 기록 직후 죽어서 그 청구서가 아직 대기 중이면 연장을 다시 시도 (청구서는 pay_invoice 가 1번만 처리)
+            new = await self.db.record_payment(tx_id, inv["id"] if inv else None,
+                                               inv["chat_id"] if inv else None, value, t.get("from", ""), ts)
+            if not new and not (inv and await self.db.payment_invoice_id(tx_id) == inv["id"]):
                 continue
-            if inv and await self.db.mark_invoice_paid(inv["id"], tx_id):
-                until = await self.extend(inv["chat_id"], self.cfg.sub_days)
+            until = await self.db.pay_invoice(inv["id"], tx_id, inv["chat_id"], self.cfg.sub_days * 86400,
+                                              int(time.time())) if inv else None
+            if until is not None:
                 pending = [p for p in pending if p["id"] != inv["id"]]
                 paid.append({**dict(inv), "tx_id": tx_id, "until": until, "from": t.get("from", "")})
-            else:
+            elif new:
                 # 청구서가 없거나, 방금 취소·결제 처리돼서 반영 못 한 입금 → 돈은 들어왔으니 반드시 오너에게 보고
                 unmatched.append({"tx_id": tx_id, "amount_units": value, "from": t.get("from", ""), "ts": ts})
         await self.db.expire_invoices(now - LATE_GRACE)

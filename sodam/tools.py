@@ -16,9 +16,10 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.error import TelegramError
 
 from . import knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
+from .llm import BudgetExceeded
 from .permissions import Role
 from .services import PendingAction, Services
-from .settings import DEFAULTS, LABELS, coerce, render
+from .settings import DEFAULTS, LABELS, RANGES, coerce, render
 from .sports import SPORTS_KO, SportsError
 from .styles import STYLES, resolve_style
 from .util import display_name, esc, fmt_time, human_minutes, mention, period_since
@@ -35,6 +36,7 @@ class ToolCtx:
     role: Role
     settings: dict
     mentions: list[tuple[int, str]] = field(default_factory=list)
+    sanctioned: bool = False  # 이번 답변(run_agent 1회)에서 경고·뮤트·밴을 이미 했는지 → 인젝션으로 연속 제재 방지
 
 
 @dataclass
@@ -211,9 +213,12 @@ async def t_web_search(ctx: ToolCtx, a: dict) -> str:
         return "검색어가 비어 있음."
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     used = await ctx.svc.db.bump(day, ctx.chat_id, "web_search")
-    if used > ctx.settings["web_search_daily"]:
+    if used > min(ctx.settings["web_search_daily"], RANGES["web_search_daily"][1]):  # 예전에 저장된 큰 값도 상한으로
         return "오늘 이 방의 웹검색 한도를 다 썼음. 내일 다시 가능하다고 안내할 것."
-    result = await ctx.svc.llm.web_search(query)
+    try:
+        result = await ctx.svc.llm.web_search(query, ctx.chat_id)
+    except BudgetExceeded:
+        return "오늘 AI 사용량 한도를 다 써서 검색할 수 없음. 내일 다시 가능하다고 안내할 것."
     return result or "검색 결과 없음."
 
 
@@ -331,10 +336,21 @@ async def t_report_to_admin(ctx: ToolCtx, a: dict) -> str:
     if used > REPORTS_PER_DAY:
         return f"이 사람은 오늘 관리자 전달을 {REPORTS_PER_DAY}번 다 썼음. 내일 다시 가능하다고 안내할 것."
     where = "1:1 채팅" if ctx.chat_id > 0 else f"방 {ctx.chat_id}"
-    await ctx.svc.mod.report(
-        ctx.bot,
-        f"[멤버 전달] {where} / {mention(ctx.caller.id, display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}"
-        f"(<code>{ctx.caller.id}</code>)\n{esc(message)}")
+    text = (f"[멤버 전달] {where} / {mention(ctx.caller.id, display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}"
+            f"(<code>{ctx.caller.id}</code>)\n{esc(message)}")
+    await ctx.svc.mod.report(ctx.bot, text)  # 로그방·오너
+    if ctx.chat_id < 0:  # 그 방 텔레그램 관리자들에게도 1:1 로 (봇과 대화 안 시작한 관리자는 조용히 건너뜀)
+        try:
+            owners, admins = await ctx.svc.perms.owners(), await ctx.svc.perms.admin_users(ctx.bot, ctx.chat_id)
+        except TelegramError:
+            admins = []
+        for u in admins:
+            if u.is_bot or u.id in owners:  # 오너는 report 로 이미 받음
+                continue
+            try:
+                await ctx.bot.send_message(u.id, "📣 " + text, parse_mode="HTML")
+            except TelegramError:
+                pass
     return "관리자 개인 텔레그램으로 전달함. 전달했다고 짧게 안내할 것."
 
 
@@ -347,27 +363,48 @@ async def t_points_ranking(ctx: ToolCtx, a: dict) -> str:
 
 
 # ── 관리자 도구 ───────────────────────────────────────────
-async def t_warn(ctx: ToolCtx, a: dict) -> str:
+SANCTION_ONCE = "제재(경고·뮤트·밴)는 한 번의 요청에 한 번만 할 수 있음. 더 필요하면 관리자가 다시 요청하라고 안내할 것."
+
+
+def _sanction_used(ctx: ToolCtx) -> bool:
+    """대상 확인 뒤 부른다. 이미 제재했으면 True, 아니면 이번 제재를 기록하고 False."""
+    if ctx.sanctioned:
+        return True
+    ctx.sanctioned = True
+    return False
+
+
+SANCTION_LABEL = {"warn": "경고", "mute": "채팅 금지", "ban": "내보내기"}
+
+
+async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0) -> str:
+    """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action."""
     row, err = await _resolve(ctx, str(a.get("name", "")), for_sanction=True)
     if err:
         return err
-    text = await ctx.svc.mod.warn(ctx.bot, ctx.chat_id, row["user_id"], _row_name(row),
-                                  ctx.caller.id, str(a.get("reason", "관리자 판단"))[:100])
-    await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML")
-    return "경고 처리 완료 (안내 메시지는 이미 보냄)."
+    if _sanction_used(ctx):
+        return SANCTION_ONCE
+    reason = str(a.get("reason", "관리자 판단"))[:100]
+    key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, row["user_id"], _row_name(row), reason, ctx.caller.id,
+                                            minutes=minutes))
+    label = SANCTION_LABEL[kind] + (f" {human_minutes(minutes)}" if minutes else "")
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"✅ {SANCTION_LABEL[kind]}", callback_data=f"act:{key}:y"),
+        InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n"),
+    ]])
+    await ctx.bot.send_message(
+        ctx.chat_id,
+        f"⚠️ {mention(row['user_id'], _row_name(row))}님 <b>{label}</b> 할까요?\n사유: {esc(reason)}\n"
+        "(관리자만 누를 수 있고 2분 뒤 만료돼요)", parse_mode="HTML", reply_markup=kb)
+    return "확인 버튼을 보냈음. 관리자가 눌러야 실행된다고 짧게 안내할 것."
+
+
+async def t_warn(ctx: ToolCtx, a: dict) -> str:
+    return await _ask_sanction(ctx, "warn", a)
 
 
 async def t_mute(ctx: ToolCtx, a: dict) -> str:
-    row, err = await _resolve(ctx, str(a.get("name", "")), for_sanction=True)
-    if err:
-        return err
-    minutes = max(1, min(int(a.get("minutes", 30)), 7 * 1440))
-    try:
-        await ctx.svc.mod.mute(ctx.bot, ctx.chat_id, row["user_id"], minutes, ctx.caller.id,
-                               str(a.get("reason", "관리자 판단"))[:100])
-    except TelegramError as e:
-        return f"실패: {e.message}"
-    return f"{_row_name(row)} {human_minutes(minutes)} 채팅 금지 완료."
+    return await _ask_sanction(ctx, "mute", a, max(1, min(int(a.get("minutes", 30)), 7 * 1440)))
 
 
 async def t_unmute(ctx: ToolCtx, a: dict) -> str:
@@ -382,20 +419,7 @@ async def t_unmute(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_ban(ctx: ToolCtx, a: dict) -> str:
-    row, err = await _resolve(ctx, str(a.get("name", "")), for_sanction=True)
-    if err:
-        return err
-    reason = str(a.get("reason", "관리자 판단"))[:100]
-    key = ctx.svc.add_pending(PendingAction(ctx.chat_id, "ban", row["user_id"], _row_name(row), reason, ctx.caller.id))
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ 내보내기", callback_data=f"act:{key}:y"),
-        InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n"),
-    ]])
-    await ctx.bot.send_message(
-        ctx.chat_id,
-        f"🚫 {mention(row['user_id'], _row_name(row))}님을 내보낼까요?\n사유: {esc(reason)}\n(관리자만 누를 수 있고 2분 뒤 만료돼요)",
-        parse_mode="HTML", reply_markup=kb)
-    return "확인 버튼을 보냈음. 관리자가 눌러야 실행된다고 짧게 안내할 것."
+    return await _ask_sanction(ctx, "ban", a)
 
 
 async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
@@ -453,9 +477,9 @@ TOOLS: list[Tool] = [
     Tool("report_to_admin", "멤버가 관리자에게 전하고 싶은 말·신고·건의를 관리자 개인 텔레그램으로 전달한다 (1인 하루 5회).",
          {"message": {"type": "string", "description": "전달할 내용 요약 (500자 이내)"}}, ["message"], t_report_to_admin),
     # 관리자 전용
-    Tool("warn_member", "[관리자] 멤버에게 경고를 준다. 누적되면 자동 뮤트/밴.",
+    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (확인 버튼이 뜬다). 누적되면 자동 뮤트/밴.",
          {"name": {"type": "string"}, "reason": {"type": "string"}}, ["name", "reason"], t_warn, Role.ADMIN),
-    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다.",
+    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (확인 버튼이 뜬다).",
          {"name": {"type": "string"}, "minutes": {"type": "integer", "description": "1~10080"},
           "reason": {"type": "string"}}, ["name", "minutes"], t_mute, Role.ADMIN),
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN),

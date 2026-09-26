@@ -74,7 +74,8 @@ class Moderator:
     async def unlock(self, bot: Bot, chat_id: int, actor_id: int) -> None:
         """잠그기 전 권한으로 되돌린다. 저장된 게 없으면 일반 멤버 기본 권한."""
         saved = await self.db.get_state(chat_id, "saved_permissions")
-        perms = ChatPermissions(**saved) if saved else DEFAULT_MEMBER_PERMISSIONS
+        # de_json: 저장 뒤 PTB/API 에 생긴·없어진 필드가 있어도 TypeError 없이 (모르는 건 api_kwargs 로)
+        perms = ChatPermissions.de_json(saved, bot) if saved else DEFAULT_MEMBER_PERMISSIONS
         await bot.set_chat_permissions(chat_id, perms, use_independent_chat_permissions=True)
         await self.db.set_state(chat_id, "locked", None)
         await self.db.set_state(chat_id, "saved_permissions", None)

@@ -62,13 +62,16 @@ _DURATION = re.compile(r"^(\d+)\s*(m|min|분|h|시간|d|일|w|주)?$", re.I)
 _UNIT_MIN = {"m": 1, "min": 1, "분": 1, "h": 60, "시간": 60, "d": 1440, "일": 1440, "w": 10080, "주": 10080}
 
 
+MAX_DURATION_MIN = 366 * 1440  # 이보다 길면 None (timedelta OverflowError·텔레그램 한도 방지)
+
+
 def parse_duration(text: str) -> int | None:
-    """'30m', '2시간', '1d', '45' → 분. 형식이 아니면 None."""
+    """'30m', '2시간', '1d', '45' → 분. 형식이 아니거나 366일을 넘으면 None."""
     m = _DURATION.match(text.strip())
     if not m:
         return None
-    unit = (m.group(2) or "m").lower()
-    return int(m.group(1)) * _UNIT_MIN[unit]
+    minutes = int(m.group(1)) * _UNIT_MIN[(m.group(2) or "m").lower()]
+    return minutes if minutes <= MAX_DURATION_MIN else None
 
 
 def human_minutes(minutes: int) -> str:

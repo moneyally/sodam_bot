@@ -40,6 +40,9 @@ class HarnessPerms:
     async def owners(self):
         return {OWNER}
 
+    async def candidate_chats(self, uid):
+        return [CHAT]
+
     async def is_admin(self, bot, cid, uid):
         return uid == OWNER or (cid < 0 and uid in self.tg | self.bot_admins)
 

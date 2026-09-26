@@ -48,6 +48,17 @@ DEALER_DESCRIPTION = ("🃏 딜러 소담이 그룹에서 포인트 게임을 �
                       "P는 게임 포인트예요. 충전·환전·선물 기능은 없어요.")
 
 
+async def set_profile(bot, dealer: bool) -> None:
+    """명령 메뉴·소개 등록. 네트워크 오류로 봇 시작이 멈추지 않게 실패는 로그만."""
+    try:
+        await bot.set_my_commands([] if dealer else handlers.BOT_MENU)
+        # 봇 프로필·검색 결과에 보이는 소개
+        await bot.set_my_short_description(DEALER_SHORT_DESCRIPTION if dealer else BOT_SHORT_DESCRIPTION)
+        await bot.set_my_description(DEALER_DESCRIPTION if dealer else BOT_DESCRIPTION)
+    except TelegramError as e:
+        logging.info("bot commands/description not updated: %s", e)
+
+
 def _log_in_local_time(tz) -> None:
     """서버가 UTC 여도 로그 시각은 .env 의 TIMEZONE(기본 한국시간)으로."""
     from datetime import datetime
@@ -67,12 +78,7 @@ def main() -> None:
         app.bot_data.update(svc=build_services(cfg, db), limiter=handlers.RateLimiter(),
                             chats=set(), joins={}, cas_seen=set(), tasks=set())
         dealer = cfg.bot_role == "dealer"
-        await app.bot.set_my_commands([] if dealer else handlers.BOT_MENU)
-        try:  # 봇 프로필·검색 결과에 보이는 소개
-            await app.bot.set_my_short_description(DEALER_SHORT_DESCRIPTION if dealer else BOT_SHORT_DESCRIPTION)
-            await app.bot.set_my_description(DEALER_DESCRIPTION if dealer else BOT_DESCRIPTION)
-        except TelegramError as e:
-            logging.info("bot description not updated: %s", e)
+        await set_profile(app.bot, dealer)
         svc: Services = app.bot_data["svc"]
         code = await svc.perms.prepare_claim_code()
         if code:

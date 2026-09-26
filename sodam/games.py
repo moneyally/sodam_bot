@@ -117,7 +117,7 @@ class Game:
                 log.warning("game finish send failed: %s", e)
 
     async def ai_json(self, system: str, user: str) -> dict:
-        return await self.svc.llm.json(system, user, model=self.svc.cfg.guard_model, max_tokens=2500)
+        return await self.svc.llm.json(system, user, model=self.svc.cfg.guard_model, max_tokens=2500, chat_id=self.chat_id)
 
     # 하위 클래스가 구현
     async def begin(self) -> None: ...

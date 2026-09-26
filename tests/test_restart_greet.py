@@ -73,12 +73,15 @@ async def greet_tool_missing_name_logged_and_guided():
         def emit(self, rec):
             logs.append(rec.getMessage())
     h = H()
-    logging.getLogger("sodam.agent").addHandler(h)
-    logging.getLogger("sodam.agent").setLevel(logging.INFO)
+    lg = logging.getLogger("sodam.agent")
+    level = lg.level
+    lg.setLevel(logging.INFO)
+    lg.addHandler(h)
     try:
         m = await r.say(BOSS, "소담아 Major님 입장 인사드려")
     finally:
-        logging.getLogger("sodam.agent").removeHandler(h)
+        lg.removeHandler(h)
+        lg.setLevel(level)
     assert "못 찾은 이름: Major" in seen["tool"] and "이름 그대로" in seen["tool"]
     assert "멘션이 자동으로" not in seen["tool"]
     assert any("greet_members" in x and "Major" in x for x in logs), logs

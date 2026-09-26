@@ -17,7 +17,8 @@ from .settings import DEFAULTS, LABELS, coerce, render
 from .sports import SportsError
 from .styles import STYLES, resolve_style, style_list
 from .games import GAME_LIST
-from .util import display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int, user_name
+from .util import (_DURATION, display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int,
+                   user_name)
 
 log = logging.getLogger(__name__)
 
@@ -450,6 +451,9 @@ async def c_mute(ctx: CmdCtx) -> None:
         return
     uid, name, rest = t
     minutes = parse_duration(rest[0]) if rest else None
+    if minutes is None and rest and _DURATION.match(rest[0]):  # 시간 형식인데 366일 초과
+        await ctx.reply("뮤트 시간은 최대 366일까지예요.")
+        return
     reason = " ".join(rest[1:] if minutes else rest) or "관리자 판단"
     minutes = minutes or 30
     await _safe(ctx, ctx.svc.mod.mute(ctx.bot, ctx.chat_id, uid, minutes, ctx.user.id, reason),
@@ -848,6 +852,14 @@ async def c_subscribe(ctx: CmdCtx) -> None:
         await ctx.reply("관리자만 쓸 수 있는 명령어예요.")
         return
     if ctx.chat_id < 0:
+        try:  # 결제 화면(금액)은 텔레그램 관리자·오너만 (봇관리자 제외), 캐시 말고 지금 상태로
+            svc.perms.forget(ctx.chat_id)
+            tg_admin = await svc.perms.is_tg_admin(ctx.bot, ctx.chat_id, ctx.user.id)
+        except TelegramError:
+            tg_admin = False
+        if not tg_admin:
+            await _private_notice(ctx, "이용 기간·연장은 텔레그램 방 관리자만 볼 수 있어요.")
+            return
         if await subscription.send_panel_dm(svc, ctx.bot, ctx.chat_id, ctx.user.id):
             await _private_notice(ctx, "🔒 관리자님, 봇과의 1:1 채팅을 확인해주세요.")
         else:
@@ -855,11 +867,11 @@ async def c_subscribe(ctx: CmdCtx) -> None:
                                   subscription.setup_button(ctx.bot.username, ctx.chat_id), seconds=60)
         return
     rows = []
-    for chat_id in await svc.db.all_chat_ids():
+    for chat_id in await svc.perms.candidate_chats(ctx.user.id):  # 후보 방만 (방 전체에 관리자 조회 안 돌게)
         if chat_id >= 0:
             continue
         try:
-            if not await svc.perms.is_admin(ctx.bot, chat_id, ctx.user.id):
+            if not await svc.perms.is_tg_admin(ctx.bot, chat_id, ctx.user.id):
                 continue
         except TelegramError:
             continue  # 봇이 나간 방

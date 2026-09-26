@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class PendingAction:
-    """관리자 확인 버튼이 필요한 동작 (밴 등)."""
+    """관리자 확인 버튼이 필요한 동작 (경고·뮤트·밴)."""
     chat_id: int
     kind: str
     target_id: int
@@ -34,6 +34,7 @@ class PendingAction:
     reason: str
     requested_by: int
     expires: float = field(default_factory=lambda: time.time() + 120)
+    minutes: int = 0   # mute 기간
 
 
 @dataclass

@@ -60,7 +60,7 @@ class ScriptedLLM:
         item = queue.pop(0)
         return item(user) if callable(item) else item
 
-    async def classify_injection(self, text):
+    async def classify_injection(self, text, chat_id=None):
         self.calls.append({"kind": "classify", "text": text})
         return self.injection, "테스트 판별"
 

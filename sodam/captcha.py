@@ -34,9 +34,12 @@ class Captcha:
         self._warned: set[int] = set()
 
     async def start(self, bot: Bot, chat_id: int, user: User) -> bool:
-        """캡차를 걸면 True. 봇 권한이 없어서 못 걸면 False (그냥 입장 처리)."""
+        """캡차를 걸면 True (이미 뮤트된 사람도 True: 인사 없이 제한 유지). 봇 권한이 없어서 못 걸면 False (그냥 입장 처리)."""
         s = await self.svc.db.get_settings(chat_id)
         minutes = s["captcha_minutes"]
+        if await self._muted(bot, chat_id, user.id):
+            # 뮤트된 사람이 나갔다 재입장: 캡차를 걸면 통과·전송 실패 때 _lift 가 뮤트까지 풀어버림 → 제한 그대로 두고 끝
+            return True
         try:
             await bot.restrict_chat_member(chat_id, user.id, ChatPermissions.no_permissions())
         except TelegramError as e:
@@ -112,11 +115,16 @@ class Captcha:
             await self._fail(bot, row["chat_id"], row["user_id"], "캡차 시간 초과", None)
 
     async def cancel(self, bot: Bot, chat_id: int, user_id: int) -> None:
-        """캡차 도중 나간 경우: 기록과 안내 메시지만 정리."""
+        """캡차 도중 나간 경우: 기록·안내 메시지 정리 + 캡차 제한 해제
+        (안 풀면 재입장 때 '이미 뮤트된 사람'으로 보여 캡차 없이 영영 막힘. 다시 들어오면 캡차를 새로 받는다)."""
         row = await self.svc.db.get_captcha(chat_id, user_id)
         if row:
             await self.svc.db.delete_captcha(chat_id, user_id)
             await self._delete(bot, chat_id, row["message_id"])
+            try:
+                await self._lift(bot, chat_id, user_id)
+            except TelegramError as e:
+                log.info("captcha cancel lift failed: %s", e)
 
     # ── 내부 ──────────────────────────────────────────────
     async def _name(self, chat_id: int, user_id: int) -> str:
@@ -129,6 +137,16 @@ class Captcha:
                 await bot.delete_message(chat_id, message_id)
             except TelegramError:
                 pass
+
+    async def _muted(self, bot: Bot, chat_id: int, user_id: int) -> bool:
+        """이미 채팅 금지(뮤트 등)된 상태인지. 조회 실패면 False → 원래대로 캡차
+        (새 입장자를 검사 없이 들이는 것보다 낫고, 뮤트된 사람이 재입장하는 순간 조회까지 실패하는 경우는 드묾)."""
+        try:
+            m = await bot.get_chat_member(chat_id, user_id)
+        except TelegramError as e:
+            log.info("captcha member lookup failed: %s", e)
+            return False
+        return m.status == "restricted" and getattr(m, "can_send_messages", True) is False
 
     async def _lift(self, bot: Bot, chat_id: int, user_id: int) -> None:
         # 모든 권한 True = 개인 제한 해제 (이후 방 기본 권한을 따름)
@@ -153,6 +171,8 @@ class Captcha:
     async def _fail(self, bot: Bot, chat_id: int, user_id: int, reason: str, actor_id: int | None,
                     force_kick: bool = False) -> None:
         row = await self.svc.db.get_captcha(chat_id, user_id)
+        if row is None and not force_kick:
+            return  # 만료 목록을 뽑은 뒤 그 사이 정답을 누른 경우 등 → 이미 끝난 캡차
         await self.svc.db.delete_captcha(chat_id, user_id)
         await self._delete(bot, chat_id, row["message_id"] if row else None)
         self.svc.joins.pop((chat_id, user_id), None)  # 강퇴 후 바로 재입장해도 캡차를 다시 받게

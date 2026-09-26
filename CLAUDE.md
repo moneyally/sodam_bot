@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 273개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 315개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -46,6 +46,12 @@
 - 먼저 끼어들기(`ai_chime_in`)는 **기본 꺼짐**. 켜도 120분 간격·하루 4회, 관리자 공지 직후·게임 중엔 안 함.
 - 단톡방 답 길이: 요청 맨 끝(tail)에 '1~3문장, 목록·제안 문장 없이' 를 매번 붙인다 (실측: 평균 ~110자).
 - 라이브 점검: `python tools/ai_live.py` (실제 OpenAI, 가짜 텔레그램) · 오프라인: `python tools/ai_dryrun.py`.
+- AI 제재(경고·뮤트·밴)는 **항상 확인 버튼** (`tools._ask_sanction` → `handlers._confirm_action`), 한 번 답변에 1회만. 대화 속 숨은 지시로 제재 안 되게.
+- 방 AI 토큰 한도 `ai_room_daily_tokens` 는 기본값=상한(60만)이라 방 관리자는 줄이기만 가능. 0=무제한 없음.
+- 재시작 때 쌓인 업데이트는 버리지 않음(`drop_pending_updates=False`, 입장 놓침 방지). 5분 넘은 메시지엔 AI 답 생략(`util.is_stale`).
+- `.말투 X` 한 단어 = 본인 말투. 태그·답장·설명이 붙으면 AI 가 대상 판단(`set_member_style` 관리자 전용).
+- 결제 처리+연장은 `db.pay_invoice` 로 DB 스레드에서 한 번에 (공유 연결이라 중간 commit 끼어듦 방지).
+- 버그 수정은 뮤테이션 검증: 고친 줄을 되돌리면 그 테스트가 FAIL 해야 함 (tests/test_fix_*.py).
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (32상황, 목표 엉뚱한 멘션 0).
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)

@@ -161,8 +161,12 @@ class FakeQuery:
 
 
 class FakePerms:
-    def __init__(self, admins=()):
+    def __init__(self, admins=(), db=None):
         self.admins = set(admins)
+        self.db = db
+
+    async def candidate_chats(self, user_id):
+        return await self.db.all_chat_ids() if self.db else []
 
     async def protected(self, bot, chat_id, uid):
         return uid in self.admins or uid == bot.id
@@ -237,7 +241,7 @@ async def make_svc(db: DB, *, admins=(), cas_banned=(), **cfg_kw) -> Services:
     from sodam.captcha import Captcha
     from sodam.games import GameManager
     c = cfg(db.path, **cfg_kw)
-    perms = FakePerms(admins)
+    perms = FakePerms(admins, db)
     svc = Services(cfg=c, db=db, perms=perms, mod=Moderator(c, db, perms), llm=None, sports=None,
                    cas=FakeCas(cas_banned), backup=None)
     svc.games = GameManager(svc)

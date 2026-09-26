@@ -176,6 +176,11 @@ async def r_refresh(c: PanelCtx) -> Screen:
     return screen
 
 
+def _cell(v: str) -> str:
+    """CSV 수식 주입 방지: 엑셀이 수식으로 읽는 글자로 시작하면 앞에 ' (이름은 멤버가 마음대로 정함)."""
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
+
 async def r_export(c: PanelCtx) -> Screen:
     now = time.time()
     if now - _csv_last.get(c.uid, 0) < CSV_GAP:
@@ -194,7 +199,7 @@ async def r_export(c: PanelCtx) -> Screen:
     w.writerow(["user_id", "name", "username", "admin", "joined", "last_seen", "messages_90d"])
     tz = c.svc.cfg.tz
     for r in rows:
-        w.writerow([r["user_id"], display_name(r["first_name"], r["last_name"], None), r["username"] or "",
+        w.writerow([r["user_id"], _cell(display_name(r["first_name"], r["last_name"], None)), r["username"] or "",
                     "Y" if r["user_id"] in admins else "", fmt_time(r["joined_at"], tz, "%Y-%m-%d") if r["joined_at"] else "",
                     fmt_time(r["last_seen"], tz, "%Y-%m-%d %H:%M") if r["last_seen"] else "", counts.get(r["user_id"], 0)])
     data = ("﻿" + buf.getvalue()).encode("utf-8")  # 엑셀에서 한글 안 깨지게 BOM

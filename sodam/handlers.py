@@ -15,8 +15,8 @@ from datetime import datetime
 from datetime import time as dtime
 
 from openai import OpenAIError
-from telegram import (Bot, BotCommand, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update,
-                      User)
+from telegram import (Bot, BotCommand, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+                      ReplyParameters, Update, User)
 from telegram.constants import ChatAction, ChatMemberStatus, ChatType
 from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
@@ -30,7 +30,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .services import Services
 from .tools import ToolCtx
-from .util import RateLimiter, day_start, esc, is_stale, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
+from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
@@ -319,8 +319,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if role < Role.ADMIN and await svc.perms.bot_can_moderate(bot, chat_id):
         s = await svc.db.get_settings(chat_id)
         cas_seen: set = context.bot_data["cas_seen"]
-        if s["cas_enabled"] and user.id not in cas_seen:
-            cas_seen.add(user.id)
+        if s["cas_enabled"] and (chat_id, user.id) not in cas_seen:  # 방마다 (밴은 그 방에서만 하니까)
+            cas_seen.add((chat_id, user.id))
             tasks: set = context.bot_data["tasks"]
             task = asyncio.create_task(_cas_background(context, chat_id, user))
             tasks.add(task)  # 참조를 잡아둬야 도중에 가비지 컬렉션되지 않음
@@ -432,11 +432,15 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         await send_temp(context, chat_id, "⏳ 조금만 천천히 불러주세요!", 10)
         return
 
+    # 무료 한도 먼저: 한도를 넘은 사람의 긴 메시지가 2층 AI 판별(유료 호출)을 무제한으로 부르지 않게
+    if not await _within_ai_quota(context, chat_id, user.id, role):
+        return
+
     # 인젝션 방어: 1층 규칙 → 애매하거나 긴 요청만 2층 AI 판별
     if s["injection_guard"] and role < Role.OWNER:
         blocked, reason = scan.blocked, ", ".join(scan.hits)
         if not blocked and (scan.suspicious or len(request) > 150):
-            blocked, reason = await svc.llm.classify_injection(request)
+            blocked, reason = await svc.llm.classify_injection(request, chat_id=chat_id)
         if blocked:
             await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
             text = "🛡️ 그 요청은 들어드릴 수 없어요."
@@ -447,9 +451,6 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
             await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
                                       f"{esc(request[:200])} / {esc(reason)}")
             return
-
-    if not await _within_ai_quota(context, chat_id, user.id, role):
-        return
 
     await svc.db.log_request(chat_id, user.id, request)
     try:
@@ -491,7 +492,9 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     body = esc(out)
     if ctx.mentions:
         body = " ".join(mention(uid, name) for uid, name in dict(ctx.mentions).items()) + " " + body
-    sent = await msg.reply_text(body, parse_mode="HTML")
+    # 기다리는 동안 원본이 지워져도 답은 가게 (1:1 은 원래대로 인용 없이)
+    reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if chat_id < 0 else None
+    sent = await msg.reply_text(body, parse_mode="HTML", reply_parameters=reply)
     await svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True)
     await memory.record_turn(svc.db, chat_id, user.id, via, request, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
@@ -527,7 +530,10 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     if not action or action.expires < time.time():
         svc.pending.pop(key, None)
         await q.answer("만료된 요청이에요.")
-        await q.edit_message_reply_markup(None)
+        try:
+            await q.edit_message_reply_markup(None)
+        except TelegramError:  # 이미 버튼이 없거나 메시지가 지워진 경우
+            pass
         return
     if not await svc.perms.is_admin(bot, action.chat_id, q.from_user.id):
         await q.answer("관리자만 누를 수 있어요.", show_alert=True)
@@ -539,12 +545,21 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         return
     # 버튼이 떠 있는 동안 대상이 관리자가 됐을 수도 있으니 다시 확인
     if await svc.perms.protected(bot, action.chat_id, action.target_id):
-        await q.edit_message_text("대상이 관리자라서 내보낼 수 없어요.")
+        await q.edit_message_text("대상이 관리자라서 제재할 수 없어요.")
         return
+    who, by = mention(action.target_id, action.target_name), esc(user_name(q.from_user))
     try:
-        await svc.mod.ban(bot, action.chat_id, action.target_id, q.from_user.id, action.reason)
-        await q.edit_message_text(f"🚫 {mention(action.target_id, action.target_name)}님을 내보냈어요. "
-                                  f"(처리: {esc(user_name(q.from_user))})", parse_mode="HTML")
+        if action.kind == "warn":
+            text = await svc.mod.warn(bot, action.chat_id, action.target_id, action.target_name,
+                                      q.from_user.id, action.reason)
+            await q.edit_message_text(f"{text}\n(처리: {by})", parse_mode="HTML")
+        elif action.kind == "mute":
+            await svc.mod.mute(bot, action.chat_id, action.target_id, action.minutes, q.from_user.id, action.reason)
+            await q.edit_message_text(f"🔇 {who}님 {human_minutes(action.minutes)} 채팅 금지했어요. (처리: {by})",
+                                      parse_mode="HTML")
+        else:
+            await svc.mod.ban(bot, action.chat_id, action.target_id, q.from_user.id, action.reason)
+            await q.edit_message_text(f"🚫 {who}님을 내보냈어요. (처리: {by})", parse_mode="HTML")
     except TelegramError as e:
         await q.edit_message_text(f"실패했어요: {esc(e.message)}")
 

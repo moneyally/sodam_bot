@@ -686,13 +686,13 @@ class DB:
             "SELECT * FROM invoices WHERE chat_id=? AND user_id=? AND status='pending' AND expires>? "
             "ORDER BY id DESC LIMIT 1", (chat_id, user_id, now_ts))
 
+    _EXTEND_SQL = ("INSERT INTO subscriptions(chat_id, paid_until, updated_at) VALUES(?, ?, ?) "
+                   "ON CONFLICT(chat_id) DO UPDATE SET paid_until = MAX(?, COALESCE(paid_until, 0), "
+                   "COALESCE(trial_until, 0)) + ?, updated_at = ?")
+
     async def extend_paid(self, chat_id: int, seconds: int, now_ts: int) -> int:
         """paid_until = max(지금, 유료 만료, 체험 만료) + seconds 를 한 문장으로 (동시 실행에도 안전)."""
-        await self._write(
-            "INSERT INTO subscriptions(chat_id, paid_until, updated_at) VALUES(?, ?, ?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET paid_until = MAX(?, COALESCE(paid_until, 0), "
-            "COALESCE(trial_until, 0)) + ?, updated_at = ?",
-            (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
+        await self._write(self._EXTEND_SQL, (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
         return (await self.get_subscription(chat_id))["paid_until"]
 
     async def migrate_chat(self, old: int, new: int) -> None:
@@ -729,7 +729,35 @@ class DB:
         return await self._all("SELECT * FROM invoices WHERE status='pending' AND expires>?", (expires_after,))
 
     async def pending_amounts(self, expires_after: int) -> set[int]:
-        return {r["amount_units"] for r in await self.pending_invoices(expires_after)}
+        """새 청구서가 피해야 할 금액. 취소한 청구서도 유효시간(+여유) 동안은 그 금액으로 입금이 올 수 있어서 포함."""
+        return {r["amount_units"] for r in await self._all(
+            "SELECT amount_units FROM invoices WHERE status IN ('pending', 'cancelled') AND expires>?", (expires_after,))}
+
+    async def pay_invoice(self, invoice_id: int, tx_id: str, chat_id: int, seconds: int, now_ts: int) -> int | None:
+        """청구서 결제 처리 + 구독 연장을 한 번에. 연결을 같이 쓰는 다른 코루틴의 commit 이 두 문장 사이에 끼면
+        '결제됨인데 연장 안 됨'이 남을 수 있어서, DB 스레드에서 두 문장을 연달아 실행한다.
+        이미 처리·취소된 청구서면 None, 성공하면 새 만료 시각."""
+        def run(c) -> bool:
+            c.execute("SAVEPOINT pay")
+            try:
+                ok = c.execute("UPDATE invoices SET status='paid', tx_id=? WHERE id=? AND status='pending'",
+                               (tx_id, invoice_id)).rowcount > 0
+                if ok:
+                    c.execute(self._EXTEND_SQL, (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
+            except BaseException:
+                c.execute("ROLLBACK TO pay")   # 이 두 문장만 되돌림 (다른 코루틴의 쓰기는 건드리지 않음)
+                raise
+            finally:
+                c.execute("RELEASE pay")
+            c.commit()
+            return ok
+        if not await self.conn._execute(run, self.conn._conn):
+            return None
+        return (await self.get_subscription(chat_id))["paid_until"]
+
+    async def payment_invoice_id(self, tx_id: str) -> int | None:
+        row = await self._one("SELECT invoice_id FROM payments WHERE tx_id=?", (tx_id,))
+        return row["invoice_id"] if row else None
 
     async def mark_invoice_paid(self, invoice_id: int, tx_id: str) -> bool:
         cur = await self.conn.execute(

@@ -107,7 +107,11 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         if not ok:
             await q.answer("그 방의 관리자만 결제할 수 있어요.", show_alert=True)
             return
-        inv = await svc.billing.create_invoice(chat_id, q.from_user.id)
+        try:
+            inv = await svc.billing.create_invoice(chat_id, q.from_user.id)
+        except RuntimeError as e:  # 대기 청구서가 너무 많음 → 버튼이 빙글빙글 돌지 않게 안내
+            await q.answer(str(e), show_alert=True)
+            return
         await q.answer()
         await bot.send_message(q.from_user.id, invoice_text(svc, inv, await chat_title(svc, chat_id)),
                                parse_mode="HTML", reply_markup=invoice_buttons(inv["id"]))
