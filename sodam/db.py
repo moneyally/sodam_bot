@@ -193,9 +193,15 @@ def now() -> int:
 EXTRA_SCHEMA: list[str] = []
 
 
-def register_schema(sql: str) -> None:
+def register_schema(sql: str, *, migrate: dict[str, str] | None = None) -> None:
+    """migrate = {테이블: "composite"|"plain"|"drop"} — 그룹이 슈퍼그룹으로 바뀔 때 chat_id 를 어떻게 옮길지.
+    composite: chat_id 가 PK 일부 (UPDATE OR IGNORE 후 옛 행 삭제) · plain: 그냥 UPDATE · drop: 옛 행 삭제(캐시)."""
     if sql not in EXTRA_SCHEMA:
         EXTRA_SCHEMA.append(sql)
+    EXTRA_MIGRATE.update(migrate or {})
+
+
+EXTRA_MIGRATE: dict[str, str] = {}
 
 
 class DB:
@@ -698,6 +704,13 @@ class DB:
             await self.conn.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
         for t in plain:
             await self.conn.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+        for t, kind in EXTRA_MIGRATE.items():
+            if kind == "composite":
+                await self.conn.execute(f"UPDATE OR IGNORE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+            if kind in ("composite", "drop"):
+                await self.conn.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
+            elif kind == "plain":
+                await self.conn.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
         await self.conn.commit()
         self._settings_cache.pop(old, None)
         self._settings_cache.pop(new, None)

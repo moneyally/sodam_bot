@@ -190,7 +190,9 @@ def register_main(order: int, code: str, label: str, need: int = PUBLIC) -> None
 
 async def admin_groups(svc: Services, bot: Bot, user_id: int) -> list[tuple[int, str]]:
     out = []
-    for chat_id in await svc.db.all_chat_ids():
+    candidates = getattr(svc.perms, "candidate_chats", None)
+    chat_ids = await candidates(user_id) if candidates else await svc.db.all_chat_ids()
+    for chat_id in chat_ids:
         if chat_id >= 0:
             continue
         try:

@@ -8,9 +8,24 @@ from telegram import Bot
 from telegram.constants import ChatMemberStatus
 
 from .config import Config
-from .db import DB
+from .db import DB, register_schema
 
 log = logging.getLogger(__name__)
+ADMIN_TTL = 300            # 메모리·DB 캐시 유효 시간
+ADMIN_STALE = 86400        # 이보다 오래된 방은 '내 그룹' 목록 후보에 다시 넣어 새로 확인
+
+# 텔레그램 관리자 목록 캐시 (재시작 후에도 빠르게, '내 그룹 관리' 목록을 방 전체 조회 없이 만들려고)
+register_schema("""
+CREATE TABLE IF NOT EXISTS chat_admins (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS chat_admins_fetched (
+    chat_id INTEGER PRIMARY KEY,
+    ts      INTEGER NOT NULL
+);
+""", migrate={"chat_admins": "drop", "chat_admins_fetched": "drop"})
 
 
 class Role(IntEnum):
@@ -24,6 +39,7 @@ class Permissions:
         self.cfg = cfg
         self.db = db
         self._admin_cache: dict[int, tuple[float, set[int]]] = {}
+        self._forgotten: set[int] = set()
         self._owners: set[int] | None = None
         self.claim_code: str | None = None  # 오너가 없을 때만 생성, 서버 로그에만 출력
 
@@ -65,16 +81,50 @@ class Permissions:
 
     # ── 관리자 ────────────────────────────────────────────
     async def telegram_admins(self, bot: Bot, chat_id: int) -> set[int]:
+        now = time.time()
         cached = self._admin_cache.get(chat_id)
-        if cached and time.time() - cached[0] < 300:
+        if cached and now - cached[0] < ADMIN_TTL:
             return cached[1]
+        if chat_id not in self._forgotten:  # 재시작 직후: DB 에 최근 목록이 있으면 그대로
+            row = await self.db._one("SELECT ts FROM chat_admins_fetched WHERE chat_id=?", (chat_id,))
+            if row and now - row["ts"] < ADMIN_TTL:
+                ids = {r["user_id"] for r in await self.db._all(
+                    "SELECT user_id FROM chat_admins WHERE chat_id=?", (chat_id,))}
+                self._admin_cache[chat_id] = (row["ts"], ids)
+                return ids
         admins = await bot.get_chat_administrators(chat_id)
         ids = {a.user.id for a in admins if a.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)}
-        self._admin_cache[chat_id] = (time.time(), ids)
+        self._admin_cache[chat_id] = (now, ids)
+        self._forgotten.discard(chat_id)
+        await self._store_admins(chat_id, ids, int(now))
         return ids
 
+    async def _store_admins(self, chat_id: int, ids: set[int], ts: int) -> None:
+        conn = self.db.conn
+        await conn.execute("DELETE FROM chat_admins WHERE chat_id=?", (chat_id,))
+        await conn.executemany("INSERT OR IGNORE INTO chat_admins(chat_id, user_id) VALUES(?, ?)",
+                               [(chat_id, uid) for uid in ids])
+        await conn.execute("INSERT INTO chat_admins_fetched(chat_id, ts) VALUES(?, ?) "
+                           "ON CONFLICT(chat_id) DO UPDATE SET ts=excluded.ts", (chat_id, ts))
+        await conn.commit()
+
     def forget(self, chat_id: int) -> None:
+        """관리자 변경·결제 판단 등: 다음 확인은 메모리·DB 캐시 모두 건너뛰고 텔레그램에 묻는다."""
         self._admin_cache.pop(chat_id, None)
+        self._forgotten.add(chat_id)
+
+    async def candidate_chats(self, user_id: int) -> list[int]:
+        """'내 그룹 관리' 목록 후보 (방 전체에 getChatAdministrators 를 돌리지 않게).
+        그 사람이 관리자로 기록된 방 + 봇관리자로 등록된 방 + 아직 목록을 안 받았거나 오래된 방. 최종 판단은 is_admin."""
+        if user_id in await self.owners():
+            return [r["chat_id"] for r in await self.db._all("SELECT chat_id FROM chats WHERE chat_id < 0")]
+        rows = await self.db._all(
+            "SELECT c.chat_id FROM chats c LEFT JOIN chat_admins_fetched f ON f.chat_id=c.chat_id "
+            "WHERE c.chat_id < 0 AND (f.ts IS NULL OR f.ts < ? "
+            "  OR EXISTS(SELECT 1 FROM chat_admins a WHERE a.chat_id=c.chat_id AND a.user_id=?) "
+            "  OR EXISTS(SELECT 1 FROM bot_admins b WHERE b.chat_id=c.chat_id AND b.user_id=?))",
+            (int(time.time()) - ADMIN_STALE, user_id, user_id))
+        return [r["chat_id"] for r in rows]
 
     async def role(self, bot: Bot, chat_id: int, user_id: int) -> Role:
         if user_id in await self.owners():
