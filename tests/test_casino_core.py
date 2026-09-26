@@ -241,6 +241,36 @@ async def repeated_game_commands_are_not_spam():
 
 
 @test
+async def dealer_sodam_comments_in_room_style():
+    db, svc, bot, ctx = await setup(values=[3, 3])
+    await say(ctx, A, "!가입")
+    r = await say(ctx, A, "!홀짝 1000 홀")
+    assert "딜러 소담" in r and ("대표님" in r or "습니다" in r or "요" in r)
+    await db.set_setting(CHAT, "style", "free")                         # 자유분방 방 → 반말 딜러
+    r = await say(ctx, A, "!홀짝 1000 홀")
+    line = r.split("딜러 소담</b>: ")[1]
+    from sodam.casino import dealer
+    assert line in dealer.LINES["free"]["win"] + dealer.LINES["free"]["jackpot"]
+
+
+@test
+async def bot_roles_split_main_and_dealer():
+    import dataclasses
+    db, svc, bot, ctx = await setup(values=[3])
+    svc.cfg = dataclasses.replace(svc.cfg, bot_role="main")             # 메인 봇: ! 명령은 무시 (딜러 봇 몫)
+    assert await say(ctx, A, "!가입") == "" and not await core.account(db, CHAT, A.id)
+    svc.cfg = dataclasses.replace(svc.cfg, bot_role="dealer")           # 딜러 봇: ! 명령만
+    m = FakeMsg(CHAT, A, "!가입")
+    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup"), None
+    await handlers.on_dealer_group(SimpleNamespace(message=m), ctx)
+    assert "가입 완료" in m.replies[-1]
+    m = FakeMsg(CHAT, A, "소담아 안녕")                                  # 딜러 봇은 일반 대화엔 반응 안 함
+    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup"), None
+    await handlers.on_dealer_group(SimpleNamespace(message=m), ctx)
+    assert not m.replies
+
+
+@test
 async def unknown_bang_text_is_ignored():
     db, svc, bot, ctx = await setup()
     assert await say(ctx, A, "!!!") == "" and await say(ctx, A, "!ㅋㅋ") == ""

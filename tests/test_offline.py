@@ -149,7 +149,6 @@ def settings_coerce():
 
 @test
 def hangul_games():
-    assert games.chosung("사과나무") == "ㅅㄱㄴㅁ"
     assert games.dueum("력") == "역" and games.dueum("녀") == "여" and games.dueum("라") == "나"
     assert games.dueum("기") == "기"
     assert games.starts_for("노력") == {"력", "역"}

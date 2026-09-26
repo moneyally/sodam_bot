@@ -201,7 +201,7 @@ async def expired_room_gating():
     assert "start=sub_" in notice[3]["reply_markup"].inline_keyboard[0][0].url
     assert await handlers._within_ai_quota(ctx, CHAT, 1, Role.OWNER)            # 오너는 제한 없음
 
-    assert "이용 기간" in await svc.games.start(bot, CHAT, 20, "업다운")
+    assert "이용 기간" in await svc.games.start(bot, CHAT, 20, "끝말잇기")
     await db.add_schedule(CHAT, kind="interval", at_time=None, interval_min=30, title="t", text="x",
                           media_type=None, media_id=None, pin=False, created_by=1)
     await db.conn.execute("UPDATE schedules SET last_sent=0")
@@ -211,7 +211,7 @@ async def expired_room_gating():
 
     await svc.billing.extend(CHAT, 30)
     assert await handlers._within_ai_quota(ctx, CHAT, 20, Role.MEMBER)
-    assert "시작" in await svc.games.start(bot, CHAT, 20, "업다운")
+    assert "시작" in await svc.games.start(bot, CHAT, 20, "끝말잇기")
 
 
 # ── 결제 화면 (1:1 전용) ──────────────────────────────────

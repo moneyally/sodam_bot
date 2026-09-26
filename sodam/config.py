@@ -42,10 +42,14 @@ class Config:
     free_ai_per_day: int = 10
     invoice_minutes: int = 60
     trongrid_api_key: str = ""
+    # all: 한 봇이 전부 / main: 포인트 게임(!) 빼고 전부 / dealer: 포인트 게임만 (게임 전용 딜러 봇)
+    # 같은 DB_PATH 를 쓰면 포인트·방 설정·구독을 두 봇이 같이 본다
+    bot_role: str = "all"
 
 
 def load_config() -> Config:
-    load_dotenv()
+    # 봇을 두 개(메인·딜러) 켤 때: SODAM_ENV=.env.dealer python -m sodam
+    load_dotenv(os.getenv("SODAM_ENV", ".env"))
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not token:
@@ -84,7 +88,15 @@ def load_config() -> Config:
         free_ai_per_day=max(0, int(os.getenv("FREE_AI_PER_DAY", "10"))),
         invoice_minutes=min(180, max(10, int(os.getenv("INVOICE_MINUTES", "60")))),
         trongrid_api_key=os.getenv("TRONGRID_API_KEY", "").strip(),
+        bot_role=_role(os.getenv("BOT_ROLE", "")),
     )
+
+
+def _role(raw: str) -> str:
+    role = raw.strip().lower() or "all"
+    if role not in ("all", "main", "dealer"):
+        raise SystemExit("BOT_ROLE 은 all / main / dealer 중 하나로 적어주세요.")
+    return role
 
 
 def _pay_address(raw: str) -> str:

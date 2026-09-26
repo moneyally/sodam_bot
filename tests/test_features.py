@@ -20,7 +20,6 @@ from sodam.backup import Backup
 from sodam.cas import Cas
 from sodam.commands import CmdCtx
 from sodam.db import DB
-from sodam.games import Quiz
 from sodam.moderation import DEFAULT_MEMBER_PERMISSIONS
 from sodam.permissions import Role
 from sodam.services import PendingAction
@@ -512,19 +511,6 @@ async def ban_confirm_rechecks_admin():
     q = FakeQuery(CHAT, fake_user(1, "관리자"))
     await handlers._confirm_action(svc, bot, q, [key, "y"])
     assert not bot.named("ban") and "관리자" in q.edits[-1]
-    await db.close()
-
-
-@test
-async def quiz_callback_bad_data():
-    db = await make_db()
-    svc = await make_svc(db)
-    quiz = Quiz(svc.games, FakeBot(), CHAT, 1)
-    quiz.token, quiz.round, quiz.answers = "abc", 0, {}
-    for parts in (["abc", "x", "1"], ["abc", "0"], ["zzz", "0", "1"], ["abc", "0", "-1"]):
-        q = FakeQuery(CHAT, fake_user(5, "a"))
-        await quiz.on_callback(q, parts)
-        assert q.answers and "지난" in (q.answers[0][0] or ""), parts
     await db.close()
 
 

@@ -42,6 +42,11 @@ BOT_DESCRIPTION = ("🕵️ 멤버가 이름·@아이디를 바꾸면 알려주�
                    "🤖 AI 비서, 게임, 예약공지, 채팅 통계\n\n"
                    "그룹에 추가하고 관리자로 지정하면 바로 시작돼요.")
 
+DEALER_SHORT_DESCRIPTION = "소통방 포인트 게임 딜러 · 홀짝·슬롯·바카라·블랙잭·그래프·경마"
+DEALER_DESCRIPTION = ("🃏 딜러 소담이 그룹에서 포인트 게임을 진행해요.\n"
+                      "!가입 → !채굴 · !출석 으로 포인트 모으고 → !도움 에서 게임 고르기\n"
+                      "P는 게임 포인트예요. 충전·환전·선물 기능은 없어요.")
+
 
 def _log_in_local_time(tz) -> None:
     """서버가 UTC 여도 로그 시각은 .env 의 TIMEZONE(기본 한국시간)으로."""
@@ -61,10 +66,11 @@ def main() -> None:
         await db.open()
         app.bot_data.update(svc=build_services(cfg, db), limiter=handlers.RateLimiter(),
                             chats=set(), joins={}, cas_seen=set(), tasks=set())
-        await app.bot.set_my_commands(handlers.BOT_MENU)
+        dealer = cfg.bot_role == "dealer"
+        await app.bot.set_my_commands([] if dealer else handlers.BOT_MENU)
         try:  # 봇 프로필·검색 결과에 보이는 소개
-            await app.bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
-            await app.bot.set_my_description(BOT_DESCRIPTION)
+            await app.bot.set_my_short_description(DEALER_SHORT_DESCRIPTION if dealer else BOT_SHORT_DESCRIPTION)
+            await app.bot.set_my_description(DEALER_DESCRIPTION if dealer else BOT_DESCRIPTION)
         except TelegramError as e:
             logging.info("bot description not updated: %s", e)
         svc: Services = app.bot_data["svc"]
@@ -103,7 +109,7 @@ def main() -> None:
            .post_init(post_init)
            .post_shutdown(post_shutdown)
            .build())
-    handlers.register(app, cfg.tz, cfg.backup_time)
+    handlers.register(app, cfg.tz, cfg.backup_time, cfg.bot_role)
     # chat_member 는 명시적으로 받아야 오는 업데이트 (입장 메시지를 숨긴 방에서도 입장 감지)
     try:
         app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

@@ -221,6 +221,7 @@ class DB:
         self.conn = await pending
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode=WAL")
+        await self.conn.execute("PRAGMA busy_timeout=5000")  # 딜러 봇과 같은 DB 를 쓸 때 잠깐 잠겨도 기다림
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)

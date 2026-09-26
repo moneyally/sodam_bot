@@ -10,7 +10,7 @@ import asyncio
 
 from ..util import esc
 from . import Ctx, register
-from .core import balance, fmt, result_line, rng, settle, split_bet, take_bet
+from .core import balance, finish, fmt, rng, split_bet, take_bet
 
 DICE_WAIT = 3.5   # 애니메이션 끝날 때까지 (테스트에선 0)
 
@@ -54,8 +54,7 @@ async def g_oddeven(ctx: Ctx) -> None:
     v = await _roll(ctx, "🎲")
     got = "홀" if v % 2 else "짝"
     payout = int(bet * 1.95) if got == pick else 0
-    bal = await settle(ctx, bet, payout, "oddeven")
-    await ctx.reply(f"🎲 {v} → <b>{got}</b> ({esc(pick)} 선택)\n" + result_line(bet, payout, bal))
+    await finish(ctx, "oddeven", bet, payout, f"🎲 {v} → <b>{got}</b> ({esc(pick)} 선택)")
 
 
 # ── 🎲 주사위 숫자 ────────────────────────────────────────
@@ -77,8 +76,7 @@ async def g_dice(ctx: Ctx) -> None:
     else:
         high = pick in ("높음", "하이")
         payout = int(bet * 1.95) if (v >= 4) == high else 0
-    bal = await settle(ctx, bet, payout, "dice")
-    await ctx.reply(f"🎲 <b>{v}</b> ({esc(pick)} 선택)\n" + result_line(bet, payout, bal))
+    await finish(ctx, "dice", bet, payout, f"🎲 <b>{v}</b> ({esc(pick)} 선택)")
 
 
 # ── 🎰 슬롯 ───────────────────────────────────────────────
@@ -97,9 +95,8 @@ async def g_slot(ctx: Ctx) -> None:
     reels = slot_reels(v)
     mult = SLOT_PAY[reels[0]] if reels[0] == reels[1] == reels[2] else 0
     payout = bet * mult
-    bal = await settle(ctx, bet, payout, "slot")
     head = "🎊 <b>잭팟!!! 777</b>\n" if mult == 30 else ""
-    await ctx.reply(f"{head}🎰 {' | '.join(reels)}\n" + result_line(bet, payout, bal))
+    await finish(ctx, "slot", bet, payout, f"{head}🎰 {' | '.join(reels)}")
 
 
 # ── 🏀⚽🎯🎳 스포츠 한 방 ─────────────────────────────────
@@ -125,8 +122,7 @@ def _sport(name: str):
             return
         v = await _roll(ctx, emoji)
         payout = int(bet * mult) if v in wins else 0
-        bal = await settle(ctx, bet, payout, name)
-        await ctx.reply(f"{emoji} {'성공!' if payout else '아깝다…'}\n" + result_line(bet, payout, bal))
+        await finish(ctx, name, bet, payout, f"{emoji} {'성공!' if payout else '아깝다…'}")
     return play
 
 
@@ -164,8 +160,7 @@ async def g_roulette(ctx: Ctx) -> None:
     n = rng(37)
     color = "🟢" if n == 0 else ("🔴" if n in REDS else "⚫")
     payout = bet * roulette_win(n, pick)
-    bal = await settle(ctx, bet, payout, "roulette")
-    await ctx.reply(f"🎡 빙글빙글… {color} <b>{n}</b> ({esc(pick)} 선택)\n" + result_line(bet, payout, bal))
+    await finish(ctx, "roulette", bet, payout, f"🎡 빙글빙글… {color} <b>{n}</b> ({esc(pick)} 선택)")
 
 
 # ── 🪜 사다리 ─────────────────────────────────────────────
@@ -202,10 +197,10 @@ async def g_ladder(ctx: Ctx) -> None:
         return
     result = LADDER[rng(4)]
     payout = int(bet * ladder_payout(result, pick))
-    bal = await settle(ctx, bet, payout, "ladder")
     start, lines, end = result
-    await ctx.reply(f"🪜 출발 <b>{start}</b>\n<code>{LADDER_ART[lines]}</code>\n{lines}줄 → 도착 <b>{end}</b>  "
-                    f"(<b>{start}{lines}{end}</b>, {esc(pick)} 선택)\n" + result_line(bet, payout, bal))
+    await finish(ctx, "ladder", bet, payout,
+                 f"🪜 출발 <b>{start}</b>\n<code>{LADDER_ART[lines]}</code>\n{lines}줄 → 도착 <b>{end}</b>  "
+                 f"(<b>{start}{lines}{end}</b>, {esc(pick)} 선택)")
 
 
 register(("홀짝", "oddeven"), g_oddeven, usage="금액 홀|짝", help="🎲 ×1.95", group="주사위·슬롯")

@@ -261,7 +261,9 @@ async def c_points(ctx: CmdCtx) -> None:
 
 async def c_game(ctx: CmdCtx) -> None:
     if not ctx.args:
-        await ctx.reply(f"🎮 게임 종류: {GAME_LIST}\n예: <code>.게임 초성퀴즈</code>\n\n🎰 포인트 게임(홀짝·슬롯·바카라…)은 <code>!가입</code> 후 <code>!도움</code>")
+        await ctx.reply(f"🔗 말 게임: {GAME_LIST} (<code>.게임 끝말잇기</code>)\n\n"
+                        "🎰 <b>포인트 게임</b>: 홀짝·슬롯·바카라·블랙잭·그래프·경마…\n"
+                        "<code>!가입</code> 후 <code>!도움</code> 으로 전체 목록")
         return
     await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, ctx.args[0])))
 
@@ -275,11 +277,6 @@ async def c_stop_game(ctx: CmdCtx) -> None:
         await ctx.reply("게임을 시작한 분이나 관리자만 끝낼 수 있어요.")
         return
     await ctx.svc.games.stop(ctx.chat_id)
-
-
-async def c_answer(ctx: CmdCtx) -> None:
-    if not await ctx.svc.games.on_text(ctx.msg, "정답 " + ctx.argstr):
-        await ctx.reply("정답을 받을 게임이 없어요.")
 
 
 async def c_style(ctx: CmdCtx) -> None:
@@ -904,7 +901,6 @@ COMMANDS: list[Cmd] = [
     Cmd(("검색", "search"), c_search, usage="키워드", help="대화 검색 (최근 30일)", group="집계"),
     Cmd(("게임", "game"), c_game, usage="[종류]", help="게임 시작", group="게임"),
     Cmd(("게임종료", "stopgame"), c_stop_game, help="게임 끝내기", group="게임"),
-    Cmd(("정답", "answer"), c_answer, usage="단어", help="스무고개 정답", group="게임"),
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘 축구|팀 이름|결과 이름|구독 이름|해제 이름|목록]",
         help="경기 일정·결과·알림", group="스포츠"),

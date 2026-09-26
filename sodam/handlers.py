@@ -15,7 +15,8 @@ from datetime import datetime
 from datetime import time as dtime
 
 from openai import OpenAIError
-from telegram import Bot, BotCommand, ChatMember, Message, Update, User
+from telegram import (Bot, BotCommand, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update,
+                      User)
 from telegram.constants import ChatAction, ChatMemberStatus, ChatType
 from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
@@ -329,7 +330,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not text:
         return
 
-    if text.startswith("!") and await casino.dispatch(svc, bot, msg, chat_id, user, role, text):
+    if text.startswith("!") and svc.cfg.bot_role != "main" and \
+            await casino.dispatch(svc, bot, msg, chat_id, user, role, text):
         return  # 포인트 게임 (! 명령)
 
     parsed = commands.parse(text, bot.username)
@@ -459,10 +461,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = q.data or ""
     prefix, _, rest = data.partition(":")
     parts = rest.split(":") if rest else []
-    if prefix == "qz":
-        await svc.db.upsert_user(q.from_user)
-        await svc.games.on_callback(q, parts)
-    elif prefix == "cap":
+    if prefix == "cap":
         await svc.captcha.on_callback(bot, q, parts)
     elif prefix == "an":
         await svc.announcer.on_callback(bot, q, parts)
@@ -714,7 +713,47 @@ BOT_MENU = [
 ]
 
 
-def register(app: Application, tz, backup_time: str = "05:00") -> None:
+# ── 게임 전용 딜러 봇 (BOT_ROLE=dealer) ──────────────────
+async def on_dealer_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """딜러 봇: 그룹의 '!' 명령만 처리 (관리·AI·인사는 메인 봇 몫)."""
+    msg = update.message
+    if not msg or not msg.from_user or msg.sender_chat:
+        return
+    svc, bot = _svc(context), context.bot
+    text = (msg.text or "").strip()
+    if not text.startswith("!"):
+        return
+    await svc.db.ensure_chat(msg.chat_id, msg.chat.title)
+    await svc.db.upsert_user(msg.from_user)
+    await svc.db.touch_member(msg.chat_id, msg.from_user.id)
+    await casino.dispatch(svc, bot, msg, msg.chat_id, msg.from_user, Role.MEMBER, text)
+
+
+async def on_dealer_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    bot = context.bot
+    await msg.reply_text(
+        "🃏 <b>딜러 소담</b>이에요. 그룹에서 포인트 게임을 진행해요.\n"
+        "그룹에 추가하고 <code>!가입</code> → <code>!도움</code>\n"
+        "(P는 게임 포인트예요. 돈으로 바꿀 수 없어요)",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+            "➕ 그룹에 딜러 추가", url=f"https://t.me/{bot.username}?startgroup=true")]]))
+
+
+def register_dealer(app: Application) -> None:
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & filters.Regex(r"^!"), on_dealer_group))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE, on_dealer_private))
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
+
+
+def register(app: Application, tz, backup_time: str = "05:00", role: str = "all") -> None:
+    if role == "dealer":
+        register_dealer(app)
+        return
     groups = filters.ChatType.GROUPS
     app.add_handler(TypeHandler(Update, on_any_update), group=-1)  # 이름 기록 (다른 처리보다 먼저, 막지 않음)
     # 반응·가입 요청·수정된 메시지는 기록만 하면 돼서 별도 처리 없음 (TypeHandler 가 봄)

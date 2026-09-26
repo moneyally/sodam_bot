@@ -398,7 +398,7 @@ async def weird_digits_do_not_crash():
         assert msg.replies, text                                        # 예외 없이 안내
     assert not bot.named("unban")
     assert await db.find_members(CHAT, "²") == []
-    await svc.games.start(bot, CHAT, 1, "업다운")                       # 업다운 진행 중에 '²' 입력
+    await svc.games.start(bot, CHAT, 1, "끝말잇기")                       # 업다운 진행 중에 '²' 입력
     assert svc.games.is_active(CHAT)
     assert not await svc.games.on_text(FakeMsg(CHAT, admin, "²"), "²")
     svc.games.active.pop(CHAT).cancel_timer()
