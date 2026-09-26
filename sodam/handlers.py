@@ -473,6 +473,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await namehist.on_callback(svc, bot, q, parts)
     elif prefix == "act":
         await _confirm_action(svc, bot, q, parts)
+    elif prefix == "cs":
+        await casino.on_callback(svc, bot, q, parts)
     else:
         await q.answer()
 

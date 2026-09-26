@@ -90,6 +90,28 @@ async def dispatch(svc, bot, msg, chat_id: int, user, role, text: str) -> bool:
     return True
 
 
+# ── 버튼 콜백 (접두어 cs:<게임>:...) ─────────────────────
+CALLBACKS: dict[str, Callable[..., Awaitable[None]]] = {}
+
+
+def register_callback(game: str, fn) -> None:
+    """버튼 콜백 등록: 'cs:<game>:...' 을 누르면 fn(svc, bot, q, 나머지 parts). fn 은 q.answer() 를 한 번 부른다."""
+    if game in CALLBACKS and CALLBACKS[game] is not fn:
+        raise ValueError(f"카지노 콜백 이름 겹침: {game}")
+    CALLBACKS[game] = fn
+
+
+async def on_callback(svc, bot, q, parts: list[str]) -> None:
+    fn = CALLBACKS.get(parts[0]) if parts else None
+    if not fn:
+        await q.answer("지난 버튼이에요.")
+        return
+    try:
+        await fn(svc, bot, q, parts[1:])
+    except TelegramError as e:
+        log.warning("casino callback %s failed: %s", parts[0], e)
+
+
 def help_text() -> str:
     groups: dict[str, list[str]] = {}
     for c in COMMANDS:
