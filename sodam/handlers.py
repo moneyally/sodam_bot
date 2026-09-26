@@ -22,7 +22,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription
+from . import addressee, casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription
 from .agent import run_agent
 from .panels import members as members_panel
 from .commands import CmdCtx
@@ -453,10 +453,15 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     if chat_id > 0 and s.get("ai_memory", True):
         memory.observe(svc, chat_id, user.id, request)  # 1:1 은 그룹 훅이 없어서 여기서 기억 후보 확인
 
+    try:
+        hints = await addressee.collect(svc, bot, msg, chat_id, user, request)
+    except Exception:  # 단서가 없어도 대답은 한다
+        log.exception("addressee hints failed")
+        hints = []
     ctx = ToolCtx(svc, bot, chat_id, user, role, s)
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history,
-                                 reply_to=reply_to, request=request, mode=via)
+                                 reply_to=reply_to, request=request, mode=via, hints=hints)
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:

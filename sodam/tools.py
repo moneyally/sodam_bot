@@ -69,7 +69,7 @@ PERIOD = {"type": "string", "enum": ["오늘", "어제", "주간", "월간", "�
 async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     """이름/@username/ID → 방 멤버 1명. 실패하면 에러 문자열."""
     rows = await ctx.svc.db.find_members(ctx.chat_id, name)
-    if not rows and not for_sanction:  # 인사·조회는 '하늘대표님' 처럼 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
+    if not rows and not for_sanction:  # 인사·조회는 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
         rows = await _fuzzy_members(ctx, name)
     if not rows:
         return None, f"'{name}' 멤버를 찾을 수 없어요. @username 이나 정확한 이름이 필요해요."
@@ -82,12 +82,11 @@ async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     return row, None
 
 
-_HONORIFICS = ("대표님", "사장님", "실장님", "이사님", "회장님", "팀장님", "부장님", "형님", "누님", "선생님",
-               "대표", "사장", "실장", "이사", "회장", "팀장", "부장", "님", "씨", "형", "누나", "언니", "오빠")
+from .addressee import HONORIFICS as _HONORIFICS  # noqa: E402  (호칭 목록은 한 곳에서)
 
 
 async def _fuzzy_members(ctx: ToolCtx, name: str):
-    """'하늘대표님' → '하늘' 를 이름·@아이디에 포함한 이 방 멤버. 핵심이 2글자 미만이면 안 찾음."""
+    """호칭을 뗀 핵심(2글자 이상)이 이름·@아이디에 들어간 이 방 멤버."""
     core = name.strip().lstrip("@")
     for h in _HONORIFICS:
         if core.endswith(h) and len(core) > len(h):
@@ -424,7 +423,7 @@ TOOLS: list[Tool] = [
          {"what": {"type": "string", "description": "지울 기억의 핵심 단어. 비우면 전부 지움"}}, [], t_forget_my_memory),
     Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다.",
          {"style": {"type": "string", "enum": [s.label for s in STYLES.values()]}}, ["style"], t_set_my_style),
-    Tool("greet_members", "특정 멤버들에게 인사할 때 사용. 멘션을 붙여준다.",
+    Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_greet),
     Tool("start_game", "방에서 봇과 하는 끝말잇기를 시작한다. 포인트 게임(홀짝·바카라 등)은 도구가 아니라 멤버가 직접 ! 명령으로 한다.",
