@@ -151,7 +151,7 @@ async def huge_history_fits_telegram_limits():
         assert len(H.unescape(re.sub(r"<[^>]+>", "", t))) <= 4096, (mode, len(t))
         assert not html_errors(t)
         for row in namehist.buttons(99999999999, mode).inline_keyboard:
-            assert all(len(b.callback_data.encode()) <= 64 for b in row)
+            assert all(len(b.callback_data.encode()) <= 64 for b in row if b.callback_data)
     assert "전체 기록 버튼" in await namehist.history_text(db, 5, TZ)
 
 
@@ -246,6 +246,35 @@ async def name_notice_command_admin_only():
     assert "관리자만" in r and (await db.get_settings(CHAT))["name_change_notice"] is True
     r = await cmd(svc, bot, CHAT, admin, ".이름알림 끄기", role=Role.ADMIN)
     assert "꺼짐" in r and (await db.get_settings(CHAT))["name_change_notice"] is False
+
+
+@test
+async def reply_forward_mention_users_are_recorded_too():
+    db, svc, bot, ctx = await setup()
+    speaker, replied, fwd, tagged = user(5, "말한이"), user(6, "원글이", "orig"), user(7, "전달원"), user(8, "멘션됨")
+    m = FakeMsg(CHAT, speaker, "안녕", reply_to=SimpleNamespace(from_user=replied))
+    m.chat = SimpleNamespace(id=CHAT, title="방", type="supergroup")
+    m.sender_chat = None
+    m.forward_origin = SimpleNamespace(sender_user=fwd)
+    m.entities = (SimpleNamespace(type="text_mention", user=tagged, offset=0, length=2),)
+    await handlers.on_group_message(SimpleNamespace(message=m), ctx)
+    for u in (speaker, replied, fwd, tagged):
+        assert await namehist.history(db, u.id), u.first_name
+    assert not await namehist.history(db, 999)
+
+
+@test
+async def dm_plain_id_or_username_shows_all_history():
+    db, svc, bot, ctx = await setup()
+    await group_say(ctx, user(8098229366, "김대표", "kim"))
+    await group_say(ctx, user(8098229366, "박대표", "park"))
+    for text in ("@kim", "8098229366", "@park"):
+        m = FakeMsg(6, user(6, "B"), text)
+        await handlers.on_private(SimpleNamespace(message=m), ctx)
+        assert "전체 기록" in m.replies[0] and "박대표" in m.replies[0], text
+    m = FakeMsg(6, user(6, "B"), "@nobody_x")
+    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    assert "못 찾았" in m.replies[0]
 
 
 if __name__ == "__main__":

@@ -196,9 +196,9 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
                     reply_markup=namehist.buttons(uid, mode))
 
 
-async def name_lookup_forward(ctx: CmdCtx) -> None:
-    """1:1 에 전달된 메시지 → 원래 보낸 사람의 기록."""
-    await _name_lookup(ctx, "recent")
+async def name_lookup_forward(ctx: CmdCtx, mode: str = "recent") -> None:
+    """1:1 에 전달된 메시지 → 원래 보낸 사람의 기록 / @아이디·ID 만 보낸 경우 → 그 사람 기록."""
+    await _name_lookup(ctx, mode)
 
 
 async def c_history(ctx: CmdCtx) -> None:

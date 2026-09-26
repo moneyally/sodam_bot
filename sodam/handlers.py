@@ -293,6 +293,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await bot.send_message(chat_id, namehist.change_notice(user.id, *changed), parse_mode="HTML")
         except TelegramError as e:
             log.info("name change notice failed: %s", e)
+    # 말한 사람 말고도 메시지에 보이는 사람(답장 원글·전달 원작성자·이름 멘션)의 이름도 기록 → 기록 범위 넓힘
+    for other in namehist.seen_users(msg):
+        await namehist.record(svc.db, other)
 
     text = msg.text or msg.caption or ""
     role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
@@ -503,6 +506,7 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         await q.edit_message_text(f"실패했어요: {esc(e.message)}")
 
 
+_LOOKUP_ONLY = re.compile(r"@[A-Za-z0-9_]{3,32}|\d{5,15}")
 _OWNER_CMD = re.compile(r"^[./](owner|오너)(@\w+)?\s+(\d{8})\s*$", re.I)
 _DEEP_LINK = re.compile(r"^/start\s+(sub|cfg)_(-\d{5,18})\s*$")
 
@@ -560,6 +564,10 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await svc.announcer.handle_message(bot, msg):
         return
     if await menu.handle_input(svc, bot, msg):
+        return
+    if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록 (SangMata 처럼)
+        role = await svc.perms.role(bot, msg.chat_id, user.id)
+        await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [text], text), mode="all")
         return
     if getattr(msg, "forward_origin", None) is not None:  # 전달된 메시지 → 보낸 사람 이름 기록 (SangMata 처럼)
         role = await svc.perms.role(bot, msg.chat_id, user.id)

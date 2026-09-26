@@ -103,7 +103,7 @@ async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title:
     rows = await history(db, user_id)
     if not rows:
         return (f"🕵️ ID <code>{user_id}</code> 의 이름 기록이 없어요.\n"
-                "(소담이 있는 방에서 본 적이 있어야 기록돼요)")
+                "(소담이 있는 방에서 본 적이 있어야 기록돼요. 그 전 기록은 아래 SangMata 버튼으로)")
     cur = rows[0]
     head = title or display_name(cur["first_name"], cur["last_name"], cur["username"])
     names, users = _changes(rows, "name"), _changes(rows, "username")
@@ -118,7 +118,8 @@ async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title:
             lines.append(f"<code>{fmt_time(ts, tz, '%y.%m.%d')}</code> {_fmt(v, field)}" + (" ← 지금" if i == 0 else ""))
         if len(items) > limit:
             lines.append(f"… 이전 {len(items) - limit}개 더 (전체 기록 버튼)" if mode == "recent" else f"… 이전 {len(items) - limit}개 생략")
-    lines.append("\n소담이 본 뒤부터의 기록이에요. 날짜는 처음 본 날.")
+    lines.append(f"\n소담이 본 뒤부터의 기록이에요 (날짜는 처음 본 날). 그 전 기록은 아래 SangMata 버튼 → "
+                 f"<code>{user_id}</code> 보내기.")
     return "\n".join(lines)
 
 
@@ -126,7 +127,8 @@ def buttons(user_id: int, mode: str) -> InlineKeyboardMarkup:
     """조회 결과 아래 [최근][전체][이름만][아이디만] — 누를 때마다 권한 다시 확인 (nh:<모드>:<ID>)."""
     labels = {"recent": "🕘 최근", "all": "📜 전체", "names": "👤 이름만", "usernames": "🔗 아이디만"}
     return InlineKeyboardMarkup([[InlineKeyboardButton(("● " if m == mode else "") + labels[m],
-                                                       callback_data=f"nh:{m}:{user_id}") for m in MODES]])
+                                                       callback_data=f"nh:{m}:{user_id}") for m in MODES],
+                                 [sangmata_button(user_id)]])
 
 
 async def find_by_old_username(db: DB, chat_id: int | None, username: str) -> int | None:
@@ -208,3 +210,31 @@ async def on_callback(svc, bot, q, parts: list[str]) -> None:
     except BadRequest as e:
         if "not modified" not in str(e).lower():
             raise
+
+
+def seen_users(msg) -> list:
+    """메시지에 함께 보이는 다른 사람들: 답장 원글 작성자, 전달 원작성자, 이름 멘션(text_mention). 봇·말한 사람 제외."""
+    out, me = [], getattr(msg.from_user, "id", None)
+    reply = getattr(msg, "reply_to_message", None)
+    if reply is not None and getattr(reply, "from_user", None):
+        out.append(reply.from_user)
+    origin = getattr(msg, "forward_origin", None)
+    if origin is not None and getattr(origin, "sender_user", None):
+        out.append(origin.sender_user)
+    for ent in [*(getattr(msg, "entities", None) or ()), *(getattr(msg, "caption_entities", None) or ())]:
+        if getattr(ent, "type", None) == "text_mention" and getattr(ent, "user", None):
+            out.append(ent.user)
+    seen, uniq = {me}, []
+    for u in out:
+        if u.id not in seen and not u.is_bot:
+            seen.add(u.id)
+            uniq.append(u)
+    return uniq
+
+
+SANGMATA_BOT = "SangMataInfo_bot"
+
+
+def sangmata_button(user_id: int) -> InlineKeyboardButton:
+    """소담이 보기 전의 기록은 SangMata 에서 (공개 API 가 없어서 링크로 연결)."""
+    return InlineKeyboardButton("🔎 이전 기록은 SangMata 에서", url=f"https://t.me/{SANGMATA_BOT}")
