@@ -210,6 +210,13 @@ async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
         screens = [(t, kb) for t, kb in q.edits]
         screens += [(c[2], c[3].get("reply_markup")) for c in bot.calls[before_sent:]
                     if c[0] == "send_message" and c[1] == uid]
+        # 사진·영상·GIF·파일로 보낸 화면(인사 미리보기 등): 캡션 + 버튼. 캡션은 1024자 제한
+        for c in bot.calls[before_sent:]:
+            if c[0] in ("send_photo", "send_video", "send_animation", "send_document") and c[1] == uid:
+                cap = c[3] or ""
+                if len(re.sub(r"<[^>]+>", "", cap)) > 1024:
+                    rep.issues.append(f"[{who}] {data}: 캡션 1024자 초과")
+                screens.append((f"[{c[0][5:]}] " + cap, c[4].get("reply_markup")))
         for text, kb in screens:
             _check_screen(rep, who, data, text, kb)
             rep.shots.append(Shot(uid, data, text, kb, toast))
