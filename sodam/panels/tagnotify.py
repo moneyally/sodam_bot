@@ -49,6 +49,8 @@ async def r_tagnotify(c: PanelCtx) -> Screen:
     if val not in ("0", "1") or not CID_RE.fullmatch(raw) or not await c.svc.db.has_chat(int(raw)):
         return Screen(None, toast="없는 그룹이에요. 메뉴를 다시 열어주세요.", alert=True)
     cid, on = int(raw), val == "1"
+    if not await c.svc.db.get_member(cid, c.uid):  # 내가 속한 방만 (남의 방 제목 엿보기·기록 방지)
+        return Screen(None, toast="없는 그룹이에요. 메뉴를 다시 열어주세요.", alert=True)
     await set_opt_out(c.svc.db, c.uid, cid, not on)
     title = (await chat_title(c.svc, cid))[:30]
     if c.arg(2) == "dm":

@@ -44,7 +44,8 @@ def _owner_only(fn):
 
 
 def _page(raw: str) -> int | None:
-    return int(raw) if PAGE_RE.fullmatch(raw or "0") else None
+    raw = raw or "0"
+    return int(raw) if PAGE_RE.fullmatch(raw) else None
 
 
 async def _room_cid(c: PanelCtx, raw: str) -> int | None:

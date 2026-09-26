@@ -277,7 +277,7 @@ class Announcer:
         if not draft or draft.step not in ("title", "body", "when"):
             return False
         text = (msg.text or msg.caption or "").strip()
-        if text[:1] in "./" and text not in CANCEL:
+        if text and text[0] in "./" and text not in CANCEL:
             return False  # 다른 명령어는 그대로 통과
         draft.cleanup.append(msg.message_id)
         draft.expires = time.time() + WIZARD_TTL
@@ -341,6 +341,9 @@ class Announcer:
     async def on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
         token, action = (parts + ["", ""])[:2]
         if token == "x":  # 1:1 미리보기의 [🗑 닫기]
+            if not query.message or query.message.chat_id != query.from_user.id:
+                await query.answer()  # 그룹 메시지에 위조 콜백을 붙여 봇 메시지를 지우는 것 방지
+                return
             await query.answer()
             try:
                 await bot.delete_message(query.message.chat_id, query.message.message_id)
@@ -381,6 +384,7 @@ class Announcer:
             await self._finish(bot, draft, "예약공지 만들기를 취소했어요.")
             return
         if action == "save" and draft.step == "confirm":
+            draft.step = "saving"  # 두 번 눌러도 한 번만 (await 전에 바꿔야 동시에 온 두 번째가 막힘)
             await query.answer("저장했어요!")
             await self._save(bot, draft)
             return

@@ -12,7 +12,7 @@ from sodam.settings import render
 
 test, run_all = runner()
 CHAT = -1001111
-LONG = -1009999999999999999
+LONG = -100999999999999999
 BTNS = [["📢 공지", "https://t.me/sodam_notice"], ["규칙 & 안내", "https://example.com/r?a=1&b=2"]]
 
 

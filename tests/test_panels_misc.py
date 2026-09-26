@@ -456,7 +456,7 @@ async def bot_admin_management_tg_admin_only():
 @test
 async def all_new_callbacks_fit_64_bytes():
     db, svc, bot, _ = await setup()
-    long = -1009999999999999999
+    long = -100999999999999999
     await db.ensure_chat(long, "긴 방")
     svc.perms.is_admin = lambda bot, cid, uid: _async(True)
     svc.perms.is_tg_admin = lambda bot, cid, uid: _async(True)

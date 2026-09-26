@@ -14,7 +14,7 @@ from sodam.security import normalize_domain
 
 test, run_all = runner()
 CHAT, OTHER = -1001111, -1002222
-LONG = -1009999999999999999  # 방 ID 가 길어도 콜백 64바이트 안에 들어가는지
+LONG = -100999999999999999  # 방 ID 가 길어도 콜백 64바이트 안에 들어가는지
 
 
 async def setup(tg_admins=(1,), bot_admins=()):

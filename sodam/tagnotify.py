@@ -19,7 +19,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOpti
 from telegram.error import Forbidden, TelegramError
 
 from . import db as dbmod
-from .hooks import add_group_message_hook
+from .hooks import add_group_message_hook, add_member_left_hook
 from .settings import register_setting
 from .util import esc, mention, user_name
 
@@ -32,7 +32,8 @@ MAX_RECIPIENTS = 5          # 메시지 하나당
 SAME_CHAT_GAP = 60          # 수신자별 같은 방 알림 간격(초)
 PER_HOUR = 20               # 수신자별 시간당
 SENDER_PER_MIN = 10         # 보낸 사람 기준 분당
-MEMBER_TTL = 600            # get_chat_member 결과 캐시(초)
+MEMBER_TTL = 600            # get_chat_member '멤버 아님' 결과 캐시(초)
+MEMBER_OK_TTL = 60          # '멤버임' 결과 캐시(초). 나가면 hooks.member_left 로 바로 지움
 PREVIEW_CHARS = 200
 MAX_CACHE = 5000
 
@@ -112,18 +113,32 @@ class State:
     sent: dict[int, deque] = field(default_factory=dict)       # 수신자 → (시각, 방)
     senders: dict[int, deque] = field(default_factory=dict)    # 보낸 사람 → 시각
     members: dict[tuple[int, int], tuple[bool, float]] = field(default_factory=dict)
+    _swept: float = 0.0
 
     def _recent(self, q: deque, window: float, now: float) -> deque:
         while q and now - (q[0][0] if isinstance(q[0], tuple) else q[0]) > window:
             q.popleft()
         return q
 
+    def _sweep(self, now: float) -> None:
+        """빈 기록 정리 (보낸 사람·받는 사람 수만큼 키가 계속 쌓이지 않게)."""
+        if now - self._swept < 600:
+            return
+        self._swept = now
+        for d, window in ((self.sent, 3600), (self.senders, 60)):
+            for k in [k for k, q in d.items() if not self._recent(q, window, now)]:
+                del d[k]
+        for k in [k for k, (_, ts) in self.members.items() if now - ts > MEMBER_TTL]:
+            del self.members[k]
+
     def recipient_ok(self, uid: int, cid: int) -> bool:
         now = self.clock()
+        self._sweep(now)
         q = self._recent(self.sent.setdefault(uid, deque()), 3600, now)
         return len(q) < PER_HOUR and not any(c == cid and now - t < SAME_CHAT_GAP for t, c in q)
 
     def sender_ok(self, sid: int) -> bool:
+        self._sweep(self.clock())
         return len(self._recent(self.senders.setdefault(sid, deque()), 60, self.clock())) < SENDER_PER_MIN
 
     def record(self, uid: int, cid: int, sid: int) -> None:
@@ -143,7 +158,8 @@ def state(svc: Services) -> State:
 async def still_member(st: State, bot, chat_id: int, user_id: int) -> bool:
     now = st.clock()
     hit = st.members.get((chat_id, user_id))
-    if hit and now - hit[1] < MEMBER_TTL:
+    # '아님'은 오래 기억해도 되지만 '멤버임'은 짧게 (나가거나 밴된 사람에게 방 내용이 새지 않게)
+    if hit and now - hit[1] < (MEMBER_TTL if not hit[0] else MEMBER_OK_TTL):
         return hit[0]
     try:
         m = await bot.get_chat_member(chat_id, user_id)
@@ -270,3 +286,13 @@ async def _title(svc: Services, chat_id: int) -> str:
 
 
 add_group_message_hook(on_group_message)
+
+
+def forget_member(svc: Services, chat_id: int, user_id: int) -> None:
+    """나가거나 밴·킥 됐을 때: 멤버 캐시를 바로 지워서 다음 알림 전에 다시 확인하게."""
+    st = getattr(svc, "_tagnotify", None)
+    if st:
+        st.members.pop((chat_id, user_id), None)
+
+
+add_member_left_hook(forget_member)

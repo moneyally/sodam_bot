@@ -40,11 +40,12 @@ ADMIN_RIGHTS = "delete_messages+restrict_members+pin_messages+invite_users"
 # 권한 단계
 PUBLIC, ADMIN, TG_ADMIN, OWNER = range(4)
 
-CID_RE = re.compile(r"^-\d{5,20}$")
+CID_RE = re.compile(r"^-\d{5,18}$")  # SQLite INTEGER(int64) 안에 들어가게
 CALLBACK_PER_MIN = 40
 TOKEN_TTL = 120          # 삭제 확인 버튼
 LIST_TOKEN_TTL = 600     # 목록의 항목 버튼
-MAX_TOKENS = 5000
+MAX_TOKENS = 20000
+MAX_TOKENS_PER_USER = 200  # 한 사람이 목록을 계속 열어도 다른 사람의 확인 버튼은 안 밀려나게
 INPUT_GRACE = 600        # 입력 시간이 지난 뒤 이 시간 안에 온 글은 '시간 지남' 안내로 받아준다
 LIST_SHOW = 30
 MAX_WORDS = 200
@@ -149,7 +150,10 @@ def _token(svc: Services, uid: int, cid: int, action: str, arg, ttl: int = TOKEN
     now = time.time()
     for key in [k for k, t in tokens.items() if t.expires < now]:
         del tokens[key]
-    while len(tokens) >= MAX_TOKENS:  # 오래된 것부터
+    mine = [k for k, t in tokens.items() if t.user_id == uid]
+    for k in mine[:max(0, len(mine) - MAX_TOKENS_PER_USER + 1)]:  # 넘치면 그 사람 것 중 오래된 것부터
+        del tokens[k]
+    while len(tokens) >= MAX_TOKENS:  # 전체 상한(비정상 상황)
         del tokens[next(iter(tokens))]
     key = secrets.token_urlsafe(6)
     tokens[key] = MenuToken(uid, cid, action, arg, now + ttl)
@@ -387,10 +391,24 @@ async def s_warn(c: PanelCtx) -> Screen:
     return Screen("\n".join(lines), _kb(rows))
 
 
+LIST_TEXT_CHARS = 2500  # 목록 본문 최대 글자 (텔레그램 메시지 4096자 제한 여유)
+
+
+def _joined(items: list[str]) -> str:
+    """'a, b, c' 로 잇되 너무 길면 '… 외 N개'."""
+    out, size = [], 0
+    for i, w in enumerate(items):
+        if size + len(w) + 2 > LIST_TEXT_CHARS:
+            return ", ".join(out) + f" … 외 {len(items) - i}개"
+        out.append(esc(w))
+        size += len(w) + 2
+    return ", ".join(out)
+
+
 async def s_words(c: PanelCtx) -> Screen:
     words = sorted(await c.svc.db.banned_words(c.cid))
     lines = ["🚫 <b>금지어</b>", "이 단어가 들어간 메시지는 지우고 경고해요. (관리자는 제외)"]
-    lines.append(", ".join(esc(w) for w in words) if words else "(없음)")
+    lines.append(_joined(words) if words else "(없음)")
     if words:
         lines.append("\n단어를 누르면 삭제할 수 있어요.")
     if len(words) > LIST_SHOW:
@@ -404,7 +422,7 @@ async def s_words(c: PanelCtx) -> Screen:
 async def s_domains(c: PanelCtx) -> Screen:
     domains = list((await c.svc.db.get_settings(c.cid))["whitelist_domains"])
     lines = ["🔗 <b>허용 도메인</b>", "링크 차단이 켜져 있어도 이 도메인(하위 도메인 포함) 링크는 허용해요."]
-    lines.append(esc(", ".join(domains)) if domains else "(없음)")
+    lines.append(_joined(domains) if domains else "(없음)")
     if domains:
         lines.append("\n도메인을 누르면 삭제할 수 있어요.")
     btns = [B(f"🗑 {d[:24]}", f"m:k:{_token(c.svc, c.uid, c.cid, 'ask_dom', d, LIST_TOKEN_TTL)}")

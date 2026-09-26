@@ -20,11 +20,11 @@ def user_name(user) -> str:
     return display_name(get("first_name"), get("last_name"), get("username"))
 
 
-_INT = re.compile(r"-?\d{1,20}")
+_INT = re.compile(r"-?\d{1,18}")  # SQLite INTEGER(int64) 범위 안
 
 
 def to_int(s: str) -> int | None:
-    """'--5', '²' 같은 값에서 int() 가 터지지 않게. 정수 문자열이 아니면 None."""
+    """'--5', '²', 19자리 이상 같은 값에서 int()·SQLite 가 터지지 않게. 정수 문자열이 아니면 None."""
     return int(s) if isinstance(s, str) and _INT.fullmatch(s) else None
 
 
@@ -101,6 +101,7 @@ class RateLimiter:
     """키별 최근 60초 호출 수 제한."""
     def __init__(self):
         self._hits: dict[tuple, deque[float]] = {}
+        self._calls = 0
 
     def allow(self, key: tuple, per_minute: int) -> bool:
         now = time.monotonic()
@@ -110,4 +111,8 @@ class RateLimiter:
         if len(q) >= per_minute:
             return False
         q.append(now)
+        self._calls += 1
+        if self._calls % 1000 == 0:  # 가끔 빈 키 정리 (사람 수만큼 계속 쌓이지 않게)
+            for k in [k for k, v in self._hits.items() if not v or now - v[-1] > 60]:
+                del self._hits[k]
         return True

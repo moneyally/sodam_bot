@@ -4,8 +4,20 @@ GROUP_MESSAGE_HOOKS: 관리 검사를 통과한 그룹 메시지마다 백그라
 (handlers.GROUP_MESSAGE_HOOKS 는 이 리스트와 같은 객체)
 """
 GROUP_MESSAGE_HOOKS: list = []
+# 멤버가 나가거나 밴·킥 됐을 때 (동기 함수): hook(svc, chat_id, user_id)
+MEMBER_LEFT_HOOKS: list = []
 
 
 def add_group_message_hook(fn) -> None:
     if fn not in GROUP_MESSAGE_HOOKS:
         GROUP_MESSAGE_HOOKS.append(fn)
+
+
+def add_member_left_hook(fn) -> None:
+    if fn not in MEMBER_LEFT_HOOKS:
+        MEMBER_LEFT_HOOKS.append(fn)
+
+
+def member_left(svc, chat_id: int, user_id: int) -> None:
+    for fn in MEMBER_LEFT_HOOKS:
+        fn(svc, chat_id, user_id)

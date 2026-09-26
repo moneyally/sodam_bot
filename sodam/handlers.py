@@ -249,6 +249,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user)
     elif _in_chat(old) and not _in_chat(new):
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
+        hooks.member_left(svc, cmu.chat.id, new.user.id)
         await svc.captcha.cancel(context.bot, cmu.chat.id, new.user.id)
 
 
@@ -483,7 +484,7 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
 
 
 _OWNER_CMD = re.compile(r"^[./](owner|오너)(@\w+)?\s+(\d{8})\s*$", re.I)
-_DEEP_LINK = re.compile(r"^/start\s+(sub|cfg)_(-\d{5,20})\s*$")
+_DEEP_LINK = re.compile(r"^/start\s+(sub|cfg)_(-\d{5,18})\s*$")
 
 
 async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

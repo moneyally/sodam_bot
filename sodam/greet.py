@@ -47,7 +47,8 @@ CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
 
 _URL_BAD = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
 _HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
-_TG = re.compile(r"^tg://[a-z_]{1,32}(?:\?[A-Za-z0-9_.=&%+-]{0,400})?$")
+# tg:// 는 채널·그룹·사용자 이동만 (proxy·socks 처럼 설정을 바꾸는 링크 금지)
+_TG = re.compile(r"^tg://(?:resolve|join|openmessage|privatepost|user)(?:\?[A-Za-z0-9_.=&%+-]{0,400})?$")
 _LINE = re.compile(r"^(.*\S)\s+-\s+(\S+)$")
 
 
