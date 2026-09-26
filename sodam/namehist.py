@@ -5,7 +5,7 @@
 - 명령 (대상 = 답장 > @아이디(예전 것도)·ID·이름 > 전달된 메시지 > 나):
   `.기록 /history` 최근 · `.전체기록 /allhistory` · `.이름조회 /check_name` · `.아이디조회 /check_username` · `.내기록 /myhistory`
   결과 아래 [최근][전체][이름만][아이디만] 버튼(nh:<모드>:<ID>) — 누를 때마다 권한 재확인
-- 권한: 그룹은 그 방 멤버의 기록만 / 1:1 은 나·나와 같은 그룹 멤버만 (오너는 전부)
+- 권한: 누구나, 소담이 본 모든 사람의 기록을 조회 가능 (사용자 결정 — 익명 방이라 사칭 확인 우선)
 - 1:1: 메시지를 전달하면 보낸 사람 기록 · 메뉴 🕵️ 이름 기록
 봇이 들어오기 전의 변경이나 봇이 없는 방에서의 변경은 알 수 없다.
 """
@@ -141,21 +141,11 @@ async def find_by_old_username(db: DB, chat_id: int | None, username: str) -> in
     return row["user_id"] if row else None
 
 
-async def shares_group(db: DB, a: int, b: int) -> bool:
-    """두 사람이 봇이 있는 같은 그룹에 있는지 (1:1 에서 남의 기록을 볼 수 있는 조건)."""
-    row = await db._one("SELECT 1 FROM members x JOIN members y ON x.chat_id=y.chat_id "
-                        "WHERE x.user_id=? AND y.user_id=? AND x.chat_id < 0 LIMIT 1", (a, b))
-    return row is not None
-
-
 # ── 조회 권한 · 대상 찾기 ─────────────────────────────────
 async def can_view(db: DB, viewer: int, target: int, chat_id: int, is_owner: bool) -> bool:
-    """그룹: 그 방 멤버의 기록만 / 1:1: 나, 나와 같은 그룹에 있는 사람 (오너는 전부)."""
-    if is_owner or viewer == target:
-        return True
-    if chat_id < 0:
-        return await db.get_member(chat_id, target) is not None
-    return await shares_group(db, viewer, target)
+    """누구나 전부 조회 가능 (사용자 결정 2026-09-27: 익명 닉네임 방이라 사칭·먹튀 확인이 우선).
+    범위를 다시 좁히려면 여기만 바꾸면 된다 (명령·버튼·1:1 메뉴가 전부 이 함수를 거침)."""
+    return True
 
 
 async def resolve(db: DB, raw: str, chat_id: int | None = None) -> int | None:
@@ -167,12 +157,15 @@ async def resolve(db: DB, raw: str, chat_id: int | None = None) -> int | None:
     name = raw.lstrip("@")
     if not name or not _USERNAME.fullmatch(name):
         return None
-    if chat_id is None:
-        row = await db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE AND is_bot=0", (name,))
-    else:
-        row = await db._one("SELECT u.user_id FROM users u JOIN members m ON m.user_id=u.user_id AND m.chat_id=? "
-                            "WHERE u.username=? COLLATE NOCASE AND u.is_bot=0", (chat_id, name))
-    return row["user_id"] if row else await find_by_old_username(db, chat_id, name)
+    row = await db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE AND is_bot=0", (name,))
+    if row:  # 지금 이 아이디를 쓰는 사람
+        return row["user_id"]
+    # 예전에 이 아이디를 쓴 사람 (이 방 멤버를 먼저, 없으면 전체에서)
+    if chat_id is not None:
+        found = await find_by_old_username(db, chat_id, name)
+        if found is not None:
+            return found
+    return await find_by_old_username(db, None, name)
 
 
 _USERNAME = re.compile(r"[A-Za-z0-9_]{3,32}")

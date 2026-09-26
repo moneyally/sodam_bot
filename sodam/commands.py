@@ -158,7 +158,7 @@ async def c_me(ctx: CmdCtx) -> None:
 
 async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> None:
     """이름·아이디 변경 기록 (SangMata 방식). 대상: 답장 > 인자(@아이디·ID·이름) > 전달된 메시지 > 나.
-    그룹은 이 방 멤버만, 1:1 은 나·같은 그룹 멤버만 (오너는 전부)."""
+    권한은 namehist.can_view (지금은 누구나 전부)."""
     db, tz = ctx.svc.db, ctx.svc.cfg.tz
     group = ctx.chat_id < 0
     uid: int | None = ctx.user.id
@@ -189,7 +189,7 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
             await ctx.reply(err)
             return
     if not await namehist.can_view(db, ctx.user.id, uid, ctx.chat_id, ctx.role >= Role.OWNER):
-        await ctx.reply("🔒 이 방 멤버의 기록만 볼 수 있어요." if group else "🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요.")
+        await ctx.reply("🔒 볼 수 없는 기록이에요.")
         return
     title = "내 이름 기록" if uid == ctx.user.id else None
     await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title),

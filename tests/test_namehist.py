@@ -89,15 +89,15 @@ async def group_command_by_reply_mention_and_old_username():
 
 
 @test
-async def dm_lookup_limited_to_shared_groups():
+async def dm_lookup_anyone():
     db, svc, bot, ctx = await setup()
     a, b, stranger = user(5, "A", "aaa"), user(6, "B", "bbb"), user(7, "외부인", "ccc")
     await group_say(ctx, a)
     await group_say(ctx, b)
     await group_say(ctx, stranger, chat=OTHER)
     assert "A" in await cmd(svc, bot, 6, b, ".이름기록 @aaa")               # 같은 방
-    assert "같은 그룹" in await cmd(svc, bot, 6, b, ".이름기록 @ccc")      # 다른 방 사람
-    assert "같은 그룹" in await cmd(svc, bot, 6, b, ".이름기록 7")
+    assert "외부인" in await cmd(svc, bot, 6, b, ".이름기록 @ccc")        # 다른 방 사람도 (사용자 결정: 전부 조회)
+    assert "외부인" in await cmd(svc, bot, 6, b, ".이름기록 7")
     assert "외부인" in await cmd(svc, bot, 1, user(1, "오너"), ".이름기록 7", role=Role.OWNER)
     assert "못 찾았" in await cmd(svc, bot, 6, b, ".이름기록 99999999999999999999")  # 이상한 숫자
 
@@ -173,14 +173,20 @@ async def all_command_aliases_work():
 
 
 @test
-async def group_lookup_only_for_members_of_that_group():
+async def group_lookup_anyone_bot_has_seen():
     db, svc, bot, ctx = await setup()
     outsider = user(7, "외부인", "outsider")
     await group_say(ctx, outsider, chat=OTHER)
     me = user(6, "나", "me")
     await group_say(ctx, me)
-    assert "이 방 멤버" in await cmd(svc, bot, CHAT, me, ".기록 7")        # 숫자 ID 로 다른 방 사람
-    assert "못 찾았" in await cmd(svc, bot, CHAT, me, ".기록 @outsider")  # @아이디는 이 방 멤버 중에서만
+    assert "외부인" in await cmd(svc, bot, CHAT, me, ".기록 7")            # 다른 방 사람도 숫자 ID 로
+    assert "외부인" in await cmd(svc, bot, CHAT, me, ".기록 @outsider")    # @아이디로도
+    await namehist.record(db, user(8, "옛이름", "shared_old"))            # 예전 아이디: 이 방 멤버가 먼저
+    await namehist.record(db, user(8, "새이름", "new8"))
+    await namehist.record(db, user(6, "나", "shared_old"))
+    await namehist.record(db, user(6, "나", "me"))
+    assert "내 이름 기록" in await cmd(svc, bot, CHAT, me, ".기록 @shared_old")
+    assert "못 찾았" in await cmd(svc, bot, CHAT, me, ".기록 @nobody_here")
 
 
 @test
@@ -194,12 +200,12 @@ async def result_buttons_recheck_permission():
     q = FakeQuery(CHAT, b)                                              # 그룹에서 멤버 기록 → 전체
     await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:all:5")), ctx)
     assert "전체 기록" in q.edits[-1] and q.kb.inline_keyboard[0][1].text.startswith("●")
-    q = FakeQuery(CHAT, b)                                              # 위조: 다른 방 사람 ID
-    await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:all:7")), ctx)
-    assert not q.edits and "볼 수 없" in q.answers[0][0]
-    q = FakeQuery(6, b)                                                 # 1:1: 같은 그룹 아닌 사람
+    q = FakeQuery(6, b)                                                 # 1:1: 다른 방 사람도 조회 가능
     await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:names:7")), ctx)
-    assert not q.edits and "볼 수 없" in q.answers[0][0]
+    assert "외부인" in q.edits[-1]
+    q = FakeQuery(6, b)                                                 # 기록 없는 ID
+    await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:all:424242")), ctx)
+    assert "기록이 없어요" in q.edits[-1]
     for bad in ("nh:zzz:5", "nh:all:-5", "nh:all:99999999999999999999", "nh", "nh:all:²"):
         q = FakeQuery(6, b)
         await handlers.on_callback(SimpleNamespace(callback_query=_q(q, bad)), ctx)

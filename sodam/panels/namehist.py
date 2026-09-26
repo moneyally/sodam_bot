@@ -28,7 +28,7 @@ async def r_query(c: PanelCtx) -> Screen:
     if c.svc.announcer:
         c.svc.announcer.drafts.pop((c.uid, c.uid), None)
     return Screen("🔎 조회할 사람의 <b>@아이디</b>(예전 아이디도 돼요)나 <b>숫자 ID</b>를 보내주세요.\n"
-                  "그 사람 메시지를 전달해도 돼요. 나와 같은 그룹에 있는 사람만 볼 수 있어요.\n\n그만두려면 <code>취소</code>",
+                  "그 사람 메시지를 전달해도 돼요.\n\n그만두려면 <code>취소</code>",
                   _kb([[B("❌ 취소", "m:nh")]]))
 
 
@@ -43,7 +43,7 @@ async def _lookup(c: PanelCtx, msg: Message) -> tuple[bool, str]:
             return False, "그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요."
     owner = c.uid in await c.svc.perms.owners()
     if not await namehist.can_view(c.svc.db, c.uid, uid, 0, owner):
-        return True, "🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요."
+        return True, "🔒 볼 수 없는 기록이에요."
     return True, await namehist.history_text(c.svc.db, uid, c.svc.cfg.tz)
 
 
