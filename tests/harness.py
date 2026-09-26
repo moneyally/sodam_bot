@@ -273,3 +273,15 @@ def render_markdown(rep: Report) -> str:
             out.append("```")
             out.append("")
     return "\n".join(out)
+
+
+# 패널별 시드 파일 tests/seed_*.py 를 자동으로 불러온다 (각 파일이 harness.SEEDERS.append).
+# sodam/ 쪽 패널 모듈은 tests 를 import 할 수 없어서(순환·배포) 데이터는 tests/ 에 둔다.
+def _load_seed_files() -> None:
+    import importlib
+    from pathlib import Path
+    for p in sorted(Path(__file__).resolve().parent.glob("seed_*.py")):
+        importlib.import_module(p.stem)
+
+
+_load_seed_files()
