@@ -52,6 +52,8 @@ register_setting("forward_filter", "newbie", "전달(포워드) 메시지 막기
                  choices={"off": "off", "끔": "off", "허용": "off", "newbie": "newbie", "신규": "newbie",
                           "all": "all", "전체": "all"},
                  choice_labels={"off": "허용", "newbie": "신규 입장자만 막기", "all": "전부 막기"})
+# 홍보 @아이디(채널·다른 그룹·봇) 막기: 관리자가 허락한 홍보일 수도 있어서 선택 사항 (기본 꺼짐, 🔒 종류별 잠금 화면)
+register_setting("promo_mentions", False, "홍보 @아이디 막기 (채널·그룹·봇)")
 KIND_NOTICE_GAP = 600  # 잠긴 종류·전달 안내는 같은 사람에게 10분에 한 번
 MENTION_CACHE = 86400  # @아이디가 채널·그룹인지 조회 결과 보관(초)
 
@@ -247,7 +249,7 @@ class Moderator:
             if ent.type == "text_link" and ent.url:
                 domains += find_links(ent.url) or ["link"]
         bad_link = bool(domains) and not link_allowed(domains, s["whitelist_domains"])
-        if not bad_link and not await self._outside_mentions(bot, chat_id, text):
+        if not bad_link and not (s["promo_mentions"] and await self._outside_mentions(bot, chat_id, text)):
             return None
         newbie = await self._is_newbie(chat_id, user.id, s["newbie_link_hours"])
         if not (s["link_filter"] or newbie):

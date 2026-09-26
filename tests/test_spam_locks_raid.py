@@ -176,8 +176,15 @@ async def forward_filter_all_and_off():
 
 # ── 1d. 이 방 멤버가 아닌 @아이디 홍보 ─────────────────────
 @test
+async def promo_mentions_off_by_default():
+    db, svc, bot, ctx = await _world({"ai_enabled": False})
+    m = await _say(ctx, _msg(OLD, "문의는 @spam_channel_kr 로 주세요"))
+    assert not m.deleted, "기본은 꺼짐 (관리자가 허락한 홍보일 수 있음)"
+
+
+@test
 async def outside_mention_treated_like_link():
-    db, svc, bot, ctx = await _world({"ai_enabled": False})  # '@sodambot' 은 봇 호출이라 AI 는 끔
+    db, svc, bot, ctx = await _world({"ai_enabled": False, "promo_mentions": True})  # '@sodambot' 은 봇 호출이라 AI 는 끔
     m = await _say(ctx, _msg(OLD, "문의는 @spam_channel_kr 로 주세요"))
     assert m.deleted, "외부 @아이디 홍보가 안 지워짐"
     assert any("@아이디" in t for t in _room_texts(bot)), _room_texts(bot)
@@ -191,7 +198,7 @@ async def outside_mention_treated_like_link():
 
 @test
 async def outside_mention_follows_link_rules():
-    db, svc, bot, ctx = await _world({"link_filter": False})
+    db, svc, bot, ctx = await _world({"link_filter": False, "promo_mentions": True})
     old = await _say(ctx, _msg(OLD, "@some_channel 구독"))
     assert not old.deleted, "링크 차단이 꺼져 있으면 기존 멤버는 허용"
     new = await _say(ctx, _msg(NEW, "@some_channel 구독"))

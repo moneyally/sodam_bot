@@ -18,6 +18,7 @@ from . import log as log_panel
 
 for _key, _, _ in LOCK_KINDS:
     menu.register_toggle(_key, "lk")
+menu.register_toggle("promo_mentions", "lk")
 menu.register_preset("forward_filter", [("off", "전달 허용"), ("newbie", "신규만 막기"), ("all", "전부 막기")], "lk")
 menu.register_toggle("raid_guard", "raid")
 menu.register_preset("raid_count", [(v, f"{v}명") for v in ("5", "10", "20")], "raid")
@@ -33,12 +34,15 @@ async def s_locks(c: PanelCtx) -> Screen:
     lines = ["🔒 <b>종류별 잠금</b>",
              "막아 둔 종류(🔒)를 관리자 말고 누가 올리면 바로 지워요. 안내는 한 사람에게 10분에 한 번만 해요.",
              "✅ 허용 · 🔒 막힘 — 누르면 바뀌어요.", "",
+             "🔗 홍보 @아이디: 다른 채널·그룹·봇을 알리는 @아이디 (사람 태그는 안 막아요). 허락한 홍보가 있으면 ✅ 로 두세요.",
              f"📨 전달(포워드) 메시지: <b>{CHOICE_LABELS[s['forward_filter']]}</b>",
              f"('신규' = 들어온 지 {hours}시간 안 된 사람. 🛡️ 보안의 신규 입장자 링크 금지와 같은 기준)" if hours
              else "(🛡️ 보안에서 신규 입장자 링크 금지가 꺼져 있어서 '신규만 막기'는 아무도 안 막아요)"]
     btns = [B(("🔒 " if s[k] else "✅ ") + label, f"m:t:{c.cid}:{k}:{0 if s[k] else 1}") for k, label, _ in LOCK_KINDS]
     rows = menu._chunks(btns, 2)
-    rows += [menu._preset_row(s, c.cid, "forward_filter"), menu._back(c.cid)]
+    rows += [[B(("🔒 " if s["promo_mentions"] else "✅ ") + "홍보 @아이디 (채널·그룹·봇)",
+                f"m:t:{c.cid}:promo_mentions:{0 if s['promo_mentions'] else 1}")],
+             menu._preset_row(s, c.cid, "forward_filter"), menu._back(c.cid)]
     return Screen("\n".join(lines), menu._kb(rows))
 
 
