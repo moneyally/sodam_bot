@@ -126,11 +126,21 @@ async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title:
     return "\n".join(lines)
 
 
-def buttons(user_id: int, mode: str) -> InlineKeyboardMarkup:
+def add_button(bot_username: str | None) -> list[InlineKeyboardButton]:
+    """'우리 방에도 추가' — 소담이 들어간 방이 늘수록 기록이 쌓여 조회가 정확해진다."""
+    if not bot_username:
+        return []
+    return [InlineKeyboardButton("➕ 우리 방에도 이름 추적 달기 (무료)",
+                                 url=f"https://t.me/{bot_username}?startgroup=true&admin=delete_messages+restrict_members")]
+
+
+def buttons(user_id: int, mode: str, bot_username: str | None = None) -> InlineKeyboardMarkup:
     """조회 결과 아래 [최근][전체][이름만][아이디만] — 누를 때마다 권한 다시 확인 (nh:<모드>:<ID>)."""
     labels = {"recent": "🕘 최근", "all": "📜 전체", "names": "👤 이름만", "usernames": "🔗 아이디만"}
-    return InlineKeyboardMarkup([[InlineKeyboardButton(("● " if m == mode else "") + labels[m],
-                                                       callback_data=f"nh:{m}:{user_id}") for m in MODES]])
+    rows = [[InlineKeyboardButton(("● " if m == mode else "") + labels[m], callback_data=f"nh:{m}:{user_id}")
+             for m in MODES]]
+    extra = add_button(bot_username)
+    return InlineKeyboardMarkup(rows + ([extra] if extra else []))
 
 
 async def find_by_old_username(db: DB, chat_id: int | None, username: str) -> int | None:
@@ -208,7 +218,7 @@ async def on_callback(svc, bot, q, parts: list[str]) -> None:
     title = "내 이름 기록" if uid == viewer and q.message.chat_id > 0 else None
     try:
         await q.edit_message_text(await history_text(svc.db, uid, svc.cfg.tz, mode=mode, title=title),
-                                  parse_mode="HTML", reply_markup=buttons(uid, mode))
+                                  parse_mode="HTML", reply_markup=buttons(uid, mode, getattr(bot, "username", None)))
     except BadRequest as e:
         if "not modified" not in str(e).lower():
             raise
@@ -275,7 +285,10 @@ async def _notify(svc, bot, chat_id: int, user_id: int, changed) -> None:
     if chat_id >= 0 or not (await svc.db.get_settings(chat_id))["name_change_notice"]:
         return
     try:
-        await bot.send_message(chat_id, change_notice(user_id, *changed), parse_mode="HTML")
+        await bot.send_message(chat_id, change_notice(user_id, *changed), parse_mode="HTML",
+                               reply_markup=InlineKeyboardMarkup(
+                                   [[InlineKeyboardButton("🕵️ 전체 기록", callback_data=f"nh:all:{user_id}")]]
+                                   + [row for row in [add_button(getattr(bot, "username", None))] if row]))
     except TelegramError as e:
         log.info("name change notice failed: %s", e)
 

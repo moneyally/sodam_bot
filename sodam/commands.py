@@ -193,7 +193,7 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
         return
     title = "내 이름 기록" if uid == ctx.user.id else None
     await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title),
-                    reply_markup=namehist.buttons(uid, mode))
+                    reply_markup=namehist.buttons(uid, mode, ctx.bot.username))
 
 
 async def name_lookup_forward(ctx: CmdCtx, mode: str = "recent") -> None:

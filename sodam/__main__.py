@@ -2,6 +2,7 @@
 import logging
 
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import Application, ApplicationBuilder
 
 from . import handlers
@@ -35,6 +36,13 @@ def build_services(cfg: Config, db: DB) -> Services:
     return svc
 
 
+BOT_SHORT_DESCRIPTION = "소통방 AI 비서 · 이름·아이디 변경 추적 · 사칭·도배 차단 (방 관리 무료)"
+BOT_DESCRIPTION = ("🕵️ 멤버가 이름·@아이디를 바꾸면 알려주고, 누구든 변경 기록을 볼 수 있어요 (사칭·먹튀 확인).\n"
+                   "🛡️ 입장 캡차, 도배·링크·사칭 차단, 경고·뮤트 — 무료\n"
+                   "🤖 AI 비서, 게임, 예약공지, 채팅 통계\n\n"
+                   "그룹에 추가하고 관리자로 지정하면 바로 시작돼요.")
+
+
 def _log_in_local_time(tz) -> None:
     """서버가 UTC 여도 로그 시각은 .env 의 TIMEZONE(기본 한국시간)으로."""
     from datetime import datetime
@@ -54,6 +62,11 @@ def main() -> None:
         app.bot_data.update(svc=build_services(cfg, db), limiter=handlers.RateLimiter(),
                             chats=set(), joins={}, cas_seen=set(), tasks=set())
         await app.bot.set_my_commands(handlers.BOT_MENU)
+        try:  # 봇 프로필·검색 결과에 보이는 소개
+            await app.bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
+            await app.bot.set_my_description(BOT_DESCRIPTION)
+        except TelegramError as e:
+            logging.info("bot description not updated: %s", e)
         svc: Services = app.bot_data["svc"]
         code = await svc.perms.prepare_claim_code()
         if code:

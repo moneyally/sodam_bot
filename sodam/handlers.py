@@ -206,6 +206,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     days = svc.cfg.trial_days
     intro = (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n"
              "원활한 동작을 위해 저를 <b>관리자</b>로 지정해주세요 (메시지 삭제·사용자 차단·고정 권한).\n"
+             "🕵️ 이제 멤버가 이름·@아이디를 바꾸면 알려드려요. 누구든 <code>.기록</code> 으로 변경 기록을 볼 수 있어요.\n"
              + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if svc.billing and svc.billing.enabled and days else "")
              + "명령어는 <code>.도움말</code>")
     markup = subscription.setup_button(bot.username, chat.id) if svc.billing and svc.billing.enabled else None

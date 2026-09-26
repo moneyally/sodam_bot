@@ -61,6 +61,11 @@ async def change_is_recorded_and_announced():
     n = notices(bot)
     assert len(n) == 1 and "김대표" in n[0] and "&lt;b&gt;관리자&lt;/b&gt;" in n[0] and "@admin_real" in n[0]
     assert not html_errors(n[0]) and "<code>5</code>" in n[0]
+    kb = [c for c in bot.named("send_message") if "이름 변경" in c[2]][-1][3]["reply_markup"]
+    btns = [b for row in kb.inline_keyboard for b in row]
+    assert btns[0].callback_data == "nh:all:5"                          # 알림에서 바로 전체 기록
+    assert any(b.url and "startgroup=true" in b.url for b in btns)      # 우리 방에도 추가 (성장 고리)
+    assert not any("sangmata" in (b.url or b.text).lower() for b in btns)
     await db.set_setting(CHAT, "name_change_notice", False)
     await group_say(ctx, user(5, "또바뀜", "admin_real"))
     assert len(notices(bot)) == 1 and len(await namehist.history(db, 5)) == 3  # 알림 꺼도 기록은 남음
