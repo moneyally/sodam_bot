@@ -56,6 +56,8 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
                 result = "이 도구는 지금 사용할 수 없음."
             else:
                 result = await execute(c.function.name, c.function.arguments, ctx)
+            log.info("도구 %s chat=%s user=%s 인자=%s → %s", c.function.name, ctx.chat_id, ctx.caller.id,
+                     (c.function.arguments or "")[:200], result[:200].replace("\n", " "))
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", result[:4000], nonce())})
 

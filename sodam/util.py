@@ -23,6 +23,16 @@ def user_name(user) -> str:
 _INT = re.compile(r"-?\d{1,18}")  # SQLite INTEGER(int64) 범위 안
 
 
+STALE_SEC = 300
+
+
+def is_stale(msg, sec: int = STALE_SEC) -> bool:
+    """재시작 동안 쌓였다 늦게 받은 메시지인지 (AI 답·끼어들기는 건너뜀, 입장·관리는 그대로 처리)."""
+    d = getattr(msg, "date", None)
+    ts = d.timestamp() if isinstance(d, datetime) else None
+    return ts is not None and time.time() - ts > sec
+
+
 def to_int(s: str) -> int | None:
     """'--5', '²', 19자리 이상 같은 값에서 int()·SQLite 가 터지지 않게. 정수 문자열이 아니면 None."""
     return int(s) if isinstance(s, str) and _INT.fullmatch(s) else None

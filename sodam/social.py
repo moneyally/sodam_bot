@@ -32,7 +32,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .security import filter_output, nonce, scan, wrap
 from .tools import ToolCtx
-from .util import esc, user_name
+from .util import esc, is_stale, user_name
 
 if TYPE_CHECKING:
     from .services import Services
@@ -125,7 +125,7 @@ async def on_group_message(svc: Services, bot, msg, role: Role) -> None:
         return
     if not await svc.paid_features(chat_id):
         return  # 구독 안 한 방엔 뒷작업 비용을 쓰지 않음
-    if s.get("ai_chime_in"):
+    if s.get("ai_chime_in") and not is_stale(msg):
         await maybe_chime(svc, bot, msg, role, text, s)
     if s.get("ai_memory", True):
         memory.observe(svc, chat_id, user.id, text)

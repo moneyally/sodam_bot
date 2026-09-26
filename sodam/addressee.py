@@ -112,9 +112,11 @@ async def collect(svc: Services, bot, msg, chat_id: int, caller, request: str) -
     for uid, c in sorted(cands.items(), key=lambda kv: -kv[1]["score"])[:MAX_LINES]:
         lines.append(f"{'★' * c['score']} {c['name']} (ID {uid}): {', '.join(c['why'])}")
     if not lines:
-        lines.append("후보 없음: 누구를 가리키는지 단서가 없다. 특정인을 지어내지 말 것.")
+        lines.append("후보 없음: 방 기록에서 가리키는 사람을 못 찾았다. 요청에 이름이 적혀 있으면 멘션 없이 그 이름 그대로 부르고, "
+                     "없으면 특정인을 지어내지 말 것.")
     m = _STYLE_ASK.search(request)
     if m:
         want = m.group(1) or m.group(2)
-        notes.append(f"요청에 말투 변경 부탁이 섞여 있다: '{want}'. 다른 부탁과 함께 이것도 처리할 것.")
+        notes.append(f"요청에 말투 변경 부탁이 섞여 있다: '{want}'. 누구 말투인지(특정인·방 전체·요청자 본인) 판단해 "
+                     "다른 부탁과 함께 처리할 것.")
     return lines + notes

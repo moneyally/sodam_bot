@@ -56,6 +56,7 @@ class Case:
     caller_admin: bool = True
     style_room: str | None = None        # 방 말투가 이걸로 바뀌어야
     style_self: str | None = None        # 말한 사람 개인 말투가 이걸로
+    style_member: tuple | None = None    # (등장인물, 말투): 그 사람 개인 말투가 이걸로 (방·요청자 말투는 그대로)
     text_has: str | None = None          # 답에 이 글자가 있어야 (text 판정)
     title_room: str = "대표님 소통방"
 
@@ -78,8 +79,8 @@ CASES = [
     Case("봇 답장에 고맙다", "고마워 소담아", "general", reply_to_bot=True),
     Case("저분 누구셔 (답장)", "소담아 저분 누구셔?", "text", reply_to="하나", text_has="하나"),
     Case("방장 누구야", "소담아 이 방 관리자 누구야?", "text", text_has="방장"),
-    Case("인사 + 말투 (관리자)", "소담아 대표님 인사드려 .말투 여친", "mention", {"하나"}, reply_to="하나",
-         style_room="girlfriend"),
+    Case("인사 + 방 말투 (관리자)", "소담아 대표님 인사드려 그리고 이 방 말투 여친으로 바꿔", "mention", {"하나"},
+         reply_to="하나", style_room="girlfriend"),
     Case("말투만 (관리자, 문장)", "소담아 이 방 말투 자유분방으로 바꿔줘", "general", style_room="free"),
     Case("말투 (일반 멤버)", "소담아 나한테는 츤데레 말투로 해줘", "general", caller_admin=False, style_self="tsundere"),
     Case("새내기 + 답장은 다른 사람", "소담아 새로 오신 분 환영해드려", "mention", {"새내기"}, reply_to="하나",
@@ -95,7 +96,17 @@ CASES = [
     Case("이름 부분 + 호칭 (철수형)", "소담아 철수형한테 인사해", "mention", {"김철수"}),
     Case("영어 아이디로", "소담아 junho 대표님 인사드려", "mention", {"박대표"}),
     Case("두 명 중 한 명 이름 (김영희)", "소담아 영희 대표님 인사드려", "mention", {"김영희"}, spoke={"김철수": 1}),
+    Case("기록에 없는 새 사람 (입장 알림 놓침)", "소담아 Major님 입장 인사드려", "text", text_has="Major", title_room="FIRST"),
+    Case("명령 + 태그로 남의 말투 (관리자)", ".말투 여친 소담아 @hana_k 한테 이제 앞으로 말투 바꿔서 사용", "mention", {"하나"},
+         style_member=("하나", "girlfriend")),
+    Case("명령 + 답장으로 남의 말투 (관리자)", ".말투 츤데레 이분한테", "mention", {"김철수"}, reply_to="김철수",
+         style_member=("김철수", "tsundere")),
+    Case("말투 한 단어 명령 = 본인", ".말투 여친", "general", style_self="girlfriend"),
+    Case("일반 멤버가 남의 말투 부탁 (거절)", "소담아 하나한테 말투 여친으로 해줘", "general", caller_admin=False,
+         style_member=("하나", None)),
+    Case("기록에 없는 이름 + 대표님", "소담아 Hunter 대표님 인사드려", "text", text_has="Hunter", spoke={"하나": 1}),
 ]
+HEDGE = re.compile(r"(들어오셨|오셨|계셨던|계신)\S*\s*(다면|라면|거라면)")
 
 
 async def run_case(i: int, c: Case) -> dict:
@@ -147,13 +158,18 @@ async def run_case(i: int, c: Case) -> dict:
     elif c.expect == "general":
         ok = not mentioned
     else:
-        ok = (c.text_has in plain) and not wrong
+        ok = (c.text_has in plain) and not wrong and not HEDGE.search(plain)
     s = await r.db.get_settings(Room.CHAT)
     if c.style_room:
         ok = ok and s["style"] == c.style_room
     if c.style_self:
         mem = await r.db.get_member(Room.CHAT, caller.id)
         ok = ok and (mem["style"] == c.style_self) and s["style"] != c.style_self
+    if c.style_member:
+        who, want_style = c.style_member
+        mem = await r.db.get_member(Room.CHAT, P[who].id)
+        me = await r.db.get_member(Room.CHAT, caller.id)
+        ok = ok and mem["style"] == want_style and s["style"] == "polite" and not (me and me["style"])
     names = {v: k for k, v in ids.items()}
     print(f"{'✅' if ok else '❌'} {i:2d}. {c.title} — 멘션 {sorted(names.get(x, x) for x in mentioned) or '없음'}"
           + (f" · 엉뚱한 멘션 {sorted(names.get(x, x) for x in wrong)}" if wrong else "")

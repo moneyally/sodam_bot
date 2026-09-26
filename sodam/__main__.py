@@ -112,8 +112,9 @@ def main() -> None:
            .build())
     handlers.register(app, cfg.tz, cfg.backup_time, cfg.bot_role)
     # chat_member 는 명시적으로 받아야 오는 업데이트 (입장 메시지를 숨긴 방에서도 입장 감지)
+    # 재시작 동안 쌓인 업데이트도 받는다 (버리면 그 사이 입장한 사람을 영영 모름). 오래된 메시지엔 AI 가 답하지 않음 (util.is_stale)
     try:
-        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
     except KeyboardInterrupt:
         # Ctrl+C 를 두 번 눌러 정리 도중 끊긴 경우. 데이터는 매번 커밋되므로 안전하다
         pass

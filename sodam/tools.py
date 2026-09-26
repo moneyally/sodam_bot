@@ -266,6 +266,21 @@ async def t_set_my_style(ctx: ToolCtx, a: dict) -> str:
     return f"이 사람의 말투를 '{STYLES[style].label}'(으)로 바꿈. 다음 답변부터 적용."
 
 
+async def t_set_member_style(ctx: ToolCtx, a: dict) -> str:
+    raw = str(a.get("style", "")).strip()
+    style = None if raw in ("기본", "초기화", "reset") else resolve_style(raw)
+    if raw not in ("기본", "초기화", "reset") and not style:
+        return "없는 말투."
+    row, err = await _resolve(ctx, str(a.get("name", "")))
+    if err:
+        return err + " 누구인지 짧게 되물을 것."
+    await ctx.svc.db.set_member_style(ctx.chat_id, row["user_id"], style)
+    ctx.mentions.append((row["user_id"], _row_name(row)))
+    label = STYLES[style].label if style else "방 기본"
+    return (f"{_row_name(row)} 님에게 쓸 말투를 '{label}'(으)로 바꿈 (방 전체·요청자 말투는 그대로). "
+            "답변 맨 앞에 그 사람 멘션이 자동으로 붙으니 이름은 다시 쓰지 말고, 바뀐 말투로 그 사람에게 한마디 할 것.")
+
+
 async def t_greet(ctx: ToolCtx, a: dict) -> str:
     names = [str(n) for n in (a.get("names") or [])][:10]
     found, missing, new = [], [], []
@@ -281,13 +296,15 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
         if m and m["joined_at"] and m["joined_at"] > day_ago:
             new.append(_row_name(row))
     old = [f for f in found if f not in new]
-    result = f"인사 대상 확인: {', '.join(found) or '없음'}. 답변 맨 앞에 멘션이 자동으로 붙으니 이름은 다시 쓰지 말고 인사말만 쓸 것."
+    result = (f"인사 대상 확인: {', '.join(found)}. 답변 맨 앞에 멘션이 자동으로 붙으니 이 사람들 이름은 다시 쓰지 말 것."
+              if found else "인사 대상 확인: 없음.")
     if new:
         result += f" 오늘 새로 들어온 사람: {', '.join(new)} → 환영 인사."
     if old:
         result += f" 원래 있던 멤버: {', '.join(old)} → '환영' 말고 반가운 안부 인사 (예: 대표님 반갑습니다, 오늘도 좋은 하루 보내세요)."
     if missing:
-        result += f" 못 찾은 이름: {', '.join(missing)}"
+        result += (f" 못 찾은 이름: {', '.join(missing)} → 방 기록에 없어 멘션은 못 함. 이름 그대로 불러 인사할 것"
+                   " ('들어오셨다면' 같은 가정 없이).")
     return result
 
 
@@ -444,6 +461,10 @@ TOOLS: list[Tool] = [
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN),
     Tool("ban_member", "[관리자] 멤버를 내보낸다. 실제 실행 전 확인 버튼이 뜬다.",
          {"name": {"type": "string"}, "reason": {"type": "string"}}, ["name", "reason"], t_ban, Role.ADMIN),
+    Tool("set_member_style", "[관리자] 특정 멤버 한 사람에게 쓸 봇 말투를 바꾼다 ('기본' 이면 방 기본으로).",
+         {"name": {"type": "string", "description": "@username, 이름, 또는 ID (<addressee_hints> 의 그대로)"},
+          "style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}},
+         ["name", "style"], t_set_member_style, Role.ADMIN),
     Tool("change_setting", "[관리자] 방 설정을 바꾼다.",
          {"key": {"type": "string", "enum": list(DEFAULTS)}, "value": {"type": "string"}},
          ["key", "value"], t_change_setting, Role.ADMIN),

@@ -30,7 +30,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .services import Services
 from .tools import ToolCtx
-from .util import RateLimiter, day_start, esc, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
+from .util import RateLimiter, day_start, esc, is_stale, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
@@ -356,6 +356,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     parsed = commands.parse(text, bot.username)
     if parsed:
         cmd, args, argstr = parsed
+        if cmd.fn is commands.c_style and await _style_for_ai(svc, msg, chat_id, args):
+            # '.말투 여친 @누구 한테…' 처럼 대상·설명이 붙으면 누구 말투인지 AI 가 판단
+            await ai_reply(context, msg, role, f"말투 변경 부탁: {argstr}", scan)
+            return
         await commands.dispatch(CmdCtx(svc, bot, msg, chat_id, user, role, args, argstr), cmd)
         return
 
@@ -397,10 +401,24 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     return False
 
 
+async def _style_for_ai(svc: Services, msg: Message, chat_id: int, args: list[str]) -> bool:
+    """'.말투 여친' 한 단어면 본인 말투(명령 그대로). 태그·답장·설명이 붙었고 AI 를 쓸 수 있으면 AI 에게."""
+    r = msg.reply_to_message
+    other = r is not None and r.from_user is not None and not r.from_user.is_bot and r.from_user.id != msg.from_user.id
+    tagged = any(e.type in ("mention", "text_mention") for e in (msg.entities or ()))
+    if not (len(args) > 1 or other or tagged):
+        return False
+    s = await svc.db.get_settings(chat_id)
+    return bool(s["ai_enabled"] and getattr(svc.llm, "enabled", False))
+
+
 async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
                    request: str, scan: security.ScanResult, via: str = "call") -> None:
     svc, bot = _svc(context), context.bot
     chat_id, user = msg.chat_id, msg.from_user
+    if is_stale(msg):
+        log.info("늦게 받은 메시지라 AI 답 생략 chat=%s msg=%s", chat_id, msg.message_id)
+        return
     s = await svc.db.get_settings(chat_id)
     if not s["ai_enabled"]:
         return
