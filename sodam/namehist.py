@@ -335,6 +335,9 @@ async def sweep(svc, bot) -> int:
         done += 1
         if member is None or getattr(member.user, "is_bot", False):
             continue
+        if str(member.status) in ("left", "kicked"):  # 조용히 나간 사람은 멤버 목록에서 뺌
+            from .panels.members import mark
+            await mark(svc.db, chat_id, user_id, left=True)
         changed = await record(svc.db, member.user)
         if changed and str(member.status) in ("member", "administrator", "creator", "restricted"):
             await _notify(svc, bot, chat_id, user_id, changed)

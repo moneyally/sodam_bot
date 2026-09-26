@@ -58,6 +58,16 @@ class HarnessPerms:
     def forget(self, cid):
         self.forgets += 1
 
+    def forget_bot(self, cid):
+        pass
+
+    async def bot_can_moderate(self, bot, cid):
+        return True
+
+    async def admin_users(self, bot, cid):
+        from fakes import fake_user
+        return [fake_user(u, PERSONAS.get(u, "관리자")) for u in self.tg | {OWNER}]
+
 
 class _Checker(HTMLParser):
     def __init__(self):

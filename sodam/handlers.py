@@ -24,6 +24,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, 
 
 from . import casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription
 from .agent import run_agent
+from .panels import members as members_panel
 from .commands import CmdCtx
 from .llm import BudgetExceeded
 from .permissions import Role
@@ -128,6 +129,7 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     await svc.db.ensure_chat(chat_id, title)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(chat_id, user.id, joined=True)
+    await members_panel.mark(svc.db, chat_id, user.id, left=False)
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
         return
@@ -228,6 +230,15 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                               f"{esc(user_name(adder)) if adder else '?'}({adder.id if adder else '?'})")
 
 
+async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """'OO님이 나갔습니다' 메시지 (관리 권한 없는 방에서도 옴) → 멤버 목록에서 뺌."""
+    msg = update.message
+    if msg and msg.left_chat_member and not msg.left_chat_member.is_bot:
+        svc = _svc(context)
+        hooks.member_left(svc, msg.chat_id, msg.left_chat_member.id)
+        await members_panel.mark(svc.db, msg.chat_id, msg.left_chat_member.id, left=True)
+
+
 async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """일반 그룹이 슈퍼그룹으로 바뀌면 방 ID 가 바뀐다 → 구독·설정·자료를 새 ID 로 옮김."""
     msg = update.message
@@ -258,6 +269,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif _in_chat(old) and not _in_chat(new):
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
         hooks.member_left(svc, cmu.chat.id, new.user.id)
+        await members_panel.mark(svc.db, cmu.chat.id, new.user.id, left=True)
         await svc.captcha.cancel(context.bot, cmu.chat.id, new.user.id)
 
 
@@ -768,6 +780,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     # 반응·가입 요청·수정된 메시지는 기록만 하면 돼서 별도 처리 없음 (TypeHandler 가 봄)
     app.add_handler(MessageHandler(groups & filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
+    app.add_handler(MessageHandler(groups & filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left))
     app.add_handler(MessageHandler(groups & filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL, on_group_message))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE, on_private))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))

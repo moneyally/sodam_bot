@@ -351,6 +351,23 @@ async def c_about(ctx: CmdCtx) -> None:
 
 
 # ── 관리자 명령 ───────────────────────────────────────────
+async def c_members(ctx: CmdCtx) -> None:
+    """👥 멤버 목록을 관리자 1:1 로 (방에 명단을 뿌리지 않게)."""
+    from .panels.members import s_members
+    screen = await s_members(menu.PanelCtx(ctx.svc, ctx.bot, ctx.user.id, ctx.chat_id, []))
+    if screen.text is None:
+        await ctx.reply(screen.toast or "잠시 후 다시 해주세요.")
+        return
+    try:
+        await menu.send_panel(ctx.svc, ctx.bot, ctx.user.id, lambda: ctx.bot.send_message(
+            ctx.user.id, screen.text, parse_mode="HTML", reply_markup=screen.kb))
+        await _private_notice(ctx, "🔒 관리자님, 1:1 채팅에서 멤버 목록을 확인해주세요.")
+    except TelegramError:
+        await _private_notice(ctx, "관리자님, 먼저 봇과 1:1 대화를 시작해주세요.",
+                              InlineKeyboardMarkup([[InlineKeyboardButton(
+                                  "👥 열기", url=f"https://t.me/{ctx.bot.username}?start=cfg_{ctx.chat_id}")]]), seconds=60)
+
+
 async def c_settings(ctx: CmdCtx) -> None:
     """그룹헬프처럼 버튼 설정 패널을 관리자 1:1 로 보낸다. '.설정 전체' 는 글 목록."""
     if not (ctx.args and ctx.args[0] in ("전체", "all", "목록")):
@@ -894,6 +911,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("아이디조회", "check_username", "usernames"), c_check_username, usage="[@user|ID|답장]",
         help="@아이디 변경만", group="이름 기록", dm_ok=True),
     Cmd(("내기록", "myhistory"), c_myhistory, help="내 이름·아이디 기록", group="이름 기록", dm_ok=True),
+    Cmd(("멤버", "멤버목록", "members"), c_members, Role.ADMIN, help="방 멤버 목록 (1:1 로)", group="관리자"),
     Cmd(("이름알림", "namealert"), c_name_notice, Role.ADMIN, usage="[켜기|끄기]", help="이름 변경 알림 설정",
         group="관리자"),
     Cmd(("랭킹", "rank"), c_rank, usage="[오늘|주간|월간|전체]", help="채팅 랭킹", group="집계"),

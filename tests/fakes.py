@@ -106,6 +106,10 @@ class FakeBot:
         return [SimpleNamespace(user=u, status="administrator") for u in self.admins]
 
     # 태그 알림용. 테스트가 bot.member_status = {(방, 사람): "left"} (없으면 "member"), bot.dm_blocked = {사람} 로 지정
+    async def get_chat_member_count(self, chat_id):
+        self.calls.append(("get_chat_member_count", chat_id))
+        return getattr(self, "member_count", 100)
+
     async def get_chat_member(self, chat_id, user_id):
         self.calls.append(("get_chat_member", chat_id, user_id))
         if user_id == self.id:  # 봇 자신: 기본은 관리 권한 있는 관리자 (can_moderate=False 면 일반 멤버)

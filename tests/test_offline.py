@@ -71,7 +71,7 @@ def app_wiring():
     importlib.import_module("sodam.__main__")  # import 오류 확인
     app = ApplicationBuilder().token("123456:TEST").build()
     handlers.register(app, TZ)
-    assert sum(len(h) for h in app.handlers.values()) == 8  # 이름기록(모든 업데이트)·입장·그룹전환·메시지·개인챗·멤버변경·봇초대·버튼
+    assert sum(len(h) for h in app.handlers.values()) == 9  # 이름기록(모든 업데이트)·입장·나감·그룹전환·메시지·개인챗·멤버변경·봇초대·버튼
     assert {"tick", "backup", "sports", "daily_report", "prune", "sub_reminders", "name_sweep"} <= {j.name for j in app.job_queue.jobs()}
     assert -1 in app.handlers  # 이름 기록기가 다른 처리보다 먼저
     aliases = [n.lower() for c in commands.COMMANDS for n in c.names]
