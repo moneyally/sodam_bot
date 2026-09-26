@@ -83,6 +83,9 @@ class FakeBot:
     async def unban_chat_member(self, chat_id, user_id, only_if_banned=False, **kw):
         self.calls.append(("unban", chat_id, user_id))
 
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None, reply_markup=None, **kw):
+        self.calls.append(("edit_markup", chat_id, message_id, reply_markup))
+
     async def delete_message(self, chat_id, message_id):
         self.calls.append(("delete", chat_id, message_id))
 

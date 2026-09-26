@@ -405,5 +405,26 @@ async def weird_digits_do_not_crash():
     assert normalize_domain("https://www.YouTube.com/x") == "youtube.com" and normalize_domain("<b>") is None
 
 
+@test
+async def only_one_live_panel_per_user():
+    db, svc, bot, _ = await setup()
+    ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
+
+    async def dm(text, mid):
+        msg = FakeMsg(1, fake_user(1, "방장"), text, message_id=mid)
+        await handlers.on_private(SimpleNamespace(message=msg), ctx)
+
+    await dm("/start", 1)                                                # 메뉴 A (id 10001)
+    assert not bot.named("edit_markup")
+    await dm(f"/start cfg_{CHAT}", 2)                                    # 메뉴 B → A 의 버튼 제거
+    assert bot.named("edit_markup") == [("edit_markup", 1, 10001, None)]
+    q = FakeQuery(1, fake_user(1, "방장"))
+    q.message.message_id = 10002                                         # B 에서 버튼 누름 → B 가 살아있는 메뉴
+    await menu.on_callback(svc, bot, q, ["sec", str(CHAT)])
+    await press(svc, bot, 1, f"m:in:{CHAT}:bw")
+    await dm("새단어", 3)                                                 # 입력 결과로 새 메뉴 → B 버튼 제거
+    assert bot.named("edit_markup")[-1][2] == 10002
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

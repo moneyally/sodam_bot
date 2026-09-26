@@ -509,12 +509,12 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         svc.inputs.pop(user.id, None)
         text_, kb = await menu.group_panel(svc, bot, chat_id, user.id)
-        await msg.reply_text(text_, parse_mode="HTML", reply_markup=kb)
+        await menu.send_panel(svc, bot, user.id, lambda: msg.reply_text(text_, parse_mode="HTML", reply_markup=kb))
         return
     if re.match(r"^/start(@\w+)?\s*$", text) or text in ("/menu", ".메뉴"):
         svc.inputs.pop(user.id, None)
         text_, kb = await menu.main_menu(svc, bot, user.id)
-        await msg.reply_text(text_, parse_mode="HTML", reply_markup=kb)
+        await menu.send_panel(svc, bot, user.id, lambda: msg.reply_text(text_, parse_mode="HTML", reply_markup=kb))
         return
 
     m = _OWNER_CMD.match(text)

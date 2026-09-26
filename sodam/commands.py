@@ -284,7 +284,8 @@ async def c_settings(ctx: CmdCtx) -> None:
     if not (ctx.args and ctx.args[0] in ("전체", "all", "목록")):
         text, kb = await menu.group_panel(ctx.svc, ctx.bot, ctx.chat_id, ctx.user.id)
         try:
-            await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb)
+            await menu.send_panel(ctx.svc, ctx.bot, ctx.user.id,
+                                  lambda: ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb))
             await _private_notice(ctx, "🔒 관리자님, 봇과의 1:1 채팅에서 설정 메뉴를 확인해주세요.")
         except TelegramError:
             await _private_notice(ctx, "관리자님, 아래 버튼으로 설정 메뉴를 열어주세요.",

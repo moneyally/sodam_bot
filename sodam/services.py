@@ -76,6 +76,7 @@ class Services:
     inputs: dict[int, PendingInput] = field(default_factory=dict)      # user_id → 메뉴 글자 입력 대기
     menu_tokens: dict[str, MenuToken] = field(default_factory=dict)
     menu_limiter: RateLimiter = field(default_factory=RateLimiter)
+    panel_msgs: dict[int, int] = field(default_factory=dict)  # user_id → 지금 살아있는 메뉴 메시지 (옛 메뉴 버튼 정리용)
 
     async def paid_features(self, chat_id: int) -> bool:
         """구독(또는 체험) 중인 방인지. 결제 기능이 꺼져 있으면 항상 True.

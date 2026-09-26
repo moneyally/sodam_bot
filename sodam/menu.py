@@ -653,7 +653,8 @@ async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
         return True
     svc.inputs.pop(user.id, None)
     screen = await screen_fn(c)
-    await msg.reply_text(result + "\n\n" + screen.text, parse_mode="HTML", reply_markup=screen.kb)
+    await send_panel(svc, bot, user.id, lambda: msg.reply_text(result + "\n\n" + screen.text, parse_mode="HTML",
+                                                               reply_markup=screen.kb))
     return True
 
 
@@ -719,7 +720,22 @@ ROUTES: dict[str, Route] = {
 }
 
 
-async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen) -> None:
+async def send_panel(svc: Services, bot: Bot, uid: int, send: Callable[[], Awaitable[object]]) -> None:
+    """메뉴를 새 메시지로 보내고, 그 전에 떠 있던 메뉴의 버튼은 없앤다 (1:1 에 메뉴 1개만 살아있게).
+    send() 는 실제로 보내는 코루틴 (reply_text / send_message)."""
+    sent = await send()
+    new_id = getattr(sent, "message_id", None)
+    old = svc.panel_msgs.get(uid)
+    if new_id is not None:
+        svc.panel_msgs[uid] = new_id
+    if old is not None and old != new_id:
+        try:
+            await bot.edit_message_reply_markup(chat_id=uid, message_id=old, reply_markup=None)
+        except TelegramError:
+            pass  # 이미 지워졌거나 48시간 지난 메시지
+
+
+async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen, svc: Services | None = None) -> None:
     await q.answer(screen.toast, show_alert=screen.alert)
     if screen.text is None:
         return
@@ -730,9 +746,16 @@ async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen) -> None:
         if "not modified" in err:
             return
         if "not found" in err or "can't be edited" in err:  # 지워졌거나 오래된 메시지 → 새로 보냄
-            await bot.send_message(uid, screen.text, parse_mode="HTML", reply_markup=screen.kb)
+            send = lambda: bot.send_message(uid, screen.text, parse_mode="HTML", reply_markup=screen.kb)  # noqa: E731
+            if svc is not None:
+                await send_panel(svc, bot, uid, send)
+            else:
+                await send()
             return
         raise
+    msg_id = getattr(q.message, "message_id", None)
+    if svc is not None and msg_id is not None and screen.kb is not None:
+        svc.panel_msgs[uid] = msg_id  # 누른 메시지가 지금 살아있는 메뉴
 
 
 async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str]) -> None:
@@ -771,7 +794,7 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
     except TelegramError as e:
         log.warning("menu %s failed: %s", code, e)
         screen = Screen(None, toast="텔레그램 연결이 불안정해요. 잠시 후 다시 눌러주세요.", alert=True)
-    await _show(bot, q, uid, screen)
+    await _show(bot, q, uid, screen, svc)
 
 
 from . import panels  # noqa: E402,F401  패널 모듈들이 위 register_* 로 화면을 추가한다
