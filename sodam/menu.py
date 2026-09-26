@@ -671,7 +671,7 @@ async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
         return True
     svc.inputs.pop(user.id, None)
     screen = await screen_fn(c)
-    await send_panel(svc, bot, user.id, lambda: msg.reply_text(result + "\n\n" + screen.text, parse_mode="HTML",
+    await send_panel(svc, bot, user.id, lambda: msg.reply_text(result + ("\n\n" + screen.text if screen.text else ""), parse_mode="HTML",
                                                                reply_markup=screen.kb))
     return True
 

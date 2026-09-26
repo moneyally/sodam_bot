@@ -9,7 +9,8 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
-from . import knowledge, menu, stats, subscription
+from . import knowledge, menu, namehist, stats, subscription
+from .panels import namehist as nh_panel
 from .permissions import Role
 from .services import Services
 from .security import normalize_domain
@@ -154,6 +155,34 @@ async def c_me(ctx: CmdCtx) -> None:
     if ctx.role >= Role.ADMIN or uid == ctx.user.id:
         lines.append(f"경고: {await db.warning_count(ctx.chat_id, uid)}회")
     await ctx.reply("\n".join(lines))
+
+
+async def c_namehist(ctx: CmdCtx) -> None:
+    """이름·아이디 변경 기록 (SangMata 방식). 그룹: 이 방 멤버 / 1:1: 나 또는 같은 그룹 멤버 (오너는 전부)."""
+    db, tz = ctx.svc.db, ctx.svc.cfg.tz
+    in_dm = ctx.chat_id > 0
+    if not ctx.args and not ctx.msg.reply_to_message:
+        await ctx.reply(await namehist.history_text(db, ctx.user.id, tz, title="내 이름 기록"))
+        return
+    if in_dm:
+        uid = await nh_panel.resolve(db, ctx.args[0])
+        if uid is None:
+            await ctx.reply("그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요.")
+            return
+        if uid != ctx.user.id and ctx.role < Role.OWNER and not await namehist.shares_group(db, ctx.user.id, uid):
+            await ctx.reply("🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요.")
+            return
+    else:
+        old = await namehist.find_by_old_username(db, ctx.chat_id, ctx.args[0]) \
+            if ctx.args and ctx.args[0].startswith("@") and not ctx.msg.reply_to_message else None
+        if old is not None and not await db.find_members(ctx.chat_id, ctx.args[0]):
+            uid = old  # 예전 @아이디로 찾음
+        else:
+            t = await _target(ctx, sanction=False)
+            if not t:
+                return
+            uid = t[0]
+    await ctx.reply(await namehist.history_text(db, uid, tz))
 
 
 async def c_rank(ctx: CmdCtx) -> None:
@@ -813,6 +842,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("내아이디", "id", "myid"), c_myid, help="내 텔레그램 숫자 ID (방에선 방 ID도)", dm_ok=True),
     Cmd(("규칙", "rules"), c_rules, help="방 규칙 보기"),
     Cmd(("내정보", "me", "정보", "info"), c_me, usage="[@user]", help="활동 정보"),
+    Cmd(("이름기록", "기록", "history", "names", "sangmata"), c_namehist, usage="[@user|ID|답장]",
+        help="이름·아이디 변경 기록", dm_ok=True),
     Cmd(("랭킹", "rank"), c_rank, usage="[오늘|주간|월간|전체]", help="채팅 랭킹", group="집계"),
     Cmd(("통계", "stats"), c_stats, usage="[오늘|주간|월간]", help="방 통계", group="집계"),
     Cmd(("검색", "search"), c_search, usage="키워드", help="대화 검색 (최근 30일)", group="집계"),

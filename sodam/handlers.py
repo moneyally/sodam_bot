@@ -21,7 +21,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import commands, hooks, memory, menu, security, social, stats, subscription
+from . import commands, hooks, memory, menu, namehist, security, social, stats, subscription
 from .agent import run_agent
 from .commands import CmdCtx
 from .llm import BudgetExceeded
@@ -125,7 +125,10 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
         return
     svc, bot = _svc(context), context.bot
     await svc.db.ensure_chat(chat_id, title)
+    changed = await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
+    if changed and (await svc.db.get_settings(chat_id))["name_change_notice"]:
+        await send_temp(context, chat_id, namehist.change_notice(user.id, *changed) + "\n(다시 들어온 멤버)", 3600)
     await svc.db.touch_member(chat_id, user.id, joined=True)
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
@@ -282,8 +285,14 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if chat_id not in seen:
         await svc.db.ensure_chat(chat_id, msg.chat.title)
         seen.add(chat_id)
+    changed = None if msg.sender_chat else await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(chat_id, user.id)
+    if changed and (await svc.db.get_settings(chat_id))["name_change_notice"]:
+        try:  # SangMata 처럼 방에 남겨 둔다 (사칭·먹튀 계정 확인용)
+            await bot.send_message(chat_id, namehist.change_notice(user.id, *changed), parse_mode="HTML")
+        except TelegramError as e:
+            log.info("name change notice failed: %s", e)
 
     text = msg.text or msg.caption or ""
     role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
@@ -505,6 +514,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not user:
         return
     await svc.db.ensure_chat(msg.chat_id, None)
+    await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(msg.chat_id, user.id)
 
