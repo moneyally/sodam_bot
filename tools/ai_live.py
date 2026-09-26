@@ -174,7 +174,26 @@ async def scene9():
     del before
 
 
-SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9]
+async def scene10():
+    print("\n🎬 10. 방 전체 인사 (새로 온 사람 없음) / 새로 온 사람 있음 (캡차 없는 방)")
+    r = await room({"captcha_enabled": False})
+    await say(r, JUNHO, "오늘 다들 고생 많으셨어요")
+    out = await say(r, BOSS, "소담아 방사람들한테 인사드려")
+    sent = " ".join(out)
+    check("기존 멤버들에겐 '환영' 없이 안부", bool(out) and "환영" not in sent and "오신 걸" not in sent)
+    newbie = fake_user(55, "새내기", "newbie")
+    from sodam import handlers
+    from types import SimpleNamespace as NS
+    m = r.msg(newbie, "")
+    m.new_chat_members = (newbie,)
+    await handlers.on_join(NS(message=m), r.ctx)
+    await asyncio.sleep(0)
+    out = await say(r, BOSS, "소담아 새로 오신 분 인사드려")
+    sent = " ".join(out)
+    check("새로 온 사람은 멘션해서 환영", "tg://user?id=55" in sent)
+
+
+SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9, scene10]
 
 
 async def main() -> int:
