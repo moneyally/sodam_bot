@@ -8,6 +8,7 @@ from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, run
 
 from sodam import casino
 from sodam.casino import core
+from sodam.casino import basic
 from sodam.casino import cards as C
 
 test, run_all = runner()
@@ -75,7 +76,12 @@ async def setup(n_users=1, start=10_000):
         await core.credit(db, CHAT, u.id, start, "join")
     C.HANDS.clear()
     core._last_bet.clear()
+    basic.sleep = _no_wait                  # 카드 뒤집기·딜러 공개 연출을 실제로 기다리지 않게
     return svc, bot, users
+
+
+async def _no_wait(_):
+    await asyncio.sleep(0)
 
 
 def ctx(svc, bot, user, text):
@@ -180,11 +186,12 @@ async def bac_command_flow():
     fix("♠4", "♥K", "♦4", "♣5")
     msg = await cmd(svc, bot, u, "!바카라 1000 플")
     assert await core.balance(svc.db, CHAT, u.id) == 11_000
-    out = msg.replies[-1]
-    assert "♠4 ♦4" in out and "플레이어 승" in out and "+1,000P" in out, out
+    out = bot.named("edit_text")[-1][3]                          # 카드 뒤집는 연출 → 마지막 수정이 결과 화면
+    assert "「4♠️」「4♦️」" in out and "플레이어 승" in out and "+1,000P" in out, out
     fix("♠K", "♥7", "♦7", "♣K")
     msg = await cmd(svc, bot, u, "!바카라 뱅 2000")
-    assert await core.balance(svc.db, CHAT, u.id) == 11_000 and "타이" in msg.replies[-1] and "본전" in msg.replies[-1]
+    out = bot.named("edit_text")[-1][3]
+    assert await core.balance(svc.db, CHAT, u.id) == 11_000 and "타이" in out and "본전" in out
     fix("♠K", "♥7", "♦7", "♣K")
     await cmd(svc, bot, u, "!바카라 1000 T")
     assert await core.balance(svc.db, CHAT, u.id) == 20_000

@@ -172,12 +172,18 @@ async def settle(ctx: Ctx, bet: int, payout: int, game: str) -> int:
     return await balance(db, cid, uid)
 
 
-async def finish(ctx: Ctx, game: str, bet: int, payout: int, body: str, **reply_kw) -> int:
-    """정산 + 결과 메시지 (게임 결과 줄 → 손익·잔액 → 딜러 소담 한마디). 새 잔액."""
+async def settle_text(ctx: Ctx, game: str, bet: int, payout: int) -> tuple[int, str]:
+    """정산 + 꼬리 두 줄 (손익·잔액 / 딜러 소담 한마디). (새 잔액, 꼬리)."""
     from .dealer import line
     bal = await settle(ctx, bet, payout, game)
     style = (await ctx.svc.db.get_settings(ctx.chat_id))["style"]
-    await ctx.reply(f"{body}\n{result_line(bet, payout, bal)}\n{line(style, bet, payout, bal)}", **reply_kw)
+    return bal, f"{result_line(bet, payout, bal)}\n{line(style, bet, payout, bal)}"
+
+
+async def finish(ctx: Ctx, game: str, bet: int, payout: int, body: str, **reply_kw) -> int:
+    """정산 + 결과 메시지 (게임 결과 줄 → 손익·잔액 → 딜러 소담 한마디). 새 잔액."""
+    bal, tail = await settle_text(ctx, game, bet, payout)
+    await ctx.reply(f"{body}\n{tail}", **reply_kw)
     return bal
 
 

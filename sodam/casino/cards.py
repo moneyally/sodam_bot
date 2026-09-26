@@ -22,13 +22,15 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from ..util import esc, user_name
-from . import SHUTDOWN_HOOKS, Ctx, register, register_callback
+from . import SHUTDOWN_HOOKS, Ctx, basic, register, register_callback
+from .basic import edit_live, show
 from .core import balance, credit, dealer_tail, debit, fmt, result_line, rng, settle, split_bet, take_bet
 
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
 HAND_TTL = 120          # 버튼 게임 만료(초)
 HIDDEN = "🎴"
+SUIT_FACE = ("♠️", "♥️", "♦️", "♣️")   # 이모지 무늬: ♥️♦️ 는 빨강, ♠️♣️ 는 검정으로 보임
 
 
 # ── 카드 · 슈 ─────────────────────────────────────────────
@@ -61,8 +63,18 @@ def make_shoe(decks: int) -> Shoe:
     return Shoe(decks)
 
 
+def face(c: Card) -> str:
+    """화면용 카드: 「A♠️」 「10♥️」 (기본 문자 + 흔한 이모지만)."""
+    return f"「{RANKS.get(c.rank, str(c.rank))}{SUIT_FACE[c.suit]}」"
+
+
 def cards_str(cards: list[Card]) -> str:
-    return " ".join(str(c) for c in cards)
+    return "".join(face(c) for c in cards)
+
+
+def bar(p: int, top: int = 9) -> str:
+    """점수 막대 (바카라 0~9)."""
+    return "█" * p + "░" * (top - p)
 
 
 def _name(user) -> str:
@@ -155,6 +167,31 @@ def bac_payout(rd: BacRound, pick: str, bet: int) -> int:
     return bet * BAC_PAY[pick] // 100 if w == pick else 0
 
 
+def _bac_side(icon: str, label: str, cards: list[Card], shown: int) -> str:
+    """한 쪽 카드 줄 + 점수 막대. shown = 뒤집힌 카드 수 (나머지 처음 두 장은 🎴)."""
+    if not shown:
+        return f"{icon} <b>{label}</b> {HIDDEN}{HIDDEN}\n<code>{bar(0)}</code> ?"
+    cs = cards[:shown]
+    return (f"{icon} <b>{label}</b> {cards_str(cs)}{HIDDEN * max(0, 2 - shown)}\n"
+            f"<code>{bar(bac_total(cs))}</code> <b>{bac_total(cs)}</b>")
+
+
+def _bac_head(name: str, pick: str, bet: int) -> str:
+    return f"🃏 <b>바카라</b> · {name}님 {BAC_LABEL[pick]}에 {fmt(bet)}"
+
+
+def bac_frames(rd: BacRound, name: str, pick: str, bet: int) -> list[str]:
+    """카드 뒤집는 중간 화면: 다 덮음 → 플레이어 2장 → (3번째 카드가 있으면) 뱅커 2장. 마지막은 render_baccarat."""
+    head = _bac_head(name, pick, bet)
+    frames = [f"{head}\n{_bac_side('🔵', '플레이어', rd.player, 0)}\n{_bac_side('🔴', '뱅커', rd.banker, 0)}\n🃏 카드를 나눠요…",
+              f"{head}\n{_bac_side('🔵', '플레이어', rd.player, 2)}\n{_bac_side('🔴', '뱅커', rd.banker, 0)}\n🔴 뱅커 카드 뒤집는 중…"]
+    if len(rd.player) > 2 or len(rd.banker) > 2:
+        who = " · ".join(w for w, cs in (("플레이어", rd.player), ("뱅커", rd.banker)) if len(cs) > 2)
+        frames.append(f"{head}\n{_bac_side('🔵', '플레이어', rd.player, 2)}\n{_bac_side('🔴', '뱅커', rd.banker, 2)}\n"
+                      f"➕ {who} 3번째 카드 받는 중…")
+    return frames
+
+
 def render_baccarat(rd: BacRound, name: str, pick: str, bet: int) -> str:
     head = {"player": "🔵 <b>플레이어 승</b>", "banker": "🔴 <b>뱅커 승</b>", "tie": "🟢 <b>타이</b>"}[rd.winner]
     head += f" (플 {rd.p} : {rd.b} 뱅)"
@@ -165,9 +202,9 @@ def render_baccarat(rd: BacRound, name: str, pick: str, bet: int) -> str:
         tags.append("플레이어 페어")
     if rd.pair("banker"):
         tags.append("뱅커 페어")
-    return (f"🃏 <b>바카라</b> · {name}님 {BAC_LABEL[pick]}에 {fmt(bet)}\n"
-            f"🔵 플레이어 {cards_str(rd.player)} → <b>{rd.p}</b>\n"
-            f"🔴 뱅커 {cards_str(rd.banker)} → <b>{rd.b}</b>\n"
+    return (f"{_bac_head(name, pick, bet)}\n"
+            f"{_bac_side('🔵', '플레이어', rd.player, len(rd.player))}\n"
+            f"{_bac_side('🔴', '뱅커', rd.banker, len(rd.banker))}\n"
             f"{head}" + (f" · {' · '.join(tags)}" if tags else "") + "\n"
             + ("타이라서 플레이어·뱅커 베팅은 원금을 돌려드려요.\n"
                if rd.winner == "tie" and pick in ("player", "banker") else ""))
@@ -191,8 +228,9 @@ async def g_baccarat(ctx: Ctx) -> None:
         return
     rd = deal_baccarat(make_shoe(8))
     payout = bac_payout(rd, pick, bet)
-    bal = await settle(ctx, bet, payout, "baccarat")
-    await ctx.reply(render_baccarat(rd, _name(ctx.user), pick, bet) + result_line(bet, payout, bal) + await dealer_tail(ctx, bet, payout, bal))
+    bal = await settle(ctx, bet, payout, "baccarat")                 # 정산 먼저 → 연출은 보여주기만
+    final = render_baccarat(rd, _name(ctx.user), pick, bet) + result_line(bet, payout, bal) + await dealer_tail(ctx, bet, payout, bal)
+    await show(ctx, bac_frames(rd, _name(ctx.user), pick, bet), final)
 
 
 # ── 버튼 게임 공통 ────────────────────────────────────────
@@ -216,6 +254,7 @@ class Hand:
     prize: int = 0
     step: int = 0
     history: list[Card] = field(default_factory=list)
+    anim: object = None        # 버튼 응답(answer) 뒤에 돌릴 연출 (블랙잭 딜러 공개)
 
     def touch(self) -> None:
         self.tok = secrets.token_urlsafe(6)   # 8글자, 누를 때마다 바뀜
@@ -232,15 +271,9 @@ def _key(game: str, chat_id: int, uid: int) -> tuple[str, int, int]:
     return (game, chat_id, uid)
 
 
-async def _edit(h: Hand, text: str, kb=None, q=None) -> None:
-    try:
-        if q is not None:
-            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
-        elif h.message_id is not None:
-            await h.ctx.bot.edit_message_text(text=text, chat_id=h.ctx.chat_id, message_id=h.message_id,
-                                              parse_mode="HTML", reply_markup=kb)
-    except (TelegramError, RuntimeError):   # RuntimeError: 봇 종료 뒤(HTTP 닫힘) 정리할 때
-        pass
+async def _edit(h: Hand, text: str, kb=None, q=None, final: bool = False) -> bool:
+    """오류는 삼킨다 (봇 종료 뒤 HTTP 닫힘 포함). final(결과 화면)은 429 면 기다렸다 한 번 더."""
+    return await edit_live(h.ctx.bot, h.ctx.chat_id, h.message_id, text, final=final, kb=kb, q=q)
 
 
 async def _expire(h: Hand, q=None) -> None:
@@ -292,7 +325,7 @@ async def _callback(game: str, svc, bot, q, parts: list[str], act_fn) -> None:
     if h is None or h.done or not secrets.compare_digest(h.tok, tok):
         await q.answer("이미 끝났거나 지난 버튼이에요.")
         return
-    toast = None
+    toast, anim = None, None
     async with h.lock:
         if h.done or not secrets.compare_digest(h.tok, tok):   # 연타: 앞의 누름이 토큰을 바꿨음
             toast = "이미 처리됐어요."
@@ -301,7 +334,10 @@ async def _callback(game: str, svc, bot, q, parts: list[str], act_fn) -> None:
             toast = "시간이 지나 자동으로 정리했어요."
         else:
             toast = await act_fn(h, act, q)
-    await q.answer(toast)
+            anim, h.anim = h.anim, None       # 이 누름이 만든 연출만 (정산은 이미 끝남)
+    await q.answer(toast)                     # 버튼 로딩 표시는 바로 끝내고
+    if anim:
+        await anim()                          # 딜러 카드 공개 연출
 
 
 # ── 🃏 블랙잭 ─────────────────────────────────────────────
@@ -348,14 +384,16 @@ def bj_payout(player: list[Card], dealer: list[Card], bet: int) -> tuple[int, st
     return 0, "딜러 승 😭"
 
 
-def _bj_text(h: Hand, reveal: bool, footer: str = "") -> str:
-    dealer = cards_str(h.dealer) + f"  ({bj_total(h.dealer)})" if reveal else f"{h.dealer[0]} {HIDDEN}"
+def _bj_text(h: Hand, reveal: bool, footer: str = "", upto: int | None = None) -> str:
+    """upto: 딜러 카드를 앞에서 몇 장까지 보일지 (공개 연출 중간 화면)."""
+    shown = h.dealer[:upto] if upto else h.dealer
+    dealer = (cards_str(shown) + f" (<b>{bj_total(shown)}</b>)") if reveal else f"{face(h.dealer[0])}{HIDDEN}"
     p, soft = bj_value(h.player)
     ptot = f"소프트 {p}" if soft and p < 21 and not reveal else str(p)
     doubled = " (더블)" if h.bet > h.stake else ""
     return (f"🃏 <b>블랙잭</b> · {_name(h.ctx.user)}님 · 베팅 {fmt(h.bet)}{doubled}\n"
-            f"딜러: {dealer}\n"
-            f"내 카드: {cards_str(h.player)}  (<b>{ptot}</b>)" + (f"\n{footer}" if footer else ""))
+            f"🎩 딜러 {dealer}\n"
+            f"🙋 나 {cards_str(h.player)} (<b>{ptot}</b>)" + (f"\n{footer}" if footer else ""))
 
 
 def _bj_kb(h: Hand) -> InlineKeyboardMarkup:
@@ -366,17 +404,48 @@ def _bj_kb(h: Hand) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row])
 
 
-async def _bj_finish(h: Hand, q=None, note: str = "") -> None:
-    """딜러 진행 → 정산 → 메시지. lock 안에서, 한 판에 한 번만."""
+BJ_REVEAL_MAX = 2      # 딜러 공개 중간 화면 최대 수 (+ 결과 화면 1 = 버튼 한 번에 수정 3회 이하)
+
+
+def bj_reveal_steps(n_dealer: int) -> list[int]:
+    """공개 연출에서 보여줄 딜러 카드 장수: 숨긴 카드 뒤집기(2장) → … → 마지막 한 장 전. 최대 BJ_REVEAL_MAX 개."""
+    steps = list(range(2, n_dealer))                  # 2장, 3장, … (마지막 장은 결과 화면)
+    if not steps:
+        return [2]                                    # 안 받고 멈춤: 뒤집기 → 결과
+    return steps if len(steps) <= BJ_REVEAL_MAX else [steps[0], steps[-1]]
+
+
+async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False) -> None:
+    """딜러 진행 → 정산 → 메시지. lock 안에서, 한 판에 한 번만.
+    animate: 딜러가 카드를 까는 판이면 연출(h.anim)을 남기고 끝 — _callback 이 버튼 응답 뒤에 돌린다."""
     if h.done:
         return
     _finish(h)
-    if bj_total(h.player) <= 21 and not is_blackjack(h.player):
+    dealer_turn = bj_total(h.player) <= 21 and not is_blackjack(h.player)
+    if dealer_turn:
         dealer_play(h.dealer, h.shoe)
     payout, verdict = bj_payout(h.player, h.dealer, h.bet)
-    bal = await settle(h.ctx, h.bet, payout, "blackjack")
+    bal = await settle(h.ctx, h.bet, payout, "blackjack")            # 정산 먼저 (연출이 실패해도 돈은 끝)
     footer = (note + "\n" if note else "") + f"━━━━━━━━\n{verdict}\n" + result_line(h.bet, payout, bal) + await dealer_tail(h.ctx, h.bet, payout, bal)
-    await _edit(h, _bj_text(h, True, footer), None, q)
+    final = _bj_text(h, True, footer)
+    if not (animate and dealer_turn):
+        await _edit(h, final, None, q, final=True)
+        return
+    frames = [_bj_text(h, True, "🎩 딜러 카드 공개 중…" if k == 2 else "🎩 딜러가 한 장 더…", upto=k)
+              for k in bj_reveal_steps(len(h.dealer))]
+
+    async def reveal() -> None:
+        for i, text in enumerate(frames):
+            if i:
+                await basic.sleep(basic.anim_gap())
+            await _edit(h, text, None, q)
+        await basic.sleep(basic.anim_gap())
+        if not await _edit(h, final, None, q, final=True):
+            try:                                                      # 결과만은 꼭: 새 메시지로
+                await h.ctx.bot.send_message(h.ctx.chat_id, final, parse_mode="HTML")
+            except (TelegramError, RuntimeError):
+                pass
+    h.anim = reveal
 
 
 async def _bj_act(h: Hand, act: str, q) -> str | None:
@@ -390,15 +459,15 @@ async def _bj_act(h: Hand, act: str, q) -> str | None:
                                   (extra, h.ctx.chat_id, h.ctx.user.id))
         h.bet += extra
         h.player.append(h.shoe.draw())
-        await _bj_finish(h, q)
+        await _bj_finish(h, q, animate=True)
         return None
     if act == "s":
-        await _bj_finish(h, q)
+        await _bj_finish(h, q, animate=True)
         return None
     if act == "h":
         h.player.append(h.shoe.draw())
         if bj_total(h.player) >= 21:          # 버스트 또는 21 → 자동으로 끝
-            await _bj_finish(h, q)
+            await _bj_finish(h, q, animate=True)
             return None
         h.touch()
         await _edit(h, _bj_text(h, False, "히트·스탠드 중에 골라주세요."), _bj_kb(h), q)
@@ -473,10 +542,12 @@ def _hl_mults(h: Hand) -> tuple[float, float]:
 
 
 def _hl_text(h: Hand, footer: str = "") -> str:
-    trail = " → ".join(str(c) for c in h.history[-6:])
+    trail = cards_str(h.history[-6:])
+    steps = "🟩" * h.step + "⬜" * (HL_MAX_STEPS - h.step)
     return (f"🔼🔽 <b>하이로우</b> · {_name(h.ctx.user)}님 · 베팅 {fmt(h.bet)}\n"
             + (f"지난 카드: {trail}\n" if trail else "")
-            + f"지금 카드: <b>{h.card}</b>  ({h.step}/{HL_MAX_STEPS}단계)\n"
+            + f"지금 카드: <b>{face(h.card)}</b>\n"
+            f"{steps} {h.step}/{HL_MAX_STEPS}단계\n"
             f"현재 상금: <b>{fmt(h.prize)}</b>" + (f"\n{footer}" if footer else ""))
 
 
@@ -497,7 +568,7 @@ async def _hl_cashout(h: Hand, q=None, note: str = "") -> None:
     _finish(h)
     bal = await settle(h.ctx, h.bet, h.prize, "hilo")
     footer = (note + "\n" if note else "") + f"━━━━━━━━\n💰 {fmt(h.prize)} 받고 그만!\n" + result_line(h.bet, h.prize, bal) + await dealer_tail(h.ctx, h.bet, h.prize, bal)
-    await _edit(h, _hl_text(h, footer), None, q)
+    await _edit(h, _hl_text(h, footer), None, q, final=True)
 
 
 async def _hl_act(h: Hand, act: str, q) -> str | None:
@@ -520,12 +591,12 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
         _finish(h)
         why = "같은 숫자라 꽝" if nxt.rank == prev.rank else "틀렸어요"
         bal = await settle(h.ctx, h.bet, 0, "hilo")
-        await _edit(h, _hl_text(h, f"━━━━━━━━\n{prev} → <b>{nxt}</b> ({pick} 선택) · {why} 😭\n"
-                                   + result_line(h.bet, 0, bal) + await dealer_tail(h.ctx, h.bet, 0, bal)), None, q)
+        await _edit(h, _hl_text(h, f"━━━━━━━━\n{face(prev)} → <b>{face(nxt)}</b> ({pick} 선택) · {why} 😭\n"
+                                   + result_line(h.bet, 0, bal) + await dealer_tail(h.ctx, h.bet, 0, bal)), None, q, final=True)
         return None
     h.prize = int(h.prize * mult)
     h.step += 1
-    msg = f"{prev} → <b>{nxt}</b> {pick} 적중! ×{mult:g}"
+    msg = f"{face(prev)} → <b>{face(nxt)}</b> {pick} 적중! ×{mult:g}"
     if h.step >= HL_MAX_STEPS:
         await _hl_cashout(h, q, note=msg + f"\n🏁 {HL_MAX_STEPS}단계 완주!")
         return None

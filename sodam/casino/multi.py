@@ -140,11 +140,30 @@ def race_frames(winner: int, rand=None) -> list[list[int]]:
     return [[paths[h][f] for h in range(HORSES)] for f in range(FRAMES)]
 
 
-def track_text(pos: list[int], title: str) -> str:
-    lines = [title]
+MEDALS = ("🥇", "🥈", "🥉")
+
+
+def track_text(pos: list[int], title: str, picks: list[int] | None = None, final: bool = False) -> str:
+    """경주 화면: 제목 → 선두·남은 칸 → <pre> 트랙 (줄 끝에 순위 메달, 결승 2칸 안이면 💨, 우승 🏆).
+    picks: 말별 베팅 인원 (있으면 '👥n'). 같은 위치면 같은 순위."""
+    ranks = sorted(set(pos), reverse=True)
+    lead = max(pos)
+    leaders = [h + 1 for h, p in enumerate(pos) if p == lead]
+    if final:
+        sub = ""
+    elif lead == 0:
+        sub = "\n출발선에 섰어요!"
+    else:
+        sub = f"\n선두 <b>{'·'.join(map(str, leaders))}번</b> · 결승까지 {TRACK - lead}칸" + (" 🔥" if TRACK - lead <= 2 else "")
+    rows = []
     for h, p in enumerate(pos):
-        lines.append(f"{h + 1} " + "·" * p + "🏇" + "·" * (TRACK - p) + "🏁")
-    return "\n".join(lines)
+        r = ranks.index(p)
+        mark = "🏆" if final and p == TRACK else (MEDALS[r] if r < 3 and lead > 0 else "  ")
+        if not final and 0 < TRACK - p <= 2:
+            mark += "💨"
+        who = f" 👥{picks[h]}" if picks and picks[h] else ""
+        rows.append((f"{h + 1} " + "·" * p + "🏇" + "·" * (TRACK - p) + "🏁" + mark + who).rstrip())
+    return f"{title}{sub}\n<pre>" + "\n".join(rows) + "</pre>"
 
 
 # ── 공통: 판 · 참가자 ─────────────────────────────────────
@@ -592,19 +611,25 @@ class HorseRound(Round):
                 "베팅: <code>!경마 금액 번호</code> (예: <code>!경마 1000 3</code>)")
 
     def picks_line(self) -> str:
+        counts = self.pick_counts()
+        return " · ".join(f"{h + 1}번 {c}명" for h, c in enumerate(counts) if c)
+
+    def pick_counts(self) -> list[int]:
         counts = [0] * HORSES
         for p in self.players.values():
             counts[p.pick - 1] += 1
-        return " · ".join(f"{h + 1}번 {c}명" for h, c in enumerate(counts) if c)
+        return counts
 
     async def play(self) -> None:
-        self.live = await self.send(track_text([0] * HORSES, "🏇 <b>출발!</b>"))
+        picks = self.pick_counts()
+        self.live = await self.send(track_text([0] * HORSES, "🏇 <b>출발!</b>", picks))
         self.last_edit = self.clock()
         for f, pos in enumerate(self.frames):
             await self.sleep(TICK)
             last = f == len(self.frames) - 1
-            title = f"🏁 <b>{self.winner + 1}번 우승!</b>" if last else "🏇 <b>달리는 중…</b>"
-            await self.edit(track_text(pos, title), force=last)
+            title = (f"🏁 <b>{self.winner + 1}번 우승!</b>" if last else
+                     "🏇 <b>막판 스퍼트!</b>" if f == len(self.frames) - 2 else f"🏇 <b>달리는 중…</b> ({f + 1}/{len(self.frames)})")
+            await self.edit(track_text(pos, title, picks, final=last), force=last)
         win_no = self.winner + 1
         for p in self.players.values():
             await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)

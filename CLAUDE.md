@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 324개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 348개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -53,6 +53,10 @@
 - 결제 처리+연장은 `db.pay_invoice` 로 DB 스레드에서 한 번에 (공유 연결이라 중간 commit 끼어듦 방지).
 - 버그 수정은 뮤테이션 검증: 고친 줄을 되돌리면 그 테스트가 FAIL 해야 함 (tests/test_fix_*.py).
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
+
+## 클라우드 세션 서버 실행
+- 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.
+  갱신: `git --work-tree=/home/user/sodam_run checkout HEAD -- sodam tests tools docs requirements.txt` 후 재시작.
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)
 - Claude 앱은 AppData 를 `…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…` 로 가상화함 → 앱 내부에서 설치한 python/git 경로가 앱 밖 터미널에선 다름.

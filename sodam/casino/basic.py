@@ -3,22 +3,93 @@
 주사위 계열은 텔레그램 서버가 결과를 정한다(send_dice) → 봇도 조작 불가, 모두가 같은 애니메이션을 본다.
 애니메이션이 끝날 즈음(약 3.5초) 결과를 알린다. 룰렛·사다리는 secrets 난수.
 배당은 기대 환급률 약 94~97% (오래 하면 조금씩 잃는 구조 → 채굴·출석이 계속 의미 있음).
+
+연출(룰렛·사다리, cards.py 의 바카라·블랙잭도 같이 씀): 결과를 정하고 **정산을 먼저 끝낸 뒤**
+메시지 하나를 보내 anim_gap() 간격으로 2~3번 고친다. 중간 화면 수정이 실패해도 건너뛰고,
+마지막 화면은 제한(429)이면 기다렸다 한 번 더, 그래도 안 되면 새 메시지로 결과를 보낸다.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
+from datetime import timedelta
 
 from telegram import ReplyParameters
-from telegram.error import TelegramError
+from telegram.error import BadRequest, RetryAfter, TelegramError
 
-from ..util import esc
+from ..util import esc, user_name
 from . import Ctx, register
-from .core import balance, credit, finish, fmt, rng, split_bet, take_bet
+from .core import balance, credit, finish, fmt, rng, settle_text, split_bet, take_bet
 
 log = logging.getLogger(__name__)
 
 DICE_WAIT = 3.5   # 애니메이션 끝날 때까지 (테스트에선 0)
+sleep = asyncio.sleep   # 테스트에서 바꿔 끼움 (기다리지 않게)
+RETRY_MAX = 30          # 마지막 화면이 429 면 최대 이만큼 기다렸다 다시
+
+
+def anim_gap() -> float:
+    """연출 화면 사이 간격 (≈1.2초): 한 판 연출이 주사위 애니메이션 길이(DICE_WAIT)쯤에 끝나게.
+    그룹 한도(보내기+수정 분당 약 20개) 안에서 한 판 = 보내기 1 + 수정 2~3."""
+    return DICE_WAIT / 3
+
+
+def _secs(e: RetryAfter) -> float:
+    ra = e.retry_after
+    return ra.total_seconds() if isinstance(ra, timedelta) else float(ra)
+
+
+async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False, kb=None, q=None) -> bool:
+    """연출 화면 수정 (q 가 있으면 버튼 콜백 메시지). 고쳤으면(또는 이미 같으면) True.
+    중간 화면은 실패하면 그냥 건너뛰고, final 은 429 면 기다렸다 한 번 더."""
+    for attempt in (0, 1):
+        try:
+            if q is not None:
+                await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+            elif message_id is not None:
+                await bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id,
+                                            parse_mode="HTML", reply_markup=kb)
+            else:
+                return False
+            return True
+        except RetryAfter as e:
+            if not final or attempt:
+                return False
+            await sleep(min(_secs(e), RETRY_MAX))
+        except BadRequest as e:
+            return "not modified" in str(e).lower()
+        except Exception as e:   # 네트워크·봇 종료 뒤(RuntimeError) 등: 연출은 보여주기만이라 게임은 계속
+            log.debug("live edit failed: %r", e)
+            return False
+    return False
+
+
+async def show(ctx: Ctx, frames: list[str], final: str) -> None:
+    """frames[0] 을 답장으로 보내고 anim_gap() 마다 frames[1:] → final 로 고친다. 정산은 부르기 전에 끝낼 것."""
+    try:
+        sent = await ctx.reply(frames[0] if frames else final)
+    except TelegramError as e:
+        log.warning("anim send failed: %s", e)
+        sent = None
+        frames = []
+    if not frames:
+        if sent is None:
+            try:
+                await ctx.reply(final)
+            except TelegramError:
+                pass
+        return
+    mid = getattr(sent, "message_id", None)
+    for text in frames[1:]:
+        await sleep(anim_gap())
+        await edit_live(ctx.bot, ctx.chat_id, mid, text)
+    await sleep(anim_gap())
+    if not await edit_live(ctx.bot, ctx.chat_id, mid, final, final=True):
+        try:                                  # 마지막 화면만은 꼭: 새 메시지로
+            await ctx.reply(final)
+        except TelegramError as e:
+            log.warning("anim final failed: %s", e)
 
 SLOT_SYMBOLS = ["BAR", "🍇", "🍋", "7️⃣"]
 
@@ -40,7 +111,7 @@ async def _roll(ctx: Ctx, emoji: str, game: str, bet: int) -> int | None:
         await ctx.bot.send_message(ctx.chat_id, f"{emoji} 주사위를 못 굴려서 베팅 {fmt(bet)}을 돌려드렸어요. "
                                                 f"잔액 {fmt(bal)}", parse_mode="HTML")
         return None
-    await asyncio.sleep(DICE_WAIT)
+    await sleep(DICE_WAIT)
     return sent.dice.value
 
 
@@ -181,15 +252,77 @@ async def g_roulette(ctx: Ctx) -> None:
     if bet is None:
         return
     n = rng(37)
-    color = "🟢" if n == 0 else ("🔴" if n in REDS else "⚫")
-    payout = bet * roulette_win(n, pick)
-    await finish(ctx, "roulette", bet, payout, f"🎡 빙글빙글… {color} <b>{n}</b> ({esc(pick)} 선택)")
+    mult = roulette_win(n, pick)
+    payout = bet * mult
+    _, tail = await settle_text(ctx, "roulette", bet, payout)       # 정산 먼저 → 연출은 보여주기만
+    head = f"🎡 <b>룰렛</b> · {esc(user_name(ctx.user))}님 {fmt(bet)} ({esc(pick)} 선택)"
+    frames, final = roulette_frames(n, head, mult)
+    await show(ctx, frames, final + "\n" + tail)
+
+
+# 유럽식 휠의 실제 칸 순서 (0 에서 시계 방향)
+WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
+         5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
+SPIN = ["🌀 휠이 돌아요… 💨💨💨", "🌀 느려져요… 💨💨", "🌀 거의 멈춰요… 💨"]
+
+
+def pocket(n: int) -> str:
+    return ("🟢" if n == 0 else "🔴" if n in REDS else "⚫") + str(n)
+
+
+def wheel_strip(idx: int, half: int = 2) -> str:
+    """휠에서 idx 칸을 가운데(【】)에 둔 5칸 띠."""
+    cells = [pocket(WHEEL[(idx + d) % len(WHEEL)]) for d in range(-half, half + 1)]
+    cells[half] = f"<b>【{cells[half]}】</b>"
+    return " ".join(cells)
+
+
+def roulette_frames(n: int, head: str, mult: int) -> tuple[list[str], str]:
+    """(돌아가는 화면 3개, 멈춘 화면). 띠가 점점 적게 흘러가다 결과 칸에서 멈춘다 (흘러가는 폭은 꾸밈용 난수)."""
+    end = WHEEL.index(n)
+    back = [19 + secrets.randbelow(9), 6 + secrets.randbelow(4), 1 + secrets.randbelow(2)]
+    frames = [f"{head}\n{wheel_strip(end - b)}\n{SPIN[i]}" for i, b in enumerate(back)]
+    props = "초록" if n == 0 else " · ".join(("빨강" if n in REDS else "검정", "홀" if n % 2 else "짝",
+                                            "하이" if n >= 19 else "로우"))
+    hit = f"✅ 적중! ×{mult}" if mult else "❌ 빗나감"
+    return frames, f"{head}\n{wheel_strip(end)}\n🎯 멈춤! <b>{pocket(n)}</b> ({props}) · {hit}"
 
 
 # ── 🪜 사다리 ─────────────────────────────────────────────
 # 출발(좌/우) × 줄 수(3/4) 로 도착(홀/짝)이 정해짐: 좌3→짝, 좌4→홀, 우3→홀, 우4→짝 (4가지 25%씩)
+# 그림: 왼쪽 기둥 아래 = 홀, 오른쪽 = 짝. 가로줄을 만날 때마다 반대 기둥으로 건너감 (지나간 길은 굵은 선)
 LADDER = [("좌", 3, "짝"), ("좌", 4, "홀"), ("우", 3, "홀"), ("우", 4, "짝")]
-LADDER_ART = {3: "├─┤\n├─┤\n├─┤", 4: "├─┤\n├─┤\n├─┤\n├─┤"}
+RUNG_W = 7
+CURTAIN = "│" + "░" * RUNG_W + "│"
+
+
+def ladder_art(start: str, lines: int, shown: int | None = None) -> str:
+    """사다리 그림 (<pre> 안에 넣음). shown = 드러난 가로줄 수 (None=전부). 가려진 부분은 줄 수가 안 새게 같은 높이 ░."""
+    shown = lines if shown is None else shown
+    side = 0 if start == "좌" else 1
+
+    def post(s: int) -> str:
+        return ("┃" if s == 0 else "│") + " " * RUNG_W + ("┃" if s == 1 else "│")
+    rows = ["좌" + " " * (RUNG_W - 1) + "우", post(side)]
+    for _ in range(shown):
+        rows.append(("┗" + "━" * RUNG_W + "┓") if side == 0 else ("┏" + "━" * RUNG_W + "┛"))
+        side = 1 - side
+        rows.append(post(side))
+    if shown < lines:
+        rows += [CURTAIN] * (7 if shown == 0 else 3)
+    rows.append("홀" + " " * (RUNG_W - 1) + "짝")
+    return "\n".join(rows)
+
+
+def ladder_frames(result: tuple[str, int, str], head: str, won: bool) -> tuple[list[str], str]:
+    """(출발만 보이는 화면, 절반 내려간 화면), 도착 화면."""
+    start, lines, end = result
+    f0 = f"{head}\n출발 <b>{start}</b> 🔵\n<pre>{ladder_art(start, lines, 0)}</pre>\n도착 ❔ 사다리 타는 중…"
+    f1 = f"{head}\n출발 <b>{start}</b> 🔵\n<pre>{ladder_art(start, lines, 2)}</pre>\n도착 ❔ 내려가는 중… ⬇️"
+    hit = "✅ 적중!" if won else "❌ 빗나감"
+    final = (f"{head}\n출발 <b>{start}</b> 🔵\n<pre>{ladder_art(start, lines)}</pre>\n"
+             f"{lines}줄 → 도착 <b>{end}</b> 🏁 (<b>{start}{lines}{end}</b>) · {hit}")
+    return [f0, f1], final
 
 
 def ladder_payout(result: tuple[str, int, str], pick: str) -> float:
@@ -220,10 +353,10 @@ async def g_ladder(ctx: Ctx) -> None:
         return
     result = LADDER[rng(4)]
     payout = int(bet * ladder_payout(result, pick))
-    start, lines, end = result
-    await finish(ctx, "ladder", bet, payout,
-                 f"🪜 출발 <b>{start}</b>\n<code>{LADDER_ART[lines]}</code>\n{lines}줄 → 도착 <b>{end}</b>  "
-                 f"(<b>{start}{lines}{end}</b>, {esc(pick)} 선택)")
+    _, tail = await settle_text(ctx, "ladder", bet, payout)         # 정산 먼저 → 연출은 보여주기만
+    head = f"🪜 <b>사다리</b> · {esc(user_name(ctx.user))}님 {fmt(bet)} ({esc(pick)} 선택)"
+    frames, final = ladder_frames(result, head, payout > 0)
+    await show(ctx, frames, final + "\n" + tail)
 
 
 register(("홀짝", "oddeven"), g_oddeven, usage="금액 홀|짝", help="🎲 ×1.95", group="주사위·슬롯")
