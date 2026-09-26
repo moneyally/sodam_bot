@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Bot, ChatPermissions, Message, User
 from telegram.error import TelegramError
 
+from . import casino
 from .config import Config
 from .db import DB
 from .permissions import Permissions
@@ -138,12 +139,16 @@ class Moderator:
         s = await self.db.get_settings(chat_id)
         name = user_name(user)
         key = (chat_id, user.id)
+        # 포인트 게임 명령(!홀짝 1000 홀 …)은 같은 말을 빠르게 반복하는 게 정상 → 도배·반복 검사에서 뺀다
+        # (게임 쪽에 1인 2초 간격 제한이 따로 있음). 금지어·링크 검사는 그대로.
+        is_game_cmd = casino.parse(text.strip()) is not None
 
         # 1) 도배: N초에 M개. 게임 중엔 정답을 빠르게 치니까 기준을 2배로 완화
         now = time.monotonic()
         limit = s["flood_count"] * (2 if game_active else 1)
         q = self._flood.setdefault(key, deque(maxlen=200))
-        q.append(now)
+        if not is_game_cmd:
+            q.append(now)
         while q and now - q[0] > s["flood_seconds"]:
             q.popleft()
         if len(q) >= limit:
@@ -163,7 +168,7 @@ class Moderator:
             return None
 
         # 2) 같은 말 반복 (게임 중 짧은 답은 겹칠 수 있어서 이 검사만 건너뜀)
-        if not (game_active and len(norm) <= 10):
+        if not (game_active and len(norm) <= 10) and not is_game_cmd:
             last, n = self._dups.get(key, ("", 0))
             n = n + 1 if norm == last else 1
             self._dups[key] = (norm, n)
