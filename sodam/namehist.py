@@ -1,18 +1,24 @@
 """이름·아이디 변경 기록 (SangMata 방식).
 
 봇이 본 사람(봇이 있는 방의 멤버·1:1 사용자)의 이름·@아이디가 바뀔 때마다 기록한다.
-- 그룹에서 멤버 이름이 바뀌면 방에 잠깐 알림 (설정 `name_change_notice`, 기본 켜짐) → 사칭·먹튀 계정 식별
-- `.이름기록 [@user|ID|답장]` : 그 사람의 변경 기록 (그룹: 이 방 멤버만 / 1:1: 나와 같은 방에 있는 사람만, 오너는 전부)
-- 1:1 메뉴 🕵️ 이름 기록 : 내 기록 · 다른 사람 조회
+- 그룹에서 멤버 이름이 바뀌면 방에 알림 (설정 `name_change_notice`, 기본 켜짐, `.이름알림`) → 사칭·먹튀 계정 식별
+- 명령 (대상 = 답장 > @아이디(예전 것도)·ID·이름 > 전달된 메시지 > 나):
+  `.기록 /history` 최근 · `.전체기록 /allhistory` · `.이름조회 /check_name` · `.아이디조회 /check_username` · `.내기록 /myhistory`
+  결과 아래 [최근][전체][이름만][아이디만] 버튼(nh:<모드>:<ID>) — 누를 때마다 권한 재확인
+- 권한: 그룹은 그 방 멤버의 기록만 / 1:1 은 나·나와 같은 그룹 멤버만 (오너는 전부)
+- 1:1: 메시지를 전달하면 보낸 사람 기록 · 메뉴 🕵️ 이름 기록
 봇이 들어오기 전의 변경이나 봇이 없는 방에서의 변경은 알 수 없다.
 """
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .db import now, register_schema
 from .settings import register_setting
-from .util import display_name, esc, fmt_time
+from .util import display_name, esc, fmt_time, to_int
 
 if TYPE_CHECKING:
     from .db import DB
@@ -31,7 +37,12 @@ CREATE INDEX IF NOT EXISTS idx_name_history_username ON name_history(username CO
 """)
 register_setting("name_change_notice", True, "이름 변경 알림")
 
-SHOW = 20
+SHOW = 10          # 최근 기록 (/history): 이름·아이디 각각
+SHOW_ALL = 25      # 전체 기록 (/allhistory): 이름·아이디 각각 — 메시지 4096자 안에 들어가게
+SHOW_ONE = 50      # 이름만 / 아이디만
+VALUE_CHARS = 40
+MODES = ("recent", "all", "names", "usernames")
+MODE_LABEL = {"recent": "최근 기록", "all": "전체 기록", "names": "이름 기록", "usernames": "아이디 기록"}
 
 
 def _name(first, last) -> str:
@@ -65,28 +76,57 @@ def change_notice(user_id: int, old: dict, new: dict) -> str:
     return "\n".join(lines)
 
 
-async def history(db: DB, user_id: int) -> list:
+async def history(db: DB, user_id: int, limit: int = 500) -> list:
+    """스냅숏(이름·아이디 한 쌍) 기록, 최신이 먼저."""
     return await db._all("SELECT first_name, last_name, username, ts FROM name_history WHERE user_id=? "
-                         "ORDER BY id DESC LIMIT ?", (user_id, SHOW + 1))
+                         "ORDER BY id DESC LIMIT ?", (user_id, limit))
 
 
-async def history_text(db: DB, user_id: int, tz, *, title: str | None = None) -> str:
+def _changes(rows: list, field: str) -> list[tuple[str, int]]:
+    """스냅숏에서 한 항목(이름 또는 아이디)이 바뀐 시점만 뽑는다. [(값, 처음 본 시각)], 최신이 먼저."""
+    out: list[tuple[str, int]] = []
+    for r in reversed(rows):  # 오래된 것부터 훑으며 값이 바뀔 때만
+        v = _name(r["first_name"], r["last_name"]) if field == "name" else (r["username"] or "")
+        if not out or out[-1][0] != v:
+            out.append((v, r["ts"]))
+    return list(reversed(out))
+
+
+def _fmt(v: str, field: str) -> str:
+    v = v if len(v) <= VALUE_CHARS else v[:VALUE_CHARS] + "…"
+    if field == "username":
+        return f"@{esc(v)}" if v else "(아이디 없음)"
+    return esc(v) if v else "(이름 없음)"
+
+
+async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title: str | None = None) -> str:
     rows = await history(db, user_id)
     if not rows:
-        return f"🕵️ ID <code>{user_id}</code> 의 이름 기록이 없어요.\n(소담이 있는 방에서 본 적이 있어야 기록돼요)"
+        return (f"🕵️ ID <code>{user_id}</code> 의 이름 기록이 없어요.\n"
+                "(소담이 있는 방에서 본 적이 있어야 기록돼요)")
     cur = rows[0]
     head = title or display_name(cur["first_name"], cur["last_name"], cur["username"])
-    changes = len(rows) - 1
-    lines = [f"🕵️ <b>{esc(head)}</b> · ID <code>{user_id}</code>",
-             f"이름·아이디 변경 {changes}회" + (" 이상" if len(rows) > SHOW else "") if changes else "변경 기록 없음 (처음 본 그대로)",
-             ""]
-    for i, r in enumerate(rows[:SHOW]):
-        name = esc(_name(r["first_name"], r["last_name"]) or "(이름 없음)")
-        uname = f" · @{esc(r['username'])}" if r["username"] else ""
-        mark = " ← 지금" if i == 0 else ""
-        lines.append(f"<code>{fmt_time(r['ts'], tz, '%Y-%m-%d')}</code> {name}{uname}{mark}")
-    lines.append("\n봇이 본 뒤부터의 기록이에요.")
+    names, users = _changes(rows, "name"), _changes(rows, "username")
+    lines = [f"🕵️ <b>{esc(head)}</b> · ID <code>{user_id}</code> · {MODE_LABEL.get(mode, '')}",
+             f"이름 변경 {len(names) - 1}회 · 아이디 변경 {len(users) - 1}회"]
+    limit = {"recent": SHOW, "all": SHOW_ALL}.get(mode, SHOW_ONE)
+    for field, items, label in (("name", names, "👤 이름"), ("username", users, "🔗 아이디")):
+        if (mode == "names" and field != "name") or (mode == "usernames" and field != "username"):
+            continue
+        lines += ["", f"<b>{label}</b>"]
+        for i, (v, ts) in enumerate(items[:limit]):
+            lines.append(f"<code>{fmt_time(ts, tz, '%y.%m.%d')}</code> {_fmt(v, field)}" + (" ← 지금" if i == 0 else ""))
+        if len(items) > limit:
+            lines.append(f"… 이전 {len(items) - limit}개 더 (전체 기록 버튼)" if mode == "recent" else f"… 이전 {len(items) - limit}개 생략")
+    lines.append("\n소담이 본 뒤부터의 기록이에요. 날짜는 처음 본 날.")
     return "\n".join(lines)
+
+
+def buttons(user_id: int, mode: str) -> InlineKeyboardMarkup:
+    """조회 결과 아래 [최근][전체][이름만][아이디만] — 누를 때마다 권한 다시 확인 (nh:<모드>:<ID>)."""
+    labels = {"recent": "🕘 최근", "all": "📜 전체", "names": "👤 이름만", "usernames": "🔗 아이디만"}
+    return InlineKeyboardMarkup([[InlineKeyboardButton(("● " if m == mode else "") + labels[m],
+                                                       callback_data=f"nh:{m}:{user_id}") for m in MODES]])
 
 
 async def find_by_old_username(db: DB, chat_id: int | None, username: str) -> int | None:
@@ -106,3 +146,72 @@ async def shares_group(db: DB, a: int, b: int) -> bool:
     row = await db._one("SELECT 1 FROM members x JOIN members y ON x.chat_id=y.chat_id "
                         "WHERE x.user_id=? AND y.user_id=? AND x.chat_id < 0 LIMIT 1", (a, b))
     return row is not None
+
+
+# ── 조회 권한 · 대상 찾기 ─────────────────────────────────
+async def can_view(db: DB, viewer: int, target: int, chat_id: int, is_owner: bool) -> bool:
+    """그룹: 그 방 멤버의 기록만 / 1:1: 나, 나와 같은 그룹에 있는 사람 (오너는 전부)."""
+    if is_owner or viewer == target:
+        return True
+    if chat_id < 0:
+        return await db.get_member(chat_id, target) is not None
+    return await shares_group(db, viewer, target)
+
+
+async def resolve(db: DB, raw: str, chat_id: int | None = None) -> int | None:
+    """숫자 ID · @아이디(지금 또는 예전) → user_id. chat_id 가 있으면 @아이디는 그 방 멤버 중에서."""
+    raw = raw.strip()
+    uid = to_int(raw)
+    if uid is not None:
+        return uid if uid > 0 else None
+    name = raw.lstrip("@")
+    if not name or not _USERNAME.fullmatch(name):
+        return None
+    if chat_id is None:
+        row = await db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE AND is_bot=0", (name,))
+    else:
+        row = await db._one("SELECT u.user_id FROM users u JOIN members m ON m.user_id=u.user_id AND m.chat_id=? "
+                            "WHERE u.username=? COLLATE NOCASE AND u.is_bot=0", (chat_id, name))
+    return row["user_id"] if row else await find_by_old_username(db, chat_id, name)
+
+
+_USERNAME = re.compile(r"[A-Za-z0-9_]{3,32}")
+
+
+def forwarded_user(msg) -> tuple[int | None, str | None]:
+    """전달된 메시지의 원래 보낸 사람. (ID, 숨김이면 안내문)"""
+    origin = getattr(msg, "forward_origin", None)
+    if origin is None:
+        return None, None
+    user = getattr(origin, "sender_user", None)
+    if user is not None:
+        return (None, "봇 계정은 기록하지 않아요.") if user.is_bot else (user.id, None)
+    if getattr(origin, "sender_user_name", None):
+        return None, "그 사람은 '전달 시 계정 숨김' 설정이라 누군지 알 수 없어요. 숫자 ID나 @아이디로 조회해주세요."
+    return None, "사람이 보낸 메시지를 전달해주세요 (채널·그룹 명의 글은 조회할 수 없어요)."
+
+
+async def on_callback(svc, bot, q, parts: list[str]) -> None:
+    """조회 결과 아래 버튼 (nh:<모드>:<ID>). 그룹·1:1 어디서 눌러도 권한을 다시 확인한다."""
+    from telegram.error import BadRequest
+    mode, raw = (parts + ["", ""])[:2]
+    uid = to_int(raw)
+    if mode not in MODES or uid is None or uid <= 0 or not q.message:
+        await q.answer()
+        return
+    viewer = q.from_user.id
+    if not svc.menu_limiter.allow(("nh", viewer), 30):
+        await q.answer("너무 빨리 누르고 있어요. 잠시 후 다시 눌러주세요.")
+        return
+    owner = viewer in await svc.perms.owners()
+    if not await can_view(svc.db, viewer, uid, q.message.chat_id, owner):
+        await q.answer("🔒 볼 수 없는 기록이에요.", show_alert=True)
+        return
+    await q.answer()
+    title = "내 이름 기록" if uid == viewer and q.message.chat_id > 0 else None
+    try:
+        await q.edit_message_text(await history_text(svc.db, uid, svc.cfg.tz, mode=mode, title=title),
+                                  parse_mode="HTML", reply_markup=buttons(uid, mode))
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise

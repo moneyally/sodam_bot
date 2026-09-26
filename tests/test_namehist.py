@@ -3,7 +3,7 @@ import asyncio
 import sys
 from types import SimpleNamespace
 
-from fakes import FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
+from fakes import TZ, FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 from harness import html_errors
 
 from sodam import commands, handlers, menu, namehist
@@ -99,7 +99,7 @@ async def dm_lookup_limited_to_shared_groups():
     assert "같은 그룹" in await cmd(svc, bot, 6, b, ".이름기록 @ccc")      # 다른 방 사람
     assert "같은 그룹" in await cmd(svc, bot, 6, b, ".이름기록 7")
     assert "외부인" in await cmd(svc, bot, 1, user(1, "오너"), ".이름기록 7", role=Role.OWNER)
-    assert "기록에 없" in await cmd(svc, bot, 6, b, ".이름기록 99999999999999999999")  # 이상한 숫자
+    assert "못 찾았" in await cmd(svc, bot, 6, b, ".이름기록 99999999999999999999")  # 이상한 숫자
 
 
 @test
@@ -120,6 +120,126 @@ async def dm_panel_mine_and_query():
     m = FakeMsg(6, b, "@aaa")                                             # 예전 아이디로 조회
     await handlers.on_private(SimpleNamespace(message=m), ctx)
     assert "A2" in m.replies[0] and "변경 1회" in m.replies[0] and 6 not in svc.inputs
+
+
+@test
+async def names_and_usernames_listed_separately():
+    db, svc, bot, ctx = await setup()
+    for first, uname in (("김대표", "kim"), ("김대표", "kim2"), ("박대표", "kim2"), ("박대표", None), ("이대표", "lee")):
+        await namehist.record(db, user(5, first, uname))
+    await group_say(ctx, user(5, "이대표", "lee"))
+    t = await namehist.history_text(db, 5, TZ)
+    assert "이름 변경 2회 · 아이디 변경 3회" in t, t
+    body = t.split("🔗 아이디")[1].split("\n\n")[0]
+    vals = [ln.split("</code> ")[1].replace(" ← 지금", "") for ln in body.splitlines() if "</code> " in ln]
+    assert vals == ["@lee", "(아이디 없음)", "@kim2", "@kim"], vals
+    names = await namehist.history_text(db, 5, TZ, mode="names")
+    assert "🔗 아이디" not in names and "👤 이름" in names
+    users = await namehist.history_text(db, 5, TZ, mode="usernames")
+    assert "👤 이름" not in users and "@kim" in users
+
+
+@test
+async def huge_history_fits_telegram_limits():
+    import html as H
+    import re
+    db, svc, bot, ctx = await setup()
+    for i in range(200):
+        await namehist.record(db, user(5, f"{i:03d}" + "가" * 61, f"u{i:03d}" + "x" * 28))
+    for mode in namehist.MODES:
+        t = await namehist.history_text(db, 5, TZ, mode=mode)
+        assert len(H.unescape(re.sub(r"<[^>]+>", "", t))) <= 4096, (mode, len(t))
+        assert not html_errors(t)
+        for row in namehist.buttons(99999999999, mode).inline_keyboard:
+            assert all(len(b.callback_data.encode()) <= 64 for b in row)
+    assert "전체 기록 버튼" in await namehist.history_text(db, 5, TZ)
+
+
+@test
+async def all_command_aliases_work():
+    db, svc, bot, ctx = await setup()
+    await group_say(ctx, user(5, "김대표", "kim"))
+    await group_say(ctx, user(5, "박대표", "park"))
+    me = user(6, "나", "me")
+    await group_say(ctx, me)
+    for text, expect in ((".기록 @park", "최근 기록"), ("/history @park", "최근 기록"), (".전체기록 @park", "전체 기록"),
+                         ("/allhistory 5", "전체 기록"), (".이름조회 @park", "이름 기록"), ("/check_name 5", "이름 기록"),
+                         (".아이디조회 @kim", "아이디 기록"), ("/check_username @park", "아이디 기록"),
+                         (".내기록", "내 이름 기록"), ("/myhistory", "내 이름 기록"), (".기록 박대표", "최근 기록")):
+        r = await cmd(svc, bot, CHAT, me, text)
+        assert expect in r, (text, r)
+    r = await cmd(svc, bot, CHAT, me, ".기록", reply_to=SimpleNamespace(from_user=fake_user(999, "봇", is_bot=True)))
+    assert "봇 계정" in r
+
+
+@test
+async def group_lookup_only_for_members_of_that_group():
+    db, svc, bot, ctx = await setup()
+    outsider = user(7, "외부인", "outsider")
+    await group_say(ctx, outsider, chat=OTHER)
+    me = user(6, "나", "me")
+    await group_say(ctx, me)
+    assert "이 방 멤버" in await cmd(svc, bot, CHAT, me, ".기록 7")        # 숫자 ID 로 다른 방 사람
+    assert "못 찾았" in await cmd(svc, bot, CHAT, me, ".기록 @outsider")  # @아이디는 이 방 멤버 중에서만
+
+
+@test
+async def result_buttons_recheck_permission():
+    from fakes import FakeQuery
+    db, svc, bot, ctx = await setup()
+    a, b, outsider = user(5, "A", "aaa"), user(6, "B", "bbb"), user(7, "외부인", "ccc")
+    await group_say(ctx, a)
+    await group_say(ctx, b)
+    await group_say(ctx, outsider, chat=OTHER)
+    q = FakeQuery(CHAT, b)                                              # 그룹에서 멤버 기록 → 전체
+    await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:all:5")), ctx)
+    assert "전체 기록" in q.edits[-1] and q.kb.inline_keyboard[0][1].text.startswith("●")
+    q = FakeQuery(CHAT, b)                                              # 위조: 다른 방 사람 ID
+    await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:all:7")), ctx)
+    assert not q.edits and "볼 수 없" in q.answers[0][0]
+    q = FakeQuery(6, b)                                                 # 1:1: 같은 그룹 아닌 사람
+    await handlers.on_callback(SimpleNamespace(callback_query=_q(q, "nh:names:7")), ctx)
+    assert not q.edits and "볼 수 없" in q.answers[0][0]
+    for bad in ("nh:zzz:5", "nh:all:-5", "nh:all:99999999999999999999", "nh", "nh:all:²"):
+        q = FakeQuery(6, b)
+        await handlers.on_callback(SimpleNamespace(callback_query=_q(q, bad)), ctx)
+        assert not q.edits and len(q.answers) == 1, bad
+
+
+def _q(q, data):
+    q.data = data
+    return q
+
+
+@test
+async def forwarded_message_lookup_in_dm():
+    db, svc, bot, ctx = await setup()
+    a, b = user(5, "A", "aaa"), user(6, "B", "bbb")
+    await group_say(ctx, a)
+    await group_say(ctx, user(5, "A2", "aaa"))
+    await group_say(ctx, b)
+    m = FakeMsg(6, b, "아무 글")
+    m.forward_origin = SimpleNamespace(sender_user=a)
+    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    assert "A2" in m.replies[0] and "이름 변경 1회" in m.replies[0]
+    m = FakeMsg(6, b, "숨긴 사람 글")
+    m.forward_origin = SimpleNamespace(sender_user=None, sender_user_name="숨김")
+    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    assert "숨김" in m.replies[0]
+    m = FakeMsg(6, b, "")                                               # 사진만 전달해도
+    m.forward_origin = SimpleNamespace(sender_user=a)
+    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    assert "A2" in m.replies[0]
+
+
+@test
+async def name_notice_command_admin_only():
+    db, svc, bot, ctx = await setup()
+    admin, member = user(1, "방장"), user(6, "멤버")
+    r = await cmd(svc, bot, CHAT, member, ".이름알림 끄기")
+    assert "관리자만" in r and (await db.get_settings(CHAT))["name_change_notice"] is True
+    r = await cmd(svc, bot, CHAT, admin, ".이름알림 끄기", role=Role.ADMIN)
+    assert "꺼짐" in r and (await db.get_settings(CHAT))["name_change_notice"] is False
 
 
 if __name__ == "__main__":

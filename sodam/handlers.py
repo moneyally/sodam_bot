@@ -467,6 +467,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await subscription.on_callback(svc, bot, q, parts)
     elif prefix == "m":
         await menu.on_callback(svc, bot, q, parts)
+    elif prefix == "nh":
+        await namehist.on_callback(svc, bot, q, parts)
     elif prefix == "act":
         await _confirm_action(svc, bot, q, parts)
     else:
@@ -558,6 +560,10 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await svc.announcer.handle_message(bot, msg):
         return
     if await menu.handle_input(svc, bot, msg):
+        return
+    if getattr(msg, "forward_origin", None) is not None:  # 전달된 메시지 → 보낸 사람 이름 기록 (SangMata 처럼)
+        role = await svc.perms.role(bot, msg.chat_id, user.id)
+        await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [], ""))
         return
     if not text:
         return
@@ -679,6 +685,8 @@ BOT_MENU = [
     BotCommand("sports", "스포츠 일정·결과"),
     BotCommand("style", "봇 말투 바꾸기"),
     BotCommand("me", "내 정보"),
+    BotCommand("history", "이름·아이디 변경 기록 (답장·@아이디·ID)"),
+    BotCommand("allhistory", "변경 기록 전체"),
     BotCommand("rules", "방 규칙"),
 ]
 

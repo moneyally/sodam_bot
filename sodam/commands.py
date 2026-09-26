@@ -10,7 +10,6 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, U
 from telegram.error import TelegramError
 
 from . import knowledge, menu, namehist, stats, subscription
-from .panels import namehist as nh_panel
 from .permissions import Role
 from .services import Services
 from .security import normalize_domain
@@ -157,32 +156,79 @@ async def c_me(ctx: CmdCtx) -> None:
     await ctx.reply("\n".join(lines))
 
 
-async def c_namehist(ctx: CmdCtx) -> None:
-    """이름·아이디 변경 기록 (SangMata 방식). 그룹: 이 방 멤버 / 1:1: 나 또는 같은 그룹 멤버 (오너는 전부)."""
+async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> None:
+    """이름·아이디 변경 기록 (SangMata 방식). 대상: 답장 > 인자(@아이디·ID·이름) > 전달된 메시지 > 나.
+    그룹은 이 방 멤버만, 1:1 은 나·같은 그룹 멤버만 (오너는 전부)."""
     db, tz = ctx.svc.db, ctx.svc.cfg.tz
-    in_dm = ctx.chat_id > 0
-    if not ctx.args and not ctx.msg.reply_to_message:
-        await ctx.reply(await namehist.history_text(db, ctx.user.id, tz, title="내 이름 기록"))
-        return
-    if in_dm:
-        uid = await nh_panel.resolve(db, ctx.args[0])
+    group = ctx.chat_id < 0
+    uid: int | None = ctx.user.id
+    reply = ctx.msg.reply_to_message
+    if self_only:
+        pass
+    elif reply is not None and getattr(reply, "forward_origin", None) is not None:
+        uid, err = namehist.forwarded_user(reply)
         if uid is None:
-            await ctx.reply("그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요.")
+            await ctx.reply(err)
             return
-        if uid != ctx.user.id and ctx.role < Role.OWNER and not await namehist.shares_group(db, ctx.user.id, uid):
-            await ctx.reply("🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요.")
+    elif reply is not None and reply.from_user:
+        if reply.from_user.is_bot:
+            await ctx.reply("봇 계정은 기록하지 않아요.")
             return
-    else:
-        old = await namehist.find_by_old_username(db, ctx.chat_id, ctx.args[0]) \
-            if ctx.args and ctx.args[0].startswith("@") and not ctx.msg.reply_to_message else None
-        if old is not None and not await db.find_members(ctx.chat_id, ctx.args[0]):
-            uid = old  # 예전 @아이디로 찾음
-        else:
-            t = await _target(ctx, sanction=False)
-            if not t:
-                return
-            uid = t[0]
-    await ctx.reply(await namehist.history_text(db, uid, tz))
+        uid = reply.from_user.id
+    elif ctx.args:
+        uid = await namehist.resolve(db, ctx.args[0], ctx.chat_id if group else None)
+        if uid is None and group:
+            rows = await db.find_members(ctx.chat_id, ctx.argstr)
+            uid = rows[0]["user_id"] if len(rows) == 1 else None
+        if uid is None:
+            await ctx.reply(f"'{esc(ctx.argstr[:40])}' 기록을 못 찾았어요. @아이디(예전 아이디도 됨)·숫자 ID·답장으로 해주세요.")
+            return
+    elif getattr(ctx.msg, "forward_origin", None) is not None:
+        uid, err = namehist.forwarded_user(ctx.msg)
+        if uid is None:
+            await ctx.reply(err)
+            return
+    if not await namehist.can_view(db, ctx.user.id, uid, ctx.chat_id, ctx.role >= Role.OWNER):
+        await ctx.reply("🔒 이 방 멤버의 기록만 볼 수 있어요." if group else "🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요.")
+        return
+    title = "내 이름 기록" if uid == ctx.user.id else None
+    await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title),
+                    reply_markup=namehist.buttons(uid, mode))
+
+
+async def name_lookup_forward(ctx: CmdCtx) -> None:
+    """1:1 에 전달된 메시지 → 원래 보낸 사람의 기록."""
+    await _name_lookup(ctx, "recent")
+
+
+async def c_history(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "recent")
+
+
+async def c_allhistory(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "all")
+
+
+async def c_check_name(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "names")
+
+
+async def c_check_username(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "usernames")
+
+
+async def c_myhistory(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "recent", self_only=True)
+
+
+async def c_name_notice(ctx: CmdCtx) -> None:
+    sub = ctx.args[0] if ctx.args else ""
+    if sub in ("켜기", "on", "끄기", "off"):
+        await ctx.svc.db.set_setting(ctx.chat_id, "name_change_notice", coerce("name_change_notice", sub))
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, None, "setting", f"name_change_notice={sub}")
+    s = await ctx.svc.db.get_settings(ctx.chat_id)
+    await ctx.reply(f"🔄 <b>이름 변경 알림</b>: {render('name_change_notice', s['name_change_notice'])}\n"
+                    "멤버가 이름·@아이디를 바꾸면 방에 알려요. <code>.이름알림 켜기|끄기</code>")
 
 
 async def c_rank(ctx: CmdCtx) -> None:
@@ -842,8 +888,17 @@ COMMANDS: list[Cmd] = [
     Cmd(("내아이디", "id", "myid"), c_myid, help="내 텔레그램 숫자 ID (방에선 방 ID도)", dm_ok=True),
     Cmd(("규칙", "rules"), c_rules, help="방 규칙 보기"),
     Cmd(("내정보", "me", "정보", "info"), c_me, usage="[@user]", help="활동 정보"),
-    Cmd(("이름기록", "기록", "history", "names", "sangmata"), c_namehist, usage="[@user|ID|답장]",
-        help="이름·아이디 변경 기록", dm_ok=True),
+    Cmd(("기록", "이름기록", "history", "sangmata"), c_history, usage="[@user|ID|답장]",
+        help="이름·아이디 변경 기록 (최근)", group="이름 기록", dm_ok=True),
+    Cmd(("전체기록", "allhistory"), c_allhistory, usage="[@user|ID|답장]", help="변경 기록 전체",
+        group="이름 기록", dm_ok=True),
+    Cmd(("이름조회", "check_name", "names"), c_check_name, usage="[@user|ID|답장]", help="이름 변경만",
+        group="이름 기록", dm_ok=True),
+    Cmd(("아이디조회", "check_username", "usernames"), c_check_username, usage="[@user|ID|답장]",
+        help="@아이디 변경만", group="이름 기록", dm_ok=True),
+    Cmd(("내기록", "myhistory"), c_myhistory, help="내 이름·아이디 기록", group="이름 기록", dm_ok=True),
+    Cmd(("이름알림", "namealert"), c_name_notice, Role.ADMIN, usage="[켜기|끄기]", help="이름 변경 알림 설정",
+        group="관리자"),
     Cmd(("랭킹", "rank"), c_rank, usage="[오늘|주간|월간|전체]", help="채팅 랭킹", group="집계"),
     Cmd(("통계", "stats"), c_stats, usage="[오늘|주간|월간]", help="방 통계", group="집계"),
     Cmd(("검색", "search"), c_search, usage="키워드", help="대화 검색 (최근 30일)", group="집계"),

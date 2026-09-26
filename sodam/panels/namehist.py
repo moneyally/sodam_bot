@@ -7,7 +7,11 @@ from .. import namehist
 from ..menu import (PUBLIC, B, PanelCtx, Route, Screen, _kb, _toggle_rows, register_input, register_main, register_route,
                     register_screen_extra, register_toggle)
 from ..services import PendingInput
-from ..util import to_int
+
+HOW = ("\n\n<b>조회 방법</b>\n"
+       "• 🔎 버튼 → @아이디(예전 아이디도 됨)·숫자 ID 보내기\n"
+       "• 그 사람 메시지를 여기로 <b>전달</b>하기\n"
+       "• 그룹에서 답장하고 <code>.기록</code> · <code>.전체기록</code> · <code>.이름조회</code> · <code>.아이디조회</code>")
 
 
 def _kb_main():
@@ -16,38 +20,29 @@ def _kb_main():
 
 async def s_mine(c: PanelCtx) -> Screen:
     text = await namehist.history_text(c.svc.db, c.uid, c.svc.cfg.tz, title="내 이름 기록")
-    return Screen(text + "\n\n그룹에서는 <code>.이름기록 @아이디</code> 나 답장으로 다른 멤버 기록을 볼 수 있어요.",
-                  _kb_main())
+    return Screen(text + HOW, _kb_main())
 
 
 async def r_query(c: PanelCtx) -> Screen:
     c.svc.inputs[c.uid] = PendingInput("nh", 0)
     if c.svc.announcer:
         c.svc.announcer.drafts.pop((c.uid, c.uid), None)
-    return Screen("🔎 조회할 사람의 <b>@아이디</b>(예전 아이디도 돼요) 또는 <b>숫자 ID</b>를 보내주세요.\n"
-                  "나와 같은 그룹에 있는 사람만 볼 수 있어요.\n\n그만두려면 <code>취소</code>",
+    return Screen("🔎 조회할 사람의 <b>@아이디</b>(예전 아이디도 돼요)나 <b>숫자 ID</b>를 보내주세요.\n"
+                  "그 사람 메시지를 전달해도 돼요. 나와 같은 그룹에 있는 사람만 볼 수 있어요.\n\n그만두려면 <code>취소</code>",
                   _kb([[B("❌ 취소", "m:nh")]]))
 
 
-async def resolve(db, raw: str) -> int | None:
-    raw = raw.strip()
-    uid = to_int(raw)
-    if uid is not None:
-        return uid if uid > 0 else None
-    name = raw.lstrip("@")
-    if not name or " " in name:
-        return None
-    row = await db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (name,))
-    return row["user_id"] if row else await namehist.find_by_old_username(db, None, name)
-
-
 async def _lookup(c: PanelCtx, msg: Message) -> tuple[bool, str]:
-    raw = (msg.text or "").strip()
-    uid = await resolve(c.svc.db, raw)
-    if uid is None:
-        return False, "그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요."
+    if getattr(msg, "forward_origin", None) is not None:
+        uid, err = namehist.forwarded_user(msg)
+        if uid is None:
+            return True, err
+    else:
+        uid = await namehist.resolve(c.svc.db, (msg.text or "").strip())
+        if uid is None:
+            return False, "그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요."
     owner = c.uid in await c.svc.perms.owners()
-    if uid != c.uid and not owner and not await namehist.shares_group(c.svc.db, c.uid, uid):
+    if not await namehist.can_view(c.svc.db, c.uid, uid, 0, owner):
         return True, "🔒 나와 같은 그룹에 있는 사람만 조회할 수 있어요."
     return True, await namehist.history_text(c.svc.db, uid, c.svc.cfg.tz)
 
@@ -59,7 +54,7 @@ async def s_after(c: PanelCtx) -> Screen:
 register_main(30, "nh", "🕵️ 이름 기록")
 register_route("nh", Route(s_mine, PUBLIC, scoped=False))
 register_route("nhq", Route(r_query, PUBLIC, scoped=False))
-register_input("nh", "", "nh", _lookup, s_after, need=PUBLIC)
+register_input("nh", "", "nh", _lookup, s_after, media=True, need=PUBLIC)
 
 
 # 🛡️ 보안 화면에 '이름 변경 알림' 켜기/끄기
