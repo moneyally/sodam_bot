@@ -21,7 +21,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import commands, menu, security, stats, subscription
+from . import commands, hooks, menu, security, stats, subscription
 from .agent import run_agent
 from .commands import CmdCtx
 from .llm import BudgetExceeded
@@ -254,8 +254,8 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ── 그룹 메시지 ───────────────────────────────────────────
 # 관리 검사를 통과한 그룹 메시지마다 백그라운드로 불리는 함수들: hook(svc, bot, msg, role)
-# 기능 모듈이 import 시점에 GROUP_MESSAGE_HOOKS.append(...) 로 등록한다.
-GROUP_MESSAGE_HOOKS: list = []
+# 기능 모듈은 hooks.add_group_message_hook(...) 로 등록한다 (순환 import 방지).
+GROUP_MESSAGE_HOOKS = hooks.GROUP_MESSAGE_HOOKS
 
 
 async def _run_hook(hook, svc: Services, bot, msg: Message, role: Role) -> None:

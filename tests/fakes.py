@@ -52,6 +52,9 @@ class FakeBot:
         return [c for c in self.calls if c[0] == name]
 
     async def send_message(self, chat_id, text, **kw):
+        if chat_id in getattr(self, "dm_blocked", ()):
+            from telegram.error import Forbidden
+            raise Forbidden("Forbidden: bot was blocked by the user")
         self.calls.append(("send_message", chat_id, text, kw))
         return self._msg(chat_id, text=text)
 
@@ -98,6 +101,12 @@ class FakeBot:
 
     async def get_chat_administrators(self, chat_id):
         return [SimpleNamespace(user=u, status="administrator") for u in self.admins]
+
+    # 태그 알림용. 테스트가 bot.member_status = {(방, 사람): "left"} (없으면 "member"), bot.dm_blocked = {사람} 로 지정
+    async def get_chat_member(self, chat_id, user_id):
+        self.calls.append(("get_chat_member", chat_id, user_id))
+        status = getattr(self, "member_status", {}).get((chat_id, user_id), "member")
+        return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left")
 
 
 class FakeMsg:

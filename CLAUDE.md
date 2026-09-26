@@ -53,7 +53,7 @@
   register_toggle / register_preset / register_input / register_token_action` 로 등록 (menu.py 수정 불필요).
 - 새 설정 키 = `settings.register_setting(...)`, 새 테이블 = `db.register_schema("CREATE TABLE IF NOT EXISTS …")`
   + 그 모듈 안에서 `db._all/_one/_write` 로 쿼리.
-- 그룹 메시지 후처리(태그 알림 등) = `handlers.GROUP_MESSAGE_HOOKS.append(async fn(svc, bot, msg, role))`.
+- 그룹 메시지 후처리(태그 알림 등) = `hooks.add_group_message_hook(async fn(svc, bot, msg, role))`.
 - 검증 하네스: `tests/harness.py` 가 4개 역할(오너·TG 관리자·봇관리자·멤버)로 모든 버튼을 BFS 로 눌러
   예외·answer 1회·64바이트·HTML·권한 누출을 검사 (`tests/test_harness.py`). 화면 확인: `python tools/render_screens.py` → docs/SCREENS.md.
   패널별 하네스 데이터는 `tests/seed_<이름>.py` 에서 `harness.SEEDERS.append(async fn(svc))` (자동 로드) → 깊은 화면까지 누른다.
