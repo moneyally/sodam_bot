@@ -115,12 +115,27 @@ def _euro(word: str) -> str:
     return "로" if jong in (0, 8) else "으로"
 
 
+_WEEKDAYS = "월화수목금토일"
+
+
+def korean_now(dt: datetime) -> str:
+    """'2026-09-27 (일) 00:35 · 밤 12시 35분' — 24시간·한국식 둘 다 줘서 '지금 몇 시' 에 자연스럽게 답하게."""
+    h = dt.hour
+    part = "새벽" if h < 6 else "아침" if h < 9 else "오전" if h < 12 else "오후" if h < 18 else "저녁" if h < 21 else "밤"
+    if h == 0:
+        part = "밤"
+    elif h == 12:
+        part = "낮"
+    h12 = h % 12 or 12
+    return f"{dt:%Y-%m-%d} ({_WEEKDAYS[dt.weekday()]}) {dt:%H:%M} · 한국시간 {part} {h12}시 {dt.minute}분"
+
+
 def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, role_label: str,
                    notes: dict, history: list, reply_to: str | None, request: str,
                    user_memory: list[str] | None = None, room_memory: str = "",
                    past_turns: list[str] | None = None, mode: str = "call") -> list[dict]:
     n = nonce()
-    now = datetime.now(tz).strftime("%Y-%m-%d %H:%M (%a)")
+    now = korean_now(datetime.now(tz))
     speaker = json.dumps(
         {"name": user_name(caller), "id": caller.id, "role": role_label, "memo": notes},
         ensure_ascii=False)

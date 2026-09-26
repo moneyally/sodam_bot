@@ -33,11 +33,18 @@ def build_services(cfg: Config, db: DB) -> Services:
     return svc
 
 
+def _log_in_local_time(tz) -> None:
+    """서버가 UTC 여도 로그 시각은 .env 의 TIMEZONE(기본 한국시간)으로."""
+    from datetime import datetime
+    logging.Formatter.converter = lambda *_: datetime.now(tz).timetuple()
+
+
 def main() -> None:
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)  # 30초마다 도는 작업 로그 소음 제거
     cfg = load_config()
+    _log_in_local_time(cfg.tz)
     db = DB(cfg.db_path)
 
     async def post_init(app: Application) -> None:
@@ -92,3 +99,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
