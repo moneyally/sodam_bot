@@ -87,8 +87,8 @@ def main() -> None:
             logging.warning("🔑 오너가 아직 없어요. 봇과 1:1 채팅에서 이렇게 보내세요:  /owner %s", code)
             logging.warning("   (재시작하면 코드가 바뀌어요. 등록 후엔 이 안내가 안 나와요)")
             logging.warning("=" * 60)
-        me = await app.bot.get_me()
-        logging.info("%s (@%s) 시작! 모델=%s", cfg.bot_name, me.username,
+        # 봇 정보는 app.initialize() 가 이미 받아 둠 → 여기서 다시 조회하면 네트워크 오류로 시작이 멈출 수 있음
+        logging.info("%s (@%s) 시작! 모델=%s", cfg.bot_name, app.bot.username,
                      cfg.model if cfg.openai_api_key else "없음 (OPENAI_API_KEY 미설정 → AI 기능 꺼짐)")
         if cfg.pay_address:
             logging.info("구독 결제 켜짐: 월 %s USDT(TRC20) / %d일, 체험 %d일, 받는 주소 %s…%s",

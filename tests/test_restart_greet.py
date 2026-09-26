@@ -24,6 +24,14 @@ def polling_keeps_pending_updates():
     assert re.search(r"drop_pending_updates\s*=\s*False", src) and "drop_pending_updates=True" not in src
 
 
+
+@test
+def startup_does_not_call_get_me_again():
+    """post_init 에서 get_me 를 또 부르면 네트워크가 잠깐 끊겼을 때 봇이 안 켜짐 (initialize 가 이미 받아 둠)."""
+    src = (ROOT / "sodam" / "__main__.py").read_text(encoding="utf-8")
+    assert "get_me(" not in src and "app.bot.username" in src
+
+
 @test
 def stale_check():
     class M:
