@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 81개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 183개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -20,6 +20,8 @@
     1회용 토큰(`m:k:<tok>`, 긴 값·삭제 확인), 글자 입력 엔진(`svc.inputs`, `menu.handle_input`) · `commands.py` `.명령어`
   - `billing.py`/`subscription.py`/`tron.py` 구독 결제 · `captcha.py` `cas.py` `moderation.py` 방 관리
   - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
+  - `memory.py` 멤버 기억·방 흐름 요약·대화 기록 · `social.py` 이어 말하기·먼저 끼어들기 · `ai_settings.py` AI 설정 키
+  - `tagnotify.py` 태그·답장 알림 · `hooks.py` 확장 지점 · `panels/*.py` 버튼 화면(greet·tagnotify·owner·announce·ai·log·room)
 
 ## 중요한 결정 (바꾸지 말 것, 바꾸려면 사용자에게 확인)
 - **비밀값은 git 에 절대 올리지 않는다.** 저장소는 public. `.env` 와 `data/` 는 .gitignore.
@@ -35,6 +37,11 @@
 - 사용자가 `prompt.py` 에서 "송금·코인·도박 안내 금지" 규칙을 직접 지웠음 → 되돌리지 말 것. 출력 필터(링크·지갑주소 제거)는 별개로 유지.
 - 1:1 채팅 AI 는 결제 여부와 무관하게 하루 무료 한도 적용(외부인이 전체 예산 소모 방지). 오너는 무제한.
 - 야간 모드는 사용자 요청으로 **제외**됨.
+- AI 기억(멤버·방)은 항상 user 메시지의 nonce 태그 안 '데이터'로만 넣는다 (system 에 넣지 않음 → 캐시·인젝션 안전).
+  기억에는 본인 얘기만, 인젝션 판정 메시지·다른 멤버 이름·링크·전화번호는 저장 안 함. 멤버는 `.기억 지우기`.
+- 먼저 끼어들기(`ai_chime_in`)는 **기본 꺼짐**. 켜도 120분 간격·하루 4회, 관리자 공지 직후·게임 중엔 안 함.
+- 단톡방 답 길이: 요청 맨 끝(tail)에 '1~3문장, 목록·제안 문장 없이' 를 매번 붙인다 (실측: 평균 ~110자).
+- 라이브 점검: `python tools/ai_live.py` (실제 OpenAI, 가짜 텔레그램) · 오프라인: `python tools/ai_dryrun.py`.
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)
 - Claude 앱은 AppData 를 `…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…` 로 가상화함 → 앱 내부에서 설치한 python/git 경로가 앱 밖 터미널에선 다름.

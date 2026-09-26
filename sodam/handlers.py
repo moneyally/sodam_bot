@@ -391,7 +391,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
             text = "🛡️ 그 요청은 들어드릴 수 없어요."
             if s["injection_warn"] and role < Role.ADMIN and chat_id < 0:  # 경고·제재는 그룹방에서만 (1:1 은 양수 ID)
                 text += "\n" + await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
-                                                  f"봇 조작 시도 ({reason[:30]})")
+                                                  f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
             await msg.reply_text(text, parse_mode="HTML")
             await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
                                       f"{esc(request[:200])} / {esc(reason)}")
