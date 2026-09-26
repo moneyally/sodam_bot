@@ -245,7 +245,7 @@ async def member_join_hook_can_block_and_failures_do_not_break_join():
     finally:
         hooks.MEMBER_JOIN_HOOKS.clear()
     assert seen == [666, 777]
-    assert svc.greeter.queued and all(q[2] == 777 for q in svc.greeter.queued)      # 막힌 사람은 인사 없음
+    assert svc.greeter.queued and all(q[1] == 777 for q in svc.greeter.queued)      # 막힌 사람은 인사 없음
 
 
 if __name__ == "__main__":
