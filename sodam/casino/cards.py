@@ -239,7 +239,7 @@ async def _edit(h: Hand, text: str, kb=None, q=None) -> None:
         elif h.message_id is not None:
             await h.ctx.bot.edit_message_text(text=text, chat_id=h.ctx.chat_id, message_id=h.message_id,
                                               parse_mode="HTML", reply_markup=kb)
-    except TelegramError:
+    except (TelegramError, RuntimeError):   # RuntimeError: 봇 종료 뒤(HTTP 닫힘) 정리할 때
         pass
 
 
@@ -579,15 +579,19 @@ register_callback("hl", cb_hilo)
 
 
 async def refund_open_hands(svc) -> int:
-    """봇이 꺼질 때: 아직 안 끝난 판의 걸린 금액(더블 포함)을 돌려준다. 돌려준 판 수."""
-    n = 0
-    for key, h in list(HANDS.items()):
-        if h.done:
-            continue
-        h.done = True
-        await credit(svc.db, h.ctx.chat_id, h.ctx.user.id, h.bet, f"refund:{h.game}")
-        HANDS.pop(key, None)
-        n += 1
+    """봇이 꺼질 때: 만료된 판은 평소처럼 정리(sweep), 남은 하이로우는 현재 상금 지급,
+    블랙잭은 걸린 금액(더블 포함) 환불. 처리한 판 수 (h.done 이라 두 번 불러도 한 번만)."""
+    n = await sweep()
+    for h in list(HANDS.values()):
+        async with h.lock:
+            if h.done:
+                continue
+            if h.game == "hl":
+                await _hl_cashout(h, note="🔌 봇 점검으로 자동으로 그만했어요.")
+            else:
+                _finish(h)
+                await credit(svc.db, h.ctx.chat_id, h.ctx.user.id, h.bet, f"refund:{h.game}")
+            n += 1
     return n
 
 

@@ -14,6 +14,7 @@ from openai import OpenAIError
 from telegram import Bot, CallbackQuery, Message
 from telegram.error import TelegramError
 
+from .casino.core import credit
 from .llm import BudgetExceeded
 from .util import esc, mention, user_name
 
@@ -94,7 +95,7 @@ class Game:
     async def award(self, user, points: int) -> None:
         entry = self.scores.setdefault(user.id, [user_name(user), 0])
         entry[1] += points
-        await self.svc.db.add_points(self.chat_id, user.id, points)
+        await credit(self.svc.db, self.chat_id, user.id, points, f"game:{self.title}")   # 원장(casino_ledger)에 남김
 
     def scoreboard(self) -> str:
         if not self.scores:

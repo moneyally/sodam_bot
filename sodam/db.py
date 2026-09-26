@@ -204,11 +204,15 @@ def register_schema(sql: str, *, migrate: dict[str, str] | None = None) -> None:
 EXTRA_MIGRATE: dict[str, str] = {}
 
 
+SETTINGS_TTL = 30.0   # 초. 메인·딜러 봇이 DB 를 같이 쓰면 상대가 바꾼 설정을 이 안에 반영
+
+
 class DB:
     def __init__(self, path: str):
         self.path = path
         self.conn: aiosqlite.Connection | None = None
         self._settings_cache: dict[int, dict[str, Any]] = {}
+        self._settings_at: dict[int, float] = {}   # 읽은 시각 (다른 프로세스가 바꾼 설정도 TTL 뒤 반영)
 
     async def open(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +277,9 @@ class DB:
         )
 
     async def get_settings(self, chat_id: int) -> dict[str, Any]:
-        if chat_id not in self._settings_cache:
+        t = time.monotonic()
+        if chat_id not in self._settings_cache or t - self._settings_at.get(chat_id, t) > SETTINGS_TTL:
+            self._settings_at[chat_id] = t
             row = await self._one("SELECT settings FROM chats WHERE chat_id=?", (chat_id,))
             stored = json.loads(row["settings"]) if row else {}
             self._settings_cache[chat_id] = {**DEFAULTS, **stored}

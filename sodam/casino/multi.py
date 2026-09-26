@@ -85,7 +85,7 @@ def parse_auto(raw: str) -> int | None:
         v = float(raw)
     except ValueError:
         return None
-    if not math.isfinite(v):
+    if not 0 < v <= AUTO_MAX / 100:   # round 전에 범위 검사 (inf·nan·1e308 도 여기서 걸러짐)
         return None
     return int(round(v * 100))
 

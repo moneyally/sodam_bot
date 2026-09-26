@@ -124,12 +124,13 @@ def parse_amount(raw: str, bal: int) -> int | None:
 
 
 def split_bet(args: list[str], bal: int) -> tuple[int | None, list[str]]:
-    """인자에서 금액 하나를 찾고 나머지(선택지)를 돌려준다. '!홀짝 홀 1000' / '!홀짝 1000 홀' 둘 다."""
-    for i, a in enumerate(args):
-        n = parse_amount(a, bal)
-        if n is not None:
-            return n, args[:i] + args[i + 1:]
-    return None, args
+    """인자에서 금액 하나를 찾고 나머지(선택지)를 돌려준다. 순서 자유: '!홀짝 홀 1000' · '!주사위 6 1000'.
+    최소 베팅 이상인 첫 값이 금액 (선택지 숫자 0~36·배수는 그보다 작음). 없으면 처음 나온 금액 형식 (→ 최소 베팅 안내)."""
+    found = [(i, n) for i, a in enumerate(args) if (n := parse_amount(a, bal)) is not None]
+    if not found:
+        return None, args
+    i, n = next(((i, n) for i, n in found if n >= MIN_BET), found[0])
+    return n, args[:i] + args[i + 1:]
 
 
 async def take_bet(ctx: Ctx, amount: int | None, game: str) -> int | None:

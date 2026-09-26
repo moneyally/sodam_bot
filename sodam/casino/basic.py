@@ -7,10 +7,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+from telegram import ReplyParameters
+from telegram.error import TelegramError
 
 from ..util import esc
 from . import Ctx, register
-from .core import balance, finish, fmt, rng, split_bet, take_bet
+from .core import balance, credit, finish, fmt, rng, split_bet, take_bet
+
+log = logging.getLogger(__name__)
 
 DICE_WAIT = 3.5   # 애니메이션 끝날 때까지 (테스트에선 0)
 
@@ -23,8 +29,17 @@ def slot_reels(value: int) -> list[str]:
     return [SLOT_SYMBOLS[(v >> s) & 3] for s in (0, 2, 4)]
 
 
-async def _roll(ctx: Ctx, emoji: str) -> int:
-    sent = await ctx.bot.send_dice(ctx.chat_id, emoji=emoji, reply_to_message_id=ctx.msg.message_id)
+async def _roll(ctx: Ctx, emoji: str, game: str, bet: int) -> int | None:
+    """주사위를 굴려 값. 텔레그램 오류면 베팅을 돌려주고 None (원본 메시지가 지워져도 답장 없이 보냄)."""
+    try:
+        sent = await ctx.bot.send_dice(ctx.chat_id, emoji=emoji, reply_parameters=ReplyParameters(
+            ctx.msg.message_id, allow_sending_without_reply=True))
+    except TelegramError as e:
+        log.warning("send_dice failed (%s): %s", game, e)
+        bal = await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, f"refund:{game}")
+        await ctx.bot.send_message(ctx.chat_id, f"{emoji} 주사위를 못 굴려서 베팅 {fmt(bet)}을 돌려드렸어요. "
+                                                f"잔액 {fmt(bal)}", parse_mode="HTML")
+        return None
     await asyncio.sleep(DICE_WAIT)
     return sent.dice.value
 
@@ -51,7 +66,9 @@ async def g_oddeven(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "oddeven")
     if bet is None:
         return
-    v = await _roll(ctx, "🎲")
+    v = await _roll(ctx, "🎲", "oddeven", bet)
+    if v is None:
+        return
     got = "홀" if v % 2 else "짝"
     payout = int(bet * 1.95) if got == pick else 0
     await finish(ctx, "oddeven", bet, payout, f"🎲 {v} → <b>{got}</b> ({esc(pick)} 선택)")
@@ -70,7 +87,9 @@ async def g_dice(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "dice")
     if bet is None:
         return
-    v = await _roll(ctx, "🎲")
+    v = await _roll(ctx, "🎲", "dice", bet)
+    if v is None:
+        return
     if pick.isdecimal():
         payout = int(bet * 5.7) if v == int(pick) else 0
     else:
@@ -91,7 +110,9 @@ async def g_slot(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "slot")
     if bet is None:
         return
-    v = await _roll(ctx, "🎰")
+    v = await _roll(ctx, "🎰", "slot", bet)
+    if v is None:
+        return
     reels = slot_reels(v)
     mult = SLOT_PAY[reels[0]] if reels[0] == reels[1] == reels[2] else 0
     payout = bet * mult
@@ -120,7 +141,9 @@ def _sport(name: str):
         bet = await take_bet(ctx, amount, name)
         if bet is None:
             return
-        v = await _roll(ctx, emoji)
+        v = await _roll(ctx, emoji, name, bet)
+        if v is None:
+            return
         payout = int(bet * mult) if v in wins else 0
         await finish(ctx, name, bet, payout, f"{emoji} {'성공!' if payout else '아깝다…'}")
     return play
