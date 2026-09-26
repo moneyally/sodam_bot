@@ -218,6 +218,36 @@ def no_duplicate_top_level_definitions():
                 seen.add(node.name)
     assert not dup, dup
 
+@test
+async def member_join_hook_can_block_and_failures_do_not_break_join():
+    from types import SimpleNamespace
+
+    from fakes import FakeBot, FakeJobQueue, fake_user, make_db, make_svc
+
+    from sodam import handlers, hooks
+    db = await make_db()
+    svc = await make_svc(db, admins={1})
+    await db.set_setting(-100901, "captcha_enabled", False)
+    ctx = SimpleNamespace(bot=FakeBot(), job_queue=FakeJobQueue(), bot_data={"svc": svc, "joins": {}, "chats": set()})
+    seen = []
+
+    async def boom(svc_, bot, chat_id, user):
+        raise RuntimeError("훅 고장")
+
+    async def block(svc_, bot, chat_id, user):
+        seen.append(user.id)
+        return user.id == 666
+    for fn in (boom, block):
+        hooks.add_member_join_hook(fn)
+    try:
+        await handlers.handle_new_member(ctx, -100901, "방", fake_user(666, "막힐사람"))
+        await handlers.handle_new_member(ctx, -100901, "방", fake_user(777, "통과"))
+    finally:
+        hooks.MEMBER_JOIN_HOOKS.clear()
+    assert seen == [666, 777]
+    assert svc.greeter.queued and all(q[2] == 777 for q in svc.greeter.queued)      # 막힌 사람은 인사 없음
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(asyncio.run(run_all()))

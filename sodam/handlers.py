@@ -147,6 +147,8 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     if s["cas_enabled"] and await svc.cas.is_banned(user.id):
         await _cas_ban(context, chat_id, user)
         return
+    if await hooks.member_joined(svc, bot, chat_id, user):   # 공동 차단 명단·대량 입장 방어 등 (sodam/hooks.py)
+        return
     notice = await svc.mod.check_impersonation(bot, chat_id, user)
     if notice:
         await send_temp(context, chat_id, notice, 300)
