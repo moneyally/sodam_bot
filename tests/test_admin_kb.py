@@ -195,7 +195,7 @@ async def private_chat_routing():
         await handlers.on_private(SimpleNamespace(message=msg), ctx)
         return msg.replies
 
-    assert "맞지 않" in (await dm("/owner 99999999" if code != "99999999" else "/owner 00000000"))[0]
+    assert "운영자 전용" in (await dm("/owner 99999999" if code != "99999999" else "/owner 00000000"))[0]
     assert "오너로 등록" in (await dm(f"/owner {code}"))[0]
     assert await svc.perms.role(bot, 77, 77) == Role.OWNER
     assert "77" in (await dm(".내아이디"))[0]

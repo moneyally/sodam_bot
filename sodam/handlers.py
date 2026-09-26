@@ -530,16 +530,18 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     m = _OWNER_CMD.match(text)
     if m:
         if await svc.perms.claim(user.id, m.group(3)):
-            await msg.reply_text("👑 오너로 등록됐어요! 이제 관리자 보고(자동 밴·도배·신고·인젝션 차단 등)가 "
-                                 "이 1:1 채팅으로 와요. 명령어는 .도움말")
+            await msg.reply_text("👑 오너로 등록됐어요!\n/start → 👑 오너 메뉴에서 전체 방 현황·매출을 볼 수 있고, "
+                                 "자동 차단·신고 같은 알림도 여기로 와요.")
             log.info("오너 등록 완료: %s", user.id)
         else:
-            await msg.reply_text("코드가 맞지 않거나 이미 사용됐어요.")
+            await msg.reply_text("🔒 봇 운영자 전용 기능이에요.")
         return
 
     if re.match(r"^[./](owner|오너)(@\w+)?\s*$", text, re.I):
-        await msg.reply_text("오너 등록 코드는 봇을 실행한 서버 터미널 로그에 떠 있어요 (🔑 /owner 숫자8자리).\n"
-                             "재시작하면 코드가 바뀌니 가장 최근 코드를 보내주세요. 이미 오너가 있으면 코드가 나오지 않아요.")
+        if user.id in await svc.perms.owners():
+            await msg.reply_text("👑 이미 오너로 등록돼 있어요. /start → 👑 오너 메뉴")
+        else:
+            await msg.reply_text("🔒 봇 운영자 전용 기능이에요.")
         return
 
     # 진행 중인 입력 흐름 (사진·영상만 온 메시지도 여기까지 전달)
