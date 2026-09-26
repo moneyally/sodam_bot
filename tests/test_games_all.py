@@ -173,7 +173,7 @@ async def blackjack_photo_buttons_swap_the_picture_and_money_is_unchanged():
     start = rgb(photo)
     check_row(start, 0, K.cs("♥2", "♣Q"), hide={1})                   # 딜러 숨긴 카드 = 뒷면 그림
     check_row(start, 1, K.cs("♠10", "♦5"))
-    assert "딜러 <b>2</b> + 🂠" in cap and "나 <b>15</b>" in cap and "「" not in cap
+    assert "딜러 <b>2</b> + 🎴" in cap and "나 <b>15</b>" in cap and "「" not in cap
     medias = bot.named("edit_media")
     assert len(medias) == 3, [m[0] for m in bot.calls]                # 히트 1 + 딜러 공개 1 + 결과 1
     check_row(media_png(medias[0]), 1, K.cs("♠10", "♦5", "♠3"))       # 히트: 내 카드 3장
@@ -297,6 +297,7 @@ async def join_replies_are_deleted_after_betting_closes():
 @test
 async def gate_notice_once_per_ten_minutes():
     svc, bot, (u,) = await setup()
+    core._room_noticed.clear()
     await svc.db.set_setting(CHAT, "casino_enabled", False)
     q = FakeQuery(CHAT, u)                                              # 룰렛 버튼판 알림은 방에 안 쌓임 → 횟수에 안 셈
     q.message.message_id = 5
@@ -306,7 +307,7 @@ async def gate_notice_once_per_ten_minutes():
     assert "꺼져" in m1.replies[-1] and not m1.deleted
     m2 = await K.cmd(svc, bot, u, "!지갑")
     assert not m2.replies and m2.deleted                               # 10분 안: 조용히, 명령 메시지 지우기 시도
-    svc.db._casino_gate_notice[CHAT] -= core.GATE_QUIET + 1            # 10분 지남
+    core._room_noticed[CHAT] -= core.GATE_QUIET + 1                    # 10분 지남
     m3 = await K.cmd(svc, bot, u, "!지갑")
     assert "꺼져" in m3.replies[-1]
     other = -100999                                                     # 다른 방은 따로

@@ -445,7 +445,7 @@ def _bj_text(h: Hand, reveal: bool, footer: str = "", upto: int | None = None, c
     doubled = " (더블)" if h.bet > h.stake else ""
     head = f"🃏 <b>블랙잭</b> · {_name(h.ctx.user)}님 · 베팅 {fmt(h.bet)}{doubled}\n"
     if compact:
-        dealer = f"<b>{bj_total(shown)}</b>" if reveal else f"<b>{bj_total(h.dealer[:1])}</b> + 🂠"
+        dealer = f"<b>{bj_total(shown)}</b>" if reveal else f"<b>{bj_total(h.dealer[:1])}</b> + {HIDDEN}"
         return head + f"🎩 딜러 {dealer} · 🙋 나 <b>{ptot}</b>" + (f"\n{footer}" if footer else "")
     dealer = (cards_str(shown) + f" (<b>{bj_total(shown)}</b>)") if reveal else f"{face(h.dealer[0])}{HIDDEN}"
     return (head + f"🎩 딜러 {dealer}\n"

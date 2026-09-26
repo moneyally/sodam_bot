@@ -243,29 +243,20 @@ async def temp_reply(ctx: Ctx, text: str, secs: float = TEMP_SECS):
 
 
 # ── 사용 가능 여부 ────────────────────────────────────────
-def _room_notice(ctx: Ctx, text: str) -> str:
-    """방 전체가 막힌 이유(게임 꺼짐·이용 기간 아님) 안내는 방당 GATE_QUIET 초에 한 번만 방에 보이게.
-    casino.dispatch 는 gate 문구를 ctx.reply 로 보내므로, 이 ctx 의 reply 를 바꿔 끼운다:
-    처음 = 보내면서 시각 기록 · 10분 안의 다음 명령 = 답장 없이 명령 메시지만 지우기 시도.
-    (룰렛 버튼판은 같은 문구를 누른 사람 알림창으로만 보여서 방엔 안 쌓임 → 기록도 안 함)"""
-    db = ctx.svc.db
-    seen = getattr(db, "_casino_gate_notice", None)
-    if seen is None:
-        seen = db._casino_gate_notice = {}
-    orig = ctx.reply
-    if time.monotonic() - seen.get(ctx.chat_id, -1e18) < GATE_QUIET:
-        async def quiet(_text, **_kw):
-            try:
-                await ctx.msg.delete()
-            except Exception as e:              # 권한 없음 등: 그냥 조용히
-                log.debug("gate quiet delete failed: %r", e)
-        ctx.reply = quiet
-    else:
-        async def once(t, **kw):
-            seen[ctx.chat_id] = time.monotonic()
-            return await orig(t, **kw)
-        ctx.reply = once
-    return text
+ROOM_OFF = "이 방은 포인트 게임이 꺼져 있어요. (이 안내는 10분에 한 번만 나와요)"
+ROOM_UNPAID = "포인트 게임은 이용 기간 중인 방에서 쓸 수 있어요. (이 안내는 10분에 한 번만 나와요)"
+_room_noticed: dict[int, float] = {}
+
+
+def room_notice_due(chat_id: int, text: str) -> bool:
+    """방 전체가 막힌 이유(게임 꺼짐·이용 기간 아님)는 방당 GATE_QUIET 초에 한 번만 방에 보이게. 다른 안내는 항상 True."""
+    if text not in (ROOM_OFF, ROOM_UNPAID):
+        return True
+    t = time.monotonic()
+    if t - _room_noticed.get(chat_id, -1e18) < GATE_QUIET:
+        return False
+    _room_noticed[chat_id] = t
+    return True
 
 
 async def gate(ctx: Ctx, cmd: CasinoCmd) -> str | None:
@@ -273,9 +264,9 @@ async def gate(ctx: Ctx, cmd: CasinoCmd) -> str | None:
         return "포인트 게임은 그룹방에서 해요. 봇을 넣은 방에서 <code>!가입</code>"
     s = await ctx.svc.db.get_settings(ctx.chat_id)
     if not (s["casino_enabled"] and s["games_enabled"]):
-        return _room_notice(ctx, "이 방은 포인트 게임이 꺼져 있어요. (이 안내는 10분에 한 번만 나와요)")
+        return ROOM_OFF
     if not await ctx.svc.paid_features(ctx.chat_id):
-        return _room_notice(ctx, "포인트 게임은 이용 기간 중인 방에서 쓸 수 있어요. (이 안내는 10분에 한 번만 나와요)")
+        return ROOM_UNPAID
     if cmd.needs_account and not await account(ctx.svc.db, ctx.chat_id, ctx.user.id):
         return f"{mention(ctx.user.id, user_name(ctx.user))}님, 먼저 <code>!가입</code> 해주세요! (가입하면 {fmt(START_POINTS)} 지급)"
     return None

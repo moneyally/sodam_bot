@@ -82,7 +82,13 @@ async def dispatch(svc, bot, msg, chat_id: int, user, role, text: str) -> bool:
     ctx = Ctx(svc, bot, msg, chat_id, user, role, args)
     gate = await core.gate(ctx, cmd)
     if gate:
-        await ctx.reply(gate)
+        if core.room_notice_due(chat_id, gate):
+            await ctx.reply(gate)
+        else:                                   # 같은 방 안내는 10분에 한 번: 그 사이 명령은 조용히 지우기만
+            try:
+                await msg.delete()
+            except TelegramError:
+                pass
         return True
     try:
         await cmd.fn(ctx)
