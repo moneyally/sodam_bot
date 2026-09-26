@@ -92,6 +92,8 @@ def html_errors(text: str) -> list[str]:
         errs.append(f"메시지 4096자 초과 ({len(plain)})")
     if re.search(r"&(?![a-zA-Z]+;|#\d+;|#x[0-9a-fA-F]+;)", text):
         errs.append("이스케이프 안 된 & (esc() 누락)")
+    if re.search(r"&amp;(amp|lt|gt|quot|#\d+);", text):
+        errs.append("두 번 이스케이프됨 (esc 를 두 번 적용 → 사용자에게 &lt; 가 그대로 보임)")
     return errs
 
 
@@ -165,6 +167,8 @@ def _check_screen(rep: Report, who: str, data: str, text, kb) -> None:
     for b in _buttons(kb):
         if not (b.text or "").strip():
             rep.issues.append(f"[{who}] {data}: 빈 버튼 글자")
+        if re.search(r"&(amp|lt|gt|quot|#\d+);", b.text or ""):
+            rep.issues.append(f"[{who}] {data}: 버튼 글자는 HTML 이 아닌데 이스케이프됨 {b.text!r}")
         if b.callback_data is not None:
             cd = b.callback_data
             if len(cd.encode()) > 64:
