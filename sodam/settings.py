@@ -1,6 +1,6 @@
 """방별 설정. 기본값 + 타입 검증. `.set 키 값` 으로 바꾼다."""
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .styles import STYLES, resolve_style
 
@@ -102,6 +102,9 @@ RANGES: dict[str, tuple[int, int]] = {
     "warn_ban_at": (1, 100),
 }
 
+# 특수한 값의 표시 방법 (목록 안에 목록 등). register_setting(render_fn=…) 로 추가
+RENDERERS: dict[str, Callable[[Any], str]] = {}
+
 _TRUE = {"on", "true", "1", "yes", "켜기", "켬", "예", "ㅇ"}
 _FALSE = {"off", "false", "0", "no", "끄기", "끔", "아니오", "ㄴ"}
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -155,6 +158,8 @@ def coerce(key: str, raw: str) -> Any:
 
 
 def render(key: str, value: Any) -> str:
+    if key in RENDERERS:
+        return RENDERERS[key](value)
     if isinstance(value, bool):
         return "켜짐" if value else "꺼짐"
     if key == "style":
@@ -170,7 +175,8 @@ def render(key: str, value: Any) -> str:
 
 
 def register_setting(key: str, default: Any, label: str, *, range_: tuple[int, int] | None = None,
-                     choices: dict[str, str] | None = None, choice_labels: dict[str, str] | None = None) -> None:
+                     choices: dict[str, str] | None = None, choice_labels: dict[str, str] | None = None,
+                     render_fn: Callable[[Any], str] | None = None) -> None:
     """기능 모듈이 자기 설정 키를 추가한다 (settings.py 를 직접 고치지 않게). import 시점에 호출."""
     DEFAULTS.setdefault(key, default)
     LABELS.setdefault(key, label)
@@ -180,3 +186,5 @@ def register_setting(key: str, default: Any, label: str, *, range_: tuple[int, i
         CHOICES[key] = choices
     if choice_labels:
         CHOICE_LABELS.update(choice_labels)
+    if render_fn:
+        RENDERERS[key] = render_fn

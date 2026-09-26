@@ -2,21 +2,28 @@
 
 새 멤버 이름은 AI에게 넘기지 않는다 (닉네임에 지시문을 넣는 공격 방지).
 AI는 {names} 자리표시자가 들어간 인사말만 만들고, 이름 멘션은 코드가 끼운다.
+
+인사 편집기(panels/greet.py)로 사진·영상·GIF 와 URL 버튼을 붙일 수 있다.
+설정값은 `.set`·AI 도구로도 바뀔 수 있으니 보낼 때마다 다시 검사한다 (https:// · tg:// 만, 최대 6개).
 """
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import random
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from openai import OpenAIError
-from telegram import Bot
-from telegram.error import TelegramError
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, TelegramError
 
 from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import filter_output
+from .settings import register_setting
 from .util import esc, mention
 
 if TYPE_CHECKING:
@@ -30,6 +37,135 @@ FALLBACKS = [
     "반갑습니다 {names} 대표님! 궁금한 건 언제든 저를 불러주세요.",
     "{names} 대표님 어서 오세요! 좋은 인연 많이 만드시길 바랍니다.",
 ]
+
+MEDIA_TYPES = {"photo": "사진", "video": "영상", "animation": "GIF"}
+MAX_TEMPLATE = 800        # 인사말 글자 수 (이름 15명까지 붙어도 사진 설명 1024자 안쪽이 되게)
+MAX_BUTTONS = 6
+MAX_BUTTON_TEXT = 30
+MAX_URL = 512
+CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
+
+_URL_BAD = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
+_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
+_TG = re.compile(r"^tg://[a-z_]{1,32}(?:\?[A-Za-z0-9_.=&%+-]{0,400})?$")
+_LINE = re.compile(r"^(.*\S)\s+-\s+(\S+)$")
+
+
+def _render_buttons(value: Any) -> str:
+    """`.설정 전체` 표시용 (값이 [글자, 주소] 목록이라 기본 표시로는 안 됨)."""
+    good = clean_buttons(value)
+    return ", ".join(f"{t} ({u})" for t, u in good) if good else "(없음)"
+
+
+register_setting("greet_media_type", "", "인사 미디어 종류")
+register_setting("greet_media_id", "", "인사 미디어")
+register_setting("greet_buttons", [], "인사 URL 버튼", render_fn=_render_buttons)
+
+
+# ── 검사 ──────────────────────────────────────────────────
+def normalize_url(url: str) -> str | None:
+    """버튼에 써도 되는 주소면 정리해서 돌려준다. https:// · tg:// 만 (http·javascript 등은 거절)."""
+    if not isinstance(url, str) or len(url) > MAX_URL or _URL_BAD.search(url):
+        return None
+    low = url[:8].lower()
+    if low.startswith("tg://"):
+        url = "tg://" + url[5:]
+        return url if _TG.fullmatch(url) else None
+    if not low.startswith("https://"):
+        return None
+    url = "https://" + url[8:]
+    try:
+        parts = urlsplit(url)
+        parts.port  # 이상한 포트면 ValueError
+    except ValueError:
+        return None
+    # user@host 형태(https://google.com@나쁜곳.com)는 주소를 속이는 데 쓰여서 거절
+    if "@" in parts.netloc or not _HOST.fullmatch(parts.hostname or ""):
+        return None
+    return url
+
+
+def clean_button_text(text: str) -> str | None:
+    text = (text or "").strip() if isinstance(text, str) else ""
+    if not text or len(text) > MAX_BUTTON_TEXT or any(ord(ch) < 32 for ch in text):
+        return None
+    return text
+
+
+def clean_buttons(value: Any) -> list[tuple[str, str]]:
+    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). 형식이 틀린 항목은 조용히 뺀다."""
+    out = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            text, url = clean_button_text(item[0]), normalize_url(item[1])
+            if text and url:
+                out.append((text, url))
+    return out[:MAX_BUTTONS]
+
+
+def parse_buttons(raw: str) -> tuple[list[list[str]], str | None]:
+    """관리자가 보낸 `버튼 글자 - https://주소` 줄들 → ([[글자, 주소]], 오류문 HTML). 하나라도 틀리면 전부 거절."""
+    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+    if not lines:
+        return [], "한 줄에 하나씩 <code>버튼 글자 - https://주소</code> 로 보내주세요."
+    if len(lines) > MAX_BUTTONS:
+        return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 줄: {len(lines)}개)"
+    out = []
+    for i, line in enumerate(lines, 1):
+        m = _LINE.match(line)
+        where = f"{i}번째 줄 <code>{esc(line[:40])}</code>"
+        if not m:
+            return [], f"{where}: 형식이 틀렸어요. <code>버튼 글자 - https://주소</code>"
+        text, url = clean_button_text(m.group(1)), normalize_url(m.group(2))
+        if not text:
+            return [], f"{where}: 버튼 글자는 1~{MAX_BUTTON_TEXT}자로 써주세요."
+        if not url:
+            return [], f"{where}: 주소는 <code>https://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요."
+        out.append([text, url])
+    return out, None
+
+
+def media_of(s: dict) -> tuple[str, str] | None:
+    kind, file_id = s.get("greet_media_type"), s.get("greet_media_id")
+    if kind in MEDIA_TYPES and isinstance(file_id, str) and file_id:
+        return kind, file_id
+    return None
+
+
+def button_rows(s: dict) -> list[list[InlineKeyboardButton]]:
+    return [[InlineKeyboardButton(t, url=u)] for t, u in clean_buttons(s.get("greet_buttons"))]
+
+
+def fill(template: str, names_html: str) -> str:
+    """인사말(관리자·AI 가 쓴 글)은 이스케이프하고, {names} 자리에만 코드가 만든 멘션을 넣는다."""
+    return esc(template).replace(esc("{names}"), names_html)
+
+
+def _plain_len(text_html: str) -> int:
+    return len(html.unescape(re.sub(r"<[^>]+>", "", text_html)))
+
+
+# ── 보내기 (실제 인사와 편집기 미리보기가 같이 씀) ─────────
+async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
+                        extra_rows: list[list[InlineKeyboardButton]] | None = None) -> list:
+    """설정된 미디어·URL 버튼을 붙여 인사를 보낸다. 보낸 메시지 목록을 돌려준다.
+    미디어가 안 보내지면(지워진 파일 등) 글만 보낸다."""
+    rows = button_rows(s) + (extra_rows or [])
+    kb = InlineKeyboardMarkup(rows) if rows else None
+    media = media_of(s)
+    sent = []
+    if media:
+        kind, file_id = media
+        send = {"photo": bot.send_photo, "video": bot.send_video, "animation": bot.send_animation}[kind]
+        fits = _plain_len(text_html) <= CAPTION_LIMIT
+        try:
+            if fits:
+                return [await send(chat_id, file_id, caption=text_html, parse_mode="HTML", reply_markup=kb)]
+            sent.append(await send(chat_id, file_id))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
+        except BadRequest as e:
+            log.warning("greet media failed, sending text only: %s", e)
+    sent.append(await bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb))
+    return sent
 
 
 class Greeter:
@@ -45,6 +181,9 @@ class Greeter:
 
     async def _flush_later(self, bot: Bot, chat_id: int) -> None:
         await asyncio.sleep(WAIT_SECONDS)
+        await self.flush(bot, chat_id)
+
+    async def flush(self, bot: Bot, chat_id: int) -> None:
         people = self._pending.pop(chat_id, [])
         if not people:
             return
@@ -52,10 +191,10 @@ class Greeter:
         if len(people) > 15:
             names += f" 외 {len(people) - 15}분"
         template = await self._template(chat_id, len(people))
-        text = esc(template).replace(esc("{names}"), names)
+        s = await self.svc.db.get_settings(chat_id)
         try:
-            sent = await bot.send_message(chat_id, text, parse_mode="HTML")
-            await self.svc.db.log_message(chat_id, bot.id, sent.message_id, template, is_bot=True)
+            sent = await send_greeting(bot, chat_id, s, fill(template, names))
+            await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template, is_bot=True)
         except TelegramError as e:
             log.warning("greet send failed: %s", e)
 
@@ -64,6 +203,8 @@ class Greeter:
         if s["greet_template"]:
             tpl = s["greet_template"]
             return tpl if "{names}" in tpl else "{names} " + tpl
+        if self.svc.llm is None:
+            return random.choice(FALLBACKS)
         try:
             msg = await self.svc.llm.chat(
                 [{"role": "system", "content": system_prompt(self.svc.cfg.bot_name, s["style"])},
