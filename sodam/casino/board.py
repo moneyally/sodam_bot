@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS casino_results (
     ts      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_casino_results ON casino_results(chat_id, game, id);
-""")
+""", migrate={"casino_results": "plain"})  # 슈퍼그룹 전환 때 그림장 기록도 새 방 ID 로
 
 KEEP = 120          # 방·게임마다 남기는 판 수
 SHOW = 60           # 그림장에 그리는 판 수 (그래프는 40)

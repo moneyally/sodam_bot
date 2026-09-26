@@ -127,7 +127,11 @@ CAS 조회가 실패하면(서버 장애 등) 차단하지 않고 그대로 통�
 - 실패하면 `LOG_CHAT_ID` 로 알림. `BACKUP_SEND_TO_LOG=true` 면 백업 파일도 그 방으로 전송 (대화 기록이 들어 있으니 **비공개 관리자방일 때만**)
 - 오너가 `.백업` 으로 즉시 백업
 
-**복구**: 봇 중지 → 백업 파일 압축 해제 (`gzip -d sodam-YYYYMMDD-HHMMSS.db.gz`, 윈도우는 7-Zip) → `DB_PATH` 위치(`data/sodam.db`)에 덮어쓰기 → 봇 실행
+**복원 검증** (봇 안 멈춰도 됨, 실제 DB 안 건드림): `python tools/restore_check.py` → 최신 백업을 임시 폴더에 풀어 `integrity_check` + 핵심 테이블 행 수 출력, 실패하면 exit 1. 특정 파일은 `python tools/restore_check.py data/backups/sodam-….db.gz`
+
+**복구**: 봇 중지 (`sudo systemctl stop sodam`) → `python tools/restore_check.py 백업파일` 로 먼저 검증 → 백업 파일 압축 해제 (`gzip -dk sodam-YYYYMMDD-HHMMSS.db.gz`, 윈도우는 7-Zip) → **`data/sodam.db-wal`, `data/sodam.db-shm` 파일 삭제** (남아 있으면 옛 WAL 이 복원한 DB 위에 덮어써져 깨질 수 있음) → `DB_PATH` 위치(`data/sodam.db`)에 덮어쓰기 → 봇 실행
+
+서버 배포(systemd·갱신 스크립트·헬스체크)는 `deploy/README.md`.
 
 ## 7-1. 오너 등록 · 관리자 보고 (개인 텔레그램)
 

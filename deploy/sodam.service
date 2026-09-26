@@ -1,0 +1,29 @@
+# /etc/systemd/system/sodam.service  — 설치: deploy/README.md
+[Unit]
+Description=Sodam Telegram bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# root 로 돌리지 않는다 (sudo useradd -r -m -d /opt/sodam sodam)
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam/sodam_bot
+# .env 는 sodam/config.py 가 WorkingDirectory 에서 읽음
+ExecStart=/opt/sodam/venv/bin/python -m sodam
+Restart=always
+RestartSec=5
+# SIGTERM → PTB 가 정상 종료 (진행 중 게임 환불·DB 닫기·종료 알림) 할 시간
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# 로그는 journald 로: journalctl -u sodam -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

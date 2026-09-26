@@ -1,6 +1,7 @@
 """DB 자동 백업: 온라인 백업 → 무결성 검사 → gzip → 오래된 것 정리.
 
-복구: 봇을 멈추고 백업 파일 압축을 풀어 DB_PATH 위치에 덮어쓴 뒤 다시 실행.
+복구: 봇을 멈추고 `python tools/restore_check.py 파일` 로 검증 → 압축을 풀어 DB_PATH 위치에 덮어쓰고
+(같은 폴더의 sodam.db-wal / sodam.db-shm 은 삭제) 다시 실행.
 """
 import asyncio
 import gzip

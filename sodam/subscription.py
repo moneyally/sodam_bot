@@ -158,7 +158,13 @@ async def run_check(svc: Services, bot: Bot) -> None:
         paid, unmatched = await svc.billing.check_pending()
     except Exception as e:  # 네트워크·API 오류: 다음 주기에 다시
         log.warning("결제 확인 실패: %s", e)
-        return
+        paid, unmatched = [], []
+    alert = svc.billing.take_alert()  # TronGrid 연속 실패 시 1번, 복구 시 1번
+    if alert == "down":
+        await svc.mod.report(bot, f"[결제 확인 장애] TronGrid 조회가 {svc.billing.fail_streak}번 연속 실패했어요. "
+                                  "입금 자동 확인이 멈춘 상태예요 (TRONGRID_API_KEY·네트워크 확인). 복구되면 다시 알려드릴게요.")
+    elif alert == "up":
+        await svc.mod.report(bot, "[결제 확인 복구] TronGrid 조회가 다시 정상이에요.")
     for p in paid:
         title = await chat_title(svc, p["chat_id"])
         until = _date(p["until"], svc.cfg.tz)

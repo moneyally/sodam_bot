@@ -212,7 +212,7 @@ class Greeter:
                  {"role": "user", "content": (
                      f"방금 대표님 {count}명이 소통방에 입장했다. 환영 인사를 1~2문장으로 써라. "
                      "이름 자리에는 {names} 라는 글자를 정확히 한 번 그대로 넣어라. 링크·이모지 과다 금지.")}],
-                model=self.svc.cfg.guard_model, max_tokens=800, purpose="greet")
+                model=self.svc.cfg.guard_model, max_tokens=800, purpose="greet", chat_id=chat_id)  # 방 토큰에 포함
             text = (msg.content or "").strip()
             if "{names}" in text and len(text) < 300:
                 # 인사말에도 링크·지갑주소·외부 멘션이 섞여 나가지 않게

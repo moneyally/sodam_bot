@@ -249,10 +249,12 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     finally:
         busy.cancel()
     try:
-        await ctx.bot.send_photo(ctx.chat_id, photo=data, caption=f"🎨 {esc(display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}님 요청",
-                                 parse_mode="HTML")
+        sent = await ctx.bot.send_photo(ctx.chat_id, photo=data, parse_mode="HTML", caption=(
+            f"🎨 {esc(display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}님 요청"))
     except TelegramError as e:
         return f"이미지는 만들었는데 전송 실패: {e.message}"
+    # AI 답으로 기록 → 이 그림에 답장하면('더 밝게') 소담이 이어서 받음 (handlers: AI 답에 단 답장만 호출)
+    await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id)
     await ctx.svc.db.bump(day, ctx.chat_id, "image")
     return "이미지를 방에 보냈음. 사진 설명은 다시 하지 말고 한마디만 짧게."
 

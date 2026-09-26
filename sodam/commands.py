@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
@@ -17,6 +18,8 @@ from .settings import DEFAULTS, LABELS, coerce, render
 from .sports import SportsError
 from .styles import STYLES, resolve_style, style_list
 from .games import GAME_LIST
+from .ai_settings import ROOM_TOKENS_MAX
+from .llm import ROOM_TOKENS
 from .util import (_DURATION, display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int,
                    user_name)
 
@@ -84,11 +87,14 @@ async def _private_notice(ctx: CmdCtx, text: str, reply_markup=None, seconds: in
         sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except TelegramError:
         return
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, seconds)
 
+
+def _delete_later(bot, chat_id: int, message_id: int, seconds: int) -> None:
     async def _later():
         await asyncio.sleep(seconds)
         try:
-            await ctx.bot.delete_message(ctx.chat_id, sent.message_id)
+            await bot.delete_message(chat_id, message_id)
         except TelegramError:
             pass
 
@@ -109,6 +115,17 @@ async def _safe(ctx: CmdCtx, coro, ok_text: str) -> None:
 
 
 # ── 일반 명령 ─────────────────────────────────────────────
+def feature_lines(call: str, *, in_dm: bool = False) -> list[str]:
+    """도움말 맨 위 '이런 것도 돼요' (AI·사진·그림·포인트 게임). menu.HELP 와 같은 내용."""
+    ai = "그냥 말 걸기" if in_dm else f"<code>{esc(call)} …</code> 질문 (AI 답에 답장해도 돼요)"
+    return [f"💬 AI: {ai} · 사진에 답장하며 <code>{esc(call)} 이거 뭐야</code> · <code>{esc(call)} ○○ 그려줘</code>",
+            "🎰 포인트 게임 <code>!도움</code> · 🖼 결과표 <code>!그림장</code> · 🎡 <code>!룰렛 금액</code> 버튼 베팅판"
+            + (" (그룹방에서)" if in_dm else "")]
+
+
+HELP_ROOM_SECONDS = 120  # 방 관리자 도움말은 방에 잠깐만
+
+
 async def c_help(ctx: CmdCtx) -> None:
     groups: dict[str, list[str]] = {}
     in_dm = ctx.chat_id > 0
@@ -120,10 +137,22 @@ async def c_help(ctx: CmdCtx) -> None:
         line = f"<code>.{cmd.names[0]}</code>{(' ' + esc(cmd.usage)) if cmd.usage else ''} — {esc(cmd.help)}"
         groups.setdefault(cmd.group, []).append(line)
     parts = [f"🤖 <b>{esc(ctx.svc.cfg.bot_name)}</b> 명령어 (. 또는 / 로 시작)",
-             f"AI와 대화: <code>{esc(ctx.svc.cfg.call_names[-1])}아 …</code> 또는 봇 메시지에 답장"]
+             *feature_lines(ctx.svc.cfg.call_names[0], in_dm=in_dm)]
     for group, lines in groups.items():
         parts.append(f"\n<b>[{group}]</b>\n" + "\n".join(lines))
-    await ctx.reply("\n".join(parts))
+    full = "\n".join(parts)
+    if in_dm or ctx.role < Role.ADMIN:
+        await ctx.reply(full)
+        return
+    # 방 관리자: 관리자 명령까지 60줄이 넘어서 방엔 짧게(잠깐 뒤 삭제), 전체 목록은 1:1 로
+    try:
+        await ctx.bot.send_message(ctx.user.id, full, parse_mode="HTML")
+        text = ("📬 관리자 명령어 전체를 1:1 로 보냈어요.\n"
+                "버튼 설정 <code>.설정</code> · 이용 기간 <code>.구독</code> · AI 켜고 끄기 <code>.AI대화</code>")
+    except TelegramError:  # 봇과 1:1 을 시작 안 했으면 방에 잠깐 보여줌
+        text = full + "\n\n(봇과 1:1 대화를 시작해두면 다음부턴 1:1 로 보내드려요)"
+    sent = await ctx.reply(text)
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS)
 
 
 async def c_rules(ctx: CmdCtx) -> None:
@@ -384,7 +413,7 @@ async def c_settings(ctx: CmdCtx) -> None:
                                   seconds=60)
         return
     s = await ctx.svc.db.get_settings(ctx.chat_id)
-    lines = ["⚙️ <b>방 설정</b> (바꾸기: <code>.set 키 값</code>)"]
+    lines = ["⚙️ <b>방 설정</b> (바꾸기: <code>.설정변경 키 값</code>)"]
     for key in DEFAULTS:
         lines.append(f"<code>{key}</code> {esc(LABELS.get(key, ''))}: {esc(render(key, s[key]))}")
     await ctx.reply("\n".join(lines))
@@ -392,8 +421,8 @@ async def c_settings(ctx: CmdCtx) -> None:
 
 async def c_set(ctx: CmdCtx) -> None:
     if len(ctx.args) < 2:
-        await ctx.reply("사용법: <code>.set 키 값</code> (예: <code>.set flood_count 5</code>, <code>.set style 자유분방</code>)\n"
-                        "키 목록은 <code>.settings</code>")
+        await ctx.reply("사용법: <code>.설정변경 키 값</code> (예: <code>.설정변경 flood_count 5</code>, <code>.설정변경 style 자유분방</code>)\n"
+                        "키 목록은 <code>.설정 전체</code>")
         return
     key, raw = ctx.args[0], ctx.argstr[len(ctx.args[0]):].strip()
     try:
@@ -630,7 +659,7 @@ async def c_cas(ctx: CmdCtx) -> None:
     s = await ctx.svc.db.get_settings(ctx.chat_id)
     await ctx.reply(f"🛡️ <b>CAS 스팸DB 차단</b>: {render('cas_enabled', s['cas_enabled'])}\n"
                     "입장 시, 그리고 봇이 처음 보는 멤버가 말할 때 조회해서 등록된 스팸 계정이면 밴해요.\n"
-                    "<code>.cas 켜기|끄기</code> · <code>.cas 확인 @user|ID</code>")
+                    "<code>.스팸차단 켜기|끄기</code> · <code>.스팸차단 확인 @user|ID</code>")
 
 
 # ── 백업 (오너) ───────────────────────────────────────────
@@ -765,13 +794,22 @@ async def c_modlog(ctx: CmdCtx) -> None:
 
 
 async def c_usage(ctx: CmdCtx) -> None:
-    u = await ctx.svc.llm.usage_today()
-    budget = ctx.svc.cfg.daily_token_budget
-    hit = u["cached_tokens"] * 100 // max(u["prompt_tokens"], 1)
-    await ctx.reply(
-        f"🔋 오늘 AI 토큰: {u['tokens']:,} / {budget:,} ({u['tokens'] * 100 // max(budget, 1)}%)\n"
-        f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)\n"
-        "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요.")
+    """방 관리자: 그 방 사용량만 (봇 전체 토큰·예산은 다른 방 정보라 오너에게만)."""
+    lines = []
+    if ctx.chat_id < 0:
+        day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+        used = await ctx.svc.db.counter(day, ctx.chat_id, ROOM_TOKENS)
+        cap = min((await ctx.svc.db.get_settings(ctx.chat_id)).get("ai_room_daily_tokens") or ROOM_TOKENS_MAX,
+                  ROOM_TOKENS_MAX)
+        lines.append(f"🔋 오늘 이 방 AI 토큰: {used:,} / {cap:,} ({used * 100 // max(cap, 1)}%)")
+    if ctx.role >= Role.OWNER:
+        u = await ctx.svc.llm.usage_today()
+        budget = ctx.svc.cfg.daily_token_budget
+        hit = u["cached_tokens"] * 100 // max(u["prompt_tokens"], 1)
+        lines += [f"🌐 오늘 전체 AI 토큰: {u['tokens']:,} / {budget:,} ({u['tokens'] * 100 // max(budget, 1)}%)",
+                  f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)",
+                  "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요."]
+    await ctx.reply("\n".join(lines))
 
 
 # ── 지식 베이스 ───────────────────────────────────────────
@@ -938,9 +976,9 @@ COMMANDS: list[Cmd] = [
     Cmd(("호칭", "callme"), c_nickname, usage="부를 이름", help="봇이 부를 호칭", dm_ok=True),
     Cmd(("봇정보", "about"), c_about, help="봇 소개", dm_ok=True),
     # 관리자
-    Cmd(("settings", "설정"), c_settings, Role.ADMIN, usage="[전체]", help="버튼 설정 메뉴를 1:1로 받기 (전체: 글 목록)",
+    Cmd(("설정", "settings"), c_settings, Role.ADMIN, usage="[전체]", help="버튼 설정 메뉴를 1:1로 받기 (전체: 글 목록)",
         group="관리자"),
-    Cmd(("set", "설정변경"), c_set, Role.ADMIN, usage="키 값", help="설정 바꾸기", group="관리자"),
+    Cmd(("설정변경", "set"), c_set, Role.ADMIN, usage="키 값", help="설정 바꾸기", group="관리자"),
     Cmd(("경고", "warn"), c_warn, Role.ADMIN, usage="@user [사유]", help="경고 (누적 시 자동 제재)", group="관리자"),
     Cmd(("경고취소", "unwarn"), c_unwarn, Role.ADMIN, usage="@user", help="경고 1회 취소", group="관리자"),
     Cmd(("경고목록", "warns"), c_warns, Role.ADMIN, usage="@user", help="경고 내역", group="관리자"),
@@ -956,7 +994,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("잠금해제", "unlock"), c_unlock, Role.ADMIN, help="방 잠금 해제", group="관리자"),
     Cmd(("금지어", "filter"), c_filter, Role.ADMIN, usage="[추가|삭제] 단어", help="금지어 관리", group="관리자"),
     Cmd(("허용도메인", "whitelist"), c_whitelist, Role.ADMIN, usage="[추가|삭제] 도메인", help="링크 허용 목록", group="관리자"),
-    Cmd(("ai",), c_ai, Role.ADMIN, usage="켜기|끄기", help="AI 대화 켜고 끄기", group="관리자"),
+    Cmd(("AI대화", "ai"), c_ai, Role.ADMIN, usage="켜기|끄기", help="AI 대화 켜고 끄기", group="관리자"),
     Cmd(("인사", "greet"), c_greet, Role.ADMIN, usage="켜기|끄기|설정|테스트", help="입장 인사 설정", group="관리자"),
     Cmd(("규칙설정", "setrules"), c_setrules, Role.ADMIN, usage="내용", help="방 규칙 저장", group="관리자"),
     Cmd(("공지", "notice"), c_notice, Role.ADMIN, usage="내용", help="공지 올리고 고정", group="관리자"),
@@ -964,9 +1002,9 @@ COMMANDS: list[Cmd] = [
         help="제목·사진/영상 포함 예약·반복 공지", group="관리자"),
     Cmd(("캡차", "captcha"), c_captcha, Role.ADMIN, usage="[켜기|끄기|시간 N|실패 킥|밴|뮤트]", help="입장 캡차 설정", group="관리자"),
     Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자"),
-    Cmd(("cas",), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="CAS 스팸DB 차단", group="관리자"),
+    Cmd(("스팸차단", "cas"), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="CAS 스팸DB 차단", group="관리자"),
     Cmd(("관리기록", "modlog"), c_modlog, Role.ADMIN, help="최근 제재·설정 기록", group="관리자"),
-    Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰·캐시 적중률", group="관리자", dm_ok=True),
+    Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰 (방 관리자는 이 방만)", group="관리자", dm_ok=True),
     # 권한은 함수 안에서 판단: 방에선 관리자만, 1:1 에선 누구나(본인이 관리자인 방만 보여줌)
     Cmd(("구독", "설정하기", "subscribe"), c_subscribe, help="이용 기간 확인·연장 (방 관리자, 1:1 채팅으로 안내)",
         group="관리자", dm_ok=True),

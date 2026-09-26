@@ -145,7 +145,9 @@ class Moderator:
         is_game_cmd = casino.parse(text.strip()) is not None
 
         # 1) 도배: N초에 M개. 게임 중엔 정답을 빠르게 치니까 기준을 2배로 완화
-        now = time.monotonic()
+        # 처리 시각이 아니라 보낸 시각(msg.date) 기준: 재시작 뒤 밀린 메시지를 몰아서 처리해도 간격이 그대로라
+        # 정상 멤버가 도배로 뮤트되지 않고, 쉬는 동안 실제로 도배한 건 그대로 잡힌다
+        now = msg.date.timestamp() if isinstance(getattr(msg, "date", None), datetime) else time.time()
         limit = s["flood_count"] * (2 if game_active else 1)
         q = self._flood.setdefault(key, deque(maxlen=200))
         if not is_game_cmd:

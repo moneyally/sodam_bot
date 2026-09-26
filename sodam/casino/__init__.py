@@ -139,3 +139,5 @@ def _load() -> None:
 
 
 _load()
+if "도움" in _INDEX:  # '.도움말' 과 헷갈려 '!도움말' 로 치는 경우도 게임 목록
+    _INDEX.setdefault("도움말", _INDEX["도움"])

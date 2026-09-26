@@ -243,5 +243,24 @@ async def upload_status_kept_while_drawing_and_stopped_after():
     assert during >= 2 and count() == done, (during, done, count())   # 끝나면 멈춤
 
 
+@test
+async def reply_to_drawn_image_continues_without_call_name():
+    r = await room()
+    photo_ids = []
+    orig = r.bot.send_photo
+
+    async def send_photo(chat_id, photo, caption=None, **kw):
+        m = await orig(chat_id, photo, caption, **kw)
+        photo_ids.append(m.message_id)
+        return m
+    r.bot.send_photo = send_photo
+    r.llm.script = [tool_call("make_image", {"prompt": "노을 바다", "mode": "new"}), "그려봤어요", "더 밝게 해볼게요"]
+    await say(r, group_msg(r, text="소담아 노을 바다 그려줘"))
+    drawn = SimpleNamespace(from_user=r.bot_user(), text=None, caption="🎨 방장님 요청", photo=(), document=None,
+                            message_id=photo_ids[0], forward_origin=None)
+    m = await say(r, group_msg(r, text="더 밝게", reply_to=drawn))           # 호출어 없이 그림에 답장
+    assert m.replies and m.replies[-1] == "더 밝게 해볼게요"
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

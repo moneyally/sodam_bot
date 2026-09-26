@@ -665,6 +665,17 @@ class DB:
             "ON CONFLICT(chat_id) DO UPDATE SET paid_until=excluded.paid_until, updated_at=excluded.updated_at",
             (chat_id, until, now()))
 
+    async def is_ai_message(self, chat_id: int, msg_id: int) -> bool:
+        """봇이 보낸 AI 답(ai_turns.bot_msg_id, memory.record_turn 이 기록)인지. 14일 지난 건 지워져서 False."""
+        return await self._one("SELECT 1 FROM ai_turns WHERE chat_id=? AND bot_msg_id=? LIMIT 1",
+                               (chat_id, msg_id)) is not None
+
+    async def disable_schedules(self, chat_id: int) -> int:
+        """그 방 예약공지를 전부 끈다 (봇이 강퇴·퇴장된 방). 끈 개수."""
+        cur = await self.conn.execute("UPDATE schedules SET enabled=0 WHERE chat_id=? AND enabled=1", (chat_id,))
+        await self.conn.commit()
+        return cur.rowcount
+
     async def subscriptions_expiring(self, start: int, end: int) -> list[aiosqlite.Row]:
         """만료 시각(유료·체험 중 늦은 쪽)이 [start, end) 인 방."""
         return await self._all(

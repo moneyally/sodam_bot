@@ -32,7 +32,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .security import filter_output, nonce, scan, wrap
 from .tools import ToolCtx
-from .util import esc, is_stale, user_name
+from .util import esc, is_stale, josa, user_name
 
 if TYPE_CHECKING:
     from .services import Services
@@ -297,7 +297,7 @@ async def c_memory(ctx: commands.CmdCtx) -> None:
     facts = await memory.get_facts(db, ctx.chat_id, ctx.user.id)
     member = await db.get_member(ctx.chat_id, ctx.user.id)
     notes = json.loads(member["notes"]) if member else {}
-    lines = [f"🧠 <b>{esc(ctx.svc.cfg.bot_name)}가 기억하는 {esc(user_name(ctx.user))}님</b>"]
+    lines = [f"🧠 <b>{esc(josa(ctx.svc.cfg.bot_name, '이가'))} 기억하는 {esc(user_name(ctx.user))}님</b>"]
     lines += [f"· {esc(k)}: {esc(v)}" for k, v in notes.items()]
     lines += [f"· {esc(r['fact'])}" for r in facts]
     if len(lines) == 1:

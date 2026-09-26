@@ -234,8 +234,8 @@ async def cache_usage_accounting():
     svc.llm = llm
     cmd, args, argstr = commands.parse(".사용량", "sodambot")
     msg = FakeMsg(CHAT, fake_user(1, "관리자"), ".사용량")
-    await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, msg.from_user, Role.ADMIN, args, argstr), cmd)
-    assert "2,048" in msg.replies[0] and "64%" in msg.replies[0]
+    await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, msg.from_user, Role.OWNER, args, argstr), cmd)
+    assert "2,048" in msg.replies[0] and "64%" in msg.replies[0]       # 전체 토큰·캐시는 오너만 (방 관리자는 그 방만)
 
 
 if __name__ == "__main__":

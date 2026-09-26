@@ -50,10 +50,11 @@ async def _delete_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
-async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, seconds: int = 60) -> None:
+async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, seconds: int = 60,
+                    reply_markup=None) -> None:
     """잠깐 보였다가 사라지는 안내 (도배 경고 등으로 방이 지저분해지지 않게)."""
     try:
-        sent = await context.bot.send_message(chat_id, text, parse_mode="HTML")
+        sent = await context.bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except TelegramError as e:
         log.warning("notice send failed: %s", e)
         return
@@ -61,6 +62,8 @@ async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str,
 
 
 _LEADING_MENTIONS = re.compile(r"^(?:@\w{3,32}[\s,]*)+")
+# 문장 중간의 '소담이' 는 보통 3인칭('우리 소담이 최고') → 끝이 부탁일 때만 부른 걸로 본다
+_ASK_TAIL = re.compile(r"(줘|줄래|주라|주세요|줄래요|해봐|봐봐|부탁(해|해요|드려요|합니다)?)[\s.!~?]*$")
 
 
 def _strip_call(text: str, start: int, name: str) -> str:
@@ -70,12 +73,14 @@ def _strip_call(text: str, start: int, name: str) -> str:
     return " ".join(p for p in (before, after) if p) or "(이름만 부름)"
 
 
-def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot) -> tuple[bool, str]:
+def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot,
+                     reply_is_ai: bool = True) -> tuple[bool, str]:
     """봇을 부른 메시지인지 + 호출어를 뗀 요청문.
 
     - '소담아 …' / '@kim 소담아 …' (앞에 멘션이 붙어도 OK, 멘션은 요청에 남김)
-    - '… 소담아 …' 처럼 중간에 호격('아/야/이'로 끝나는 호출어)으로 부른 경우
-    - '@봇아이디' 멘션, 봇 메시지에 답장
+    - '… 소담아 …' 처럼 중간에 호격('아/야')으로 부른 경우, 중간의 '소담이 …해줘' 처럼 끝이 부탁인 경우
+    - '@봇아이디' 멘션, 봇 메시지에 답장 (reply_is_ai=False 면 AI 답이 아닌 봇 메시지라 호출 아님)
+    - '소담이가 틀렸네'·'소담이는 왜 저래' 처럼 조사가 바로 붙은 건 3인칭 언급이라 호출 아님
     """
     t = text.strip()
     lead = _LEADING_MENTIONS.match(t)
@@ -84,20 +89,20 @@ def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot) 
         if not t.startswith(name, body_start):
             continue
         nxt = t[body_start + len(name):body_start + len(name) + 1]
-        # '소담스럽다' 처럼 이름 뒤에 글자가 바로 붙으면 부른 게 아님 (단, '소담아' 같은 호격은 OK)
-        if nxt and nxt.isalnum() and name[-1] not in "아야이":
+        # '소담스럽다'·'소담이가/는/랑' 처럼 이름 뒤에 글자가 바로 붙으면 부른 게 아님 (단, '소담아…' 같은 호격은 OK)
+        if nxt and nxt.isalnum() and name[-1] not in "아야" and not (name[-1] == "이" and nxt == "야"):
             continue
         return True, _strip_call(t, body_start, name)
     for name in call_names:
         if name[-1] not in "아야이":
             continue  # 문장 중간의 '소담'은 그냥 이름 언급일 수 있어서 호격만 인정
         m = re.search(rf"(?<![\w가-힣]){re.escape(name)}(?![\w가-힣])", t)
-        if m:
+        if m and (name[-1] != "이" or _ASK_TAIL.search(t)):
             return True, _strip_call(t, m.start(), name)
     if bot.username and f"@{bot.username}".lower() in t.lower():
         return True, re.sub(re.escape("@" + bot.username), "", t, flags=re.I).strip() or "(이름만 부름)"
     reply = msg.reply_to_message
-    if reply and reply.from_user and reply.from_user.id == bot.id:
+    if reply and reply.from_user and reply.from_user.id == bot.id and reply_is_ai:
         return True, t
     return False, ""
 
@@ -204,8 +209,14 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not cmu or cmu.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     _svc(context).perms.forget_bot(cmu.chat.id)  # 봇 권한이 바뀌었을 수 있음 (관리자 지정·해제)
-    if _in_chat(cmu.old_chat_member) or not _in_chat(cmu.new_chat_member):
-        return  # 새로 들어온 게 아님 (권한 변경·강퇴 등)
+    if _in_chat(cmu.old_chat_member):
+        if _in_chat(cmu.new_chat_member):
+            await _bot_rights_changed(context, cmu)
+        else:
+            await _bot_removed(context, cmu)
+        return
+    if not _in_chat(cmu.new_chat_member):
+        return
     svc, bot = _svc(context), context.bot
     chat, adder = cmu.chat, cmu.from_user
     await svc.db.ensure_chat(chat.id, chat.title)
@@ -228,6 +239,36 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await subscription.send_panel_dm(svc, bot, chat.id, adder.id)  # 1:1 을 시작 안 했으면 조용히 실패
     await svc.mod.report(bot, f"[봇 초대] {esc(chat.title or '')} ({chat.id}) by "
                               f"{esc(user_name(adder)) if adder else '?'}({adder.id if adder else '?'})")
+
+
+_NEEDED_RIGHTS = (("can_delete_messages", "메시지 삭제"), ("can_restrict_members", "사용자 차단"))
+
+
+async def _bot_rights_changed(context: ContextTypes.DEFAULT_TYPE, cmu) -> None:
+    """관리자로 지정됐거나 관리자 권한이 바뀌면: 방 관리에 필요한 권한이 다 있는지 잠깐 알려줌."""
+    old, new = cmu.old_chat_member, cmu.new_chat_member
+    if new.status != ChatMemberStatus.ADMINISTRATOR:
+        return
+    have = [bool(getattr(new, k, False)) for k, _ in _NEEDED_RIGHTS]
+    if old.status == ChatMemberStatus.ADMINISTRATOR and have == [bool(getattr(old, k, False)) for k, _ in _NEEDED_RIGHTS]:
+        return  # 방 관리와 상관없는 권한만 바뀜
+    missing = [label for (_, label), ok in zip(_NEEDED_RIGHTS, have) if not ok]
+    if missing:
+        text = (f"⚠️ 관리자 권한 확인! 그런데 {'·'.join(missing)} 권한이 빠져 있어서 도배·링크 정리와 제재를 못 해요. "
+                "관리자 설정에서 켜주세요.")
+    else:
+        text = "✅ 관리자 권한 확인! 이제 도배·링크 정리, 캡차, 경고·뮤트 같은 방 관리를 할게요."
+    await send_temp(context, cmu.chat.id, text, 120)
+
+
+async def _bot_removed(context: ContextTypes.DEFAULT_TYPE, cmu) -> None:
+    """봇이 강퇴되거나 나가면: 그 방 예약공지를 끄고(보낼 수 없는 방에 계속 시도하지 않게) 오너에게 한 줄 알림."""
+    svc, chat, by = _svc(context), cmu.chat, cmu.from_user
+    n = await svc.db.disable_schedules(chat.id)
+    how = "강퇴" if cmu.new_chat_member.status == ChatMemberStatus.BANNED else "나감"
+    await svc.mod.report(context.bot, f"[봇 {how}] {esc(chat.title or '')} ({chat.id}) by "
+                                      f"{esc(user_name(by)) if by else '?'}({by.id if by else '?'})"
+                                      + (f" · 예약공지 {n}개 껐어요" if n else ""))
 
 
 async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -362,8 +403,14 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         await commands.dispatch(CmdCtx(svc, bot, msg, chat_id, user, role, args, argstr), cmd)
         return
+    if await _prefix_hint(context, chat_id, text):
+        return
 
-    addressed, request = addressed_to_bot(msg, text, svc.cfg.call_names, bot)
+    # 봇 메시지에 답장: AI 답(ai_turns 에 기록된 메시지)일 때만 호출. 게임 결과·경고·인사에 단 답장은 호출 아님
+    r = msg.reply_to_message
+    reply_is_ai = not (r and r.from_user and r.from_user.id == bot.id) or \
+        await svc.db.is_ai_message(chat_id, r.message_id)
+    addressed, request = addressed_to_bot(msg, text, svc.cfg.call_names, bot, reply_is_ai)
     via = "call"
     if not addressed:  # 방금 봇과 얘기하던 사람이 이름 없이 이어서 말한 경우
         addressed, request = await social.follow_up(svc, bot, msg, text)
@@ -372,6 +419,24 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await ai_reply(context, msg, role, request, scan, via=via)
     else:
         await svc.games.on_text(msg, text)
+
+
+async def _prefix_hint(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str) -> bool:
+    """'.가입'·'!설정' 처럼 . 과 ! 를 헷갈려 아무 반응이 없던 명령: 반대쪽에 있으면 짧게 알려줌."""
+    if text[:1] not in ".!" or len(text) < 2:
+        return False
+    head = text[1:].split(maxsplit=1)[0].partition("@")[0].lower() if text[1:].strip() else ""
+    if not head:
+        return False
+    if text[0] == "." and casino.parse("!" + head):
+        other = "!" + head
+    elif text[0] == "!" and head in commands._INDEX and not casino.parse(text):  # 게임 명령이면 딜러 봇 몫
+        other = "." + head
+    else:
+        return False
+    await send_temp(context, chat_id, f"혹시 <code>{esc(other)}</code> 인가요? (<code>.</code> 봇 명령 · "
+                                      f"<code>!</code> 포인트 게임)", 15)
+    return True
 
 
 async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, role: Role) -> bool:
@@ -390,12 +455,10 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     if await svc.db.bump(day, scope, key) <= svc.cfg.free_ai_per_day:
         return True
     if chat_id < 0:
-        try:
-            await context.bot.send_message(
-                chat_id, "🔒 오늘 무료 AI 이용량을 다 썼어요. 관리자님은 아래 버튼에서 이용 기간을 확인해주세요.",
-                reply_markup=subscription.setup_button(context.bot.username, chat_id))
-        except TelegramError:
-            pass
+        if await svc.db.bump(day, scope, "free_ai_notice") == 1:  # 방마다 하루 한 번만, 잠깐 보였다 사라지게
+            await send_temp(context, chat_id,
+                            "🔒 오늘 무료 AI 이용량을 다 썼어요. 관리자님은 아래 버튼에서 이용 기간을 확인해주세요.",
+                            120, reply_markup=subscription.setup_button(context.bot.username, chat_id))
     else:
         await send_temp(context, chat_id, "오늘 무료 대화량을 다 썼어요. 내일 다시 이야기해요 🙏", 30)
     return False
@@ -714,23 +777,33 @@ async def job_sports(context: ContextTypes.DEFAULT_TYPE) -> None:
     await svc.sports.run_alerts(context.bot, is_active=svc.paid_features)
 
 
+REMINDER_TTL = 6 * 3600  # 방에 올린 기간 안내는 이 시간 뒤 자동 삭제
+
+
 async def job_sub_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """매일 10시: 3일 안에 끝나는 방 / 어제 끝난 방에 안내 (방엔 금액 없이 '봇 설정' 버튼만)."""
+    """매일 10시: 유료는 3일 안에 끝나는 방, 체험은 마지막 날만 / 어제 끝난 방에 1번 (방엔 금액 없이 '봇 설정' 버튼만)."""
     svc, bot = _svc(context), context.bot
     if not (svc.billing and svc.billing.enabled):
         return
-    now = int(time.time())
+    now, tz, name = int(time.time()), svc.cfg.tz, svc.cfg.bot_name
     for row in await svc.db.subscriptions_expiring(now - 86400, now + 3 * 86400):
         chat_id, until = row["chat_id"], row["until"]
+        trial = not (row["paid_until"] and row["paid_until"] >= until)
         if until > now:
-            days = max(1, (until - now + 86399) // 86400)
-            text = f"⏳ 이 방의 소담 이용 기간이 {days}일 남았어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
+            if trial:
+                if until - now > 86400:
+                    continue  # 체험(3일)은 첫날부터 매일 말고 마지막 날 한 번만
+                when = "오늘" if datetime.fromtimestamp(until, tz).date() == datetime.fromtimestamp(now, tz).date() else "내일"
+                text = (f"⏳ {name} 무료 체험이 {when}({datetime.fromtimestamp(until, tz):%H:%M}) 끝나요. "
+                        "관리자님은 아래 버튼에서 연장할 수 있어요.")
+            else:
+                days = max(1, (until - now + 86399) // 86400)
+                text = f"⏳ 이 방의 {name} 이용 기간이 {days}일 남았어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
         else:
-            text = "⛔ 소담 이용 기간이 끝나서 AI 대화·게임·예약공지가 멈췄어요. 방 관리 기능은 계속 동작해요."
-        try:
-            await bot.send_message(chat_id, text, reply_markup=subscription.setup_button(bot.username, chat_id))
-        except TelegramError as e:
-            log.info("sub reminder failed %s: %s", chat_id, e)
+            text = (f"⛔ {name} {'무료 체험' if trial else '이용 기간'}이 끝났어요. AI 대화는 하루 {svc.cfg.free_ai_per_day}번까지만 되고, "
+                    "게임·예약공지·스포츠 알림·일일 리포트는 멈춰요. 방 관리(캡차·도배·경고)는 계속 동작해요.")
+        await send_temp(context, chat_id, text, REMINDER_TTL,
+                        reply_markup=subscription.setup_button(bot.username, chat_id))
         if row["added_by"] and await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
             await subscription.send_panel_dm(svc, bot, chat_id, row["added_by"])
 
