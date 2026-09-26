@@ -167,3 +167,16 @@ def render(key: str, value: Any) -> str:
         return "(없음)"
     text = str(value)
     return text if len(text) <= 40 else text[:40] + "…"
+
+
+def register_setting(key: str, default: Any, label: str, *, range_: tuple[int, int] | None = None,
+                     choices: dict[str, str] | None = None, choice_labels: dict[str, str] | None = None) -> None:
+    """기능 모듈이 자기 설정 키를 추가한다 (settings.py 를 직접 고치지 않게). import 시점에 호출."""
+    DEFAULTS.setdefault(key, default)
+    LABELS.setdefault(key, label)
+    if range_:
+        RANGES[key] = range_
+    if choices:
+        CHOICES[key] = choices
+    if choice_labels:
+        CHOICE_LABELS.update(choice_labels)

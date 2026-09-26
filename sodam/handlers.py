@@ -253,6 +253,18 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ── 그룹 메시지 ───────────────────────────────────────────
+# 관리 검사를 통과한 그룹 메시지마다 백그라운드로 불리는 함수들: hook(svc, bot, msg, role)
+# 기능 모듈이 import 시점에 GROUP_MESSAGE_HOOKS.append(...) 로 등록한다.
+GROUP_MESSAGE_HOOKS: list = []
+
+
+async def _run_hook(hook, svc: Services, bot, msg: Message, role: Role) -> None:
+    try:
+        await hook(svc, bot, msg, role)
+    except Exception:
+        log.exception("group message hook %s failed", getattr(hook, "__name__", hook))
+
+
 async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg or not msg.from_user:
@@ -292,6 +304,13 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if notice:
             await send_temp(context, chat_id, notice)
             return
+
+    # 관리 검사를 통과한 메시지 → 백그라운드 후처리 (태그 알림 등). 실패해도 메시지 처리는 계속
+    for hook in GROUP_MESSAGE_HOOKS:
+        task = asyncio.create_task(_run_hook(hook, svc, bot, msg, role))
+        bg: set = context.bot_data.setdefault("tasks", set())
+        bg.add(task)
+        task.add_done_callback(bg.discard)
 
     # 예약공지 만들기 진행 중인 관리자의 답변 (사진·영상만 보낸 경우도 여기서 받음)
     if role >= Role.ADMIN and await svc.announcer.handle_message(bot, msg):

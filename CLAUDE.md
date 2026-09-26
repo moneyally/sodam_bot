@@ -47,3 +47,14 @@
   (commands 밴해제·cas·예약공지·지식삭제, db.find_members, captcha, games 업다운·퀴즈 콜백).
 - `_is_admin_safe(fresh=)` : 결제 노출 판단(봇 초대·만료 안내)만 캐시 무시 + 텔레그램 관리자(`perms.is_tg_admin`) 기준. 딥링크 연타는 캐시 사용.
 - `subscription.on_deep_link` 삭제 (딥링크는 `menu.group_panel` 로). 결제 버튼(`pay:new`)도 TG 관리자·fresh 확인.
+
+## 확장 규칙 (여러 에이전트가 동시에 작업해도 파일이 안 겹치게)
+- 새 버튼 화면 = `sodam/panels/<이름>.py` 하나 추가. `menu.register_screen / register_hub / register_main /
+  register_toggle / register_preset / register_input / register_token_action` 로 등록 (menu.py 수정 불필요).
+- 새 설정 키 = `settings.register_setting(...)`, 새 테이블 = `db.register_schema("CREATE TABLE IF NOT EXISTS …")`
+  + 그 모듈 안에서 `db._all/_one/_write` 로 쿼리.
+- 그룹 메시지 후처리(태그 알림 등) = `handlers.GROUP_MESSAGE_HOOKS.append(async fn(svc, bot, msg, role))`.
+- 검증 하네스: `tests/harness.py` 가 4개 역할(오너·TG 관리자·봇관리자·멤버)로 모든 버튼을 BFS 로 눌러
+  예외·answer 1회·64바이트·HTML·권한 누출을 검사 (`tests/test_harness.py`). 화면 확인: `python tools/render_screens.py` → docs/SCREENS.md.
+  패널 모듈은 `harness.SEEDERS.append(async fn(svc))` 로 목록 데이터를 넣어 하네스가 깊은 화면까지 누르게 한다.
+- 테스트 러너는 `tests/test_*.py` 자동 발견. `python tests/run_all.py [모듈명]`.

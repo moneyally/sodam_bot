@@ -188,6 +188,16 @@ def now() -> int:
     return int(time.time())
 
 
+# 기능 모듈(패널·태그 알림 등)이 자기 테이블을 따로 선언한다 (db.py 한 곳에 몰리지 않게).
+# 반드시 CREATE TABLE/INDEX IF NOT EXISTS 만. 모듈 import 시점에 호출 → DB.open 때 실행.
+EXTRA_SCHEMA: list[str] = []
+
+
+def register_schema(sql: str) -> None:
+    if sql not in EXTRA_SCHEMA:
+        EXTRA_SCHEMA.append(sql)
+
+
 class DB:
     def __init__(self, path: str):
         self.path = path
@@ -206,6 +216,8 @@ class DB:
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.executescript(SCHEMA)
+        for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
+            await self.conn.executescript(extra)
         await self._migrate()
         await self.conn.commit()
 

@@ -27,7 +27,7 @@ from .services import MenuToken, PendingInput
 from .settings import LABELS, coerce, render
 from .styles import STYLES
 from .subscription import STATE_LABEL, chat_title, panel as sub_panel
-from .util import esc, human_minutes, iyeyo
+from .util import esc, human_minutes, iyeyo, josa
 
 if TYPE_CHECKING:
     from .services import Services
@@ -172,9 +172,20 @@ async def main_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineK
             "여기(1:1)서는 그냥 말을 걸면 AI와 대화할 수 있어요.")
     # 일반 사용자용 메뉴. 봇 운영자(오너) 등록은 메뉴에 두지 않는다 (서버 로그의 1회용 코드로 /owner 코드)
     rows = [[InlineKeyboardButton("➕ 내 그룹에 소담 추가하기", url=add_to_group_url(bot.username))],
-            [B("⚙️ 내 그룹 관리", "m:groups")],
-            [B("🪪 내 ID", "m:id"), B("❓ 도움말", "m:help")]]
+            [B("⚙️ 내 그룹 관리", "m:groups")]]
+    owner = user_id in await svc.perms.owners()
+    extra = [B(label, f"m:{code}") for _, code, label, need in sorted(MAIN_ITEMS) if need != OWNER or owner]
+    rows += _chunks(extra, 2)
+    rows.append([B("🪪 내 ID", "m:id"), B("❓ 도움말", "m:help")])
     return text, InlineKeyboardMarkup(rows)
+
+
+# 메인 메뉴에 붙는 버튼 (order, 코드, 글자, PUBLIC|OWNER). 패널 모듈이 추가한다
+MAIN_ITEMS: list[tuple[int, str, str, int]] = []
+
+
+def register_main(order: int, code: str, label: str, need: int = PUBLIC) -> None:
+    MAIN_ITEMS[:] = [m for m in MAIN_ITEMS if m[1] != code] + [(order, code, label, need)]
 
 
 async def admin_groups(svc: Services, bot: Bot, user_id: int) -> list[tuple[int, str]]:
@@ -240,23 +251,63 @@ def _back(cid: int, to: str = "g") -> list[InlineKeyboardButton]:
     return [B("⬅️ 뒤로", f"m:{to}:{cid}")]
 
 
+@dataclass(frozen=True)
+class HubItem:
+    """그룹 허브 버튼. 패널 모듈이 register_hub 로 추가한다."""
+    order: int
+    code: str
+    label: str | Callable[[dict], str]      # 설정(dict) → 글자
+    need: int = ADMIN
+    when: Callable[[Services], bool] | None = None
+    wide: bool = False                      # 한 줄 전체
+
+
+HUB_ITEMS: list[HubItem] = []
+
+
+def register_hub(item: HubItem) -> None:
+    HUB_ITEMS[:] = sorted([i for i in HUB_ITEMS if i.code != item.code] + [item], key=lambda i: i.order)
+
+
 async def s_hub(c: PanelCtx) -> Screen:
     svc, cid = c.svc, c.cid
     s = await svc.db.get_settings(cid)
     lines = [f"⚙️ <b>{esc(await chat_title(svc, cid))}</b> 관리", "무엇을 설정할까요?"]
+    visible = [i for i in HUB_ITEMS if (i.when is None or i.when(svc)) and await _allowed(svc, c.bot, cid, c.uid, i.need)]
     # 이용 기간·구독은 텔레그램 관리자·오너에게만 (.봇관리자 로 추가된 사람에겐 안 보임)
-    show_sub = bool(svc.billing and svc.billing.enabled) and await _allowed(svc, c.bot, cid, c.uid, TG_ADMIN)
-    if show_sub:
+    if any(i.code == "sub" for i in visible):
         st = await svc.billing.status(cid)
         lines.append(f"이용: {STATE_LABEL[st.state]}")
-    style = STYLES.get(s["style"])
-    rows = [[B("🧩 기능 켜기/끄기", f"m:f:{cid}")],
-            [B("🚪 입장·인사", f"m:j:{cid}"), B("🛡️ 보안", f"m:sec:{cid}")],
-            [B(f"🎭 말투: {style.label if style else s['style']}", f"m:st:{cid}")]]
-    if show_sub:
-        rows.append([B("💳 이용 기간·구독", f"m:sub:{cid}")])
+    rows, pair = [], []
+    for i in visible:
+        btn = B(i.label(s) if callable(i.label) else i.label, f"m:{i.code}:{cid}")
+        if i.wide:
+            rows += [pair, [btn]] if pair else [[btn]]
+            pair = []
+            continue
+        pair.append(btn)
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
     rows.append([B("🔄 새로고침", f"m:g:{cid}"), B("⬅️ 그룹 목록", "m:groups")])
     return Screen("\n".join(lines), _kb(rows))
+
+
+def _style_label(s: dict) -> str:
+    style = STYLES.get(s["style"])
+    return f"🎭 말투: {style.label if style else s['style']}"
+
+
+def _billing_on(svc: Services) -> bool:
+    return bool(svc.billing and svc.billing.enabled)
+
+
+for _item in (HubItem(10, "f", "🧩 기능 켜기/끄기", wide=True), HubItem(20, "j", "🚪 입장·인사"),
+              HubItem(30, "sec", "🛡️ 보안"), HubItem(80, "st", _style_label, wide=True),
+              HubItem(95, "sub", "💳 이용 기간·구독", TG_ADMIN, _billing_on, wide=True)):
+    register_hub(_item)
 
 
 async def group_panel(svc: Services, bot: Bot, chat_id: int, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -384,7 +435,7 @@ async def r_preset(c: PanelCtx) -> Screen:
     value = coerce(key, val)
     await _set(c, key, value)
     screen = await SCREENS[SCREEN_OF[key]](c)
-    screen.toast = f"{LABELS[key]}: {render(key, value)}"
+    screen.toast = "✅ " + dict(PRESETS[key])[val]
     return screen
 
 
@@ -431,7 +482,7 @@ async def r_sub(c: PanelCtx) -> Screen:
 # ── 1회용 토큰 (목록 항목 · 삭제 확인) ────────────────────
 async def _ask_delete(c: PanelCtx, what: str, item: str, action: str, back: str) -> Screen:
     tok = _token(c.svc, c.uid, c.cid, action, item)
-    return Screen(f"{what} <b>{esc(item)}</b> 을(를) 삭제할까요?",
+    return Screen(f"{what} <b>{esc(item)}</b>{josa(item)[len(item):]} 삭제할까요?",
                   _kb([[B("🗑 삭제", f"m:k:{tok}"), B("취소", f"m:{back}:{c.cid}")]]))
 
 
@@ -464,6 +515,7 @@ TOKEN_ACTIONS: dict[str, tuple[Callable[[PanelCtx, object], Awaitable[Screen]], 
     "ask_bw": (t_ask_bw, False), "ask_dom": (t_ask_dom, False),
     "del_bw": (t_del_bw, True), "del_dom": (t_del_dom, True),
 }
+TOKEN_NEED: dict[str, int] = {}  # 기본 ADMIN
 EXPIRED = Screen(None, toast="만료된 버튼이에요. 메뉴를 다시 열어주세요.", alert=True)
 
 
@@ -472,7 +524,7 @@ async def r_token(c: PanelCtx) -> Screen:
     if not t or t.expires < time.time() or t.user_id != c.uid or t.action not in TOKEN_ACTIONS:
         return EXPIRED
     fn, fresh = TOKEN_ACTIONS[t.action]
-    if not await _allowed(c.svc, c.bot, t.chat_id, c.uid, ADMIN, fresh):
+    if not await _allowed(c.svc, c.bot, t.chat_id, c.uid, TOKEN_NEED.get(t.action, ADMIN), fresh):
         return Screen(None, toast="그 그룹의 관리자만 바꿀 수 있어요.", alert=True)
     c.cid = t.chat_id
     return await fn(c, t.arg)
@@ -489,8 +541,10 @@ async def r_input(c: PanelCtx) -> Screen:
     kind = c.arg(0)
     if kind not in INPUT_PROMPTS:
         return Screen(None)
+    if not await _allowed(c.svc, c.bot, c.cid, c.uid, INPUT_OPTS.get(kind, (False, ADMIN))[1]):
+        return Screen(None, toast="권한이 없어요.", alert=True)
     prompt, back = INPUT_PROMPTS[kind]
-    c.svc.inputs[c.uid] = PendingInput(kind, c.cid)
+    c.svc.inputs[c.uid] = PendingInput(kind, c.cid, args=c.args[1:])
     if c.svc.announcer:  # 1:1 에선 입력 흐름 하나만 (예약공지 마법사와 서로 취소)
         c.svc.announcer.drafts.pop((c.uid, c.uid), None)
     return Screen(prompt + "\n\n5분 안에 보내주세요. 그만두려면 <code>취소</code>",
@@ -501,7 +555,8 @@ def _split_items(text: str) -> list[str]:
     return [x.strip() for x in re.split(r"[,\n]", text) if x.strip()]
 
 
-async def _add_words(c: PanelCtx, text: str) -> tuple[bool, str]:
+async def _add_words(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    text = (msg.text or msg.caption or "").strip()
     items = list(dict.fromkeys(x.lower() for x in _split_items(text) if len(x) <= 50))[:MAX_ITEMS_PER_INPUT]
     if not items:
         return False, "금지어는 1~50자로 보내주세요."
@@ -516,7 +571,8 @@ async def _add_words(c: PanelCtx, text: str) -> tuple[bool, str]:
     return True, f"✅ 금지어 {len(new)}개 추가했어요." if new else "이미 있는 금지어예요."
 
 
-async def _add_domains(c: PanelCtx, text: str) -> tuple[bool, str]:
+async def _add_domains(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    text = (msg.text or msg.caption or "").strip()
     raw = _split_items(text)[:MAX_ITEMS_PER_INPUT]
     good = [d for d in (normalize_domain(x) for x in raw) if d]
     if not good:
@@ -530,9 +586,10 @@ async def _add_domains(c: PanelCtx, text: str) -> tuple[bool, str]:
     return True, f"✅ 도메인 {len(merged) - len(domains)}개 추가했어요." + (f" (형식이 틀린 {skipped}개는 뺐어요)" if skipped else "")
 
 
-INPUT_HANDLERS: dict[str, tuple[Callable[[PanelCtx, str], Awaitable[tuple[bool, str]]], Handler]] = {
+INPUT_HANDLERS: dict[str, tuple[Callable[[PanelCtx, Message], Awaitable[tuple[bool, str]]], Handler]] = {
     "bw": (_add_words, s_words), "dom": (_add_domains, s_domains),
 }
+INPUT_OPTS: dict[str, tuple[bool, int]] = {}  # kind → (미디어 허용, 권한). 기본 (False, ADMIN)
 
 
 async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
@@ -558,17 +615,18 @@ async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
         svc.inputs.pop(user.id, None)
         await msg.reply_text("취소했어요.", reply_markup=back_kb)
         return True
+    media, need = INPUT_OPTS.get(p.kind, (False, ADMIN))
     # 입력을 기다리는 사이 관리자에서 내려왔을 수도 있으니 다시 확인
-    if not await _allowed(svc, bot, p.chat_id, user.id, ADMIN):
+    if not await _allowed(svc, bot, p.chat_id, user.id, need):
         svc.inputs.pop(user.id, None)
         await msg.reply_text("그 그룹의 관리자만 바꿀 수 있어요.")
         return True
-    if not text:
+    if not text and not media:
         await msg.reply_text("글자로 보내주세요. 그만두려면 <code>취소</code>", parse_mode="HTML")
         return True
     add, screen_fn = INPUT_HANDLERS[p.kind]
-    c = PanelCtx(svc, bot, user.id, p.chat_id, [])
-    ok, result = await add(c, text)
+    c = PanelCtx(svc, bot, user.id, p.chat_id, p.args)
+    ok, result = await add(c, msg)
     if not ok:  # 형식 오류: 입력 대기는 유지하고 다시 받기
         p.expires = now + 300
         await msg.reply_text(result + "\n다시 보내주거나 <code>취소</code>", parse_mode="HTML")
@@ -577,6 +635,53 @@ async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
     screen = await screen_fn(c)
     await msg.reply_text(result + "\n\n" + screen.text, parse_mode="HTML", reply_markup=screen.kb)
     return True
+
+
+# ── 확장 등록 (sodam/panels/*.py 가 import 될 때 호출) ─────
+def register_screen(code: str, fn: Handler, need: int = ADMIN, fresh: bool = False) -> None:
+    """방 단위 화면 m:<code>:<방ID>[:인자]. 설정 변경 후 다시 그릴 화면 목록에도 들어간다."""
+    SCREENS[code] = fn
+    ROUTES[code] = Route(fn, need, fresh=fresh)
+
+
+def register_route(code: str, route: Route) -> None:
+    if code in ROUTES and ROUTES[code] is not route:
+        log.debug("route %s overridden", code)
+    ROUTES[code] = route
+
+
+def register_toggle(key: str, screen: str) -> None:
+    """설정 키를 목표값 토글(m:t)로 허용. screen = 바꾼 뒤 다시 그릴 화면 코드."""
+    if key not in TOGGLES:
+        TOGGLES.append(key)
+    SCREEN_OF[key] = screen
+
+
+def register_preset(key: str, options: list[tuple[str, str]], screen: str) -> None:
+    """설정 키를 화이트리스트 프리셋(m:n)으로 허용. options = [(저장값 문자열, 버튼 글자)]."""
+    PRESETS[key] = options
+    SCREEN_OF[key] = screen
+
+
+def register_input(kind: str, prompt: str, back: str,
+                   handler: Callable[[PanelCtx, Message], Awaitable[tuple[bool, str]]],
+                   screen: Handler, *, media: bool = False, need: int = ADMIN) -> None:
+    """글자 입력 흐름. m:in:<방ID>:<kind> 로 시작. handler(c, msg) → (성공?, 안내문).
+    media=True 면 사진·영상만 온 메시지도 handler 로 넘긴다 (인사 편집기 등)."""
+    INPUT_PROMPTS[kind] = (prompt, back)
+    INPUT_HANDLERS[kind] = (handler, screen)
+    INPUT_OPTS[kind] = (media, need)
+
+
+def register_token_action(action: str, fn: Callable[[PanelCtx, object], Awaitable[Screen]],
+                          fresh: bool = False, need: int = ADMIN) -> None:
+    TOKEN_ACTIONS[action] = (fn, fresh)
+    TOKEN_NEED[action] = need
+
+
+def token(svc: Services, uid: int, cid: int, action: str, arg, ttl: int = TOKEN_TTL) -> str:
+    """패널 모듈용 공개 이름."""
+    return _token(svc, uid, cid, action, arg, ttl)
 
 
 # ── 라우터 ────────────────────────────────────────────────
@@ -642,3 +747,6 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         log.warning("menu %s failed: %s", code, e)
         screen = Screen(None, toast="텔레그램 연결이 불안정해요. 잠시 후 다시 눌러주세요.", alert=True)
     await _show(bot, q, uid, screen)
+
+
+from . import panels  # noqa: E402,F401  패널 모듈들이 위 register_* 로 화면을 추가한다

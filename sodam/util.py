@@ -35,6 +35,15 @@ def iyeyo(name: str) -> str:
     return name + ("이에요" if has_final else "예요")
 
 
+def josa(word: str, pair: str = "을를") -> str:
+    """받침에 맞는 조사: josa('스팸') → '스팸을', josa('도박사이트') → '도박사이트를'. pair 는 '을를','이가','은는','과와'.
+    한글이 아니면 '을(를)' 식으로."""
+    last = word[-1:] or " "
+    if not "가" <= last <= "힣":
+        return f"{word}{pair[0]}({pair[1]})"
+    return word + (pair[0] if (ord(last) - 0xAC00) % 28 else pair[1])
+
+
 def mention(user_id: int, name: str) -> str:
     return f'<a href="tg://user?id={user_id}">{esc(name)}</a>'
 

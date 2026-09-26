@@ -41,6 +41,7 @@ class PendingInput:
     """버튼 메뉴에서 '글자로 보내주세요' 를 기다리는 중 (1:1, 한 사람당 1개)."""
     kind: str
     chat_id: int
+    args: list[str] = field(default_factory=list)  # 예: 인사 편집기에서 어느 칸을 고치는지
     expires: float = field(default_factory=lambda: time.time() + 300)
 
 
