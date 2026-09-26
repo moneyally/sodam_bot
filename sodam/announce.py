@@ -1,9 +1,11 @@
 """예약·반복 공지.
 
-관리자가 방 안에서 단계별로 만든다 (.예약공지 만들기):
+관리자가 단계별로 만든다 — 방 안에서(.예약공지 만들기) 또는 1:1 버튼 메뉴(🗓️ 예약공지 → ➕/✏️)에서:
   1) 제목 → 2) 내용 (글 또는 사진·영상·GIF·파일 + 설명) → 3) 시간 (매일 09:00 / 반복 120)
   → 4) 고정 여부 버튼 → 미리보기 → 저장
-만드는 동안 오간 메시지는 저장/취소 시 지워서 방을 깨끗하게 둔다.
+Draft.ui_chat_id = 대화가 오가는 곳(방 또는 관리자 1:1), Draft.chat_id = 공지를 올릴 방.
+drafts 키는 (ui_chat_id, user_id) → 1:1 에선 (uid, uid) 라서 1:1 메시지로 찾을 수 있다.
+만드는 동안 오간 메시지는 저장/취소 시 지워서 채팅을 깨끗하게 둔다. 저장할 때 그 방 관리자인지 다시 확인한다.
 """
 from __future__ import annotations
 
@@ -110,7 +112,7 @@ def render(title: str, text: str, *, has_media: bool, rules: str, tz) -> str:
 # ── 만들기 마법사 상태 ────────────────────────────────────
 @dataclass
 class Draft:
-    chat_id: int
+    chat_id: int                  # 공지를 올릴 방
     user_id: int
     edit_id: int | None = None
     step: str = "title"
@@ -125,6 +127,22 @@ class Draft:
     token: str = field(default_factory=lambda: secrets.token_hex(3))
     expires: float = field(default_factory=lambda: time.time() + WIZARD_TTL)
     cleanup: list[int] = field(default_factory=list)
+    ui_chat_id: int | None = None  # 대화가 오가는 곳 (없으면 chat_id = 방 안에서 만드는 중)
+
+    def __post_init__(self):
+        if self.ui_chat_id is None:
+            self.ui_chat_id = self.chat_id
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return self.ui_chat_id, self.user_id
+
+    @property
+    def in_dm(self) -> bool:
+        return self.ui_chat_id == self.user_id
+
+
+CLOSE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 닫기", callback_data="an:x")]])
 
 
 class Announcer:
@@ -137,8 +155,10 @@ class Announcer:
         return (await self.svc.db.get_settings(chat_id))["rules"]
 
     async def send(self, bot: Bot, chat_id: int, *, title: str, text: str, media_type: str | None,
-                   media_id: str | None, reply_markup=None) -> Message:
-        html = render(title, text, has_media=bool(media_id), rules=await self._rules(chat_id), tz=self.svc.cfg.tz)
+                   media_id: str | None, reply_markup=None, rules_chat: int | None = None) -> Message:
+        """chat_id 로 보낸다. {규칙} 은 rules_chat(기본 chat_id) 방의 규칙 (1:1 미리보기용)."""
+        rules = await self._rules(rules_chat if rules_chat is not None else chat_id)
+        html = render(title, text, has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz)
         kw = {"parse_mode": "HTML", "reply_markup": reply_markup}
         if media_type == "photo":
             return await bot.send_photo(chat_id, media_id, caption=html, **kw)
@@ -197,38 +217,56 @@ class Announcer:
         return "\n".join(lines)
 
     # ── 마법사 ────────────────────────────────────────────
-    def _get(self, chat_id: int, user_id: int) -> Draft | None:
-        draft = self.drafts.get((chat_id, user_id))
+    def _get(self, ui_chat_id: int, user_id: int) -> Draft | None:
+        draft = self.drafts.get((ui_chat_id, user_id))
         if draft and draft.expires < time.time():
-            del self.drafts[(chat_id, user_id)]
+            del self.drafts[(ui_chat_id, user_id)]
             return None
         return draft
 
-    def active(self, chat_id: int, user_id: int) -> bool:
-        return self._get(chat_id, user_id) is not None
+    def active(self, ui_chat_id: int, user_id: int) -> bool:
+        return self._get(ui_chat_id, user_id) is not None
 
     async def _say(self, bot: Bot, draft: Draft, text: str, markup=None) -> None:
-        sent = await bot.send_message(draft.chat_id, text, parse_mode="HTML", reply_markup=markup)
+        sent = await bot.send_message(draft.ui_chat_id, text, parse_mode="HTML", reply_markup=markup)
         draft.cleanup.append(sent.message_id)
 
     async def start(self, bot: Bot, msg: Message, edit_row=None) -> None:
-        chat_id, user_id = msg.chat_id, msg.from_user.id
+        """방 안에서 .예약공지 만들기/수정 (대화도 그 방에서)."""
+        chat_id = msg.chat_id
         if edit_row is None and await self.svc.db.count_schedules(chat_id) >= MAX_PER_CHAT:
             await msg.reply_text(f"예약공지는 방당 {MAX_PER_CHAT}개까지예요. 안 쓰는 걸 지워주세요.")
             return
-        draft = Draft(chat_id, user_id)
+        await self._begin(bot, Draft(chat_id, msg.from_user.id), edit_row, trigger_msg_id=msg.message_id)
+
+    async def start_dm(self, bot: Bot, user_id: int, chat_id: int, edit_row=None) -> str | None:
+        """1:1 버튼 메뉴에서 시작: 대화는 관리자 1:1, 공지는 chat_id 방에. 못 하면 이유(문자열)."""
+        if edit_row is None and await self.svc.db.count_schedules(chat_id) >= MAX_PER_CHAT:
+            return f"예약공지는 방당 {MAX_PER_CHAT}개까지예요. 안 쓰는 걸 지워주세요."
+        from .subscription import chat_title  # 순환 import 방지
+        await self._begin(bot, Draft(chat_id, user_id, ui_chat_id=user_id), edit_row,
+                          where=await chat_title(self.svc, chat_id))
+        return None
+
+    async def _begin(self, bot: Bot, draft: Draft, edit_row=None, *, trigger_msg_id: int | None = None,
+                     where: str | None = None) -> None:
         if edit_row is not None:
             draft.edit_id = edit_row["id"]
             for k in ("title", "text", "media_type", "media_id", "kind", "at_time", "interval_min"):
                 setattr(draft, k, edit_row[k])
             draft.pin = bool(edit_row["pin"])
-        draft.cleanup.append(msg.message_id)
-        if chat_id == user_id:  # 1:1 에선 입력 흐름을 하나만 (메뉴 글자 입력과 서로 취소)
-            self.svc.inputs.pop(user_id, None)
-        self.drafts[(chat_id, user_id)] = draft
+        if trigger_msg_id is not None:
+            draft.cleanup.append(trigger_msg_id)
+        if draft.in_dm:  # 1:1 에선 입력 흐름을 하나만 (메뉴 글자 입력과 서로 취소)
+            self.svc.inputs.pop(draft.user_id, None)
+        old = self.drafts.pop(draft.key, None)
+        if old and old.cleanup:  # 같은 곳에서 하던 마법사는 버리고 새로 시작
+            await self._cleanup(bot, old)
+        self.drafts[draft.key] = draft
         head = f"✏️ 예약공지 #{draft.edit_id} 수정" if draft.edit_id else "🗓️ 예약공지 만들기"
+        room = f"\n💬 올릴 방: <b>{esc(where)}</b>" if where else ""
         keep = f"\n(지금: {esc(draft.title) or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
-        await self._say(bot, draft, f"{head} (언제든 <code>취소</code>)\n\n"
+        await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
                                     f"<b>1/4 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
@@ -302,6 +340,13 @@ class Announcer:
 
     async def on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
         token, action = (parts + ["", ""])[:2]
+        if token == "x":  # 1:1 미리보기의 [🗑 닫기]
+            await query.answer()
+            try:
+                await bot.delete_message(query.message.chat_id, query.message.message_id)
+            except TelegramError:
+                pass
+            return
         draft = next((d for d in self.drafts.values() if d.token == token), None)
         if not draft or draft.expires < time.time():
             await query.answer("만료됐어요. 다시 만들어주세요.")
@@ -322,12 +367,14 @@ class Announcer:
                 InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
             ]])
             try:
-                preview = await self.send(bot, draft.chat_id, title=draft.title, text=draft.text,
-                                          media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb)
+                preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
+                                          media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
+                                          rules_chat=draft.chat_id)
                 draft.cleanup.append(preview.message_id)
             except TelegramError as e:
-                await self._say(bot, draft, f"미리보기 실패: {esc(e.message)}\n다시 <code>.예약공지 만들기</code> 해주세요.")
-                self.drafts.pop((draft.chat_id, draft.user_id), None)
+                again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
+                await self._say(bot, draft, f"미리보기 실패: {esc(e.message)}\n{again}.")
+                self.drafts.pop(draft.key, None)
             return
         if action == "cancel":
             await query.answer()
@@ -340,25 +387,46 @@ class Announcer:
         await query.answer()
 
     async def _save(self, bot: Bot, draft: Draft) -> None:
-        db = self.svc.db
+        db, perms = self.svc.db, self.svc.perms
+        # 만드는 사이 관리자에서 내려왔을 수도 있으니 저장 직전에 캐시 말고 지금 상태로 확인
+        try:
+            perms.forget(draft.chat_id)
+            allowed = await perms.is_admin(bot, draft.chat_id, draft.user_id)
+        except TelegramError:
+            allowed = False  # 봇이 나간 방 등
+        if not allowed:
+            await self._finish(bot, draft, "그 그룹의 관리자만 예약공지를 저장할 수 있어요. 저장하지 않았어요.")
+            return
         fields = dict(kind=draft.kind, at_time=draft.at_time, interval_min=draft.interval_min,
                       title=draft.title, text=draft.text, media_type=draft.media_type,
                       media_id=draft.media_id, pin=int(draft.pin))
         if draft.edit_id:
-            await db.update_schedule(draft.chat_id, draft.edit_id, **fields)
+            if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
+                await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")
+                return
             sid = draft.edit_id
         else:
+            if await db.count_schedules(draft.chat_id) >= MAX_PER_CHAT:
+                await self._finish(bot, draft, f"예약공지는 방당 {MAX_PER_CHAT}개까지예요. 저장하지 않았어요.")
+                return
             sid = await db.add_schedule(draft.chat_id, created_by=draft.user_id, **fields)
         await db.log_mod(draft.chat_id, draft.user_id, None, "schedule", f"#{sid} {draft.title}")
         when = describe_when(draft.kind, draft.at_time, draft.interval_min)
         await self._finish(bot, draft, f"✅ 예약공지 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
                                        f"{when}{' · 📌' if draft.pin else ''} {esc(draft.title)}")
 
-    async def _finish(self, bot: Bot, draft: Draft, text: str) -> None:
-        self.drafts.pop((draft.chat_id, draft.user_id), None)
+    async def _cleanup(self, bot: Bot, draft: Draft) -> None:
         if draft.cleanup:
             try:
-                await bot.delete_messages(draft.chat_id, draft.cleanup[:100])
+                await bot.delete_messages(draft.ui_chat_id, draft.cleanup[:100])
             except TelegramError:
                 pass
-        await bot.send_message(draft.chat_id, text, parse_mode="HTML")
+
+    async def _finish(self, bot: Bot, draft: Draft, text: str) -> None:
+        if self.drafts.get(draft.key) is draft:
+            del self.drafts[draft.key]
+        await self._cleanup(bot, draft)
+        # 1:1 에서 만들었으면 예약공지 목록(버튼 메뉴)으로 돌아가는 버튼
+        kb = (InlineKeyboardMarkup([[InlineKeyboardButton("🗓️ 예약공지 목록", callback_data=f"m:sc:{draft.chat_id}")]])
+              if draft.in_dm and draft.chat_id != draft.user_id else None)
+        await bot.send_message(draft.ui_chat_id, text, parse_mode="HTML", reply_markup=kb)
