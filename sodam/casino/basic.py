@@ -20,6 +20,7 @@ from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..util import esc, user_name
 from . import Ctx, register
+from .board import record
 from .core import balance, credit, finish, fmt, rng, settle_text, split_bet, take_bet
 
 log = logging.getLogger(__name__)
@@ -141,6 +142,7 @@ async def g_oddeven(ctx: Ctx) -> None:
     if v is None:
         return
     got = "홀" if v % 2 else "짝"
+    await record(ctx.svc.db, ctx.chat_id, "oddeven", str(v))        # 🖼 그림장
     payout = int(bet * 1.95) if got == pick else 0
     await finish(ctx, "oddeven", bet, payout, f"🎲 {v} → <b>{got}</b> ({esc(pick)} 선택)")
 
@@ -252,6 +254,7 @@ async def g_roulette(ctx: Ctx) -> None:
     if bet is None:
         return
     n = rng(37)
+    await record(ctx.svc.db, ctx.chat_id, "roulette", str(n))
     mult = roulette_win(n, pick)
     payout = bet * mult
     _, tail = await settle_text(ctx, "roulette", bet, payout)       # 정산 먼저 → 연출은 보여주기만
@@ -352,6 +355,7 @@ async def g_ladder(ctx: Ctx) -> None:
     if bet is None:
         return
     result = LADDER[rng(4)]
+    await record(ctx.svc.db, ctx.chat_id, "ladder", "".join(map(str, result)))
     payout = int(bet * ladder_payout(result, pick))
     _, tail = await settle_text(ctx, "ladder", bet, payout)         # 정산 먼저 → 연출은 보여주기만
     head = f"🪜 <b>사다리</b> · {esc(user_name(ctx.user))}님 {fmt(bet)} ({esc(pick)} 선택)"

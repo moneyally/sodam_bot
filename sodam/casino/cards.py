@@ -24,6 +24,7 @@ from telegram.error import TelegramError
 from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, register, register_callback
 from .basic import edit_live, show
+from .board import record
 from .core import balance, credit, dealer_tail, debit, fmt, result_line, rng, settle, split_bet, take_bet
 
 SUITS = "♠♥♦♣"
@@ -227,6 +228,8 @@ async def g_baccarat(ctx: Ctx) -> None:
     if bet is None:
         return
     rd = deal_baccarat(make_shoe(8))
+    await record(ctx.svc.db, ctx.chat_id, "baccarat",                # 🖼 그림장: P/B/T + 페어(p·b)
+                 rd.winner[0].upper() + ("p" if rd.pair("player") else "") + ("b" if rd.pair("banker") else ""))
     payout = bac_payout(rd, pick, bet)
     bal = await settle(ctx, bet, payout, "baccarat")                 # 정산 먼저 → 연출은 보여주기만
     final = render_baccarat(rd, _name(ctx.user), pick, bet) + result_line(bet, payout, bal) + await dealer_tail(ctx, bet, payout, bal)

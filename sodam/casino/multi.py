@@ -28,6 +28,7 @@ from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, register, register_callback
 from . import core
 from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet
+from .board import record
 from .dealer import line as dealer_line
 
 log = logging.getLogger(__name__)
@@ -514,6 +515,7 @@ class CrashRound(Round):
             p.done = True                     # 꽝: 이미 차감됨, 지급 없음
             await self._unstake(p)
         self.phase = "done"
+        await record(self.svc.db, self.chat_id, "crash", str(self.crash))   # 🖼 그림장
         head = f"🏆 <b>{fx(self.crash)}</b> 완주!" if self.crash >= CRASH_CAP else f"💥 <b>{fx(self.crash)}</b>에서 터졌어요!"
         await self.edit(f"{head}\n<pre>{chart(self.hist + [self.crash])}</pre>", force=True)
         await self.send(self.board())
@@ -634,6 +636,7 @@ class HorseRound(Round):
         for p in self.players.values():
             await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)
         self.phase = "done"
+        await record(self.svc.db, self.chat_id, "horse", str(win_no))
         await self.send(self.board())
 
     def board(self) -> str:
