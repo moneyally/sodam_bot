@@ -21,7 +21,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import commands, menu, security, stats, subscription
+from . import commands, memory, menu, security, social, stats, subscription
 from .agent import run_agent
 from .commands import CmdCtx
 from .llm import BudgetExceeded
@@ -255,7 +255,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ── 그룹 메시지 ───────────────────────────────────────────
 # 관리 검사를 통과한 그룹 메시지마다 백그라운드로 불리는 함수들: hook(svc, bot, msg, role)
 # 기능 모듈이 import 시점에 GROUP_MESSAGE_HOOKS.append(...) 로 등록한다.
-GROUP_MESSAGE_HOOKS: list = []
+GROUP_MESSAGE_HOOKS: list = [social.on_group_message]  # AI 기억 정리·끼어들기 (sodam/social.py)
 
 
 async def _run_hook(hook, svc: Services, bot, msg: Message, role: Role) -> None:
@@ -325,8 +325,12 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     addressed, request = addressed_to_bot(msg, text, svc.cfg.call_names, bot)
+    via = "call"
+    if not addressed:  # 방금 봇과 얘기하던 사람이 이름 없이 이어서 말한 경우
+        addressed, request = await social.follow_up(svc, bot, msg, text)
+        via = "follow"
     if addressed:
-        await ai_reply(context, msg, role, request, scan)
+        await ai_reply(context, msg, role, request, scan, via=via)
     else:
         await svc.games.on_text(msg, text)
 
@@ -359,7 +363,7 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
 
 
 async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
-                   request: str, scan: security.ScanResult) -> None:
+                   request: str, scan: security.ScanResult, via: str = "call") -> None:
     svc, bot = _svc(context), context.bot
     chat_id, user = msg.chat_id, msg.from_user
     s = await svc.db.get_settings(chat_id)
@@ -408,13 +412,16 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
 
     reply_to = None
     r = msg.reply_to_message
-    if r and r.from_user and r.from_user.id != bot.id and (r.text or r.caption):
-        reply_to = f"{user_name(r.from_user)}({r.from_user.id}): {(r.text or r.caption)[:500]}"
+    if r and r.from_user and (r.text or r.caption):  # 봇 답에 답장한 경우도 '어느 답'인지 알려줌
+        who = f"{svc.cfg.bot_name}(봇)" if r.from_user.id == bot.id else f"{user_name(r.from_user)}({r.from_user.id})"
+        reply_to = f"{who}: {(r.text or r.caption)[:500]}"
+    if chat_id > 0 and s.get("ai_memory", True):
+        memory.observe(svc, chat_id, user.id, request)  # 1:1 은 그룹 훅이 없어서 여기서 기억 후보 확인
 
     ctx = ToolCtx(svc, bot, chat_id, user, role, s)
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history,
-                                 reply_to=reply_to, request=request)
+                                 reply_to=reply_to, request=request, mode=via)
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:
@@ -428,6 +435,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         body = " ".join(mention(uid, name) for uid, name in dict(ctx.mentions).items()) + " " + body
     sent = await msg.reply_text(body, parse_mode="HTML")
     await svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True)
+    await memory.record_turn(svc.db, chat_id, user.id, via, request, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
 
 # ── 버튼 ──────────────────────────────────────────────────

@@ -31,7 +31,7 @@ _RULES: list[tuple[re.Pattern, int, str]] = [
         (r"(?<![가-힣])(나는|내가|난|나)\s*(이\s*방\s*)?(관리자|운영자|오너|방장)(야|다|임|입니다|이야|거든|이니까)", 2, "권한 사칭"),
         (r"(모두|전부|전원|모든\s*(사람|멤버|인원|유저|사용자))\s*(를|을|다)?\s*(밴|강퇴|추방)\s*(해|시켜|하)", 3, "대량 제재 요청"),
         (r"<\|?(im_start|im_end|system|endoftext)\|?>|\[/?(inst|system)\]|<<\s*sys\s*>>", 3, "제어 토큰"),
-        (r"</?(chat_log|request|tool_result|speaker|user_memory|reply_to)\b", 3, "태그 위조"),
+        (r"</?(chat_log|request|tool_result|speaker|user_memory|room_memory|past_turns|reply_to)\b", 3, "태그 위조"),
         (r"[A-Za-z0-9+/]{120,}={0,2}", 1, "긴 인코딩 문자열"),
     ]
 ]
@@ -79,7 +79,9 @@ def nonce() -> str:
     return secrets.token_hex(4)
 
 
-_TAG_LIKE = re.compile(r"</?\s*(chat_log|request|tool_result|speaker|user_memory|system)[^>]*>", re.I)
+_TAG_LIKE = re.compile(
+    r"</?\s*(chat_log|request|tool_result|speaker|user_memory|room_memory|past_turns|reply_to|messages|known|"
+    r"previous|system)[^>]*>", re.I)
 
 
 def defang(text: str) -> str:

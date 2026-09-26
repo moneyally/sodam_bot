@@ -13,6 +13,9 @@ from .security import nonce, wrap
 log = logging.getLogger(__name__)
 
 
+ROOM_TOKENS = "room_tokens"  # counters 키: 방별 하루 토큰 (전체 합계는 chat_id=0 의 "tokens")
+
+
 class BudgetExceeded(Exception):
     pass
 
@@ -34,18 +37,24 @@ class LLM:
     async def tokens_today(self) -> int:
         return await self.db.counter(self._today(), 0, "tokens")
 
-    async def _check_budget(self) -> None:
+    async def _check_budget(self, chat_id: int | None = None) -> None:
         if not self.enabled:
             raise AIUnavailable("OPENAI_API_KEY 가 설정되지 않았어요")
         if await self.tokens_today() >= self.cfg.daily_token_budget:
             raise BudgetExceeded
+        if chat_id:  # 방(또는 1:1)별 하루 한도: 한 방이 전체 예산을 다 쓰지 못하게
+            cap = (await self.db.get_settings(chat_id)).get("ai_room_daily_tokens", 0)
+            if cap and await self.db.counter(self._today(), chat_id, ROOM_TOKENS) >= cap:
+                raise BudgetExceeded
 
-    async def _record(self, usage) -> None:
+    async def _record(self, usage, chat_id: int | None = None) -> None:
         """토큰 사용량 기록. 캐시로 읽은 입력 토큰(할인됨)을 따로 세서 절감 효과를 볼 수 있게 한다."""
         if not usage:
             return
         day = self._today()
         total = getattr(usage, "total_tokens", 0) or 0
+        if chat_id and total:
+            await self.db.bump(day, chat_id, ROOM_TOKENS, total)
         prompt = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0
         details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
         cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
@@ -67,9 +76,13 @@ class LLM:
             kw["prompt_cache_retention"] = self.cfg.cache_retention
         return kw
 
-    def _extra(self, model: str, has_tools: bool = False) -> dict[str, Any]:
-        # reasoning_effort 는 추론 모델만 받는다. .env 에서 비우면 안 보냄
-        if not self.cfg.reasoning_effort or not model.startswith(("gpt-5", "o")):
+    def _extra(self, model: str, has_tools: bool = False, effort: str | None = None) -> dict[str, Any]:
+        if not model.startswith(("gpt-5", "o")):
+            return {}  # reasoning_effort 는 추론 모델만 받는다
+        # 도구 호출이 아닌 가벼운 뒷작업(기억 정리·끼어들기 판단)은 호출하는 쪽이 낮은 추론을 지정 → 비용 절감
+        if effort and not has_tools:
+            return {"reasoning_effort": effort}
+        if not self.cfg.reasoning_effort:  # .env 에서 비우면 안 보냄
             return {}
         # gpt-5.x 는 chat.completions 에서 도구와 추론을 같이 못 씀 → 도구 호출 땐 'none' 이어야 함
         # (OpenAI 400: "Function tools with reasoning_effort are not supported ... set reasoning_effort to 'none'")
@@ -79,15 +92,17 @@ class LLM:
 
     async def chat(self, messages: list[dict], *, tools: list[dict] | None = None,
                    tool_choice: str = "auto", model: str | None = None,
-                   max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc"):
-        """chat.completions 호출. 응답 message 객체를 돌려준다."""
-        await self._check_budget()
+                   max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc",
+                   chat_id: int | None = None, effort: str | None = None):
+        """chat.completions 호출. 응답 message 객체를 돌려준다.
+        chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
+        await self._check_budget(chat_id)
         model = model or self.cfg.model
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_completion_tokens": max_tokens,
-            **self._extra(model, has_tools=bool(tools)),
+            **self._extra(model, has_tools=bool(tools), effort=effort),
             **self._cache(purpose),
         }
         if tools:
@@ -98,14 +113,16 @@ class LLM:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = await self.client.chat.completions.create(**kwargs)
-        await self._record(resp.usage)
+        await self._record(resp.usage, chat_id)
         return resp.choices[0].message
 
     async def json(self, system: str, user: str, *, model: str | None = None,
-                   max_tokens: int = 1500) -> dict:
+                   max_tokens: int = 1500, purpose: str = "json", chat_id: int | None = None,
+                   effort: str | None = None) -> dict:
         msg = await self.chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            model=model or self.cfg.guard_model, max_tokens=max_tokens, json_mode=True, purpose="json")
+            model=model or self.cfg.guard_model, max_tokens=max_tokens, json_mode=True, purpose=purpose,
+            chat_id=chat_id, effort=effort)
         try:
             data = json.loads(msg.content or "{}")
         except json.JSONDecodeError:
