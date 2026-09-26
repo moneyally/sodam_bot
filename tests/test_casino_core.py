@@ -223,9 +223,11 @@ async def rtp_simulation_all_basic_games():
         "사다리": rtp(lambda: basic.ladder_payout(basic.LADDER[r.randrange(4)], "좌")),
         "사다리 조합": rtp(lambda: basic.ladder_payout(basic.LADDER[r.randrange(4)], "우4짝")),
     }
+    # 성공 값은 코드가 아니라 문서 기준표로 (코드가 틀리면 여기서 잡히게) — PTB telegram.Dice 문서
+    goal = {"🏀": ({4, 5}, 5), "⚽": ({4, 5}, 5), "🎯": ({6}, 6), "🎳": ({6}, 6)}
     for name, (emoji, wins, mult, _) in basic.SPORTS.items():
-        n_faces = 6 if emoji in ("🎯", "🎳") else 5
-        results[name] = rtp(lambda: mult if r.randint(1, n_faces) in wins else 0)
+        assert wins == goal[emoji][0], (name, wins)
+        results[name] = rtp(lambda: mult if r.randint(1, goal[emoji][1]) in wins else 0)
     bad = {k: round(v, 3) for k, v in results.items() if not 0.88 <= v <= 1.0}
     assert not bad, bad
 

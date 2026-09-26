@@ -11,17 +11,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
+import re
+import secrets
 import time
 from dataclasses import dataclass
 from datetime import timedelta
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..db import now, register_schema
 from ..util import esc, user_name
-from . import SHUTDOWN_HOOKS, Ctx, register
+from . import SHUTDOWN_HOOKS, Ctx, register, register_callback
 from . import core
 from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet
 from .dealer import line as dealer_line
@@ -45,7 +49,8 @@ _sleep = asyncio.sleep
 _rand = core.rng                 # n → 0..n-1
 _crash_override = None           # 테스트: 다음 판 터지는 지점(센트, 예: 235 = 2.35x)
 
-TICK = 1.5                       # 메시지 수정 간격 (텔레그램 제한 고려)
+TICK = 3.0                       # 화면 수정 간격: 그룹은 보내기·수정 합쳐 분당 약 20개 제한 (텔레그램 FAQ)
+RETRY_MAX = 30                   # 제한(429)에 걸린 마지막 화면·결과판은 최대 이만큼 기다렸다 다시
 MAX_PLAYERS = 50
 NAME_MAX = 12
 
@@ -76,6 +81,28 @@ def time_to(cents: int) -> float:
 
 def fx(cents: int) -> str:
     return f"{cents // 100}.{cents % 100:02d}x"
+
+
+CHART_W, CHART_H = 16, 6          # 글자 차트 크기 (폰에서도 한 줄에 들어가게)
+_EIGHTHS = " ▁▂▃▄▅▆▇█"
+
+
+def heat(cents: int) -> str:
+    return "🟢" if cents < 200 else "🟡" if cents < 500 else "🟠" if cents < 1000 else "🔴"
+
+
+def chart(hist: list[int], top: int | None = None) -> str:
+    """배수 기록(센트) → 막대 곡선 (한 칸 = 1/8 블록, 갈수록 가파르게 치솟음). 기록이 길면 폭에 맞게 골라 전체 비행이 보이게."""
+    if len(hist) > CHART_W:
+        hist = [hist[i * (len(hist) - 1) // (CHART_W - 1)] for i in range(CHART_W)]
+    top = max(top or max(hist), 200)
+    levels = [round((max(m, 100) - 100) / (top - 100) * CHART_H * 8) for m in hist]
+    rows = []
+    for r in range(CHART_H - 1, -1, -1):
+        cells = "".join(_EIGHTHS[max(0, min(8, lv - r * 8))] for lv in levels)
+        label = fx(top) if r == CHART_H - 1 else "1.00x" if r == 0 else ""
+        rows.append(f"{label:>6}{'┤' if label else '│'}{cells}")
+    return "\n".join(rows)
 
 
 def parse_auto(raw: str) -> int | None:
@@ -196,36 +223,62 @@ class Round:
         return n
 
     # 텔레그램
-    async def send(self, text: str):
-        try:
-            return await self.bot.send_message(self.chat_id, text, parse_mode="HTML")
-        except TelegramError as e:
-            log.warning("%s send failed: %s", self.game, e)
-            return None
+    async def send(self, text: str, kb=None):
+        """제한(429)에 걸리면 한 번 기다렸다 다시 (결과판이 조용히 사라지지 않게)."""
+        for attempt in (0, 1):
+            try:
+                return await self.bot.send_message(self.chat_id, text, parse_mode="HTML", reply_markup=kb)
+            except RetryAfter as e:
+                if attempt:
+                    break
+                await self.sleep(min(_secs(e), RETRY_MAX))
+            except TelegramError as e:
+                log.warning("%s send failed: %s", self.game, e)
+                break
+        return None
 
-    async def edit(self, text: str, force: bool = False) -> None:
-        """1.5초에 한 번 이하. 'not modified'·RetryAfter·기타 텔레그램 오류는 건너뛴다.
-        force(마지막 화면)는 건너뛰지 않고 간격이 찰 때까지 기다렸다가 고친다."""
+    async def edit(self, text: str, force: bool = False, kb=None) -> None:
+        """TICK 에 한 번 이하, 오류는 건너뛴다. force(마지막 화면)는 간격·제한이 풀릴 때까지 기다렸다 고치고,
+        그래도 429 면 한 번 더 기다렸다 다시."""
         if self.live is None:
             return
-        gap = TICK - (self.clock() - self.last_edit)
-        if force and gap > 0:
-            await self.sleep(gap)
+        if force:
+            wait = max(TICK - (self.clock() - self.last_edit), self.edit_block - self.clock())
+            if wait > 0:
+                await self.sleep(min(wait, RETRY_MAX))
         t = self.clock()
-        if t < self.edit_block or (not force and t - self.last_edit < TICK - 0.01):
+        if not force and (t < self.edit_block or t - self.last_edit < TICK - 0.01):
             return
         self.last_edit = t
-        try:
-            await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=self.live.message_id,
-                                             parse_mode="HTML")
-        except RetryAfter as e:
-            ra = e.retry_after
-            self.edit_block = t + (ra.total_seconds() if isinstance(ra, timedelta) else float(ra))
-        except BadRequest as e:
-            if "not modified" not in str(e).lower():
+        for attempt in (0, 1):
+            try:
+                await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=self.live.message_id,
+                                                 parse_mode="HTML", reply_markup=kb)   # kb 없으면 버튼 사라짐
+                return
+            except RetryAfter as e:
+                self.edit_block = self.clock() + _secs(e)
+                if not force or attempt:
+                    return
+                await self.sleep(min(_secs(e), RETRY_MAX))
+            except BadRequest as e:
+                if "not modified" not in str(e).lower():
+                    log.warning("%s edit failed: %s", self.game, e)
+                return
+            except TelegramError as e:
                 log.warning("%s edit failed: %s", self.game, e)
-        except TelegramError as e:
-            log.warning("%s edit failed: %s", self.game, e)
+                return
+
+    # 결과 봉인: 판을 열 때 결과의 지문(해시)만 보여주고, 끝나면 결과+열쇠를 공개 → 중간에 못 바꿨다는 증명
+    def seal(self, result: str) -> None:
+        self.sealed_result, self.salt = result, secrets.token_hex(8)
+        self.sealed = hashlib.sha256(f"{result}|{self.salt}".encode()).hexdigest()
+
+    def seal_line(self) -> str:
+        return f"🔒 결과 봉인: <code>{self.sealed[:16]}</code>"
+
+    def reveal_line(self) -> str:
+        return (f"🔓 봉인 공개: <code>{self.sealed_result}|{self.salt}</code> → SHA-256 앞 16자리 "
+                f"<code>{self.sealed[:16]}</code> (직접 확인 가능)")
 
     def left(self) -> int:
         return max(0, math.ceil(self.window - (self.clock() - self.opened)))
@@ -258,6 +311,11 @@ class Round:
 
     def status(self) -> str:
         raise NotImplementedError
+
+
+def _secs(e: RetryAfter) -> float:
+    ra = e.retry_after
+    return ra.total_seconds() if isinstance(ra, timedelta) else float(ra)
 
 
 def current(chat_id: int, game: str) -> Round | None:
@@ -357,11 +415,15 @@ class CrashRound(Round):
     def __init__(self, ctx: Ctx):
         super().__init__(ctx)
         self.crash = crash_point()
+        self.seal(fx(self.crash))
         self.start = 0.0
+        self.hist: list[int] = [100]   # 화면 갱신 때마다의 배수 (차트용)
+        self.rid = secrets.token_urlsafe(6)   # 🛑 스톱 버튼이 이 판을 가리키는 표 (지난 판 버튼은 안 먹힘)
+        self.kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 스톱 (지금 배수로 내리기)", callback_data=f"cs:cr:{self.rid}")]])
 
     def open_text(self, p: Player, pick_txt: str) -> str:
         return (f"📈 <b>그래프 새 판!</b> {self.window}초 동안 탑승 받아요\n"
-                f"첫 탑승: {p.name} {fmt(p.bet)}{pick_txt}\n\n"
+                f"첫 탑승: {p.name} {fmt(p.bet)}{pick_txt}\n{self.seal_line()}\n\n"
                 "타기: <code>!그래프 금액</code> · 자동 내리기: <code>!그래프 금액 2.5</code>\n"
                 "출발하면 배수가 올라가요. 터지기 전에 <code>!스톱</code> 치면 그 배수만큼 받아요!")
 
@@ -375,6 +437,23 @@ class CrashRound(Round):
         p.cash_at = min(at, p.pick) if p.pick else at
         return await self.pay(p, crash_payout(p.bet, p.cash_at))
 
+    async def try_stop(self, uid: int) -> tuple[str, Player | None, int | None]:
+        """!스톱·🛑 버튼 공통. (안내, 내린 사람, 새 잔액). 내리지 못했으면 사람·잔액 None."""
+        p = self.players.get(uid)
+        if p is None:
+            return "이번 판엔 안 타셨어요. 끝나면 다음 판에 타요!", None, None
+        if self.phase == "betting":
+            return f"아직 출발 전이에요 ({self.left()}초 뒤 출발).", None, None
+        if p.done:
+            return (f"이미 {fx(p.cash_at)}에서 내렸어요." if p.cash_at else "💥 이미 터졌어요."), None, None
+        m = self.now_mult()
+        if m >= self.crash:
+            return "💥 한 발 늦었어요! 이미 터졌어요.", None, None
+        bal = await self.cash_out(p, m)       # done 은 await 전에 세워짐 → 동시에 두 번 눌러도 한 번만
+        if bal is None:
+            return f"이미 {fx(p.cash_at)}에서 내렸어요.", None, None
+        return f"✅ {p.name} <b>{fx(p.cash_at)}</b>에서 내림!", p, bal
+
     async def autos(self, upto: int) -> None:
         for p in self.open_players():
             if p.pick and p.pick <= upto:
@@ -383,8 +462,8 @@ class CrashRound(Round):
     def live_text(self, m: int) -> str:
         riding = len(self.open_players())
         outs = sorted((p for p in self.players.values() if p.done and p.cash_at), key=lambda p: p.cash_at)
-        lines = [f"📈 <b>{fx(m)}</b> 상승 중…",
-                 f"🚀 타는 중 {riding}명 · 내리려면 <code>!스톱</code>"]
+        lines = [f"{heat(m)} <b>{fx(m)}</b> 🚀 상승 중…", f"<pre>{chart(self.hist + [m])}</pre>",
+                 f"🧑‍🚀 타는 중 {riding}명 · 아래 🛑 버튼이나 <code>!스톱</code>"]
         if outs:
             shown = " · ".join(f"{p.name} {fx(p.cash_at)}" for p in outs[-5:])
             more = f" 외 {len(outs) - 5}명" if len(outs) > 5 else ""
@@ -393,7 +472,7 @@ class CrashRound(Round):
 
     async def play(self) -> None:
         self.start = self.clock()
-        self.live = await self.send(self.live_text(100))
+        self.live = await self.send(self.live_text(100), self.kb)
         self.last_edit = self.clock()
         t_crash = time_to(self.crash)
         while True:
@@ -404,21 +483,26 @@ class CrashRound(Round):
             await self.autos(m)
             if not self.open_players():
                 break
-            await self.edit(self.live_text(m))
+            await self.edit(self.live_text(m), kb=self.kb)
+            self.hist.append(m)
             await self.sleep(max(0.01, min(TICK, t_crash - el)))
         await self.autos(self.crash)          # 목표 ≤ 터진 지점이면 성공
+        if self.crash >= CRASH_CAP:           # 최대 배수 완주: 끝까지 탄 사람은 그 배수로 내려줌
+            for p in self.open_players():
+                await self.cash_out(p, CRASH_CAP)
         busted = self.open_players()
         for p in busted:
             p.done = True                     # 꽝: 이미 차감됨, 지급 없음
             await self._unstake(p)
         self.phase = "done"
-        await self.edit(f"💥 <b>{fx(self.crash)}</b>에서 터졌어요!", force=True)
+        head = f"🏆 <b>{fx(self.crash)}</b> 완주!" if self.crash >= CRASH_CAP else f"💥 <b>{fx(self.crash)}</b>에서 터졌어요!"
+        await self.edit(f"{head}\n<pre>{chart(self.hist + [self.crash])}</pre>", force=True)
         await self.send(self.board())
 
     def board(self) -> str:
         won = sorted((p for p in self.players.values() if p.cash_at), key=lambda p: -p.payout)
         lost = [p for p in self.players.values() if not p.cash_at]
-        lines = [f"💥 <b>그래프 {fx(self.crash)}에서 펑!</b>"]
+        lines = [f"🏆 <b>그래프 {fx(self.crash)} 완주!</b>" if self.crash >= CRASH_CAP else f"💥 <b>그래프 {fx(self.crash)}에서 펑!</b>"]
         if won:
             lines.append(f"\n✅ <b>탈출 성공 {len(won)}명</b>")
             lines += [f"· {p.name} {fx(p.cash_at)}{' (자동)' if p.pick and p.cash_at == p.pick else ''}"
@@ -429,6 +513,7 @@ class CrashRound(Round):
         total_in = sum(p.bet for p in self.players.values())
         total_out = sum(p.payout for p in self.players.values())
         lines.append(f"\n판돈 {fmt(total_in)} · 지급 {fmt(total_out)}")
+        lines.append(self.reveal_line())
         lines.append(dealer_line(getattr(self, "style", "polite"), total_in, total_out, 10**9))
         lines.append("다음 판: <code>!그래프 금액</code>")
         return "\n".join(lines)
@@ -468,26 +553,24 @@ async def g_stop(ctx: Ctx) -> None:
             return
         await ctx.reply("지금 날고 있는 그래프가 없어요. <code>!그래프 금액</code> 으로 새 판!")
         return
-    p = r.players.get(ctx.user.id)
+    text, p, bal = await r.try_stop(ctx.user.id)
     if p is None:
-        await ctx.reply("이번 판엔 안 타셨어요. 끝나면 다음 판에 타요!")
+        await ctx.reply(text)
         return
-    if r.phase == "betting":
-        await ctx.reply(f"아직 출발 전이에요 ({r.left()}초 뒤 출발). 출발하면 <code>!스톱</code>!")
+    await ctx.reply(text + "\n" + result_line(p.bet, p.payout, bal) + await dealer_tail(ctx, p.bet, p.payout, bal))
+
+
+async def cb_crash(svc, bot, q, parts: list[str]) -> None:
+    """🛑 스톱 버튼: 방에 새 메시지 없이 누른 사람에게만 결과 알림 (살아 있는 차트에 '내림' 으로 보임)."""
+    r = next((r for r in _ROUNDS.values() if isinstance(r, CrashRound) and r.phase != "done"
+              and parts and r.rid == parts[0]), None)
+    if r is None:
+        await q.answer("이미 끝난 판이에요.")
         return
-    if p.done:
-        if p.cash_at:
-            await ctx.reply(f"이미 {fx(p.cash_at)}에서 내렸어요.")
-        return
-    m = r.now_mult()
-    if m >= r.crash:
-        await ctx.reply("💥 한 발 늦었어요! 이미 터졌어요.")
-        return
-    bal = await r.cash_out(p, m)       # done 은 await 전에 세워짐 → 동시에 두 번 쳐도 한 번만
-    if bal is None:
-        return
-    await ctx.reply(f"✅ {p.name} <b>{fx(p.cash_at)}</b>에서 내림!\n" + result_line(p.bet, p.payout, bal)
-                    + await dealer_tail(ctx, p.bet, p.payout, bal))
+    text, p, bal = await r.try_stop(q.from_user.id)
+    if p is not None:
+        text += f" +{fmt(p.payout - p.bet)} · 잔액 {fmt(bal)}"
+    await q.answer(re.sub(r"<[^>]+>", "", text), show_alert=p is not None)
 
 
 # ── 🏇 경마 ──────────────────────────────────────────────
@@ -500,11 +583,12 @@ class HorseRound(Round):
     def __init__(self, ctx: Ctx):
         super().__init__(ctx)
         self.winner = _rand(HORSES)             # 0..4
+        self.seal(f"{self.winner + 1}번")
         self.frames = race_frames(self.winner)
 
     def open_text(self, p: Player, pick_txt: str) -> str:
         return (f"🏇 <b>경마 출발 {self.window}초 전!</b> 1~5번 중 1등을 맞히면 <b>×4.7</b>\n"
-                f"첫 베팅: {p.name} {fmt(p.bet)}{pick_txt}\n\n"
+                f"첫 베팅: {p.name} {fmt(p.bet)}{pick_txt}\n{self.seal_line()}\n\n"
                 "베팅: <code>!경마 금액 번호</code> (예: <code>!경마 1000 3</code>)")
 
     def picks_line(self) -> str:
@@ -542,7 +626,8 @@ class HorseRound(Round):
             lines += [f"· {p.name} {p.pick}번 -{fmt(p.bet)}" for p in lost]
         total_in = sum(p.bet for p in self.players.values())
         total_out = sum(p.payout for p in self.players.values())
-        lines.append("\n" + dealer_line(getattr(self, "style", "polite"), total_in, total_out, 10**9))
+        lines.append("\n" + self.reveal_line())
+        lines.append(dealer_line(getattr(self, "style", "polite"), total_in, total_out, 10**9))
         lines.append("다음 경주: <code>!경마 금액 번호</code>")
         return "\n".join(lines)
 
@@ -584,6 +669,7 @@ async def g_rounds(ctx: Ctx) -> None:
 register(("그래프", "crash", "크래시"), g_crash, usage="금액 [자동배수]",
          help="📈 다 같이 타고 터지기 전에 !스톱", group="같이 하는 게임")
 register(("스톱", "멈춰", "stop"), g_stop, help="그래프에서 내리기", group="같이 하는 게임")
+register_callback("cr", cb_crash)
 register(("경마", "horse"), g_horse, usage="금액 번호", help="🏇 1~5번 1등 맞히면 ×4.7", group="같이 하는 게임")
 register(("라운드", "round"), g_rounds, help="지금 진행 중인 판", group="같이 하는 게임", needs_account=False)
 

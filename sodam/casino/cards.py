@@ -28,7 +28,7 @@ from .core import balance, credit, dealer_tail, debit, fmt, result_line, rng, se
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
 HAND_TTL = 120          # 버튼 게임 만료(초)
-HIDDEN = "🂠"
+HIDDEN = "🎴"
 
 
 # ── 카드 · 슈 ─────────────────────────────────────────────
@@ -304,7 +304,7 @@ async def _callback(game: str, svc, bot, q, parts: list[str], act_fn) -> None:
     await q.answer(toast)
 
 
-# ── 🂡 블랙잭 ─────────────────────────────────────────────
+# ── 🃏 블랙잭 ─────────────────────────────────────────────
 def bj_value(cards: list[Card]) -> tuple[int, bool]:
     """(합계, 소프트 여부). A 는 1 또는 11."""
     total = sum(min(c.rank, 10) for c in cards)
@@ -333,7 +333,7 @@ def bj_payout(player: list[Card], dealer: list[Card], bet: int) -> tuple[int, st
     if pb and db_:
         return bet, "둘 다 블랙잭 · 푸시"
     if pb:
-        return bet * 5 // 2, "🂡 <b>블랙잭!</b> (×2.5)"
+        return bet * 5 // 2, "🃏 <b>블랙잭!</b> (×2.5)"
     if db_:
         return 0, "딜러 블랙잭"
     p, d = bj_total(player), bj_total(dealer)
@@ -353,7 +353,7 @@ def _bj_text(h: Hand, reveal: bool, footer: str = "") -> str:
     p, soft = bj_value(h.player)
     ptot = f"소프트 {p}" if soft and p < 21 and not reveal else str(p)
     doubled = " (더블)" if h.bet > h.stake else ""
-    return (f"🂡 <b>블랙잭</b> · {_name(h.ctx.user)}님 · 베팅 {fmt(h.bet)}{doubled}\n"
+    return (f"🃏 <b>블랙잭</b> · {_name(h.ctx.user)}님 · 베팅 {fmt(h.bet)}{doubled}\n"
             f"딜러: {dealer}\n"
             f"내 카드: {cards_str(h.player)}  (<b>{ptot}</b>)" + (f"\n{footer}" if footer else ""))
 
@@ -410,7 +410,7 @@ async def g_blackjack(ctx: Ctx) -> None:
     await sweep()
     if not ctx.args:
         bal = await balance(ctx.svc.db, ctx.chat_id, ctx.user.id)
-        await ctx.reply("🂡 <b>블랙잭</b>: <code>!블랙잭 1000</code>\n"
+        await ctx.reply("🃏 <b>블랙잭</b>: <code>!블랙잭 1000</code>\n"
                         "21에 가까우면 승리 ×2 · 블랙잭 ×2.5 · 동점 원금 · 딜러는 17 이상에서 멈춤\n"
                         f"버튼: 히트(한 장 더) · 스탠드(멈춤) · 더블(베팅 두 배, 한 장만)\n내 잔액: <b>{fmt(bal)}</b>")
         return
@@ -462,10 +462,9 @@ def hl_odds(card: Card, remaining: list[Card]) -> tuple[float, float]:
 
 
 def hl_mult(p: float) -> float:
-    """확률 p 에 맞는 배수 (97% / p, 소수 둘째 자리에서 버림). p=0 이면 0."""
-    if p <= 0:
-        return 0.0
-    return int(HL_EDGE / p * 100) / 100
+    """확률 p 에 맞는 배수 (97% / p, 소수 둘째 자리에서 버림). 나올 카드가 없거나 1.01 미만(맞혀도 손해)이면 0."""
+    m = int(HL_EDGE / p * 100) / 100 if p > 0 else 0.0
+    return m if m >= 1.01 else 0.0
 
 
 def _hl_mults(h: Hand) -> tuple[float, float]:
@@ -510,7 +509,7 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
     mh, ml = _hl_mults(h)
     mult = mh if act == "h" else ml
     if not mult:
-        return "그쪽은 나올 카드가 없어요."
+        return "그쪽은 고를 수 없어요 (나올 카드가 없거나 맞혀도 손해)."
     nxt = h.shoe.draw()
     prev = h.card
     ok = nxt.rank > prev.rank if act == "h" else nxt.rank < prev.rank
@@ -571,7 +570,7 @@ async def cb_hilo(svc, bot, q, parts: list[str]) -> None:
 
 register(("바카라", "baccarat", "바카"), g_baccarat, usage="금액 플|뱅|타이|플페어|뱅페어",
          help="🃏 플 ×2 · 뱅 ×1.95 · 타이 ×10 · 페어 ×13", group="카드")
-register(("블랙잭", "blackjack", "bj"), g_blackjack, usage="금액", help="🂡 버튼으로 히트·스탠드·더블 · 블랙잭 ×2.5",
+register(("블랙잭", "blackjack", "bj"), g_blackjack, usage="금액", help="🃏 버튼으로 히트·스탠드·더블 · 블랙잭 ×2.5",
          group="카드")
 register(("하이로우", "hilo", "하이로"), g_hilo, usage="금액", help="🔼🔽 높을까 낮을까, 맞힐수록 상금 ↑", group="카드")
 register_callback("bj", cb_blackjack)

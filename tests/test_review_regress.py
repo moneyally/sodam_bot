@@ -202,6 +202,22 @@ async def badm_huge_id_does_not_crash():
     assert msg.replies
 
 
+
+@test
+def no_duplicate_top_level_definitions():
+    """같은 모듈에 같은 이름의 함수·클래스가 두 번 있으면 뒤의 것만 쓰여서 고친 코드가 조용히 무시됨."""
+    import ast
+    from pathlib import Path
+    dup = []
+    for f in Path(__file__).resolve().parents[1].joinpath("sodam").rglob("*.py"):
+        seen = set()
+        for node in ast.parse(f.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in seen:
+                    dup.append(f"{f.name}:{node.lineno} {node.name}")
+                seen.add(node.name)
+    assert not dup, dup
+
 if __name__ == "__main__":
     import sys
     sys.exit(asyncio.run(run_all()))
