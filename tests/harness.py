@@ -217,7 +217,16 @@ async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
                     queue.append(cd)
 
 
+def load_seeders() -> None:
+    """tests/test_*.py 가 모듈 import 때 SEEDERS.append 하므로, render_screens 처럼 하네스만 쓸 때도 전부 불러온다."""
+    import importlib
+    from pathlib import Path
+    for p in sorted(Path(__file__).resolve().parent.glob("test_*.py")):
+        importlib.import_module(p.stem)
+
+
 async def crawl() -> tuple[Report, object, object]:
+    load_seeders()
     rep = Report()
     for uid in (OWNER, TG, BOTADM, MEMBER):  # 역할마다 새 세상 (앞 역할이 지운 목록을 다음 역할이 못 보는 일 없게)
         db, svc, bot = await make_world()
