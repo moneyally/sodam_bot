@@ -62,6 +62,16 @@ class FakeBot:
         self.calls.append((kind, chat_id, media, caption, kw))
         return self._msg(chat_id)
 
+    files: dict = {}   # file_id → bytes (get_file 로 내려받는 사진)
+
+    async def get_file(self, file_id):
+        data = self.files[file_id]
+        self.calls.append(("get_file", file_id))
+
+        async def download_as_bytearray():
+            return bytearray(data)
+        return SimpleNamespace(file_id=file_id, download_as_bytearray=download_as_bytearray)
+
     async def send_photo(self, chat_id, photo, caption=None, **kw):
         return await self._send_media("send_photo", chat_id, photo, caption, **kw)
 

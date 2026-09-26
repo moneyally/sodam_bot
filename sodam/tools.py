@@ -12,11 +12,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Awaitable, Callable
 
+from openai import BadRequestError, OpenAIError
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
+from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
 from . import knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
 from .llm import BudgetExceeded
+from .vision import Attached
 from .permissions import Role
 from .services import PendingAction, Services
 from .settings import DEFAULTS, LABELS, RANGES, coerce, render
@@ -37,6 +40,7 @@ class ToolCtx:
     settings: dict
     mentions: list[tuple[int, str]] = field(default_factory=list)
     sanctioned: bool = False  # 이번 답변(run_agent 1회)에서 경고·뮤트·밴을 이미 했는지 → 인젝션으로 연속 제재 방지
+    image: Attached | None = None  # 요청(또는 답장한 메시지)에 붙은 사진 → make_image(mode=edit) 원본
 
 
 @dataclass
@@ -205,6 +209,42 @@ async def t_room_members(ctx: ToolCtx, a: dict) -> str:
 
 async def t_room_rules(ctx: ToolCtx, a: dict) -> str:
     return ctx.settings["rules"] or "등록된 방 규칙이 없음."
+
+
+async def t_make_image(ctx: ToolCtx, a: dict) -> str:
+    prompt = str(a.get("prompt", "")).strip()
+    if not prompt:
+        return "그릴 내용이 비어 있음."
+    edit = a.get("mode") == "edit"
+    if edit and ctx.image is None:
+        return "고칠 사진이 없음. 사진에 답장하면서 부탁하거나 사진과 함께 보내 달라고 안내할 것."
+    day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+    limit = ctx.settings["image_daily"]
+    if ctx.role < Role.OWNER and await ctx.svc.db.counter(day, ctx.chat_id, "image") >= limit:
+        return f"오늘 이 방 이미지 한도({limit}장)를 다 썼음. 내일 다시 가능하다고 안내할 것."
+    try:
+        await ctx.bot.send_chat_action(ctx.chat_id, ChatAction.UPLOAD_PHOTO)
+    except TelegramError:
+        pass
+    try:
+        data = await ctx.svc.llm.image(prompt, ctx.image if edit else None, ctx.chat_id)
+    except BudgetExceeded:
+        return "오늘 AI 사용량 한도를 다 써서 이미지를 못 만듦. 내일 다시 가능하다고 안내할 것."
+    except BadRequestError as e:
+        if getattr(e, "code", None) == "moderation_blocked" or "moderation" in str(e).lower():
+            return "안전 정책에 걸려 이 그림은 못 만듦. 다른 표현을 짧게 제안할 것."
+        log.warning("image request rejected: %s", e)
+        return "이 요청으로는 이미지를 못 만듦. 설명을 바꿔 달라고 안내할 것."
+    except OpenAIError as e:
+        log.warning("image failed: %s", e)
+        return "이미지 서버가 잠깐 불안정함. 잠시 후 다시 부탁해 달라고 안내할 것."
+    try:
+        await ctx.bot.send_photo(ctx.chat_id, photo=data, caption=f"🎨 {esc(display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}님 요청",
+                                 parse_mode="HTML")
+    except TelegramError as e:
+        return f"이미지는 만들었는데 전송 실패: {e.message}"
+    await ctx.svc.db.bump(day, ctx.chat_id, "image")
+    return "이미지를 방에 보냈음. 사진 설명은 다시 하지 말고 한마디만 짧게."
 
 
 async def t_web_search(ctx: ToolCtx, a: dict) -> str:
@@ -450,6 +490,10 @@ TOOLS: list[Tool] = [
           "query": {"type": "string", "description": "view=search 일 때 이름·@아이디"},
           "limit": {"type": "integer", "description": "1~10"}}, ["view"], t_room_members),
     Tool("room_rules", "이 방의 규칙/공지를 확인한다.", {}, [], t_room_rules),
+    Tool("make_image", "그림을 새로 만들거나(new) 붙은 사진을 부탁대로 고친다(edit). 결과는 방에 사진으로 간다.",
+         {"prompt": {"type": "string", "description": "원하는 그림을 구체적으로 (피사체·분위기·색·글자·구도)"},
+          "mode": {"type": "string", "enum": ["new", "edit"]}},
+         ["prompt", "mode"], t_make_image, setting="image_daily"),
     Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),
     Tool("sports", "스포츠 경기 일정/결과를 조회한다 (배당·베팅 정보 없음). 팀 이름은 영어로.",

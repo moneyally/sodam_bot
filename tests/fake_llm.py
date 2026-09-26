@@ -60,6 +60,14 @@ class ScriptedLLM:
         item = queue.pop(0)
         return item(user) if callable(item) else item
 
+    async def image(self, prompt, source=None, chat_id=None):
+        self.calls.append({"kind": "image", "prompt": prompt, "source": source, "chat_id": chat_id})
+        if isinstance(self.image_result, Exception):
+            raise self.image_result
+        return self.image_result
+
+    image_result: object = b"\x89PNG-fake"
+
     async def classify_injection(self, text, chat_id=None):
         self.calls.append({"kind": "classify", "text": text})
         return self.injection, "테스트 판별"

@@ -16,3 +16,4 @@ register_setting("ai_room_daily_tokens", ROOM_TOKENS_MAX, "방 하루 AI 토큰 
 # 방 관리자가 바꿀 수 있는 비용 관련 설정의 상한 (웹검색은 호출마다 요금, 분당 호출은 폭주 방지)
 register_setting("web_search_daily", 30, "하루 웹검색 한도", range_=(0, 100))
 register_setting("room_rate_per_min", 20, "방 분당 AI 호출", range_=(1, 60))
+register_setting("image_daily", 5, "하루 이미지 만들기(장)", range_=(0, 20))   # 0 = 끔. 한 장이 대화 수십 번 값

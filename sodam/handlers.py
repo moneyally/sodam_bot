@@ -22,11 +22,11 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import addressee, casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription
+from . import addressee, casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription, vision
 from .agent import run_agent
 from .panels import members as members_panel
 from .commands import CmdCtx
-from .llm import BudgetExceeded
+from .llm import BudgetExceeded, out_of_credit
 from .permissions import Role
 from .services import Services
 from .tools import ToolCtx
@@ -401,6 +401,19 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     return False
 
 
+_credit_reported = 0.0
+
+
+async def _report_credit(svc: Services, bot: Bot) -> None:
+    """OpenAI 크레딧 소진: 운영자에게 한 시간에 한 번만 알림."""
+    global _credit_reported
+    if time.time() - _credit_reported < 3600:
+        return
+    _credit_reported = time.time()
+    await svc.mod.report(bot, "⚠️ OpenAI 크레딧이 바닥났어요. 모든 방의 AI 대화가 멈춘 상태예요.\n"
+                              "충전: platform.openai.com → Settings → Billing")
+
+
 async def _style_for_ai(svc: Services, msg: Message, chat_id: int, args: list[str]) -> bool:
     """'.말투 여친' 한 단어면 본인 말투(명령 그대로). 태그·답장·설명이 붙었고 AI 를 쓸 수 있으면 AI 에게."""
     r = msg.reply_to_message
@@ -477,15 +490,21 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     except Exception:  # 단서가 없어도 대답은 한다
         log.exception("addressee hints failed")
         hints = []
-    ctx = ToolCtx(svc, bot, chat_id, user, role, s)
+    image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진 (고화질로 읽고, 고쳐 달라면 원본으로)
+    ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image)
     try:
-        answer = await run_agent(ctx, style_key=style, notes=notes, history=history,
-                                 reply_to=reply_to, request=request, mode=via, hints=hints)
+        answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
+                                 request=request or "(사진만 보냄)", mode=via, hints=hints,
+                                 images=[image.part()] if image else None)
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:
         log.warning("openai error: %s", e)
-        answer = "AI 연결이 잠깐 불안정해요. 잠시 후 다시 불러주세요."
+        if out_of_credit(e):
+            answer = "지금 AI 사용량이 바닥나서 잠깐 쉬고 있어요. 운영자에게 알렸어요 🙏"
+            await _report_credit(svc, bot)
+        else:
+            answer = "AI 연결이 잠깐 불안정해요. 잠시 후 다시 불러주세요."
 
     usernames = {row["username"].lower() for row in await svc.db.member_names(chat_id) if row["username"]}
     out = security.filter_output(answer, max_chars=s["reply_max_chars"], allowed_usernames=usernames)
@@ -630,8 +649,9 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         role = await svc.perms.role(bot, msg.chat_id, user.id)
         await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [], ""))
         return
-    if not text:
+    if not text and not vision.has_image(msg):
         return
+    text = text or "이 사진 봐줘"          # 1:1 에 사진만 보내면 사진을 읽고 답함
 
     role = await svc.perms.role(bot, msg.chat_id, user.id)
     parsed = commands.parse(text, bot.username)

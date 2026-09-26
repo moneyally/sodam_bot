@@ -1,4 +1,5 @@
-"""OpenAI 호출 래퍼. 일일 토큰 한도, JSON 호출, 격리된 웹검색, 인젝션 판별."""
+"""OpenAI 호출 래퍼. 일일 토큰 한도, JSON 호출, 격리된 웹검색, 인젝션 판별, 이미지 만들기·고치기."""
+import base64
 import json
 import logging
 from datetime import datetime
@@ -19,6 +20,12 @@ ROOM_TOKENS = "room_tokens"  # counters 키: 방별 하루 토큰 (전체 합계
 
 class BudgetExceeded(Exception):
     pass
+
+
+def out_of_credit(e: Exception) -> bool:
+    """OpenAI 계정 크레딧·결제 한도 소진 (429 insufficient_quota). 일시적 오류와 달리 충전 전엔 안 풀림."""
+    code = getattr(e, "code", None) or ""
+    return code in ("insufficient_quota", "credit_balance_exhausted") or "insufficient_quota" in str(e)
 
 
 class AIUnavailable(OpenAIError):
@@ -130,6 +137,20 @@ class LLM:
         except json.JSONDecodeError:
             return {}
         return data if isinstance(data, dict) else {}
+
+    async def image(self, prompt: str, source=None, chat_id: int | None = None) -> bytes:
+        """이미지 만들기(source 없음)·고치기(source = vision.Attached). 결과 이미지 bytes.
+        안전 정책에 걸리면 OpenAI 가 BadRequestError(code=moderation_blocked) 를 낸다."""
+        await self._check_budget(chat_id)
+        common = {"prompt": prompt[:4000], "size": "1024x1024", "quality": self.cfg.image_quality}
+        if source is not None:
+            ext = source.mime.split("/")[-1]
+            resp = await self.client.images.edit(model=self.cfg.image_edit_model, image=(f"photo.{ext}", source.data, source.mime),
+                                                 input_fidelity="high", **common)
+        else:
+            resp = await self.client.images.generate(model=self.cfg.image_model, **common)
+        await self._record(resp.usage, chat_id)
+        return base64.b64decode(resp.data[0].b64_json)
 
     async def web_search(self, query: str, chat_id: int | None = None) -> str:
         """격리 검색: 이 호출은 우리 도구를 하나도 갖지 않고, 요약 텍스트만 돌려준다.

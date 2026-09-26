@@ -16,7 +16,8 @@ CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 
 async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
                     reply_to: str | None, request: str, mode: str = "call",
-                    extras: dict | None = None, hints: list[str] | None = None) -> str:
+                    extras: dict | None = None, hints: list[str] | None = None,
+                    images: list[dict] | None = None) -> str:
     """mode: call(이름 불러서) / follow(이어 말하기) / chime·morning(먼저 끼어들기).
     extras: memory.context_for 결과. None 이면 여기서 읽는다 (실패해도 기억 없이 진행)."""
     svc = ctx.svc
@@ -30,7 +31,7 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
     messages = build_messages(
         bot_name=svc.cfg.bot_name, bot_id=ctx.bot.id, style_key=style_key, tz=svc.cfg.tz,
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
-        reply_to=reply_to, request=request, mode=mode, hints=hints, **extras)
+        reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, **extras)
     tools = available(ctx.role, ctx.settings)
     if mode in ("chime", "morning"):
         tools = [t for t in tools if t.name in CHIME_TOOLS]

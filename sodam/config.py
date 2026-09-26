@@ -34,6 +34,9 @@ class Config:
     backup_send_to_log: bool = False
     cas_api: str = "https://api.cas.chat/check"
     cache_retention: str = ""  # '', 'in_memory', '24h'
+    image_model: str = "gpt-image-2.5-flare"         # 새 이미지 (빠름)
+    image_edit_model: str = "gpt-image-2.5-sunburst"  # 사진 고치기 (원본 유지가 정확)
+    image_quality: str = "medium"                    # low·medium·high (비쌀수록 오래 걸림)
     # 구독 결제 (PAY_ADDRESS 가 비어 있으면 결제 기능 꺼짐 = 모든 방 무료)
     pay_address: str = ""
     sub_price_usdt: str = "30"
@@ -78,6 +81,9 @@ def load_config() -> Config:
         backup_dir=os.getenv("BACKUP_DIR", "").strip() or "data/backups",
         backup_keep=max(1, int(os.getenv("BACKUP_KEEP", "14"))),
         backup_time=parse_hhmm(os.getenv("BACKUP_TIME", "").strip() or "05:00"),
+        image_model=os.getenv("OPENAI_IMAGE_MODEL", "").strip() or "gpt-image-2.5-flare",
+        image_edit_model=os.getenv("OPENAI_IMAGE_EDIT_MODEL", "").strip() or "gpt-image-2.5-sunburst",
+        image_quality=os.getenv("OPENAI_IMAGE_QUALITY", "").strip() or "medium",
         backup_send_to_log=os.getenv("BACKUP_SEND_TO_LOG", "").strip().lower() in ("1", "true", "yes", "on"),
         cas_api=os.getenv("CAS_API", "").strip() or "https://api.cas.chat/check",
         cache_retention=_retention(os.getenv("OPENAI_CACHE_RETENTION", "")),
