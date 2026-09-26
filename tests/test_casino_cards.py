@@ -546,6 +546,17 @@ def rtp_hilo():
     print("RTP:", {k: round(v, 4) for k, v in RTP.items()})
 
 
+@test
+async def shutdown_refunds_open_hands():
+    svc, bot, (u,) = await setup()
+    await cmd(svc, bot, u, "!하이로우 1000")
+    assert await core.balance(svc.db, CHAT, u.id) == 9_000 and C.HANDS
+    await casino.shutdown(svc)
+    assert await core.balance(svc.db, CHAT, u.id) == 10_000 and not C.HANDS
+    await casino.shutdown(svc)                                          # 두 번 불러도 한 번만
+    assert await core.balance(svc.db, CHAT, u.id) == 10_000
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if asyncio.run(run_all()) else 0)

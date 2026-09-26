@@ -50,6 +50,7 @@ class CasinoCmd:
 
 
 COMMANDS: list[CasinoCmd] = []
+SHUTDOWN_HOOKS: list = []   # async fn(svc) → 봇 종료 때 진행 중인 판 환불 등
 _INDEX: dict[str, CasinoCmd] = {}
 
 
@@ -110,6 +111,16 @@ async def on_callback(svc, bot, q, parts: list[str]) -> None:
         await fn(svc, bot, q, parts[1:])
     except TelegramError as e:
         log.warning("casino callback %s failed: %s", parts[0], e)
+
+
+async def shutdown(svc) -> None:
+    for fn in SHUTDOWN_HOOKS:
+        try:
+            n = await fn(svc)
+            if n:
+                log.info("카지노 종료 정리 %s: %s건 환불", getattr(fn, "__name__", fn), n)
+        except Exception:
+            log.exception("casino shutdown hook failed")
 
 
 def help_text() -> str:

@@ -180,6 +180,12 @@ async def finish(ctx: Ctx, game: str, bet: int, payout: int, body: str, **reply_
     return bal
 
 
+async def dealer_tail(ctx: Ctx, bet: int, payout: int, bal: int) -> str:
+    """결과 문구 뒤에 붙일 딜러 소담 한마디 (방 말투 반영)."""
+    from .dealer import line
+    return "\n" + line((await ctx.svc.db.get_settings(ctx.chat_id))["style"], bet, payout, bal)
+
+
 def result_line(bet: int, payout: int, bal: int) -> str:
     if payout > bet:
         return f"🎉 <b>+{fmt(payout - bet)}</b> 획득! · 잔액 {fmt(bal)}"

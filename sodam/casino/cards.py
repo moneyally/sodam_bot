@@ -22,8 +22,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from ..util import esc, user_name
-from . import Ctx, register, register_callback
-from .core import balance, credit, debit, fmt, result_line, rng, settle, split_bet, take_bet
+from . import SHUTDOWN_HOOKS, Ctx, register, register_callback
+from .core import balance, credit, dealer_tail, debit, fmt, result_line, rng, settle, split_bet, take_bet
 
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
@@ -192,7 +192,7 @@ async def g_baccarat(ctx: Ctx) -> None:
     rd = deal_baccarat(make_shoe(8))
     payout = bac_payout(rd, pick, bet)
     bal = await settle(ctx, bet, payout, "baccarat")
-    await ctx.reply(render_baccarat(rd, _name(ctx.user), pick, bet) + result_line(bet, payout, bal))
+    await ctx.reply(render_baccarat(rd, _name(ctx.user), pick, bet) + result_line(bet, payout, bal) + await dealer_tail(ctx, bet, payout, bal))
 
 
 # ── 버튼 게임 공통 ────────────────────────────────────────
@@ -375,7 +375,7 @@ async def _bj_finish(h: Hand, q=None, note: str = "") -> None:
         dealer_play(h.dealer, h.shoe)
     payout, verdict = bj_payout(h.player, h.dealer, h.bet)
     bal = await settle(h.ctx, h.bet, payout, "blackjack")
-    footer = (note + "\n" if note else "") + f"━━━━━━━━\n{verdict}\n" + result_line(h.bet, payout, bal)
+    footer = (note + "\n" if note else "") + f"━━━━━━━━\n{verdict}\n" + result_line(h.bet, payout, bal) + await dealer_tail(h.ctx, h.bet, payout, bal)
     await _edit(h, _bj_text(h, True, footer), None, q)
 
 
@@ -436,7 +436,7 @@ async def g_blackjack(ctx: Ctx) -> None:
         h.done = True
         payout, verdict = bj_payout(h.player, h.dealer, bet)
         bal = await settle(ctx, bet, payout, "blackjack")
-        await ctx.reply(_bj_text(h, True, f"━━━━━━━━\n{verdict}\n" + result_line(bet, payout, bal)))
+        await ctx.reply(_bj_text(h, True, f"━━━━━━━━\n{verdict}\n" + result_line(bet, payout, bal) + await dealer_tail(ctx, bet, payout, bal)))
         return
     h.touch()
     HANDS[_key("bj", ctx.chat_id, ctx.user.id)] = h
@@ -497,7 +497,7 @@ async def _hl_cashout(h: Hand, q=None, note: str = "") -> None:
         return
     _finish(h)
     bal = await settle(h.ctx, h.bet, h.prize, "hilo")
-    footer = (note + "\n" if note else "") + f"━━━━━━━━\n💰 {fmt(h.prize)} 받고 그만!\n" + result_line(h.bet, h.prize, bal)
+    footer = (note + "\n" if note else "") + f"━━━━━━━━\n💰 {fmt(h.prize)} 받고 그만!\n" + result_line(h.bet, h.prize, bal) + await dealer_tail(h.ctx, h.bet, h.prize, bal)
     await _edit(h, _hl_text(h, footer), None, q)
 
 
@@ -522,7 +522,7 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
         why = "같은 숫자라 꽝" if nxt.rank == prev.rank else "틀렸어요"
         bal = await settle(h.ctx, h.bet, 0, "hilo")
         await _edit(h, _hl_text(h, f"━━━━━━━━\n{prev} → <b>{nxt}</b> ({pick} 선택) · {why} 😭\n"
-                                   + result_line(h.bet, 0, bal)), None, q)
+                                   + result_line(h.bet, 0, bal) + await dealer_tail(h.ctx, h.bet, 0, bal)), None, q)
         return None
     h.prize = int(h.prize * mult)
     h.step += 1
@@ -576,3 +576,19 @@ register(("블랙잭", "blackjack", "bj"), g_blackjack, usage="금액", help="�
 register(("하이로우", "hilo", "하이로"), g_hilo, usage="금액", help="🔼🔽 높을까 낮을까, 맞힐수록 상금 ↑", group="카드")
 register_callback("bj", cb_blackjack)
 register_callback("hl", cb_hilo)
+
+
+async def refund_open_hands(svc) -> int:
+    """봇이 꺼질 때: 아직 안 끝난 판의 걸린 금액(더블 포함)을 돌려준다. 돌려준 판 수."""
+    n = 0
+    for key, h in list(HANDS.items()):
+        if h.done:
+            continue
+        h.done = True
+        await credit(svc.db, h.ctx.chat_id, h.ctx.user.id, h.bet, f"refund:{h.game}")
+        HANDS.pop(key, None)
+        n += 1
+    return n
+
+
+SHUTDOWN_HOOKS.append(refund_open_hands)

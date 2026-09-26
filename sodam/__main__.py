@@ -18,7 +18,7 @@ from .greet import Greeter
 from .llm import LLM
 from .moderation import Moderator
 from .permissions import Permissions
-from . import namehist
+from . import casino, namehist
 from .services import Services
 from .sports import Sports
 
@@ -95,6 +95,7 @@ def main() -> None:
     async def post_shutdown(app: Application) -> None:
         svc: Services | None = app.bot_data.get("svc")
         if svc:
+            await casino.shutdown(svc)  # 진행 중인 블랙잭·하이로우·그래프 판 환불 (DB 닫기 전)
             await svc.sports.close()
             await svc.cas.close()
             await svc.billing.close()
