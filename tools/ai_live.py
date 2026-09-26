@@ -160,7 +160,21 @@ async def scene8():
     check("AI 라고 솔직히", any("AI" in o or "인공지능" in o for o in out))
 
 
-SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8]
+async def scene9():
+    print("\n🎬 9. 특정인 지목 인사 (원래 있던 멤버, 호칭으로 부름)")
+    r = await room()
+    woo = fake_user(8600465586, "우주코인 OTC", "woojuotc")
+    await r.join(woo)
+    await r.db._write("UPDATE members SET joined_at=? WHERE user_id=?", (int(time.time()) - 30 * 86400, woo.id))
+    before = len(r.bot.calls)
+    out = await say(r, BOSS, "소담아 우주대표님 인사드려")
+    sent = " ".join(out)
+    check("우주코인 OTC 를 멘션", "tg://user?id=8600465586" in sent)
+    check("기존 멤버에게 '환영' 대신 안부", bool(out) and "환영" not in sent and "오신 걸" not in sent)
+    del before
+
+
+SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9]
 
 
 async def main() -> int:

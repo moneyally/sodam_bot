@@ -69,6 +69,8 @@ PERIOD = {"type": "string", "enum": ["오늘", "어제", "주간", "월간", "�
 async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     """이름/@username/ID → 방 멤버 1명. 실패하면 에러 문자열."""
     rows = await ctx.svc.db.find_members(ctx.chat_id, name)
+    if not rows and not for_sanction:  # 인사·조회는 '우주대표님' 처럼 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
+        rows = await _fuzzy_members(ctx, name)
     if not rows:
         return None, f"'{name}' 멤버를 찾을 수 없어요. @username 이나 정확한 이름이 필요해요."
     if len(rows) > 1:
@@ -78,6 +80,26 @@ async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     if for_sanction and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, row["user_id"]):
         return None, "관리자나 봇은 제재할 수 없어요."
     return row, None
+
+
+_HONORIFICS = ("대표님", "사장님", "실장님", "이사님", "회장님", "팀장님", "부장님", "형님", "누님", "선생님",
+               "대표", "사장", "실장", "이사", "회장", "팀장", "부장", "님", "씨", "형", "누나", "언니", "오빠")
+
+
+async def _fuzzy_members(ctx: ToolCtx, name: str):
+    """'우주대표님' → '우주' 를 이름·@아이디에 포함한 이 방 멤버. 핵심이 2글자 미만이면 안 찾음."""
+    core = name.strip().lstrip("@")
+    for h in _HONORIFICS:
+        if core.endswith(h) and len(core) > len(h):
+            core = core[: -len(h)].strip()
+            break
+    if len(core) < 2:
+        return []
+    like = f"%{core}%"
+    return await ctx.svc.db._all(
+        "SELECT u.* FROM users u JOIN members m ON m.user_id=u.user_id WHERE m.chat_id=? AND u.is_bot=0 AND "
+        "(u.first_name LIKE ? OR COALESCE(u.last_name,'') LIKE ? OR COALESCE(u.username,'') LIKE ?) LIMIT 6",
+        (ctx.chat_id, like, like, like))
 
 
 def _row_name(row) -> str:
@@ -206,15 +228,24 @@ async def t_set_my_style(ctx: ToolCtx, a: dict) -> str:
 
 async def t_greet(ctx: ToolCtx, a: dict) -> str:
     names = [str(n) for n in (a.get("names") or [])][:10]
-    found, missing = [], []
+    found, missing, new = [], [], []
+    day_ago = int(datetime.now().timestamp()) - 86400
     for n in names:
         row, err = await _resolve(ctx, n)
         if err:
             missing.append(n)
-        else:
-            ctx.mentions.append((row["user_id"], _row_name(row)))
-            found.append(_row_name(row))
+            continue
+        ctx.mentions.append((row["user_id"], _row_name(row)))
+        found.append(_row_name(row))
+        m = await ctx.svc.db.get_member(ctx.chat_id, row["user_id"])
+        if m and m["joined_at"] and m["joined_at"] > day_ago:
+            new.append(_row_name(row))
+    old = [f for f in found if f not in new]
     result = f"인사 대상 확인: {', '.join(found) or '없음'}. 답변 맨 앞에 멘션이 자동으로 붙으니 이름은 다시 쓰지 말고 인사말만 쓸 것."
+    if new:
+        result += f" 오늘 새로 들어온 사람: {', '.join(new)} → 환영 인사."
+    if old:
+        result += f" 원래 있던 멤버: {', '.join(old)} → '환영' 말고 반가운 안부 인사 (예: 대표님 반갑습니다, 오늘도 좋은 하루 보내세요)."
     if missing:
         result += f" 못 찾은 이름: {', '.join(missing)}"
     return result

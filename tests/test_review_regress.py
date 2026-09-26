@@ -241,3 +241,20 @@ async def migrate_moves_ai_memory():
     assert await db._one("SELECT 1 FROM member_memory WHERE chat_id=?", (-1007777777,))
     assert await db._one("SELECT 1 FROM room_memory WHERE chat_id=?", (-1007777777,))
     assert not await db._one("SELECT 1 FROM room_memory WHERE chat_id=?", (CHAT,))
+
+
+@test
+async def greet_finds_member_by_nickname_but_sanctions_need_exact_name():
+    from sodam import tools
+    from sodam.permissions import Role
+    db, svc, bot = await setup()
+    woo = fake_user(8600465586, "우주코인 OTC", "woojuotc")
+    await db.upsert_user(woo)
+    await db.touch_member(CHAT, woo.id)
+    ctx = tools.ToolCtx(svc, bot, CHAT, fake_user(ADMIN), Role.ADMIN, await db.get_settings(CHAT))
+    r = await tools.t_greet(ctx, {"names": ["우주대표님"]})
+    assert ctx.mentions == [(woo.id, "우주코인 OTC")] and "원래 있던 멤버" in r
+    row, err = await tools._resolve(ctx, "우주대표님", for_sanction=True)   # 제재는 부분 이름으로 안 됨
+    assert row is None and err
+    row, err = await tools._resolve(ctx, "님")                              # 핵심이 너무 짧으면 안 찾음
+    assert row is None
