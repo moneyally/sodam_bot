@@ -145,8 +145,9 @@ class LLM:
         common = {"prompt": prompt[:4000], "size": "1024x1024", "quality": self.cfg.image_quality}
         if source is not None:
             ext = source.mime.split("/")[-1]
-            resp = await self.client.images.edit(model=self.cfg.image_edit_model, image=(f"photo.{ext}", source.data, source.mime),
-                                                 input_fidelity="high", **common)
+            # sunburst 는 원본 유지가 기본 (input_fidelity 인자를 받지 않음 — 실제 API 400 확인)
+            resp = await self.client.images.edit(model=self.cfg.image_edit_model,
+                                                 image=(f"photo.{ext}", source.data, source.mime), **common)
         else:
             resp = await self.client.images.generate(model=self.cfg.image_model, **common)
         await self._record(resp.usage, chat_id)

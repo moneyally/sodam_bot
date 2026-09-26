@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -211,6 +212,16 @@ async def t_room_rules(ctx: ToolCtx, a: dict) -> str:
     return ctx.settings["rules"] or "등록된 방 규칙이 없음."
 
 
+async def _uploading(ctx: ToolCtx) -> None:
+    """텔레그램 '사진 보내는 중' 표시는 5초면 꺼져서 4초마다 다시."""
+    while True:
+        try:
+            await ctx.bot.send_chat_action(ctx.chat_id, ChatAction.UPLOAD_PHOTO)
+        except TelegramError:
+            pass
+        await asyncio.sleep(4)
+
+
 async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     prompt = str(a.get("prompt", "")).strip()
     if not prompt:
@@ -222,10 +233,7 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     limit = ctx.settings["image_daily"]
     if ctx.role < Role.OWNER and await ctx.svc.db.counter(day, ctx.chat_id, "image") >= limit:
         return f"오늘 이 방 이미지 한도({limit}장)를 다 썼음. 내일 다시 가능하다고 안내할 것."
-    try:
-        await ctx.bot.send_chat_action(ctx.chat_id, ChatAction.UPLOAD_PHOTO)
-    except TelegramError:
-        pass
+    busy = asyncio.create_task(_uploading(ctx))   # 그리는 동안(20~80초) '사진 보내는 중…' 표시를 계속 띄움
     try:
         data = await ctx.svc.llm.image(prompt, ctx.image if edit else None, ctx.chat_id)
     except BudgetExceeded:
@@ -238,6 +246,8 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     except OpenAIError as e:
         log.warning("image failed: %s", e)
         return "이미지 서버가 잠깐 불안정함. 잠시 후 다시 부탁해 달라고 안내할 것."
+    finally:
+        busy.cancel()
     try:
         await ctx.bot.send_photo(ctx.chat_id, photo=data, caption=f"🎨 {esc(display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))}님 요청",
                                  parse_mode="HTML")

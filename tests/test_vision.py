@@ -208,9 +208,39 @@ async def llm_image_calls_openai_with_right_models_and_records_tokens():
     (k1, g), (k2, e) = calls
     assert k1 == "generate" and g["model"] == llm.cfg.image_model and g["size"] == "1024x1024"
     assert k2 == "edit" and e["model"] == llm.cfg.image_edit_model and e["image"] == ("photo.png", b"src", "image/png")
-    assert e["input_fidelity"] == "high"
+    assert "input_fidelity" not in e                         # sunburst 는 이 인자를 받으면 400
     from sodam.llm import ROOM_TOKENS
     assert await db.counter(llm._today(), -5, ROOM_TOKENS) == 2468                  # 방 토큰 한도에 포함
+
+
+@test
+async def upload_status_kept_while_drawing_and_stopped_after():
+    r = await room()
+    from sodam import tools
+    orig_sleep = tools.asyncio.sleep
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    async def slow_image(prompt, source=None, chat_id=None):
+        started.set()
+        await gate.wait()                       # 그리는 중 …
+        return b"PNG"
+
+    async def fast_sleep(d):
+        await orig_sleep(0)
+    tools.asyncio.sleep = fast_sleep
+    r.llm.image = slow_image
+    r.llm.script = [tool_call("make_image", {"prompt": "고양이", "mode": "new"}), "보냈어요"]
+    task = asyncio.create_task(say(r, group_msg(r, text="소담아 고양이 그려줘")))
+    await asyncio.wait_for(started.wait(), 5)
+    await orig_sleep(0.02)                      # 그리는 동안 표시가 여러 번 갱신되는지
+    during = len([c for c in r.bot.calls if c[0] == "chat_action" and c[2] == "upload_photo"])
+    gate.set()
+    await task
+    count = lambda: len([c for c in r.bot.calls if c[0] == "chat_action" and c[2] == "upload_photo"])  # noqa: E731
+    done = count()
+    await orig_sleep(0.02)
+    tools.asyncio.sleep = orig_sleep
+    assert during >= 2 and count() == done, (during, done, count())   # 끝나면 멈춤
 
 
 if __name__ == "__main__":
