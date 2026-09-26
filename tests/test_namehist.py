@@ -3,7 +3,7 @@ import asyncio
 import sys
 from types import SimpleNamespace
 
-from fakes import TZ, FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
+from fakes import TZ, FakeBot, FakeJobQueue, FakeMsg, FakeQuery, add_member, fake_user, make_db, make_svc, runner
 from harness import html_errors
 
 from sodam import commands, handlers, menu, namehist
@@ -30,11 +30,19 @@ def user(uid, first, username=None):
     return fake_user(uid, first, username)
 
 
+async def deliver(ctx, m, private=False):
+    """PTB 처럼: 모든 업데이트 앞의 이름 기록(on_any_update) → 메시지 처리."""
+    upd = SimpleNamespace(message=m, effective_chat=m.chat if not private else SimpleNamespace(id=m.chat_id))
+    await handlers.on_any_update(upd, ctx)
+    await (handlers.on_private if private else handlers.on_group_message)(upd, ctx)
+    await asyncio.gather(*ctx.bot_data["tasks"], return_exceptions=True)  # 태그 알림 등 백그라운드 훅
+
+
 async def group_say(ctx, u, text="안녕하세요", chat=CHAT):
     m = FakeMsg(chat, u, text)
     m.chat = SimpleNamespace(id=chat, title="방", type="supergroup")
     m.sender_chat = None
-    await handlers.on_group_message(SimpleNamespace(message=m), ctx)
+    await deliver(ctx, m)
     return m
 
 
@@ -118,7 +126,7 @@ async def dm_panel_mine_and_query():
     await menu.on_callback(svc, bot, q, ["nhq"])
     assert 6 in svc.inputs
     m = FakeMsg(6, b, "@aaa")                                             # 예전 아이디로 조회
-    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    await deliver(ctx, m, private=True)
     assert "A2" in m.replies[0] and "변경 1회" in m.replies[0] and 6 not in svc.inputs
 
 
@@ -224,17 +232,18 @@ async def forwarded_message_lookup_in_dm():
     await group_say(ctx, a)
     await group_say(ctx, user(5, "A2", "aaa"))
     await group_say(ctx, b)
+    a_now = user(5, "A2", "aaa")                                        # 전달에는 지금 이름이 담겨 옴
     m = FakeMsg(6, b, "아무 글")
-    m.forward_origin = SimpleNamespace(sender_user=a)
-    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    m.forward_origin = SimpleNamespace(sender_user=a_now)
+    await deliver(ctx, m, private=True)
     assert "A2" in m.replies[0] and "이름 변경 1회" in m.replies[0]
     m = FakeMsg(6, b, "숨긴 사람 글")
     m.forward_origin = SimpleNamespace(sender_user=None, sender_user_name="숨김")
-    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    await deliver(ctx, m, private=True)
     assert "숨김" in m.replies[0]
     m = FakeMsg(6, b, "")                                               # 사진만 전달해도
-    m.forward_origin = SimpleNamespace(sender_user=a)
-    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    m.forward_origin = SimpleNamespace(sender_user=a_now)
+    await deliver(ctx, m, private=True)
     assert "A2" in m.replies[0]
 
 
@@ -257,7 +266,7 @@ async def reply_forward_mention_users_are_recorded_too():
     m.sender_chat = None
     m.forward_origin = SimpleNamespace(sender_user=fwd)
     m.entities = (SimpleNamespace(type="text_mention", user=tagged, offset=0, length=2),)
-    await handlers.on_group_message(SimpleNamespace(message=m), ctx)
+    await deliver(ctx, m)
     for u in (speaker, replied, fwd, tagged):
         assert await namehist.history(db, u.id), u.first_name
     assert not await namehist.history(db, 999)
@@ -270,11 +279,100 @@ async def dm_plain_id_or_username_shows_all_history():
     await group_say(ctx, user(8098229366, "박대표", "park"))
     for text in ("@kim", "8098229366", "@park"):
         m = FakeMsg(6, user(6, "B"), text)
-        await handlers.on_private(SimpleNamespace(message=m), ctx)
+        await deliver(ctx, m, private=True)
         assert "전체 기록" in m.replies[0] and "박대표" in m.replies[0], text
     m = FakeMsg(6, user(6, "B"), "@nobody_x")
-    await handlers.on_private(SimpleNamespace(message=m), ctx)
+    await deliver(ctx, m, private=True)
     assert "못 찾았" in m.replies[0]
+
+
+@test
+async def every_update_kind_is_recorded():
+    db, svc, bot, ctx = await setup()
+    U = [user(100 + i, f"사람{i}", f"p{i}") for i in range(12)]
+    grp = SimpleNamespace(id=CHAT, type="supergroup", title="방")
+    cm = lambda u: SimpleNamespace(user=u, status="member", is_member=None)  # noqa: E731
+    updates = [
+        SimpleNamespace(effective_chat=grp, edited_message=SimpleNamespace(from_user=U[0])),         # 수정
+        SimpleNamespace(effective_chat=grp, message_reaction=SimpleNamespace(user=U[1])),           # 반응
+        SimpleNamespace(effective_chat=grp, chat_join_request=SimpleNamespace(from_user=U[2])),     # 가입 요청
+        SimpleNamespace(effective_chat=grp, callback_query=SimpleNamespace(from_user=U[3])),        # 버튼
+        SimpleNamespace(effective_chat=grp, chat_member=SimpleNamespace(                            # 상태 변경
+            from_user=U[4], old_chat_member=cm(U[5]), new_chat_member=cm(U[5]))),
+        SimpleNamespace(effective_chat=grp, message=SimpleNamespace(                                # 입장·퇴장
+            from_user=U[6], new_chat_members=(U[7],), left_chat_member=None)),
+        SimpleNamespace(effective_chat=grp, message=SimpleNamespace(                                # 고정·외부 답장
+            from_user=U[8], pinned_message=SimpleNamespace(from_user=U[9]),
+            external_reply=SimpleNamespace(origin=SimpleNamespace(sender_user=U[10])))),
+        SimpleNamespace(effective_chat=grp, poll_answer=SimpleNamespace(user=U[11])),              # 투표
+    ]
+    for upd in updates:
+        await handlers.on_any_update(upd, ctx)
+    missing = [u.first_name for u in U if not await namehist.history(db, u.id)]
+    assert not missing, missing
+    bot_user = fake_user(55, "봇", "x_bot", is_bot=True)
+    await handlers.on_any_update(SimpleNamespace(effective_chat=grp, callback_query=SimpleNamespace(from_user=bot_user)), ctx)
+    assert not await namehist.history(db, 55)
+
+
+@test
+async def reaction_from_renamed_user_triggers_notice():
+    db, svc, bot, ctx = await setup()
+    await namehist.record(db, user(5, "원래이름", "orig"))
+    grp = SimpleNamespace(id=CHAT, type="supergroup", title="방")
+    await handlers.on_any_update(SimpleNamespace(effective_chat=grp, message_reaction=SimpleNamespace(
+        user=user(5, "사칭관리자", "orig"))), ctx)
+    n = notices(bot)
+    assert len(n) == 1 and "사칭관리자" in n[0]
+
+
+class SweepBot(FakeBot):
+    def __init__(self, names, fail_after=None):
+        super().__init__()
+        self.names, self.fail_after, self.asked, self.attempts = names, fail_after, [], 0
+
+    async def get_chat_member(self, chat_id, user_id):
+        from telegram.error import RetryAfter
+        self.attempts += 1
+        if self.fail_after is not None and len(self.asked) >= self.fail_after:
+            raise RetryAfter(5)
+        self.asked.append((chat_id, user_id))
+        first, uname, status = self.names[user_id]
+        return SimpleNamespace(user=user(user_id, first, uname), status=status)
+
+
+@test
+async def sweep_catches_silent_member_rename():
+    import time as _t
+    db, svc, bot, ctx = await setup()
+    for uid in (5, 6, 7):
+        await add_member(db, CHAT, user(uid, f"조용{uid}", f"q{uid}"))
+        await namehist.record(db, user(uid, f"조용{uid}", f"q{uid}"))
+    sb = SweepBot({5: ("바꾼이름", "q5", "member"), 6: ("조용6", "q6", "member"), 7: ("나간사람새이름", "q7", "left")})
+    assert await namehist.sweep(svc, sb) == 3
+    n = notices(sb)
+    assert len(n) == 1 and "바꾼이름" in n[0]                             # 나간 사람은 기록만, 알림 없음
+    assert (await namehist.history(db, 7))[0]["first_name"] == "나간사람새이름"
+    assert await namehist.sweep(svc, sb) == 0                              # 12시간 안엔 다시 안 봄
+    await db._write("UPDATE name_scan SET ts=?", (int(_t.time()) - namehist.SCAN_EVERY - 1,))
+    sb2 = SweepBot(sb.names, fail_after=1)                                # 속도 제한 → 이번 회차 멈춤
+    assert await namehist.sweep(svc, sb2) == 1 and sb2.attempts == 2       # 제한 걸리면 바로 멈춤 (더 안 물어봄)
+    await db._write("UPDATE members SET last_seen=?", (int(_t.time()) - 100 * 86400,))
+    await db._write("UPDATE name_scan SET ts=0")
+    assert await namehist.sweep(svc, sb) == 0                              # 90일 넘게 안 보인 멤버는 제외
+
+
+@test
+async def admin_list_fetch_records_names():
+    from sodam.permissions import Permissions
+    from sodam import __main__ as main_mod
+    db, svc, bot, ctx = await setup()
+    svc.perms = Permissions(svc.cfg, db)
+    svc.perms.on_admins = lambda b, cid, admins: namehist.record_admins(svc, b, cid, admins)
+    bot.admins = [user(77, "숨은관리자", "hidden_admin")]
+    assert await svc.perms.is_admin(bot, CHAT, 77)
+    assert (await namehist.history(db, 77))[0]["username"] == "hidden_admin"
+    assert main_mod.build_services(svc.cfg, db).perms.on_admins is not None   # 실제 조립에서도 연결됨
 
 
 if __name__ == "__main__":

@@ -11,10 +11,12 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import RetryAfter, TelegramError
 
 from .db import now, register_schema
 from .settings import register_setting
@@ -22,6 +24,8 @@ from .util import display_name, esc, fmt_time, to_int
 
 if TYPE_CHECKING:
     from .db import DB
+
+log = logging.getLogger(__name__)
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS name_history (
@@ -210,22 +214,115 @@ async def on_callback(svc, bot, q, parts: list[str]) -> None:
             raise
 
 
-def seen_users(msg) -> list:
-    """메시지에 함께 보이는 다른 사람들: 답장 원글 작성자, 전달 원작성자, 이름 멘션(text_mention). 봇·말한 사람 제외."""
-    out, me = [], getattr(msg.from_user, "id", None)
-    reply = getattr(msg, "reply_to_message", None)
-    if reply is not None and getattr(reply, "from_user", None):
-        out.append(reply.from_user)
-    origin = getattr(msg, "forward_origin", None)
-    if origin is not None and getattr(origin, "sender_user", None):
-        out.append(origin.sender_user)
-    for ent in [*(getattr(msg, "entities", None) or ()), *(getattr(msg, "caption_entities", None) or ())]:
-        if getattr(ent, "type", None) == "text_mention" and getattr(ent, "user", None):
+
+# ── 기록 범위: 모든 업데이트에서 보이는 사람 ──────────────
+register_schema("""
+CREATE TABLE IF NOT EXISTS name_scan (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    ts      INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
+""", migrate={"name_scan": "drop"})
+
+SCAN_PER_TICK = 20          # 조용한 멤버 확인: 한 번에 몇 명 (getChatMember)
+SCAN_EVERY = 12 * 3600      # 한 사람을 이 간격마다 다시 확인
+SCAN_ACTIVE_DAYS = 90       # 이 기간 안에 본 멤버만
+
+
+def _msg_users(m, out: list) -> None:
+    if m is None:
+        return
+    for u in (getattr(m, "from_user", None), getattr(m, "left_chat_member", None)):
+        if u is not None:
+            out.append(u)
+    out.extend(getattr(m, "new_chat_members", None) or ())
+    for origin in (getattr(m, "forward_origin", None), getattr(getattr(m, "external_reply", None), "origin", None)):
+        if origin is not None and getattr(origin, "sender_user", None) is not None:
+            out.append(origin.sender_user)
+    for ent in [*(getattr(m, "entities", None) or ()), *(getattr(m, "caption_entities", None) or ())]:
+        if getattr(ent, "type", None) == "text_mention" and getattr(ent, "user", None) is not None:
             out.append(ent.user)
-    seen, uniq = {me}, []
+
+
+def users_in_update(update) -> list:
+    """업데이트 하나에 보이는 모든 사람 (봇 제외, 중복 제거). 말한 사람·답장 원글·전달 원작성자·이름 멘션·
+    입장/퇴장·상태 변경·반응·가입 요청·버튼 누른 사람·수정한 사람·고정한 사람."""
+    out: list = []
+    for m in (getattr(update, "message", None), getattr(update, "edited_message", None)):
+        _msg_users(m, out)
+        if m is not None:
+            _msg_users(getattr(m, "reply_to_message", None), out)
+            _msg_users(getattr(m, "pinned_message", None), out)
+    for cmu in (getattr(update, "chat_member", None), getattr(update, "my_chat_member", None)):
+        if cmu is not None:
+            out += [cmu.from_user, cmu.old_chat_member.user, cmu.new_chat_member.user]
+    for obj, attr in ((getattr(update, "message_reaction", None), "user"),
+                      (getattr(update, "chat_join_request", None), "from_user"),
+                      (getattr(update, "callback_query", None), "from_user"),
+                      (getattr(update, "poll_answer", None), "user")):
+        if obj is not None and getattr(obj, attr, None) is not None:
+            out.append(getattr(obj, attr))
+    seen, uniq = set(), []
     for u in out:
-        if u.id not in seen and not u.is_bot:
+        if u is not None and not getattr(u, "is_bot", False) and u.id not in seen:
             seen.add(u.id)
             uniq.append(u)
     return uniq
 
+
+async def _notify(svc, bot, chat_id: int, user_id: int, changed) -> None:
+    if chat_id >= 0 or not (await svc.db.get_settings(chat_id))["name_change_notice"]:
+        return
+    try:
+        await bot.send_message(chat_id, change_notice(user_id, *changed), parse_mode="HTML")
+    except TelegramError as e:
+        log.info("name change notice failed: %s", e)
+
+
+async def observe(svc, bot, update) -> None:
+    """모든 업데이트 앞에서 (handlers 그룹 -1): 보이는 사람 이름을 전부 기록, 그룹에서 바뀐 걸 보면 알림."""
+    chat = getattr(update, "effective_chat", None)
+    chat_id = chat.id if chat is not None else 0
+    for u in users_in_update(update):
+        changed = await record(svc.db, u)
+        if changed:
+            await _notify(svc, bot, chat_id, u.id, changed)
+
+
+async def record_admins(svc, bot, chat_id: int, admins) -> None:
+    """관리자 목록을 받아올 때 그 사람들 이름도 기록."""
+    for a in admins:
+        changed = await record(svc.db, a.user)
+        if changed:
+            await _notify(svc, bot, chat_id, a.user.id, changed)
+
+
+async def sweep(svc, bot) -> int:
+    """조용한 멤버 확인: 말을 안 해도 이름을 바꿨는지 getChatMember 로 조금씩 확인 (한 사람 12시간마다).
+    확인한 수를 돌려준다. 텔레그램이 속도 제한을 걸면 이번 회차는 멈춘다."""
+    now_ts = now()
+    rows = await svc.db._all(
+        "SELECT m.chat_id, m.user_id FROM members m JOIN users u ON u.user_id=m.user_id AND u.is_bot=0 "
+        "LEFT JOIN name_scan s ON s.chat_id=m.chat_id AND s.user_id=m.user_id "
+        "WHERE m.chat_id < 0 AND COALESCE(m.last_seen, 0) > ? AND COALESCE(s.ts, 0) < ? "
+        "ORDER BY COALESCE(s.ts, 0) LIMIT ?",
+        (now_ts - SCAN_ACTIVE_DAYS * 86400, now_ts - SCAN_EVERY, SCAN_PER_TICK))
+    done = 0
+    for r in rows:
+        chat_id, user_id = r["chat_id"], r["user_id"]
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+        except RetryAfter:
+            break
+        except TelegramError:
+            member = None  # 봇이 나간 방·없는 사용자
+        await svc.db._write("INSERT INTO name_scan(chat_id, user_id, ts) VALUES(?,?,?) "
+                            "ON CONFLICT(chat_id, user_id) DO UPDATE SET ts=excluded.ts", (chat_id, user_id, now_ts))
+        done += 1
+        if member is None or getattr(member.user, "is_bot", False):
+            continue
+        changed = await record(svc.db, member.user)
+        if changed and str(member.status) in ("member", "administrator", "creator", "restricted"):
+            await _notify(svc, bot, chat_id, user_id, changed)
+    return done

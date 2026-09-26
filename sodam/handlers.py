@@ -19,7 +19,7 @@ from telegram import Bot, BotCommand, ChatMember, Message, Update, User
 from telegram.constants import ChatAction, ChatMemberStatus, ChatType
 from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
-                          MessageHandler, filters)
+                          MessageHandler, TypeHandler, filters)
 
 from . import commands, hooks, memory, menu, namehist, security, social, stats, subscription
 from .agent import run_agent
@@ -125,10 +125,7 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
         return
     svc, bot = _svc(context), context.bot
     await svc.db.ensure_chat(chat_id, title)
-    changed = await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
-    if changed and (await svc.db.get_settings(chat_id))["name_change_notice"]:
-        await send_temp(context, chat_id, namehist.change_notice(user.id, *changed) + "\n(다시 들어온 멤버)", 3600)
     await svc.db.touch_member(chat_id, user.id, joined=True)
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
@@ -285,17 +282,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if chat_id not in seen:
         await svc.db.ensure_chat(chat_id, msg.chat.title)
         seen.add(chat_id)
-    changed = None if msg.sender_chat else await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(chat_id, user.id)
-    if changed and (await svc.db.get_settings(chat_id))["name_change_notice"]:
-        try:  # 방에 남겨 둔다 (사칭·먹튀 계정 확인용)
-            await bot.send_message(chat_id, namehist.change_notice(user.id, *changed), parse_mode="HTML")
-        except TelegramError as e:
-            log.info("name change notice failed: %s", e)
-    # 말한 사람 말고도 메시지에 보이는 사람(답장 원글·전달 원작성자·이름 멘션)의 이름도 기록 → 기록 범위 넓힘
-    for other in namehist.seen_users(msg):
-        await namehist.record(svc.db, other)
 
     text = msg.text or msg.caption or ""
     role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
@@ -520,7 +508,6 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not user:
         return
     await svc.db.ensure_chat(msg.chat_id, None)
-    await namehist.record(svc.db, user)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(msg.chat_id, user.id)
 
@@ -600,6 +587,22 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         log.warning("텔레그램 연결 일시 오류 (자동 재시도): %s", context.error)
         return
     log.error("unhandled error", exc_info=context.error)
+
+
+async def on_any_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """모든 업데이트 맨 앞(그룹 -1): 보이는 사람 이름·아이디 기록 (이름 변경 기록 범위를 최대로)."""
+    try:
+        await namehist.observe(_svc(context), context.bot, update)
+    except Exception:
+        log.exception("name observe failed")
+
+
+async def job_name_sweep(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """1분마다: 말 안 하는 멤버도 이름을 바꿨는지 조금씩 확인."""
+    try:
+        await namehist.sweep(_svc(context), context.bot)
+    except Exception:
+        log.exception("name sweep failed")
 
 
 # ── 예약 작업 ─────────────────────────────────────────────
@@ -701,6 +704,8 @@ BOT_MENU = [
 
 def register(app: Application, tz, backup_time: str = "05:00") -> None:
     groups = filters.ChatType.GROUPS
+    app.add_handler(TypeHandler(Update, on_any_update), group=-1)  # 이름 기록 (다른 처리보다 먼저, 막지 않음)
+    # 반응·가입 요청·수정된 메시지는 기록만 하면 돼서 별도 처리 없음 (TypeHandler 가 봄)
     app.add_handler(MessageHandler(groups & filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
     app.add_handler(MessageHandler(groups & filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL, on_group_message))
@@ -713,6 +718,7 @@ def register(app: Application, tz, backup_time: str = "05:00") -> None:
     jq = app.job_queue
     hh, mm = map(int, backup_time.split(":"))
     jq.run_repeating(job_tick, interval=30, first=10, name="tick")
+    jq.run_repeating(job_name_sweep, interval=60, first=90, name="name_sweep")
     jq.run_repeating(job_sports, interval=600, first=60, name="sports")
     jq.run_daily(job_daily_report, time=dtime(23, 50, tzinfo=tz), name="daily_report")
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")

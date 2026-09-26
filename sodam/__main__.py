@@ -17,6 +17,7 @@ from .greet import Greeter
 from .llm import LLM
 from .moderation import Moderator
 from .permissions import Permissions
+from . import namehist
 from .services import Services
 from .sports import Sports
 
@@ -30,6 +31,7 @@ def build_services(cfg: Config, db: DB) -> Services:
     svc.greeter = Greeter(svc)
     svc.captcha = Captcha(svc)
     svc.announcer = Announcer(svc)
+    perms.on_admins = lambda bot, chat_id, admins: namehist.record_admins(svc, bot, chat_id, admins)
     return svc
 
 

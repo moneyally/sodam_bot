@@ -40,6 +40,7 @@ class Permissions:
         self.db = db
         self._admin_cache: dict[int, tuple[float, set[int]]] = {}
         self._forgotten: set[int] = set()
+        self.on_admins = None  # async fn(bot, chat_id, admins) — services 조립 때 연결
         self._owners: set[int] | None = None
         self.claim_code: str | None = None  # 오너가 없을 때만 생성, 서버 로그에만 출력
 
@@ -94,6 +95,11 @@ class Permissions:
                 return ids
         admins = await bot.get_chat_administrators(chat_id)
         ids = {a.user.id for a in admins if a.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)}
+        if self.on_admins is not None:  # 관리자 이름도 이름 기록에 (namehist)
+            try:
+                await self.on_admins(bot, chat_id, admins)
+            except Exception:
+                log.exception("admin name record failed")
         self._admin_cache[chat_id] = (now, ids)
         self._forgotten.discard(chat_id)
         await self._store_admins(chat_id, ids, int(now))
