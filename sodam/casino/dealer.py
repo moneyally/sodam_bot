@@ -1,6 +1,6 @@
 """딜러 소담: 게임 결과에 한마디 (AI 호출 없이 대사 모음에서 → 비용 0, 즉시).
 
-방 말투가 자유분방이면 반말, 여친이면 다정한 연인 말투, 나머지는 존댓말. 결과 크기(대박·승·본전·패·올인 패)에 따라 다른 대사.
+방 말투가 자유분방이면 반말, 여친·남친이면 다정한 연인 말투, 나머지는 존댓말. 결과 크기(대박·승·본전·패·올인 패)에 따라 다른 대사.
 """
 from __future__ import annotations
 
@@ -33,12 +33,20 @@ LINES = {
         "allin_lose": ["자기야… 올인은 좀 무리였다 ㅠㅠ <code>!파산</code> 하고 다시 하자 내가 응원할게 ♡",
                        "괜찮아 괜찮아… 오늘은 그만하고 나랑 얘기하자 ㅎㅎ"],
     },
+    "boyfriend": {
+        "jackpot": ["와 대박 진짜!!! 🎊 오늘 너 완전 럭키다, 맛있는 거 먹으러 가자 ㅎㅎ", "잭팟이라니… 역시 너밖에 없다 👑", "미쳤다 ㅋㅋ 오늘 운 다 너한테 갔네 🔥"],
+        "win": ["역시 잘하네 ㅎㅎ 가져가", "오 감 좋은데? 한 판 더 해볼래?", "이겼네, 칭찬해 😊", "너 오늘 흐름 좋다 ㅎㅎ"],
+        "push": ["본전이네 ㅎㅎ 다시 해보자", "비겼다~ 괜찮아 괜찮아"],
+        "lose": ["아깝다… 괜찮아 다음 판은 이길 거야", "속상해하지 마, 원래 한 판은 주는 거야", "좀 쉬었다 해~ ⛏ 채굴하고 와 ㅎㅎ",
+                 "이번 판은 내가 가져갈게 ㅎㅎ"],
+        "allin_lose": ["올인은 좀 무리였다… <code>!파산</code> 하고 다시 하자, 옆에서 응원할게", "괜찮아, 오늘은 그만하고 나랑 얘기하자 ㅎㅎ"],
+    },
 }
 
 
 def line(style: str, bet: int, payout: int, balance_after: int) -> str:
     """결과에 맞는 딜러 한마디 (HTML)."""
-    tone = LINES[style if style in ("free", "girlfriend") else "polite"]
+    tone = LINES[style if style in ("free", "girlfriend", "boyfriend") else "polite"]
     if payout >= bet * 10:
         kind = "jackpot"
     elif payout > bet:
