@@ -3,7 +3,7 @@ import asyncio
 import sys
 
 from fakes import runner
-from harness import CHAT, TG, crawl, html_errors
+from harness import crawl, html_errors
 
 test, run_all = runner()
 

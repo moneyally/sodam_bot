@@ -262,7 +262,7 @@ async def s_sales(c: PanelCtx) -> Screen:
              f"이번 달({this_name}): <b>{fmt_usdt(this_total)} USDT</b> · {this_n}건",
              f"지난 달({last_name}): <b>{fmt_usdt(last_total)} USDT</b> · {last_n}건",
              "(청구서와 맞아서 구독이 연장된 입금만 합산)",
-             f"\n<b>최근 결제</b>"]
+             "\n<b>최근 결제</b>"]
     pays = await recent_payments(c)
     lines += [f"• {_date(c, p['ts'], '%m/%d %H:%M')} · {fmt_usdt(p['amount_units'])} · "
               f"{esc((p['title'] or str(p['chat_id']))[:20])}" for p in pays] or ["(아직 없어요)"]

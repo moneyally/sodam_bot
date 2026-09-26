@@ -334,6 +334,22 @@ async def s_join(c: PanelCtx) -> Screen:
     return Screen(text, _kb(rows))
 
 
+# 다른 패널이 기존 화면의 '⬅️ 뒤로' 위에 버튼 줄을 붙일 때: 화면 코드 → [async fn(c) → 줄 목록]
+SCREEN_EXTRAS: dict[str, list[Callable[[PanelCtx], Awaitable[list[list[InlineKeyboardButton]]]]]] = {}
+
+
+def register_screen_extra(code: str, fn) -> None:
+    if fn not in SCREEN_EXTRAS.setdefault(code, []):
+        SCREEN_EXTRAS[code].append(fn)
+
+
+async def _extras(code: str, c: PanelCtx) -> list[list[InlineKeyboardButton]]:
+    rows = []
+    for fn in SCREEN_EXTRAS.get(code, ()):
+        rows += await fn(c)
+    return rows
+
+
 async def s_security(c: PanelCtx) -> Screen:
     svc, cid = c.svc, c.cid
     s = await svc.db.get_settings(cid)
@@ -353,6 +369,7 @@ async def s_security(c: PanelCtx) -> Screen:
              [B(f"🔗 허용 도메인 ({len(s['whitelist_domains'])})", f"m:dom:{cid}"),
               B(f"🚫 금지어 ({len(words)})", f"m:bw:{cid}")],
              [B("⚠️ 경고 단계", f"m:wl:{cid}")],
+             *await _extras("sec", c),
              _back(cid)]
     return Screen(text, _kb(rows))
 
@@ -365,6 +382,7 @@ async def s_warn(c: PanelCtx) -> Screen:
     if s["warn_ban_at"] <= s["warn_mute_at"]:
         lines.append("\n⚠️ 밴 기준이 뮤트 기준보다 낮거나 같아서 뮤트 없이 바로 밴돼요.")
     rows = [_preset_row(s, c.cid, k) for k in ("warn_mute_at", "warn_mute_minutes", "warn_ban_at")]
+    rows += await _extras("wl", c)
     rows.append(_back(c.cid, "sec"))
     return Screen("\n".join(lines), _kb(rows))
 

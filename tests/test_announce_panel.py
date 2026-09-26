@@ -100,7 +100,7 @@ async def hub_has_announce_button_and_list_is_scoped():
     q = await press(svc, bot, f"m:sc:{CHAT}")
     text, labels = q.edits[-1], [b.text for b in buttons(q.kb)]
     assert "남의 비밀" not in text + "".join(labels) and "(2/20)" in text
-    assert f"🟢 매일 09:00 · 내 공지" in labels and "⏸ 2시간마다 · 꺼둔 공지" in labels
+    assert "🟢 매일 09:00 · 내 공지" in labels and "⏸ 2시간마다 · 꺼둔 공지" in labels
     assert not any(str(theirs) == b.callback_data.split(":")[-1] for b in buttons(q.kb) if "sci" in b.callback_data)
 
     q = await press(svc, bot, f"m:sci:{CHAT}:{mine}")

@@ -25,7 +25,7 @@ from sodam import menu
 CHAT = -1001234567890
 OWNER, TG, BOTADM, MEMBER = 7, 1, 30, 20
 PERSONAS = {OWNER: "오너", TG: "텔레그램 관리자", BOTADM: "봇관리자(.봇관리자)", MEMBER: "일반 멤버"}
-MAX_PRESSES = 600
+MAX_PRESSES = 2000   # 역할 전체 합계. 넘으면 문제로 보고 (뒤 역할이 덜 눌리는 걸 모르고 지나가지 않게)
 TG_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a", "tg-spoiler",
            "span", "blockquote", "tg-emoji"}
 KNOWN_PREFIXES = ("m:", "pay:", "an:", "cap:", "qz:", "act:")
@@ -242,6 +242,8 @@ async def crawl() -> tuple[Report, object, object]:
     for uid in (OWNER, TG, BOTADM, MEMBER):  # 역할마다 새 세상 (앞 역할이 지운 목록을 다음 역할이 못 보는 일 없게)
         db, svc, bot = await make_world()
         await crawl_as(svc, bot, uid, rep, ["m:home", "m:groups", f"m:g:{CHAT}"])
+    if rep.presses >= MAX_PRESSES:
+        rep.issues.append(f"[하네스] 버튼을 {MAX_PRESSES}번 눌러서 중간에 멈춤 — MAX_PRESSES 를 늘리거나 시드 데이터를 줄일 것")
     db, svc, bot = await make_world()
     # 권한 퍼징: 관리자 화면에서 본 방 단위 버튼을 멤버가 누르면 전부 거절돼야 함
     for data in list(rep.scoped_seen):

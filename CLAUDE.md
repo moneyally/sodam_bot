@@ -50,7 +50,7 @@
 
 ## 확장 규칙 (여러 에이전트가 동시에 작업해도 파일이 안 겹치게)
 - 새 버튼 화면 = `sodam/panels/<이름>.py` 하나 추가. `menu.register_screen / register_hub / register_main /
-  register_toggle / register_preset / register_input / register_token_action` 로 등록 (menu.py 수정 불필요).
+  register_toggle / register_preset / register_input / register_token_action / register_screen_extra` 로 등록 (menu.py 수정 불필요).
 - 새 설정 키 = `settings.register_setting(...)`, 새 테이블 = `db.register_schema("CREATE TABLE IF NOT EXISTS …")`
   + 그 모듈 안에서 `db._all/_one/_write` 로 쿼리.
 - 그룹 메시지 후처리(태그 알림 등) = `hooks.add_group_message_hook(async fn(svc, bot, msg, role))`.
