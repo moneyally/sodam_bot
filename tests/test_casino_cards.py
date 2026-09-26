@@ -77,6 +77,7 @@ async def setup(n_users=1, start=10_000):
     C.HANDS.clear()
     core._last_bet.clear()
     basic.sleep = _no_wait                  # 카드 뒤집기·딜러 공개 연출을 실제로 기다리지 않게
+    C.IMAGES = False                        # 이 파일은 글자 화면을 검사 (카드 그림 경로는 test_games_all)
     return svc, bot, users
 
 

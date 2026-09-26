@@ -16,7 +16,7 @@ import re
 import secrets
 from datetime import timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyParameters
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..util import esc, user_name
@@ -44,13 +44,20 @@ def _secs(e: RetryAfter) -> float:
 
 
 async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False, kb=None, q=None,
-                    caption: bool = False) -> bool:
-    """연출 화면 수정 (q 가 있으면 버튼 콜백 메시지, caption 이면 애니메이션의 캡션). 고쳤으면(또는 이미 같으면) True.
+                    caption: bool = False, media: bytes | None = None) -> bool:
+    """연출 화면 수정 (q 가 있으면 버튼 콜백 메시지, caption 이면 사진·애니메이션의 캡션,
+    media 면 사진을 새 그림으로 바꾸고 캡션=text). 고쳤으면(또는 이미 같으면) True.
     중간 화면은 실패하면 그냥 건너뛰고, final 은 429 면 기다렸다 한 번 더."""
     for attempt in (0, 1):
         try:
-            if caption:
-                await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, parse_mode="HTML")
+            if media is not None:
+                if message_id is None:
+                    return False
+                await bot.edit_message_media(chat_id=chat_id, message_id=message_id, reply_markup=kb,
+                                             media=InputMediaPhoto(media, caption=text, parse_mode="HTML"))
+            elif caption:
+                await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, parse_mode="HTML",
+                                               reply_markup=kb)
             elif q is not None:
                 await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
             elif message_id is not None:
@@ -71,8 +78,10 @@ async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False,
     return False
 
 
-async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, fallback: list[str]) -> None:
-    """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로."""
+async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, fallback: list[str],
+                    fallback_final: str | None = None) -> None:
+    """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로
+    (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌)."""
     try:
         gif = await asyncio.to_thread(make_gif)          # 약 1초: 그리는 동안 다른 메시지 처리가 멈추지 않게
         sent = await ctx.bot.send_animation(ctx.chat_id, animation=gif, caption=spin, parse_mode="HTML",
@@ -80,7 +89,7 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
                                                                              allow_sending_without_reply=True))
     except Exception as e:                              # Pillow 없음·그리기 실패·텔레그램 오류
         log.warning("animation failed, text fallback: %r", e)
-        await show(ctx, fallback, final)
+        await show(ctx, fallback, fallback_final or final)
         return
     await sleep(moving_s)
     if not await edit_live(ctx.bot, ctx.chat_id, sent.message_id, final, final=True, caption=True):
@@ -117,6 +126,11 @@ async def show(ctx: Ctx, frames: list[str], final: str) -> None:
             log.warning("anim final failed: %s", e)
 
 SLOT_SYMBOLS = ["BAR", "🍇", "🍋", "7️⃣"]
+DIE = " ⚀⚁⚂⚃⚄⚅"   # 주사위 면 글자 (결과 문구용)
+
+
+def hit_mark(payout: int) -> str:
+    return "✅ 적중!" if payout else "❌ 빗나감"
 
 
 def slot_reels(value: int) -> list[str]:
@@ -168,7 +182,7 @@ async def g_oddeven(ctx: Ctx) -> None:
     got = "홀" if v % 2 else "짝"
     await record(ctx.svc.db, ctx.chat_id, "oddeven", str(v))        # 🖼 그림장
     payout = int(bet * 1.95) if got == pick else 0
-    await finish(ctx, "oddeven", bet, payout, f"🎲 {v} → <b>{got}</b> ({esc(pick)} 선택)")
+    await finish(ctx, "oddeven", bet, payout, f"🎲 주사위 {DIE[v]} <b>{v}</b> → <b>{got}</b> · {esc(pick)} 선택 {hit_mark(payout)}")
 
 
 # ── 🎲 주사위 숫자 ────────────────────────────────────────
@@ -189,10 +203,12 @@ async def g_dice(ctx: Ctx) -> None:
         return
     if pick.isdecimal():
         payout = int(bet * 5.7) if v == int(pick) else 0
+        side = ""
     else:
         high = pick in ("높음", "하이")
         payout = int(bet * 1.95) if (v >= 4) == high else 0
-    await finish(ctx, "dice", bet, payout, f"🎲 <b>{v}</b> ({esc(pick)} 선택)")
+        side = " (높음 4~6)" if v >= 4 else " (낮음 1~3)"
+    await finish(ctx, "dice", bet, payout, f"🎲 주사위 {DIE[v]} <b>{v}</b>{side} · {esc(pick)} 선택 {hit_mark(payout)}")
 
 
 # ── 🎰 슬롯 ───────────────────────────────────────────────
@@ -214,7 +230,8 @@ async def g_slot(ctx: Ctx) -> None:
     mult = SLOT_PAY[reels[0]] if reels[0] == reels[1] == reels[2] else 0
     payout = bet * mult
     head = "🎊 <b>잭팟!!! 777</b>\n" if mult == 30 else ""
-    await finish(ctx, "slot", bet, payout, f"{head}🎰 {' | '.join(reels)}")
+    verdict = f"✅ 같은 그림 3개! ×{mult}" if mult else "❌ 꽝"
+    await finish(ctx, "slot", bet, payout, f"{head}🎰 [ {' | '.join(reels)} ] {verdict}")
 
 
 # ── 🏀⚽🎯🎳 스포츠 한 방 ─────────────────────────────────
@@ -242,7 +259,7 @@ def _sport(name: str):
         if v is None:
             return
         payout = int(bet * mult) if v in wins else 0
-        await finish(ctx, name, bet, payout, f"{emoji} {'성공!' if payout else '아깝다…'}")
+        await finish(ctx, name, bet, payout, f"{emoji} <b>{name}</b> {'성공! ✅' if payout else '아깝다… ❌'}")
     return play
 
 

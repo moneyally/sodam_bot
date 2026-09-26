@@ -91,6 +91,7 @@ async def setup(name="사장"):
     await core.credit(db, CHAT, u.id, START, "join")
     C.HANDS.clear()
     core._last_bet.clear()
+    C.IMAGES = False                        # 이 파일은 글자 연출을 검사 (카드 그림 경로는 test_games_all)
 
     async def rec_sleep(d):
         env.ops.append(("sleep", d))

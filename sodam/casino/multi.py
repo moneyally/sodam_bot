@@ -27,7 +27,7 @@ from ..db import now, register_schema
 from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, anim, register, register_callback
 from . import core
-from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet
+from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet, temp_reply
 from .board import record
 from .dealer import line as dealer_line
 
@@ -406,13 +406,13 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
     cid, uid, game = ctx.chat_id, ctx.user.id, cls.game
     r = current(cid, game)
     if r and r.phase != "betting":
-        await ctx.reply(f"🚫 이번 판은 이미 출발했어요. 끝나면 {cls.next_hint}")
+        await temp_reply(ctx, f"🚫 이번 판은 이미 출발했어요. 끝나면 {cls.next_hint}")
         return
     if (r and uid in r.players) or (cid, game, uid) in _PENDING:
-        await ctx.reply("이번 판엔 이미 걸었어요. 한 판에 한 번만!")
+        await temp_reply(ctx, "이번 판엔 이미 걸었어요. 한 판에 한 번만!")
         return
     if r and len(r.players) >= MAX_PLAYERS:
-        await ctx.reply(f"이번 판은 꽉 찼어요 ({MAX_PLAYERS}명). 다음 판에 와요!")
+        await temp_reply(ctx, f"이번 판은 꽉 찼어요 ({MAX_PLAYERS}명). 다음 판에 와요!")
         return
     _PENDING.add((cid, game, uid))
     try:
@@ -435,7 +435,9 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
             await ctx.reply(f"⏱ 아슬아슬하게 마감됐어요. {fmt(bet)} 돌려드렸어요.")
             return
         r.players[uid] = p
-        await ctx.reply(f"🎫 {p.name} {fmt(bet)}{pick_txt} · 참가 {len(r.players)}명 · {r.left()}초 남음")
+        # 🎫 참가 확인은 베팅이 마감될 때쯤 지워짐 (사람마다 방에 영구로 쌓이지 않게) — 참가자 목록은 결과판에
+        await temp_reply(ctx, f"🎫 {p.name} {fmt(bet)}{pick_txt} · 참가 {len(r.players)}명 · {r.left()}초 남음",
+                         r.left() + 3)
     finally:
         _PENDING.discard((cid, game, uid))
 
@@ -587,11 +589,11 @@ async def g_stop(ctx: Ctx) -> None:
         if last and ctx.user.id in last.players and _clock() - t < 15 and not last.players[ctx.user.id].cash_at:
             await ctx.reply(f"💥 한 발 늦었어요! 이미 {fx(last.crash)}에서 터졌어요.")
             return
-        await ctx.reply("지금 날고 있는 그래프가 없어요. <code>!그래프 금액</code> 으로 새 판!")
+        await temp_reply(ctx, "지금 날고 있는 그래프가 없어요. <code>!그래프 금액</code> 으로 새 판!")
         return
     text, p, bal = await r.try_stop(ctx.user.id)
     if p is None:
-        await ctx.reply(text)
+        await temp_reply(ctx, text)              # '출발 전이에요'·'이미 내렸어요' 같은 안내는 잠깐만
         return
     await ctx.reply(text + "\n" + result_line(p.bet, p.payout, bal) + await dealer_tail(ctx, p.bet, p.payout, bal))
 
