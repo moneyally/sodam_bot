@@ -242,8 +242,9 @@ async def member_join_hook_can_block_and_failures_do_not_break_join():
     try:
         await handlers.handle_new_member(ctx, -100901, "방", fake_user(666, "막힐사람"))
         await handlers.handle_new_member(ctx, -100901, "방", fake_user(777, "통과"))
-    finally:
-        hooks.MEMBER_JOIN_HOOKS.clear()
+    finally:  # 이 테스트가 넣은 것만 뺀다 (다른 모듈이 등록한 대량 입장 방어·공동 차단 훅은 그대로)
+        for fn in (boom, block):
+            hooks.MEMBER_JOIN_HOOKS.remove(fn)
     assert seen == [666, 777]
     assert svc.greeter.queued and all(q[1] == 777 for q in svc.greeter.queued)      # 막힌 사람은 인사 없음
 

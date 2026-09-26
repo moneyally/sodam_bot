@@ -10,8 +10,8 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
-from . import knowledge, menu, namehist, stats, subscription
-from .permissions import Role
+from . import fedban, knowledge, menu, namehist, stats, subscription
+from .permissions import Role, may, no_right_text
 from .services import Services
 from .security import normalize_domain
 from .settings import DEFAULTS, LABELS, coerce, render
@@ -50,6 +50,7 @@ class Cmd:
     help: str = ""
     group: str = "일반"
     dm_ok: bool = False  # 1:1 채팅에서도 쓸 수 있는 명령
+    right: str | None = None  # "restrict"|"delete": 텔레그램 관리자 권한까지 확인 (permissions.Permissions.can)
 
 
 async def _target(ctx: CmdCtx, *, sanction: bool = True) -> tuple[int, str, list[str]] | None:
@@ -732,11 +733,45 @@ async def c_botadmin(ctx: CmdCtx) -> None:
             return
         on = sub in ("추가", "add")
         await ctx.svc.db.set_bot_admin(ctx.chat_id, t[0], on)
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, t[0], "bot_admin", "추가" if on else "해제")
         await ctx.reply(f"{esc(t[1])}님 봇 관리자 {'추가' if on else '해제'} (텔레그램 관리자가 아니어도 봇 관리 명령 사용 가능)")
         return
     ids = await ctx.svc.db.bot_admin_ids(ctx.chat_id)
     await ctx.reply("🛠️ 봇 관리자 ID: " + (", ".join(f"<code>{i}</code>" for i in ids) or "없음") +
                     "\n<code>.봇관리자 추가 @user</code> / <code>.봇관리자 삭제 @user</code>")
+
+
+async def c_fedban(ctx: CmdCtx) -> None:
+    """.공동차단 @user|답장 사유 → 공동 명단에 올리고 이 방에서 밴. .공동차단 해제 ID → 이 방 표시 빼기(오너는 완전 삭제)."""
+    svc = ctx.svc
+    if ctx.args and ctx.args[0] in ("해제", "삭제", "remove"):
+        uid = to_int(ctx.args[1]) if len(ctx.args) > 1 else None
+        if not uid or uid <= 0:
+            await ctx.reply("사용법: <code>.공동차단 해제 숫자ID</code>")
+            return
+        owner = ctx.user.id in await svc.perms.owners()
+        await ctx.reply(await fedban.remove(svc, ctx.chat_id, uid, ctx.user.id, owner=owner))
+        return
+    if not ctx.args and not ctx.msg.reply_to_message:
+        await ctx.reply(fedban.USAGE)
+        return
+    # 이미 나간 계정도 올릴 수 있게 숫자 ID 는 바로 받는다 (답장이 없을 때)
+    raw = to_int(ctx.args[0]) if ctx.args and not ctx.msg.reply_to_message else None
+    if raw and raw > 0 and not await svc.db.find_members(ctx.chat_id, ctx.args[0]):
+        if await svc.perms.protected(ctx.bot, ctx.chat_id, raw):
+            await ctx.reply("관리자·봇·운영자는 공동 차단 명단에 올릴 수 없어요.")
+            return
+        uid, name, rest = raw, f"ID {raw}", ctx.args[1:]
+    else:
+        t = await _target(ctx)
+        if not t:
+            return
+        uid, name, rest = t  # _target 이 관리자·봇·오너(protected)를 거른다
+    reason = " ".join(rest).strip()
+    if not reason:
+        await ctx.reply("사유를 꼭 적어주세요. 예: <code>.공동차단 @아이디 코인 사기 DM</code>")
+        return
+    await ctx.reply(await fedban.add(svc, ctx.bot, ctx.chat_id, uid, name, reason, ctx.user.id))
 
 
 async def c_ai(ctx: CmdCtx) -> None:
@@ -979,19 +1014,19 @@ COMMANDS: list[Cmd] = [
     Cmd(("설정", "settings"), c_settings, Role.ADMIN, usage="[전체]", help="버튼 설정 메뉴를 1:1로 받기 (전체: 글 목록)",
         group="관리자"),
     Cmd(("설정변경", "set"), c_set, Role.ADMIN, usage="키 값", help="설정 바꾸기", group="관리자"),
-    Cmd(("경고", "warn"), c_warn, Role.ADMIN, usage="@user [사유]", help="경고 (누적 시 자동 제재)", group="관리자"),
-    Cmd(("경고취소", "unwarn"), c_unwarn, Role.ADMIN, usage="@user", help="경고 1회 취소", group="관리자"),
+    Cmd(("경고", "warn"), c_warn, Role.ADMIN, usage="@user [사유]", help="경고 (누적 시 자동 제재)", group="관리자", right="restrict"),
+    Cmd(("경고취소", "unwarn"), c_unwarn, Role.ADMIN, usage="@user", help="경고 1회 취소", group="관리자", right="restrict"),
     Cmd(("경고목록", "warns"), c_warns, Role.ADMIN, usage="@user", help="경고 내역", group="관리자"),
-    Cmd(("경고초기화", "resetwarns"), c_resetwarns, Role.ADMIN, usage="@user", help="경고 전부 삭제", group="관리자"),
-    Cmd(("뮤트", "mute"), c_mute, Role.ADMIN, usage="@user [30m|2h|1d] [사유]", help="채팅 금지", group="관리자"),
-    Cmd(("뮤트해제", "unmute"), c_unmute, Role.ADMIN, usage="@user", help="채팅 금지 해제", group="관리자"),
-    Cmd(("밴", "ban"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자"),
-    Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자"),
-    Cmd(("킥", "kick"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자"),
-    Cmd(("삭제", "del"), c_del, Role.ADMIN, help="답장한 메시지 삭제", group="관리자"),
-    Cmd(("청소", "purge"), c_purge, Role.ADMIN, usage="개수", help="최근 메시지 일괄 삭제", group="관리자"),
-    Cmd(("잠금", "lock"), c_lock, Role.ADMIN, help="방 잠금", group="관리자"),
-    Cmd(("잠금해제", "unlock"), c_unlock, Role.ADMIN, help="방 잠금 해제", group="관리자"),
+    Cmd(("경고초기화", "resetwarns"), c_resetwarns, Role.ADMIN, usage="@user", help="경고 전부 삭제", group="관리자", right="restrict"),
+    Cmd(("뮤트", "mute"), c_mute, Role.ADMIN, usage="@user [30m|2h|1d] [사유]", help="채팅 금지", group="관리자", right="restrict"),
+    Cmd(("뮤트해제", "unmute"), c_unmute, Role.ADMIN, usage="@user", help="채팅 금지 해제", group="관리자", right="restrict"),
+    Cmd(("밴", "ban"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자", right="restrict"),
+    Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자", right="restrict"),
+    Cmd(("킥", "kick"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자", right="restrict"),
+    Cmd(("삭제", "del"), c_del, Role.ADMIN, help="답장한 메시지 삭제", group="관리자", right="delete"),
+    Cmd(("청소", "purge"), c_purge, Role.ADMIN, usage="개수", help="최근 메시지 일괄 삭제", group="관리자", right="delete"),
+    Cmd(("잠금", "lock"), c_lock, Role.ADMIN, help="방 잠금", group="관리자", right="restrict"),
+    Cmd(("잠금해제", "unlock"), c_unlock, Role.ADMIN, help="방 잠금 해제", group="관리자", right="restrict"),
     Cmd(("금지어", "filter"), c_filter, Role.ADMIN, usage="[추가|삭제] 단어", help="금지어 관리", group="관리자"),
     Cmd(("허용도메인", "whitelist"), c_whitelist, Role.ADMIN, usage="[추가|삭제] 도메인", help="링크 허용 목록", group="관리자"),
     Cmd(("AI대화", "ai"), c_ai, Role.ADMIN, usage="켜기|끄기", help="AI 대화 켜고 끄기", group="관리자"),
@@ -1001,7 +1036,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("예약공지", "schedule"), c_announce, Role.ADMIN, usage="[만들기|수정|미리보기|지금|켜기|끄기|삭제] [번호]",
         help="제목·사진/영상 포함 예약·반복 공지", group="관리자"),
     Cmd(("캡차", "captcha"), c_captcha, Role.ADMIN, usage="[켜기|끄기|시간 N|실패 킥|밴|뮤트]", help="입장 캡차 설정", group="관리자"),
-    Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자"),
+    Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자", right="restrict"),
     Cmd(("스팸차단", "cas"), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="CAS 스팸DB 차단", group="관리자"),
     Cmd(("관리기록", "modlog"), c_modlog, Role.ADMIN, help="최근 제재·설정 기록", group="관리자"),
     Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰 (방 관리자는 이 방만)", group="관리자", dm_ok=True),
@@ -1011,6 +1046,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("지식", "자료", "knowledge"), c_knowledge, Role.ADMIN, usage="[추가 제목|검색 단어|삭제 번호]",
         help="AI가 참고할 문서·자료 등록 (1:1 에선 모든 방 공통)", group="관리자", dm_ok=True),
     Cmd(("리포트", "report"), c_report, Role.ADMIN, help="오늘 집계 리포트", group="관리자"),
+    Cmd(("공동차단", "fedban"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
+        help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
     Cmd(("백업", "backup"), c_backup, Role.OWNER, usage="[목록]", help="DB 지금 백업 / 백업 목록", group="오너", dm_ok=True),
     Cmd(("구독부여", "grant"), c_grant, Role.OWNER, usage="방ID 일수", help="결제 없이 이용 기간 부여", group="오너", dm_ok=True),
@@ -1036,6 +1073,13 @@ def parse(text: str, bot_username: str) -> tuple[Cmd, list[str], str] | None:
 async def dispatch(ctx: CmdCtx, cmd: Cmd) -> None:
     if ctx.role < cmd.role:
         await ctx.reply("관리자만 쓸 수 있는 명령어예요." if cmd.role == Role.ADMIN else "봇 오너만 쓸 수 있어요.")
+        return
+    if cmd.right and ctx.chat_id < 0 and not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.user.id, cmd.right):
+        sender = getattr(ctx.msg, "sender_chat", None)
+        if sender is not None and sender.id == ctx.chat_id:  # 익명 관리자: 누가 보냈는지 몰라 권한을 확인할 수 없음
+            await ctx.reply("익명 관리자로는 이 명령을 쓸 수 없어요. 텔레그램에서 익명 모드를 끄고 다시 해주세요.")
+        else:
+            await ctx.reply(no_right_text(cmd.right))
         return
     try:
         await cmd.fn(ctx)

@@ -27,6 +27,39 @@ CREATE TABLE IF NOT EXISTS chat_admins_fetched (
     ts      INTEGER NOT NULL
 );
 """, migrate={"chat_admins": "drop", "chat_admins_fetched": "drop"})
+# 관리자별 텔레그램 권한 (사용자 차단·메시지 삭제). 이 표가 비어 있는 방 = 옛 형식 캐시 → 텔레그램에 다시 묻는다
+register_schema("""
+CREATE TABLE IF NOT EXISTS chat_admin_rights (
+    chat_id      INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    can_restrict INTEGER NOT NULL,
+    can_delete   INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
+""", migrate={"chat_admin_rights": "drop"})
+
+RIGHT_LABEL = {"restrict": "사용자 차단", "delete": "메시지 삭제"}
+
+
+def no_right_text(right: str = "restrict") -> str:
+    return (f"텔레그램에서 '{RIGHT_LABEL[right]}' 권한이 있는 관리자만 할 수 있어요.\n"
+            "(방장이 텔레그램 관리자 설정에서 권한을 켜 주거나, 그런 관리자가 해야 해요)")
+
+
+async def may(perms, bot: Bot, chat_id: int, user_id: int, right: str = "restrict") -> bool:
+    """제재 권한 확인 (명령·AI 제재·확인 버튼·캡차 버튼 공용). 확인 중 연결 오류면 막는 쪽(False)."""
+    try:
+        return await perms.can(bot, chat_id, user_id, right)
+    except TelegramError as e:
+        log.warning("권한 확인 실패(%s) → 거절: chat %s user %s", e, chat_id, user_id)
+        return False
+
+
+def _rights_of(member) -> tuple[bool, bool]:
+    """getChatAdministrators 한 명 → (사용자 차단, 메시지 삭제). 방장(creator)은 전부."""
+    if member.status == ChatMemberStatus.OWNER:
+        return True, True
+    return bool(getattr(member, "can_restrict_members", False)), bool(getattr(member, "can_delete_messages", False))
 
 
 class Role(IntEnum):
@@ -40,6 +73,7 @@ class Permissions:
         self.cfg = cfg
         self.db = db
         self._admin_cache: dict[int, tuple[float, set[int]]] = {}
+        self._rights: dict[int, dict[int, tuple[bool, bool]]] = {}  # 방 → 관리자 → (사용자 차단, 메시지 삭제)
         self._forgotten: set[int] = set()
         self._admin_users: dict[int, tuple[float, list]] = {}  # 관리자 이름 (사칭 검사용)
         self._bot_rights: dict[int, tuple[float, bool]] = {}   # 봇이 관리 권한이 있는지
@@ -91,10 +125,12 @@ class Permissions:
             return cached[1]
         if chat_id not in self._forgotten:  # 재시작 직후: DB 에 최근 목록이 있으면 그대로
             row = await self.db._one("SELECT ts FROM chat_admins_fetched WHERE chat_id=?", (chat_id,))
-            if row and now - row["ts"] < ADMIN_TTL:
+            rights = await self._stored_rights(chat_id) if row and now - row["ts"] < ADMIN_TTL else None
+            if rights:  # 권한까지 저장된 새 형식만 (옛 형식이면 아래에서 다시 조회)
                 ids = {r["user_id"] for r in await self.db._all(
                     "SELECT user_id FROM chat_admins WHERE chat_id=?", (chat_id,))}
                 self._admin_cache[chat_id] = (row["ts"], ids)
+                self._rights[chat_id] = rights
                 return ids
         try:
             admins = await bot.get_chat_administrators(chat_id)
@@ -106,16 +142,18 @@ class Permissions:
             log.warning("관리자 목록 조회 실패(%s) → 저장된 목록 사용: chat %s", e, chat_id)
             return stale
         ids = {a.user.id for a in admins if a.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)}
+        rights = {a.user.id: _rights_of(a) for a in admins if a.user.id in ids}
         if self.on_admins is not None:  # 관리자 이름도 이름 기록에 (namehist)
             try:
                 await self.on_admins(bot, chat_id, admins)
             except Exception:
                 log.exception("admin name record failed")
         self._admin_cache[chat_id] = (now, ids)
+        self._rights[chat_id] = rights
         self._admin_users[chat_id] = (now, [a.user for a in admins if a.status in (
             ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)])
         self._forgotten.discard(chat_id)
-        await self._store_admins(chat_id, ids, int(now))
+        await self._store_admins(chat_id, ids, int(now), rights)
         return ids
 
     async def admin_users(self, bot: Bot, chat_id: int) -> list:
@@ -156,11 +194,19 @@ class Permissions:
             return None
         return {r["user_id"] for r in await self.db._all("SELECT user_id FROM chat_admins WHERE chat_id=?", (chat_id,))}
 
-    async def _store_admins(self, chat_id: int, ids: set[int], ts: int) -> None:
+    async def _stored_rights(self, chat_id: int) -> dict[int, tuple[bool, bool]]:
+        return {r["user_id"]: (bool(r["can_restrict"]), bool(r["can_delete"])) for r in await self.db._all(
+            "SELECT user_id, can_restrict, can_delete FROM chat_admin_rights WHERE chat_id=?", (chat_id,))}
+
+    async def _store_admins(self, chat_id: int, ids: set[int], ts: int,
+                            rights: dict[int, tuple[bool, bool]] | None = None) -> None:
         conn = self.db.conn
         await conn.execute("DELETE FROM chat_admins WHERE chat_id=?", (chat_id,))
         await conn.executemany("INSERT OR IGNORE INTO chat_admins(chat_id, user_id) VALUES(?, ?)",
                                [(chat_id, uid) for uid in ids])
+        await conn.execute("DELETE FROM chat_admin_rights WHERE chat_id=?", (chat_id,))
+        await conn.executemany("INSERT OR IGNORE INTO chat_admin_rights VALUES(?, ?, ?, ?)",
+                               [(chat_id, uid, int(r[0]), int(r[1])) for uid, r in (rights or {}).items()])
         await conn.execute("INSERT INTO chat_admins_fetched(chat_id, ts) VALUES(?, ?) "
                            "ON CONFLICT(chat_id) DO UPDATE SET ts=excluded.ts", (chat_id, ts))
         await conn.commit()
@@ -200,6 +246,40 @@ class Permissions:
     async def protected(self, bot: Bot, chat_id: int, user_id: int) -> bool:
         """제재할 수 없는 대상 (오너·관리자·봇 자신)."""
         return user_id == bot.id or await self.is_admin(bot, chat_id, user_id)
+
+    # ── 세부 권한 (사용자 차단·메시지 삭제) ────────────────
+    async def _tg_right(self, bot: Bot, chat_id: int, user_id: int, right: str) -> bool | None:
+        """텔레그램 관리자면 그 권한이 있는지, 관리자가 아니면 None."""
+        if user_id not in await self.telegram_admins(bot, chat_id):
+            return None
+        got = self._rights.get(chat_id, {}).get(user_id)
+        if got is None:  # 연결 오류로 옛 형식(권한 없는) 목록을 쓴 경우: 저장된 권한 → 그래도 없으면 막음
+            got = (await self._stored_rights(chat_id)).get(user_id, (False, False))
+        return got[0] if right == "restrict" else got[1]
+
+    async def can(self, bot: Bot, chat_id: int, user_id: int, right: str = "restrict") -> bool:
+        """right = "restrict"(밴·뮤트·경고·잠금·캡차 승인) | "delete"(메시지 삭제).
+        오너: 항상 · 텔레그램 관리자: 텔레그램에서 그 권한이 켜져 있을 때(방장은 전부) ·
+        봇관리자: 지정한 사람이 지금 그 권한이 있는 텔레그램 관리자이거나 오너일 때 (위임).
+        지정 기록이 없는 봇관리자 = 오너가 .봇관리자 명령으로 넣은 옛 기록 → 허용."""
+        if user_id in await self.owners():
+            return True
+        if chat_id > 0:
+            return False
+        tg = await self._tg_right(bot, chat_id, user_id, right)
+        if tg is not None:
+            return tg
+        if user_id not in await self.db.bot_admin_ids(chat_id):
+            return False
+        row = await self.db._one(
+            "SELECT actor_id FROM mod_log WHERE chat_id=? AND target_id=? AND action='bot_admin' AND detail='추가' "
+            "ORDER BY id DESC LIMIT 1", (chat_id, user_id))
+        if row is None or row["actor_id"] is None or row["actor_id"] in await self.owners():
+            return True
+        return bool(await self._tg_right(bot, chat_id, row["actor_id"], right))
+
+    async def can_restrict(self, bot: Bot, chat_id: int, user_id: int) -> bool:
+        return await self.can(bot, chat_id, user_id, "restrict")
 
     async def is_tg_admin(self, bot: Bot, chat_id: int, user_id: int) -> bool:
         """텔레그램 관리자 또는 오너 (.봇관리자 로 추가된 사람은 제외). 결제·구독 화면용."""

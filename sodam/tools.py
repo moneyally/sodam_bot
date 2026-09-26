@@ -21,7 +21,7 @@ from telegram.error import TelegramError
 from . import knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
 from .llm import BudgetExceeded
 from .vision import Attached
-from .permissions import Role
+from .permissions import Role, may
 from .services import PendingAction, Services
 from .settings import DEFAULTS, LABELS, RANGES, coerce, render
 from .sports import SPORTS_KO, SportsError
@@ -428,11 +428,15 @@ def _sanction_used(ctx: ToolCtx) -> bool:
     return False
 
 
+NO_RIGHT = ("요청한 관리자에게 텔레그램 '사용자 차단' 권한이 없어서 제재할 수 없음. "
+            "'텔레그램에서 사용자 차단 권한이 있는 관리자만 할 수 있어요'라고 짧게 안내할 것.")
 SANCTION_LABEL = {"warn": "경고", "mute": "채팅 금지", "ban": "내보내기"}
 
 
 async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0) -> str:
     """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action."""
+    if not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.caller.id):  # 부른 사람에게 텔레그램 '사용자 차단' 권한
+        return NO_RIGHT
     row, err = await _resolve(ctx, str(a.get("name", "")), for_sanction=True)
     if err:
         return err
@@ -462,6 +466,8 @@ async def t_mute(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_unmute(ctx: ToolCtx, a: dict) -> str:
+    if not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.caller.id):
+        return NO_RIGHT
     row, err = await _resolve(ctx, str(a.get("name", "")))
     if err:
         return err

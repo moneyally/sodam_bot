@@ -146,6 +146,11 @@ def find_links(text: str) -> list[str]:
     return [d.lower() for d in _DOMAIN.findall(text)] or ["link"]
 
 
+def find_mentions(text: str) -> list[str]:
+    """글 속 @아이디 (소문자, 이메일 주소의 @ 는 제외)."""
+    return [m.lower() for m in _MENTION.findall(text)]
+
+
 def link_allowed(domains: list[str], whitelist: list[str]) -> bool:
     if not domains:
         return True

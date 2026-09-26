@@ -58,6 +58,13 @@ class HarnessPerms:
             return Role.OWNER
         return Role.ADMIN if await self.is_admin(bot, cid, uid) else Role.MEMBER
 
+    async def can(self, bot, cid, uid, right="restrict"):
+        """세부 권한: 하네스의 TG 관리자는 차단·삭제 권한이 있고, 봇관리자는 그 관리자가 지정한 것으로 본다."""
+        return await self.is_admin(bot, cid, uid)
+
+    async def can_restrict(self, bot, cid, uid):
+        return await self.can(bot, cid, uid, "restrict")
+
     def forget(self, cid):
         self.forgets += 1
 

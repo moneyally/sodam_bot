@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from telegram import Bot, CallbackQuery, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.error import TelegramError
 
+from .permissions import may, no_right_text
 from .util import display_name, mention, user_name
 
 if TYPE_CHECKING:
@@ -86,8 +87,9 @@ class Captcha:
         presser = query.from_user
 
         if choice in ("ok", "no"):
-            if not await self.svc.perms.is_admin(bot, chat_id, presser.id):
-                await query.answer("관리자만 누를 수 있어요.", show_alert=True)
+            # 승인·내보내기 = 텔레그램 '사용자 차단' 권한 있는 관리자만
+            if not await may(self.svc.perms, bot, chat_id, presser.id):
+                await query.answer(no_right_text(), show_alert=True)
                 return
             await query.answer("처리했어요.")
             if choice == "ok":

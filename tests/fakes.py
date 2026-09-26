@@ -108,7 +108,15 @@ class FakeBot:
     async def pin_chat_message(self, chat_id, message_id, **kw):
         self.calls.append(("pin", chat_id, message_id))
 
+    public_chats: dict = {}   # '@아이디' 조회: 아이디 → 'channel'/'supergroup' (실제 텔레그램처럼 사람 계정은 못 찾음)
+
     async def get_chat(self, chat_id):
+        if isinstance(chat_id, str) and chat_id.startswith("@"):
+            kind = self.public_chats.get(chat_id[1:].lower())
+            if not kind:
+                from telegram.error import BadRequest
+                raise BadRequest("Chat not found")
+            return SimpleNamespace(id=-1009 - len(chat_id), type=kind, username=chat_id[1:])
         return SimpleNamespace(id=chat_id, permissions=self.chat_permissions)
 
     async def set_chat_permissions(self, chat_id, permissions, **kw):
@@ -189,6 +197,9 @@ class FakePerms:
 
     async def is_tg_admin(self, bot, chat_id, uid):
         return uid in self.admins
+
+    async def can(self, bot, chat_id, uid, right="restrict"):
+        return uid in self.admins          # 가짜 권한: 관리자면 모든 세부 권한 (세분화는 test_fedban_perms 가 실제 Permissions 로)
 
     async def owners(self):
         return set()

@@ -22,12 +22,13 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import addressee, casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription, vision
+from . import (addressee, casino, commands, hooks, memory, menu, namehist, raid, security, social, stats, subscription,
+               vision)
 from .agent import run_agent
 from .panels import members as members_panel
 from .commands import CmdCtx
 from .llm import BudgetExceeded, out_of_credit
-from .permissions import Role
+from .permissions import Role, may, no_right_text
 from .services import Services
 from .tools import ToolCtx
 from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
@@ -153,7 +154,8 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     if notice:
         await send_temp(context, chat_id, notice, 300)
         return
-    if s["captcha_enabled"] and await svc.captcha.start(bot, chat_id, user):
+    # 대량 입장 방어 모드 중엔 캡차 설정과 상관없이 캡차 (sodam/raid.py)
+    if (s["captcha_enabled"] or await raid.active(svc, chat_id)) and await svc.captcha.start(bot, chat_id, user):
         return  # 인사·입장 기록은 캡차 통과 후
     await svc.db.log_join(chat_id, user.id, user_name(user), user.username)
     if s["greet_enabled"]:
@@ -375,8 +377,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except (TimedOut, NetworkError) as e:  # 연결이 잠깐 끊겨도 메시지 처리(명령·게임·AI)는 계속
             log.warning("moderation check skipped (network): %s", e)
             notice = None
-        if notice:
-            await send_temp(context, chat_id, notice)
+        if notice is not None:  # "" = 지웠지만 안내는 생략 (잠긴 종류 안내는 10분에 한 번)
+            if notice:
+                await send_temp(context, chat_id, notice)
             return
 
     # 관리 검사를 통과한 메시지 → 백그라운드 후처리 (태그 알림 등). 실패해도 메시지 처리는 계속
@@ -421,6 +424,30 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await ai_reply(context, msg, role, request, scan, via=via)
     else:
         await svc.games.on_text(msg, text)
+
+
+async def on_group_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """수정된 메시지(캡션 포함): 링크·금지어·외부 @아이디만 다시 검사. 도배 수·AI·명령·게임은 안 함
+    (멀쩡한 글을 올렸다가 나중에 광고로 고치는 우회를 막음)."""
+    msg = update.edited_message
+    # 채널 명의 글·익명 관리자(sender_chat)는 검사 대상 아님
+    if not msg or not msg.from_user or msg.sender_chat is not None:
+        return
+    svc, bot = _svc(context), context.bot
+    text = msg.text or msg.caption or ""
+    if not text:
+        return
+    try:
+        if await svc.perms.role(bot, msg.chat_id, msg.from_user.id) >= Role.ADMIN:
+            return
+        if not await svc.perms.bot_can_moderate(bot, msg.chat_id):
+            return
+        notice = await svc.mod.check_edited(bot, msg, text)
+    except (TimedOut, NetworkError) as e:
+        log.warning("edited message check skipped (network): %s", e)
+        return
+    if notice:
+        await send_temp(context, msg.chat_id, notice)
 
 
 async def _prefix_hint(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str) -> bool:
@@ -622,6 +649,10 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     if not await svc.perms.is_admin(bot, action.chat_id, q.from_user.id):
         await q.answer("관리자만 누를 수 있어요.", show_alert=True)
         return
+    # 실행은 누른 사람에게 텔레그램 '사용자 차단' 권한이 있어야 (취소는 관리자 누구나)
+    if yn == "y" and not await may(svc.perms, bot, action.chat_id, q.from_user.id):
+        await q.answer(no_right_text(), show_alert=True)
+        return
     svc.pending.pop(key, None)
     await q.answer()
     if yn != "y":
@@ -764,7 +795,8 @@ async def job_name_sweep(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     """30초마다: 캡차 시간 초과 처리, 예약공지 발송, 대기 중인 결제 확인."""
     svc = _svc(context)
-    jobs = [("captcha", svc.captcha.expire), ("announce", svc.announcer.run_due)]
+    jobs = [("captcha", svc.captcha.expire), ("announce", svc.announcer.run_due),
+            ("raid", lambda bot: raid.tick(svc, bot))]  # 끝난 대량 입장 방어 모드 해제
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
     for name, fn in jobs:
@@ -915,6 +947,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
     app.add_handler(MessageHandler(groups & filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left))
     app.add_handler(MessageHandler(groups & filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL, on_group_message))
+    app.add_handler(MessageHandler(groups & filters.UpdateType.EDITED_MESSAGE, on_group_edit))  # 고쳐서 광고 넣기 막기
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE, on_private))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))

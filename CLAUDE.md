@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 396개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 429개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -52,6 +52,12 @@
 - `.말투 X` 한 단어 = 본인 말투. 태그·답장·설명이 붙으면 AI 가 대상 판단(`set_member_style` 관리자 전용).
 - 결제 처리+연장은 `db.pay_invoice` 로 DB 스레드에서 한 번에 (공유 연결이라 중간 commit 끼어듦 방지).
 - 버그 수정은 뮤테이션 검증: 고친 줄을 되돌리면 그 테스트가 FAIL 해야 함 (tests/test_fix_*.py).
+- 제재(밴·뮤트·경고·잠금·캡차 승인)는 텔레그램 **'사용자 차단' 권한**이 있는 관리자만 (`permissions.may/can`, 권한은 chat_admin_rights 에 캐시).
+  봇관리자는 지정한 사람(mod_log 'bot_admin' 추가 기록)이 그 권한을 가진 TG 관리자이거나 오너일 때만 (위임).
+- 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
+- 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),
+  홍보 @아이디 = 채널·그룹(getChat 조회)·bot 아이디만 (사람 아이디는 조회 불가라 허용 — 말 안 한 멤버 태그 오탐 방지).
+- 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어(전원 캡차), 입장 검사 훅 `hooks.add_member_join_hook`.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
 
 ## 클라우드 세션 서버 실행
