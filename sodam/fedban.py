@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from datetime import datetime
@@ -21,7 +20,7 @@ from . import hooks
 from .db import register_schema
 from .permissions import Role
 from .settings import register_setting
-from .util import esc, mention
+from .util import esc, mention, post_temp
 
 log = logging.getLogger(__name__)
 
@@ -154,20 +153,6 @@ async def remove(svc, chat_id: int, user_id: int, actor_id: int, *, owner: bool)
 
 
 # ── 입장·첫 발언 검사 ─────────────────────────────────────
-_BG: set = set()
-
-
-def _temp(bot, chat_id: int, text: str, seconds: int = 120) -> None:
-    async def run():
-        try:
-            sent = await bot.send_message(chat_id, text, parse_mode="HTML")
-            await asyncio.sleep(seconds)
-            await bot.delete_message(chat_id, sent.message_id)
-        except TelegramError:
-            pass
-    task = asyncio.create_task(run())
-    _BG.add(task)
-    task.add_done_callback(_BG.discard)
 
 
 def alert_text(title: str, name: str, user_id: int, info: dict, spoke: bool) -> str:
@@ -203,7 +188,7 @@ async def check(svc, bot, chat_id: int, user, *, spoke: bool = False) -> bool:
             log.warning("fedban auto ban failed in %s: %s", chat_id, e)
         else:
             await _mark(svc.db, chat_id, user.id, info["rooms"])
-            _temp(bot, chat_id, f"🛡️ {esc(name)}님은 공동 차단 명단(방 {info['rooms']}곳에서 신고)에 있는 계정이라 "
+            post_temp(bot, chat_id, f"🛡️ {esc(name)}님은 공동 차단 명단(방 {info['rooms']}곳에서 신고)에 있는 계정이라 "
                                 "내보냈어요.")
             return True
     seen = await svc.db._one("SELECT n_rooms FROM fedban_seen WHERE chat_id=? AND user_id=?", (chat_id, user.id))

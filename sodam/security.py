@@ -97,7 +97,7 @@ def wrap(tag: str, body: str, n: str, **attrs: str) -> str:
 # ── 출력 필터 ─────────────────────────────────────────────
 _URL = re.compile(r"(https?://\S+|www\.\S+|\b(t|telegram)\.me/\S+|\btg://\S+)", re.I)
 _MENTION = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{3,31})")
-_WALLETS = [
+WALLETS = [
     re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b"),          # TRON
     re.compile(r"\b0x[a-fA-F0-9]{40}\b"),                   # EVM
     re.compile(r"\b(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b"),  # BTC
@@ -107,7 +107,7 @@ _WALLETS = [
 def strip_unsafe(text: str, allowed_usernames: set[str] = frozenset()) -> str:
     """링크·지갑주소·외부 @멘션 제거 (길이는 건드리지 않음)."""
     text = _URL.sub("[링크 생략]", text)
-    for w in _WALLETS:
+    for w in WALLETS:
         text = w.sub("[주소 생략]", text)
     return _MENTION.sub(
         lambda m: m.group(0) if m.group(1).lower() in allowed_usernames else m.group(1), text)

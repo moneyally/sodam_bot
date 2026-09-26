@@ -1,9 +1,12 @@
+import asyncio
 import html
 import re
 import time
 from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from telegram.error import TelegramError
 
 esc = html.escape
 
@@ -129,3 +132,20 @@ class RateLimiter:
             for k in [k for k, v in self._hits.items() if not v or now - v[-1] > 60]:
                 del self._hits[k]
         return True
+
+
+_BG: set = set()
+
+
+def post_temp(bot, chat_id: int, text: str, seconds: int = 120) -> None:
+    """방에 안내를 올리고 seconds 뒤 지운다 (백그라운드, 실패는 무시)."""
+    async def run():
+        try:
+            sent = await bot.send_message(chat_id, text, parse_mode="HTML")
+            await asyncio.sleep(seconds)
+            await bot.delete_message(chat_id, sent.message_id)
+        except TelegramError:
+            pass
+    task = asyncio.create_task(run())
+    _BG.add(task)
+    task.add_done_callback(_BG.discard)

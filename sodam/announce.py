@@ -183,6 +183,7 @@ class Announcer:
             sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
                                    media_type=row["media_type"], media_id=row["media_id"])
             msg_id = sent.message_id
+            await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
             if row["pin"]:
                 try:
                     await bot.pin_chat_message(row["chat_id"], msg_id, disable_notification=True)

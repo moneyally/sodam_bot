@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import httpx
 from fakes import FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 
-from sodam import commands, fedban, handlers, menu, tools
+from sodam import commands, fedban, handlers, menu, tools, util
 from sodam.billing import Billing
 from sodam.commands import CmdCtx
 from sodam.permissions import Permissions, Role
@@ -71,7 +71,7 @@ def bans(bot, chat_id=None):
 
 
 def _drain():
-    for t in list(fedban._BG):
+    for t in list(util._BG):
         t.cancel()
 
 

@@ -255,6 +255,7 @@ class Moderator:
         if not (s["link_filter"] or newbie):
             return None
         await self._delete(msg)
+        await self._count(chat_id, "rep_link")
         if bad_link:
             why = "신규 입장 후 링크 제한 시간이에요" if newbie and not s["link_filter"] else "링크는 관리자만 올릴 수 있어요"
             return f"🔗 {mention(user.id, name)}님, {why}."
@@ -301,6 +302,7 @@ class Moderator:
         label = next((label for key, label, has in LOCK_KINDS if s.get(key) and has(msg)), None)
         if label:
             await self._delete(msg)
+            await self._count(chat_id, "rep_kind")
             return self._kind_notice(chat_id, uid, f"🔒 {mention(uid, name)}님, 이 방은 {label} 금지라 지웠어요.")
         mode = s.get("forward_filter", "off")
         if mode != "off" and _forwarded(msg):
@@ -311,8 +313,13 @@ class Moderator:
             else:
                 return None
             await self._delete(msg)
+            await self._count(chat_id, "rep_kind")
             return self._kind_notice(chat_id, uid, f"📨 {mention(uid, name)}님, {why}")
         return None
+
+    async def _count(self, chat_id: int, key: str) -> None:
+        """활동 리포트용 일일 카운터 (reports.COUNTER_ITEMS)."""
+        await self.db.bump(datetime.now(self.cfg.tz).strftime("%Y-%m-%d"), chat_id, key)
 
     def _kind_notice(self, chat_id: int, uid: int, text: str) -> str:
         now = time.time()

@@ -812,3 +812,44 @@ class DB:
             "SELECT l.*, u.first_name AS target_name FROM mod_log l "
             "LEFT JOIN users u ON u.user_id=l.target_id WHERE l.chat_id=? ORDER BY l.id DESC LIMIT ?",
             (chat_id, limit))
+
+    # ── 활동 리포트·AI 하루 요약 (sodam/reports.py) ─────────
+    async def mod_actions(self, chat_id: int, since: int, until: int) -> list[aiosqlite.Row]:
+        """[since, until) 관리 기록의 (action, detail, actor_id) — 분류는 reports.py 에서."""
+        return await self._all("SELECT action, detail, actor_id FROM mod_log WHERE chat_id=? AND ts>=? AND ts<?",
+                               (chat_id, since, until))
+
+    async def counter_sum(self, chat_id: int, key: str, day_from: str, day_to: str) -> int:
+        """일일 카운터 합계 (day 는 'YYYY-MM-DD', 양쪽 포함)."""
+        row = await self._one("SELECT COALESCE(SUM(n), 0) AS n FROM counters WHERE chat_id=? AND key=? "
+                              "AND day>=? AND day<=?", (chat_id, key, day_from, day_to))
+        return row["n"]
+
+    async def joined_count(self, chat_id: int, since: int, until: int) -> int:
+        """[since, until) 에 들어온 사람 수 (봇 제외, 관리자 포함 — 입장 때 members.joined_at 기록)."""
+        row = await self._one("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.user_id=m.user_id "
+                              "WHERE m.chat_id=? AND m.joined_at>=? AND m.joined_at<? AND u.is_bot=0",
+                              (chat_id, since, until))
+        return row["n"]
+
+    async def ai_turn_count(self, chat_id: int, since: int, until: int, vias: tuple[str, ...]) -> int:
+        """AI 답 기록(ai_turns, memory.py 가 만든 테이블 · 14일 보관) 개수."""
+        marks = ",".join("?" for _ in vias)
+        row = await self._one(f"SELECT COUNT(*) AS n FROM ai_turns WHERE chat_id=? AND ts>=? AND ts<? "
+                              f"AND via IN ({marks})", (chat_id, since, until, *vias))
+        return row["n"]
+
+    async def message_totals(self, chat_id: int, since: int, until: int) -> tuple[int, int]:
+        """[since, until) 사람 메시지 수, 말한 사람 수."""
+        row = await self._one("SELECT COUNT(*) AS m, COUNT(DISTINCT user_id) AS u FROM messages "
+                              "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0", (chat_id, since, until))
+        return row["m"], row["u"]
+
+    async def human_messages(self, chat_id: int, since: int, limit: int) -> list[aiosqlite.Row]:
+        """사람이 쓴 최근 메시지 (봇 답·입장 기록·인젝션 판정(flagged) 제외), 오래된 것부터."""
+        rows = await self._all(
+            "SELECT msg.user_id, msg.text, msg.ts, u.first_name, u.username FROM messages msg "
+            "LEFT JOIN users u ON u.user_id=msg.user_id "
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.is_bot=0 AND msg.flagged=0 ORDER BY msg.id DESC LIMIT ?",
+            (chat_id, since, limit))
+        return list(reversed(rows))

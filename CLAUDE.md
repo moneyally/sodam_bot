@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 429개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 459개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -58,6 +58,10 @@
 - 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),
   홍보 @아이디 막기는 선택(기본 꺼짐, promo_mentions) — 켜면 채널·그룹(getChat 조회)·bot 아이디만 (사람 아이디는 조회 불가라 허용 — 말 안 한 멤버 태그 오탐 방지).
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어(전원 캡차), 입장 검사 훅 `hooks.add_member_join_hook`.
+- 사기 의심 검사(`scamguard.py`, 🕵️ 메뉴): 선택(기본 꺼짐). 관리자 키워드·지갑주소·초대링크·신규 첫 메시지 → (선택) mini AI 확인 0.8 이상 →
+  관리자 1:1 알림 + [지우기·밴·뮤트·괜찮음] 버튼 (권한 `may`). 자동 제재 없음, '가리고 확인' 모드만 삭제. 평가 `tools/ai_eval_scam.py`.
+- 활동 리포트·AI 하루 요약(`reports.py`, 📊 메뉴): 기록된 데이터로만 셈(mod_log·counters rep_*·ai_turns). 체험 마지막 날 관리자 1:1 리포트+결제 화면 1번,
+  하루 요약은 이용 중인 방만 digest_hour(기본 21시)에 1번(counters digest_sent), 대화는 nonce 태그 안 데이터·flagged 제외.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
 
 ## 클라우드 세션 서버 실행

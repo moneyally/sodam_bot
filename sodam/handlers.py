@@ -22,8 +22,8 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (addressee, casino, commands, hooks, memory, menu, namehist, raid, security, social, stats, subscription,
-               vision)
+from . import (addressee, casino, commands, hooks, memory, menu, namehist, raid, reports, security, social, stats,
+               subscription, vision)
 from .agent import run_agent
 from .panels import members as members_panel
 from .commands import CmdCtx
@@ -838,8 +838,23 @@ async def job_sub_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
                     "게임·예약공지·스포츠 알림·일일 리포트는 멈춰요. 방 관리(캡차·도배·경고)는 계속 동작해요.")
         await send_temp(context, chat_id, text, REMINDER_TTL,
                         reply_markup=subscription.setup_button(bot.username, chat_id))
-        if row["added_by"] and await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
+        got_report: set[int] = set()
+        if trial and until > now:  # 체험 마지막 날: 텔레그램 관리자들 1:1 로 체험 동안 활동 리포트 + 결제 화면 (1번만)
+            try:
+                got_report = await reports.send_trial_report(svc, bot, chat_id, until)
+            except Exception:
+                log.exception("trial report failed for %s", chat_id)
+        if row["added_by"] and row["added_by"] not in got_report and \
+                await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
             await subscription.send_panel_dm(svc, bot, chat_id, row["added_by"])
+
+
+async def job_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """10분마다: 관리자 AI 하루 요약 시각이 된 방에 하루 1번 (sodam/reports.py)."""
+    try:
+        await reports.run_digests(_svc(context), context.bot)
+    except Exception:
+        log.exception("digest job failed")
 
 
 async def job_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -963,3 +978,4 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
+    jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)
