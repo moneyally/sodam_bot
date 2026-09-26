@@ -1,4 +1,4 @@
-"""이름·아이디 변경 기록 (SangMata 방식): python tests/test_namehist.py"""
+"""이름·아이디 변경 기록: python tests/test_namehist.py"""
 import asyncio
 import sys
 from types import SimpleNamespace

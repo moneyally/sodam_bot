@@ -289,7 +289,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await svc.db.upsert_user(user)
     await svc.db.touch_member(chat_id, user.id)
     if changed and (await svc.db.get_settings(chat_id))["name_change_notice"]:
-        try:  # SangMata 처럼 방에 남겨 둔다 (사칭·먹튀 계정 확인용)
+        try:  # 방에 남겨 둔다 (사칭·먹튀 계정 확인용)
             await bot.send_message(chat_id, namehist.change_notice(user.id, *changed), parse_mode="HTML")
         except TelegramError as e:
             log.info("name change notice failed: %s", e)
@@ -565,11 +565,11 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if await menu.handle_input(svc, bot, msg):
         return
-    if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록 (SangMata 처럼)
+    if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록
         role = await svc.perms.role(bot, msg.chat_id, user.id)
         await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [text], text), mode="all")
         return
-    if getattr(msg, "forward_origin", None) is not None:  # 전달된 메시지 → 보낸 사람 이름 기록 (SangMata 처럼)
+    if getattr(msg, "forward_origin", None) is not None:  # 전달된 메시지 → 보낸 사람 이름 기록
         role = await svc.perms.role(bot, msg.chat_id, user.id)
         await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [], ""))
         return

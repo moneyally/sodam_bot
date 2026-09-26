@@ -157,7 +157,7 @@ async def c_me(ctx: CmdCtx) -> None:
 
 
 async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> None:
-    """이름·아이디 변경 기록 (SangMata 방식). 대상: 답장 > 인자(@아이디·ID·이름) > 전달된 메시지 > 나.
+    """이름·아이디 변경 기록. 대상: 답장 > 인자(@아이디·ID·이름) > 전달된 메시지 > 나.
     권한은 namehist.can_view (지금은 누구나 전부)."""
     db, tz = ctx.svc.db, ctx.svc.cfg.tz
     group = ctx.chat_id < 0
@@ -888,7 +888,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("내아이디", "id", "myid"), c_myid, help="내 텔레그램 숫자 ID (방에선 방 ID도)", dm_ok=True),
     Cmd(("규칙", "rules"), c_rules, help="방 규칙 보기"),
     Cmd(("내정보", "me", "정보", "info"), c_me, usage="[@user]", help="활동 정보"),
-    Cmd(("기록", "이름기록", "history", "sangmata"), c_history, usage="[@user|ID|답장]",
+    Cmd(("기록", "이름기록", "history"), c_history, usage="[@user|ID|답장]",
         help="이름·아이디 변경 기록 (최근)", group="이름 기록", dm_ok=True),
     Cmd(("전체기록", "allhistory"), c_allhistory, usage="[@user|ID|답장]", help="변경 기록 전체",
         group="이름 기록", dm_ok=True),

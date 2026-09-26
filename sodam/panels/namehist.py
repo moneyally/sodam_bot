@@ -1,4 +1,4 @@
-"""🕵️ 이름 기록 (1:1 메인 메뉴): 내 이름·아이디 변경 기록 + 다른 사람 조회 (SangMata 방식)."""
+"""🕵️ 이름 기록 (1:1 메인 메뉴): 내 이름·아이디 변경 기록 + 다른 사람 조회."""
 from __future__ import annotations
 
 from telegram import Message
