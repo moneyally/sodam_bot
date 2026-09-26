@@ -344,8 +344,9 @@ async def horse_race_winners_and_losers():
     assert await bal(env, a) == core.START_POINTS - 1000 + 4700
     assert await bal(env, b) == core.START_POINTS - 2000
     assert await bal(env, c) == core.START_POINTS - 5000 + 23500
-    assert len(env.bot.edits) == multi.FRAMES
-    last = env.bot.edits[-1][1]
+    gifs = env.bot.named("send_animation")                          # 결과 애니메이션 1개 + 캡션 1번 (글자 수정 없음)
+    assert len(gifs) == 1 and gifs[0][2][:6] == b"GIF89a" and not env.bot.edits
+    last = env.bot.named("edit_caption")[-1][3]
     assert "3번 우승" in last and "3 " + "·" * multi.TRACK + "🏇🏁" in last
     assert sum("🏇🏁" in line for line in last.splitlines()) == 1
     res = board(env)[-1]

@@ -78,6 +78,9 @@ class FakeBot:
     async def send_video(self, chat_id, video, caption=None, **kw):
         return await self._send_media("send_video", chat_id, video, caption, **kw)
 
+    async def edit_message_caption(self, chat_id=None, message_id=None, caption=None, **kw):
+        self.calls.append(("edit_caption", chat_id, message_id, caption))
+
     async def send_animation(self, chat_id, animation, caption=None, **kw):
         return await self._send_media("send_animation", chat_id, animation, caption, **kw)
 

@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 from datetime import timedelta
 
-from telegram import ReplyParameters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..util import esc, user_name
-from . import Ctx, register
+from . import Ctx, anim, register, register_callback
+from .anim import REDS, WHEEL
 from .board import record
 from .core import balance, credit, finish, fmt, rng, settle_text, split_bet, take_bet
 
@@ -41,12 +43,15 @@ def _secs(e: RetryAfter) -> float:
     return ra.total_seconds() if isinstance(ra, timedelta) else float(ra)
 
 
-async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False, kb=None, q=None) -> bool:
-    """연출 화면 수정 (q 가 있으면 버튼 콜백 메시지). 고쳤으면(또는 이미 같으면) True.
+async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False, kb=None, q=None,
+                    caption: bool = False) -> bool:
+    """연출 화면 수정 (q 가 있으면 버튼 콜백 메시지, caption 이면 애니메이션의 캡션). 고쳤으면(또는 이미 같으면) True.
     중간 화면은 실패하면 그냥 건너뛰고, final 은 429 면 기다렸다 한 번 더."""
     for attempt in (0, 1):
         try:
-            if q is not None:
+            if caption:
+                await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, parse_mode="HTML")
+            elif q is not None:
                 await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
             elif message_id is not None:
                 await bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id,
@@ -64,6 +69,25 @@ async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False,
             log.debug("live edit failed: %r", e)
             return False
     return False
+
+
+async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, fallback: list[str]) -> None:
+    """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로."""
+    try:
+        gif = await asyncio.to_thread(make_gif)          # 약 1초: 그리는 동안 다른 메시지 처리가 멈추지 않게
+        sent = await ctx.bot.send_animation(ctx.chat_id, animation=gif, caption=spin, parse_mode="HTML",
+                                            reply_parameters=ReplyParameters(ctx.msg.message_id,
+                                                                             allow_sending_without_reply=True))
+    except Exception as e:                              # Pillow 없음·그리기 실패·텔레그램 오류
+        log.warning("animation failed, text fallback: %r", e)
+        await show(ctx, fallback, final)
+        return
+    await sleep(moving_s)
+    if not await edit_live(ctx.bot, ctx.chat_id, sent.message_id, final, final=True, caption=True):
+        try:                                            # 결과만은 꼭: 새 메시지로
+            await ctx.reply(final)
+        except TelegramError as e:
+            log.warning("anim final failed: %s", e)
 
 
 async def show(ctx: Ctx, frames: list[str], final: str) -> None:
@@ -223,7 +247,6 @@ def _sport(name: str):
 
 
 # ── 🎡 룰렛 (0~36, 유럽식) ────────────────────────────────
-REDS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 ROULETTE_PICKS = {"빨강": "red", "레드": "red", "검정": "black", "블랙": "black", "홀": "odd", "짝": "even",
                   "하이": "high", "높음": "high", "로우": "low", "낮음": "low"}
 
@@ -241,15 +264,15 @@ def roulette_win(n: int, pick: str) -> int:
 
 
 async def g_roulette(ctx: Ctx) -> None:
-    usage = ("🎡 <b>룰렛</b>: <code>!룰렛 1000 빨강</code>\n"
-             "빨강·검정·홀·짝·하이(19~36)·로우(1~18) ×2 · 숫자(0~36) ×36")
-    amount, rest = await _bet_or_help(ctx, "roulette", usage)
-    if amount is None and not ctx.args:
-        return
+    amount, rest = split_bet(ctx.args, await balance(ctx.svc.db, ctx.chat_id, ctx.user.id))
     pick = next((a for a in rest if a in ROULETTE_PICKS or (a.isdecimal() and 0 <= int(a) <= 36)), None)
-    if pick is None:
-        await ctx.reply(usage)
+    if pick is None:                                   # 칸을 안 적으면 버튼 베팅판
+        await ctx.reply(board_text(ctx.user, amount or CHIPS[0]), reply_markup=board_kb(ctx.user.id, amount or CHIPS[0]))
         return
+    await spin_roulette(ctx, amount, pick)
+
+
+async def spin_roulette(ctx: Ctx, amount: int | None, pick: str) -> None:
     bet = await take_bet(ctx, amount, "roulette")
     if bet is None:
         return
@@ -260,12 +283,62 @@ async def g_roulette(ctx: Ctx) -> None:
     _, tail = await settle_text(ctx, "roulette", bet, payout)       # 정산 먼저 → 연출은 보여주기만
     head = f"🎡 <b>룰렛</b> · {esc(user_name(ctx.user))}님 {fmt(bet)} ({esc(pick)} 선택)"
     frames, final = roulette_frames(n, head, mult)
-    await show(ctx, frames, final + "\n" + tail)
+    await show_anim(ctx, lambda: anim.roulette(n), anim.seconds(anim.ROULETTE_FRAMES),
+                    f"{head}\n🌀 휠이 돌아요…", final + "\n" + tail, frames)
+
+
+# ── 🎡 룰렛 베팅판 (버튼): 금액 칩을 고르고 칸을 누르면 바로 돈다. 판 주인만 누를 수 있음 ──
+CHIPS = (1000, 5000, 10000, 50000)
+
+
+def _chip(n: int) -> str:
+    return f"{n // 10000}만" if n >= 10000 and n % 10000 == 0 else f"{n // 1000}천" if n % 1000 == 0 else f"{n:,}"
+
+
+def board_text(user, amount: int) -> str:
+    return (f"🎡 <b>룰렛 베팅판</b> · {esc(user_name(user))}님\n"
+            f"금액 칩을 고르고 칸을 누르면 바로 돌아요 (지금 <b>{fmt(amount)}</b>)\n"
+            "색·홀짝·하이로우 ×2 · 숫자 ×36 · 글로도 가능: <code>!룰렛 1000 빨강</code>")
+
+
+def board_kb(uid: int, amount: int) -> InlineKeyboardMarkup:
+    def b(label: str, pick: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(label, callback_data=f"cs:rb:{uid}:{amount}:{pick}")
+    chips = [InlineKeyboardButton(("✅" if c == amount else "") + _chip(c), callback_data=f"cs:rb:{uid}:{c}:c")
+             for c in CHIPS]
+    if amount not in CHIPS:
+        chips.append(InlineKeyboardButton("✅" + _chip(amount), callback_data=f"cs:rb:{uid}:{amount}:c"))
+    outside = [b("🔴빨강", "빨강"), b("⚫검정", "검정"), b("홀", "홀"), b("짝", "짝"), b("1~18", "로우"), b("19~36", "하이")]
+    nums = [[b(pocket(0), "0")]] + [[b(pocket(n), str(n)) for n in range(r, r + 6)] for r in range(1, 37, 6)]
+    return InlineKeyboardMarkup([chips, outside, *nums])
+
+
+async def cb_board(svc, bot, q, parts: list[str]) -> None:
+    uid, amount, pick = (parts + ["", "", ""])[:3]
+    if not (uid.lstrip("-").isdecimal() and amount.isdecimal()) or q.from_user.id != int(uid):
+        await q.answer("본인 베팅판만 누를 수 있어요. !룰렛 으로 내 판을 여세요 🎡", show_alert=True)
+        return
+    amount = int(amount)
+    if pick == "c":                                    # 칩 고르기: 판만 다시 그림
+        await q.answer(f"{fmt(amount)} 선택")
+        await edit_live(bot, q.message.chat_id, q.message.message_id, board_text(q.from_user, amount),
+                        kb=board_kb(int(uid), amount))
+        return
+    if not (pick in ROULETTE_PICKS or (pick.isdecimal() and 0 <= int(pick) <= 36)):
+        await q.answer("지난 버튼이에요.")
+        return
+    from . import _INDEX
+    from .core import gate
+    ctx = Ctx(svc, bot, q.message, q.message.chat_id, q.from_user, None, [])
+    blocked = await gate(ctx, _INDEX["룰렛"])        # !명령과 같은 입장 검사 (가입·꺼진 방·이용 기간)
+    if blocked:
+        await q.answer(re.sub(r"<[^>]+>", "", blocked)[:190], show_alert=True)
+        return
+    await q.answer(f"🎡 {pick} · {fmt(amount)}!")
+    await spin_roulette(ctx, amount, pick)
 
 
 # 유럽식 휠의 실제 칸 순서 (0 에서 시계 방향)
-WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
-         5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 SPIN = ["🌀 휠이 돌아요… 💨💨💨", "🌀 느려져요… 💨💨", "🌀 거의 멈춰요… 💨"]
 
 
@@ -360,7 +433,8 @@ async def g_ladder(ctx: Ctx) -> None:
     _, tail = await settle_text(ctx, "ladder", bet, payout)         # 정산 먼저 → 연출은 보여주기만
     head = f"🪜 <b>사다리</b> · {esc(user_name(ctx.user))}님 {fmt(bet)} ({esc(pick)} 선택)"
     frames, final = ladder_frames(result, head, payout > 0)
-    await show(ctx, frames, final + "\n" + tail)
+    await show_anim(ctx, lambda: anim.ladder(result[0], result[1]), anim.seconds(anim.LADDER_STEPS + 1),
+                    f"{head}\n출발 <b>{result[0]}</b> 🔵 사다리 타는 중… (아래 O=홀 · E=짝)", final + "\n" + tail, frames)
 
 
 register(("홀짝", "oddeven"), g_oddeven, usage="금액 홀|짝", help="🎲 ×1.95", group="주사위·슬롯")
@@ -368,5 +442,6 @@ register(("주사위", "dice"), g_dice, usage="금액 숫자|높음|낮음", hel
 register(("슬롯", "slot", "슬롯머신"), g_slot, usage="금액", help="🎰 777 ×30 · 3개 ×10", group="주사위·슬롯")
 for _name, (_e, _w, _m, _d) in SPORTS.items():
     register((_name,), _sport(_name), usage="금액", help=f"{_e} {_d}", group="한 방 게임")
-register(("룰렛", "roulette"), g_roulette, usage="금액 빨강|검정|홀|짝|숫자", help="🎡 ×2 · 숫자 ×36", group="카지노")
+register_callback("rb", cb_board)
+register(("룰렛", "roulette"), g_roulette, usage="금액 빨강|검정|홀|짝|숫자", help="🎡 ×2 · 숫자 ×36 · 금액만 치면 버튼 베팅판", group="카지노")
 register(("사다리", "ladder"), g_ladder, usage="금액 좌|우|3줄|홀|좌3짝…", help="🪜 ×1.95 · 조합 ×3.8", group="카지노")

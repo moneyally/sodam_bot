@@ -43,9 +43,11 @@ async def say(ctx, u, text):
     m = FakeMsg(CHAT, u, text)
     m.chat = SimpleNamespace(id=CHAT, title="테스트방", type="supergroup")
     m.sender_chat = None
+    n = len(ctx.bot.calls)
     await handlers.on_group_message(SimpleNamespace(message=m), ctx)
     await asyncio.gather(*ctx.bot_data["tasks"], return_exceptions=True)
-    return m.replies[-1] if m.replies else ""
+    captions = [c[3] for c in ctx.bot.calls[n:] if c[0] == "edit_caption"]   # 결과 애니메이션은 캡션으로 결과
+    return captions[-1] if captions else (m.replies[-1] if m.replies else "")
 
 
 A, B = fake_user(5550001003, "회원A", "member_a"), fake_user(5550001002, "메인관리자")

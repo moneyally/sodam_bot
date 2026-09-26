@@ -10,7 +10,7 @@ import sys
 
 from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 from harness import html_errors
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import TelegramError, BadRequest, RetryAfter
 
 from sodam import casino
 from sodam.casino import basic, core, multi
@@ -45,6 +45,9 @@ class Bot(FakeBot):
     async def send_message(self, chat_id, text, **kw):
         self.env_ref[0].ops.append(("send", text))
         return await super().send_message(chat_id, text, **kw)
+
+    async def send_animation(self, *a, **kw):   # 이 파일은 글자 연출(애니메이션이 안 될 때 대신 쓰는 길)을 검사
+        raise TelegramError("animation off in this test")
 
 
 class Msg(FakeMsg):
@@ -409,6 +412,10 @@ async def names_are_escaped_in_every_frame():
 async def horse_track_ranks_leader_and_finish():
     import test_casino_multi as TM
     env = await TM.setup()
+
+    async def no_anim(*_a, **_kw):                   # 글자 트랙(애니메이션이 안 될 때 쓰는 길)을 검사
+        raise TelegramError("animation off")
+    env.bot.send_animation = no_anim
     for u, h in zip(env.users[:3], (3, 3, 1)):
         await TM.say(env, u, f"!경마 1000 {h}")
     r = multi.current(TM.CHAT, "horse")

@@ -17,6 +17,7 @@ from telegram.error import TelegramError
 
 from ..db import register_schema
 from . import Ctx, register
+from .anim import REDS
 
 log = logging.getLogger(__name__)
 
@@ -205,9 +206,6 @@ def _png(img) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
-
-
-REDS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 
 
 def render(game: str, values: list[str]) -> bytes:

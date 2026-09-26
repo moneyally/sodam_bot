@@ -25,7 +25,7 @@ from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..db import now, register_schema
 from ..util import esc, user_name
-from . import SHUTDOWN_HOOKS, Ctx, register, register_callback
+from . import SHUTDOWN_HOOKS, Ctx, anim, register, register_callback
 from . import core
 from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet
 from .board import record
@@ -257,7 +257,18 @@ class Round:
                 break
         return None
 
-    async def edit(self, text: str, force: bool = False, kb=None) -> None:
+    async def send_anim(self, make_gif, caption: str) -> bool:
+        """결과 애니메이션(GIF) 한 번 보내고 그 메시지를 live 로. 그리기·보내기 실패면 False (글자 연출로)."""
+        try:
+            gif = await asyncio.to_thread(make_gif)
+            self.live = await self.bot.send_animation(self.chat_id, animation=gif, caption=caption, parse_mode="HTML")
+        except Exception as e:
+            log.warning("%s animation failed, text fallback: %r", self.game, e)
+            return False
+        self.last_edit = self.clock()
+        return True
+
+    async def edit(self, text: str, force: bool = False, kb=None, caption: bool = False) -> None:
         """TICK 에 한 번 이하, 오류는 건너뛴다. force(마지막 화면)는 간격·제한이 풀릴 때까지 기다렸다 고치고,
         그래도 429 면 한 번 더 기다렸다 다시."""
         if self.live is None:
@@ -272,8 +283,12 @@ class Round:
         self.last_edit = t
         for attempt in (0, 1):
             try:
-                await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=self.live.message_id,
-                                                 parse_mode="HTML", reply_markup=kb)   # kb 없으면 버튼 사라짐
+                if caption:
+                    await self.bot.edit_message_caption(chat_id=self.chat_id, message_id=self.live.message_id,
+                                                        caption=text, parse_mode="HTML")
+                else:
+                    await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=self.live.message_id,
+                                                     parse_mode="HTML", reply_markup=kb)   # kb 없으면 버튼 사라짐
                 return
             except RetryAfter as e:
                 self.edit_block = self.clock() + _secs(e)
@@ -624,6 +639,22 @@ class HorseRound(Round):
 
     async def play(self) -> None:
         picks = self.pick_counts()
+        final = track_text(self.frames[-1], f"🏁 <b>{self.winner + 1}번 우승!</b>", picks, final=True)
+        if await self.send_anim(lambda: anim.race(self.frames, TRACK, self.winner),
+                                "🏇 <b>출발!</b> 누가 먼저 들어올까요…"):
+            await self.sleep(anim.seconds(anim.race_frame_count(self.frames)))
+            await self.edit(final, force=True, caption=True)
+        else:
+            await self.text_race(picks)
+        win_no = self.winner + 1
+        for p in self.players.values():
+            await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)
+        self.phase = "done"
+        await record(self.svc.db, self.chat_id, "horse", str(win_no))
+        await self.send(self.board())
+
+    async def text_race(self, picks: list[int]) -> None:
+        """애니메이션이 안 될 때: 메시지 하나를 고쳐 가며 달림."""
         self.live = await self.send(track_text([0] * HORSES, "🏇 <b>출발!</b>", picks))
         self.last_edit = self.clock()
         for f, pos in enumerate(self.frames):
@@ -632,12 +663,6 @@ class HorseRound(Round):
             title = (f"🏁 <b>{self.winner + 1}번 우승!</b>" if last else
                      "🏇 <b>막판 스퍼트!</b>" if f == len(self.frames) - 2 else f"🏇 <b>달리는 중…</b> ({f + 1}/{len(self.frames)})")
             await self.edit(track_text(pos, title, picks, final=last), force=last)
-        win_no = self.winner + 1
-        for p in self.players.values():
-            await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)
-        self.phase = "done"
-        await record(self.svc.db, self.chat_id, "horse", str(win_no))
-        await self.send(self.board())
 
     def board(self) -> str:
         win_no = self.winner + 1
