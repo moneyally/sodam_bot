@@ -733,6 +733,11 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
     if code != "in":
         svc.inputs.pop(uid, None)  # 다른 버튼을 누르면 글자 입력 대기는 취소
     cid, args = None, parts[1:]
+    if not route.scoped and route.need == OWNER and uid not in await svc.perms.owners():
+        await q.answer("오너만 쓸 수 있어요.", show_alert=True)
+        return
+    if not route.scoped and route.need in (ADMIN, TG_ADMIN):  # 방 없는 라우트는 PUBLIC/OWNER 만 (실수 방지)
+        raise ValueError(f"unscoped route {code} needs a chat")
     if route.scoped:
         raw = parts[1] if len(parts) > 1 else ""
         if not CID_RE.fullmatch(raw) or not await svc.db.has_chat(int(raw)):

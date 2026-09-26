@@ -244,6 +244,16 @@ async def crawl() -> tuple[Report, object, object]:
         q = await press(svc, bot, MEMBER, data)
         if q.edits or not q.answers or not q.answers[0][1]:
             rep.issues.append(f"[권한] 일반 멤버가 {data} 를 눌렀는데 거절되지 않음: {q.answers} {len(q.edits)}")
+    # 오너 전용(방 없는) 버튼을 다른 역할이 누르면 거절
+    owner_only = {d for s in rep.shots if s.persona == OWNER for b in _buttons(s.kb)
+                  if (d := b.callback_data or "").startswith("m:") and not d.startswith("m:k:")
+                  and (r := menu.ROUTES.get(d.split(":")[1])) and r.need == menu.OWNER}
+    for data in owner_only:
+        for uid in (TG, BOTADM, MEMBER):
+            svc.menu_limiter._hits.clear()
+            q = await press(svc, bot, uid, data)
+            if q.edits:
+                rep.issues.append(f"[권한] {PERSONAS[uid]} 가 오너 전용 {data} 화면을 봄")
     for data in [d for d in rep.scoped_seen if menu.ROUTES.get(d.split(":")[1], menu.Route(None)).need >= menu.TG_ADMIN]:
         svc.menu_limiter._hits.clear()
         q = await press(svc, bot, BOTADM, data)
