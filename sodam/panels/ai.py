@@ -24,6 +24,29 @@ FREE_KEY = "free_ai"   # handlers._within_ai_quota 가 쓰는 카운터 (범위 
 menu.register_preset("reply_max_chars", [(v, f"답변 {v}자") for v in ("200", "400", "800")], "ai")
 menu.register_preset("user_rate_per_min", [(v, f"분당 {v}회") for v in ("2", "3", "5")], "ai")
 
+# 🧠 기억·대화 방식 (sodam/memory.py · social.py 의 설정)
+SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_chime_in"]
+for _k in SOCIAL_TOGGLES:
+    menu.register_toggle(_k, "aip")
+menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
+menu.register_preset("ai_chime_daily", [(v, f"하루 {v}번") for v in ("2", "4", "8")], "aip")
+
+
+async def s_ai_social(c: PanelCtx) -> Screen:
+    s = await c.svc.db.get_settings(c.cid)
+    lines = ["🧠 <b>기억·대화 방식</b>",
+             "• <b>멤버 기억</b>: 멤버가 자기 얘기(업종·호칭·근황)를 하면 기억했다가 대화에 써요. "
+             "본인이 <code>.기억 지우기</code> 로 지울 수 있어요.",
+             "• <b>방 흐름 기억</b>: 요즘 방에서 오가는 이야기를 짧게 요약해 두고 참고해요.",
+             "• <b>이어 말하기</b>: 방금 소담과 얘기한 사람이 이어서 물으면 이름을 안 불러도 답해요.",
+             "• <b>먼저 끼어들기</b>: 아무도 답하지 않은 질문이나 아침 인사에 가끔 먼저 한마디해요.",
+             f"  (지금: {menu.human_minutes(s['ai_chime_gap_min'])}에 한 번, 하루 최대 {s['ai_chime_daily']}번)"]
+    rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES)
+    if s["ai_chime_in"]:
+        rows += [menu._preset_row(s, c.cid, "ai_chime_gap_min"), menu._preset_row(s, c.cid, "ai_chime_daily")]
+    rows.append(menu._back(c.cid, "ai"))
+    return Screen("\n".join(lines), menu._kb(rows))
+
 
 # ── 조회 (방 ID 로 범위를 묶은 쿼리만) ─────────────────────
 async def _count_docs(svc, scope: int) -> int:
@@ -96,7 +119,7 @@ async def s_ai(c: PanelCtx) -> Screen:
              B("🎭 말투", f"m:st:{cid}")],
             menu._preset_row(s, cid, "reply_max_chars"),
             menu._preset_row(s, cid, "user_rate_per_min"),
-            [B(f"📚 학습 자료 ({room_docs})", f"m:kb:{cid}")],
+            [B("🧠 기억·대화 방식", f"m:aip:{cid}"), B(f"📚 학습 자료 ({room_docs})", f"m:kb:{cid}")],
             [B("✏️ 숫자 직접 입력", f"m:num:{cid}:ai")],
             menu._back(cid)]
     return Screen("\n".join(lines), menu._kb(rows))
@@ -279,6 +302,7 @@ async def t_del_ckb(c: PanelCtx, doc_id) -> Screen:
 # ── 등록 ──────────────────────────────────────────────────
 menu.register_hub(HubItem(40, "ai", "🤖 AI"))
 menu.register_screen("ai", s_ai)
+menu.register_screen("aip", s_ai_social)
 menu.register_screen("kb", s_kb)
 menu.register_screen("kbv", s_kb_view)
 menu.register_screen("kbd", s_kb_ask_delete)

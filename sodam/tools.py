@@ -15,7 +15,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.error import TelegramError
 
-from . import knowledge, stats
+from . import knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
 from .permissions import Role
 from .services import PendingAction, Services
 from .settings import DEFAULTS, LABELS, coerce, render
@@ -180,6 +180,22 @@ async def t_save_my_note(ctx: ToolCtx, a: dict) -> str:
     return f"저장함: {key} = {value or '(삭제)'}"
 
 
+async def t_forget_my_memory(ctx: ToolCtx, a: dict) -> str:
+    """본인 기억만 지운다 (다른 사람 것은 지울 수 없음)."""
+    what = str(a.get("what", "")).strip()[:30]
+    n = await memory.clear_facts(ctx.svc.db, ctx.chat_id, ctx.caller.id, what)
+    if not what:
+        for key in NOTE_KEYS:
+            await ctx.svc.db.set_member_note(ctx.chat_id, ctx.caller.id, key, "")
+        n += 1
+    # 지운 뒤 예전 메시지에서 다시 뽑지 않게 정리 기준 시각을 지금으로
+    await memory.mark_done(ctx.svc.db, ctx.chat_id, ctx.caller.id)
+    if not n:
+        return f"'{what}' 에 해당하는 기억이 없음."
+    return ("이 사람에 대한 기억(메모 포함)을 전부 지웠음." if not what else f"'{what}' 관련 기억 {n}개를 지웠음.") + \
+        " 지웠다고 짧게 안내할 것."
+
+
 async def t_set_my_style(ctx: ToolCtx, a: dict) -> str:
     style = resolve_style(str(a.get("style", "")))
     if not style:
@@ -327,6 +343,8 @@ TOOLS: list[Tool] = [
     Tool("save_my_note", "말한 사람 본인의 정보(호칭, 업종, 관심사, 소개)를 기억한다. 다른 사람 정보는 저장하지 않는다.",
          {"key": {"type": "string", "enum": NOTE_KEYS}, "value": {"type": "string", "description": "50자 이내, 빈 값이면 삭제"}},
          ["key", "value"], t_save_my_note),
+    Tool("forget_my_memory", "말한 사람 본인에 대해 소담이 기억하는 내용을 지운다. '내 기억 지워줘', '그건 잊어줘' 같은 요청에 사용.",
+         {"what": {"type": "string", "description": "지울 기억의 핵심 단어. 비우면 전부 지움"}}, [], t_forget_my_memory),
     Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다.",
          {"style": {"type": "string", "enum": [s.label for s in STYLES.values()]}}, ["style"], t_set_my_style),
     Tool("greet_members", "특정 멤버들에게 인사할 때 사용. 멘션을 붙여준다.",

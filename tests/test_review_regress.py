@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from fakes import FakeBot, FakeJobQueue, FakeMsg, FakeQuery, add_member, fake_user, make_db, make_svc, runner
 
-from sodam import announce, handlers, menu, tagnotify
+from sodam import handlers, menu, tagnotify
 from sodam.permissions import Role
 
 test, run_all = runner()
@@ -229,3 +229,15 @@ async def greet_tg_links_only_navigation():
     assert greet.normalize_url("tg://resolve?domain=abc") and greet.normalize_url("tg://join?invite=x")
     for bad in ("tg://proxy?server=a&port=1&secret=b", "tg://socks?server=a", "tg://setlanguage?lang=x"):
         assert greet.normalize_url(bad) is None, bad
+
+
+@test
+async def migrate_moves_ai_memory():
+    from sodam import memory  # noqa: F401  (테이블 등록)
+    db, svc, bot = await setup()
+    await db._write("INSERT INTO member_memory(chat_id, user_id, fact, ts) VALUES(?,?,?,?)", (CHAT, 5, "카페 운영", 1))
+    await db._write("INSERT INTO room_memory(chat_id, summary, upto_id, updated_at) VALUES(?,?,?,?)", (CHAT, "요약", 1, 1))
+    await db.migrate_chat(CHAT, -1007777777)
+    assert await db._one("SELECT 1 FROM member_memory WHERE chat_id=?", (-1007777777,))
+    assert await db._one("SELECT 1 FROM room_memory WHERE chat_id=?", (-1007777777,))
+    assert not await db._one("SELECT 1 FROM room_memory WHERE chat_id=?", (CHAT,))
