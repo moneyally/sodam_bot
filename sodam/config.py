@@ -123,7 +123,9 @@ def _price(raw: str) -> str:
 
 
 def _retention(raw: str) -> str:
-    raw = raw.strip().lower()
-    if raw in ("", "in_memory", "24h"):
+    """기본 24h: 띄엄띄엄 대화하는 소통방은 캐시가 5~10분이면 사라져서 매번 전액. gpt-5.4 등은 24h 추가 요금 없음
+    (OpenAI 프롬프트 캐싱 문서). 지원 안 하는 모델이면 .env 에 in_memory."""
+    raw = raw.strip().lower() or "24h"
+    if raw in ("in_memory", "24h"):
         return raw
     raise SystemExit("OPENAI_CACHE_RETENTION 은 비우거나 in_memory / 24h 중 하나여야 해요.")

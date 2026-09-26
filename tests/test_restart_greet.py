@@ -130,5 +130,16 @@ async def member_cannot_set_someone_elses_style():
     assert "사용할 수 없음" in seen["tool"] and not (await r.db.get_member(r.CHAT, luffy.id))["style"]
 
 
+@test
+async def greet_never_mentions_the_requester():
+    r = await Room().open(admins=(BOSS.id,), settings={"captcha_enabled": False})
+    hana = fake_user(302, "하나", "hana_k")
+    for u in (BOSS, hana):
+        await r.join(u)
+    r.llm.script = [tool_call("greet_members", {"names": ["방장", "하나"]}), "반갑습니다!"]
+    m = await r.say(BOSS, "소담아 대표님 인사드려")
+    assert "tg://user?id=302" in m.replies[-1] and f"tg://user?id={BOSS.id}" not in m.replies[-1]
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

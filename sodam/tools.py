@@ -345,6 +345,8 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
         if err:
             missing.append(n)
             continue
+        if row["user_id"] == ctx.caller.id:   # 부탁한 본인은 멘션하지 않음 (답장이 이미 그 사람에게 감)
+            continue
         ctx.mentions.append((row["user_id"], _row_name(row)))
         found.append(_row_name(row))
         m = await ctx.svc.db.get_member(ctx.chat_id, row["user_id"])
