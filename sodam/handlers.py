@@ -21,7 +21,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import commands, hooks, memory, menu, namehist, security, social, stats, subscription
+from . import casino, commands, hooks, memory, menu, namehist, security, social, stats, subscription
 from .agent import run_agent
 from .commands import CmdCtx
 from .llm import BudgetExceeded
@@ -328,6 +328,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not text:
         return
+
+    if text.startswith("!") and await casino.dispatch(svc, bot, msg, chat_id, user, role, text):
+        return  # 포인트 게임 (! 명령)
 
     parsed = commands.parse(text, bot.username)
     if parsed:

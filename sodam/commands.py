@@ -261,7 +261,7 @@ async def c_points(ctx: CmdCtx) -> None:
 
 async def c_game(ctx: CmdCtx) -> None:
     if not ctx.args:
-        await ctx.reply(f"🎮 게임 종류: {GAME_LIST}\n예: <code>.게임 초성퀴즈</code>")
+        await ctx.reply(f"🎮 게임 종류: {GAME_LIST}\n예: <code>.게임 초성퀴즈</code>\n\n🎰 포인트 게임(홀짝·슬롯·바카라…)은 <code>!가입</code> 후 <code>!도움</code>")
         return
     await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, ctx.args[0])))
 
