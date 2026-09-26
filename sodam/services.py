@@ -1,0 +1,68 @@
+"""봇 전체가 공유하는 객체 묶음."""
+from __future__ import annotations
+
+import secrets
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .announce import Announcer
+    from .backup import Backup
+    from .billing import Billing
+    from .captcha import Captcha
+    from .cas import Cas
+    from .config import Config
+    from .db import DB
+    from .games import GameManager
+    from .greet import Greeter
+    from .llm import LLM
+    from .moderation import Moderator
+    from .permissions import Permissions
+    from .sports import Sports
+
+
+@dataclass
+class PendingAction:
+    """관리자 확인 버튼이 필요한 동작 (밴 등)."""
+    chat_id: int
+    kind: str
+    target_id: int
+    target_name: str
+    reason: str
+    requested_by: int
+    expires: float = field(default_factory=lambda: time.time() + 120)
+
+
+@dataclass
+class Services:
+    cfg: Config
+    db: DB
+    perms: Permissions
+    mod: Moderator
+    llm: LLM
+    sports: Sports
+    cas: Cas = None
+    backup: Backup = None
+    billing: Billing = None
+    pay_check_times: dict[int, float] = field(default_factory=dict)  # '입금했어요' 버튼 연타 방지
+    joins: dict[tuple[int, int], float] = field(default_factory=dict)  # 입장 중복 처리 방지 (나가면 즉시 삭제)
+    games: GameManager = None  # 아래는 Services 를 참조해서 생성 후 채운다
+    greeter: Greeter = None
+    captcha: Captcha = None
+    announcer: Announcer = None
+    pending: dict[str, PendingAction] = field(default_factory=dict)
+
+    async def paid_features(self, chat_id: int) -> bool:
+        """구독(또는 체험) 중인 방인지. 결제 기능이 꺼져 있으면 항상 True.
+        유료 기능: AI(무료 한도 초과분)·게임·예약공지·자료 등록·스포츠 알림·일일 리포트.
+        방 관리(캡차·도배·CAS·경고·명령어)는 구독과 상관없이 동작."""
+        return self.billing is None or await self.billing.active(chat_id)
+
+    def add_pending(self, action: PendingAction) -> str:
+        now = time.time()
+        for key in [k for k, v in self.pending.items() if v.expires < now]:
+            del self.pending[key]
+        key = secrets.token_hex(4)
+        self.pending[key] = action
+        return key

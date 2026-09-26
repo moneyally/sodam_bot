@@ -1,0 +1,60 @@
+"""DB 자동 백업: 온라인 백업 → 무결성 검사 → gzip → 오래된 것 정리.
+
+복구: 봇을 멈추고 백업 파일 압축을 풀어 DB_PATH 위치에 덮어쓴 뒤 다시 실행.
+"""
+import asyncio
+import gzip
+import shutil
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from .config import Config
+from .db import DB
+
+
+class BackupError(Exception):
+    pass
+
+
+class Backup:
+    PATTERN = "sodam-*.db.gz"
+
+    def __init__(self, cfg: Config, db: DB):
+        self.cfg = cfg
+        self.db = db
+        self.dir = Path(cfg.backup_dir)
+
+    async def run(self) -> Path:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(self.cfg.tz).strftime("%Y%m%d-%H%M%S")
+        raw = self.dir / f"sodam-{stamp}.db"
+        await self.db.backup_to(str(raw))
+        try:
+            gz = await asyncio.to_thread(self._verify_and_compress, raw)
+        finally:
+            raw.unlink(missing_ok=True)
+        await asyncio.to_thread(self._prune)
+        return gz
+
+    def _verify_and_compress(self, raw: Path) -> Path:
+        con = sqlite3.connect(raw)
+        try:
+            result = con.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            con.close()
+        if result != "ok":
+            raise BackupError(f"무결성 검사 실패: {result}")
+        gz = raw.with_name(raw.name + ".gz")
+        with open(raw, "rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
+            shutil.copyfileobj(src, dst)
+        return gz
+
+    def list(self) -> list[Path]:
+        if not self.dir.exists():
+            return []
+        return sorted(self.dir.glob(self.PATTERN), reverse=True)  # 파일명에 시각이 있어서 이름순 = 시간순
+
+    def _prune(self) -> None:
+        for old in self.list()[self.cfg.backup_keep:]:
+            old.unlink(missing_ok=True)
