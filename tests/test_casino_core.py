@@ -9,7 +9,7 @@ from sodam import casino, handlers
 from sodam.casino import basic, core
 
 test, run_all = runner()
-CHAT = -1003962672437
+CHAT = -1005550000001
 basic.DICE_WAIT = 0
 
 
@@ -29,7 +29,7 @@ class DiceBot(FakeBot):
 async def setup(values=()):
     db = await make_db()
     svc = await make_svc(db)
-    await db.ensure_chat(CHAT, "SECOND")
+    await db.ensure_chat(CHAT, "테스트방")
     await db.set_setting(CHAT, "cas_enabled", False)
     bot = DiceBot(values)
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(),
@@ -41,14 +41,14 @@ async def setup(values=()):
 async def say(ctx, u, text):
     core._last_bet.clear()  # 테스트에선 2초 간격 제한 끔 (따로 검사)
     m = FakeMsg(CHAT, u, text)
-    m.chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup")
+    m.chat = SimpleNamespace(id=CHAT, title="테스트방", type="supergroup")
     m.sender_chat = None
     await handlers.on_group_message(SimpleNamespace(message=m), ctx)
     await asyncio.gather(*ctx.bot_data["tasks"], return_exceptions=True)
     return m.replies[-1] if m.replies else ""
 
 
-A, B = fake_user(7043936117, "Yasin", "saaag"), fake_user(8098229366, "LOVE3")
+A, B = fake_user(5550001003, "회원A", "member_a"), fake_user(5550001002, "메인관리자")
 
 
 async def ledger_ok(db, uid):
@@ -278,11 +278,11 @@ async def bot_roles_split_main_and_dealer():
     assert await say(ctx, A, "!가입") == "" and not await core.account(db, CHAT, A.id)
     svc.cfg = dataclasses.replace(svc.cfg, bot_role="dealer")           # 딜러 봇: ! 명령만
     m = FakeMsg(CHAT, A, "!가입")
-    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup"), None
+    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="테스트방", type="supergroup"), None
     await handlers.on_dealer_group(SimpleNamespace(message=m), ctx)
     assert "가입 완료" in m.replies[-1]
     m = FakeMsg(CHAT, A, "소담아 안녕")                                  # 딜러 봇은 일반 대화엔 반응 안 함
-    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup"), None
+    m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="테스트방", type="supergroup"), None
     await handlers.on_dealer_group(SimpleNamespace(message=m), ctx)
     assert not m.replies
 

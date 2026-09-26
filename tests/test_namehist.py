@@ -280,9 +280,9 @@ async def reply_forward_mention_users_are_recorded_too():
 @test
 async def dm_plain_id_or_username_shows_all_history():
     db, svc, bot, ctx = await setup()
-    await group_say(ctx, user(8098229366, "김대표", "kim"))
-    await group_say(ctx, user(8098229366, "박대표", "park"))
-    for text in ("@kim", "8098229366", "@park"):
+    await group_say(ctx, user(5550001002, "김대표", "kim"))
+    await group_say(ctx, user(5550001002, "박대표", "park"))
+    for text in ("@kim", "5550001002", "@park"):
         m = FakeMsg(6, user(6, "B"), text)
         await deliver(ctx, m, private=True)
         assert "전체 기록" in m.replies[0] and "박대표" in m.replies[0], text

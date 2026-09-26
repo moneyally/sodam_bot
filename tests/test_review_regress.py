@@ -248,13 +248,13 @@ async def greet_finds_member_by_nickname_but_sanctions_need_exact_name():
     from sodam import tools
     from sodam.permissions import Role
     db, svc, bot = await setup()
-    woo = fake_user(8600465586, "우주코인 OTC", "woojuotc")
+    woo = fake_user(5550001001, "하늘코인 거래소", "sky_trade")
     await db.upsert_user(woo)
     await db.touch_member(CHAT, woo.id)
     ctx = tools.ToolCtx(svc, bot, CHAT, fake_user(ADMIN), Role.ADMIN, await db.get_settings(CHAT))
-    r = await tools.t_greet(ctx, {"names": ["우주대표님"]})
-    assert ctx.mentions == [(woo.id, "우주코인 OTC")] and "원래 있던 멤버" in r
-    row, err = await tools._resolve(ctx, "우주대표님", for_sanction=True)   # 제재는 부분 이름으로 안 됨
+    r = await tools.t_greet(ctx, {"names": ["하늘대표님"]})
+    assert ctx.mentions == [(woo.id, "하늘코인 거래소")] and "원래 있던 멤버" in r
+    row, err = await tools._resolve(ctx, "하늘대표님", for_sanction=True)   # 제재는 부분 이름으로 안 됨
     assert row is None and err
     row, err = await tools._resolve(ctx, "님")                              # 핵심이 너무 짧으면 안 찾음
     assert row is None

@@ -69,7 +69,7 @@ PERIOD = {"type": "string", "enum": ["오늘", "어제", "주간", "월간", "�
 async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     """이름/@username/ID → 방 멤버 1명. 실패하면 에러 문자열."""
     rows = await ctx.svc.db.find_members(ctx.chat_id, name)
-    if not rows and not for_sanction:  # 인사·조회는 '우주대표님' 처럼 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
+    if not rows and not for_sanction:  # 인사·조회는 '하늘대표님' 처럼 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
         rows = await _fuzzy_members(ctx, name)
     if not rows:
         return None, f"'{name}' 멤버를 찾을 수 없어요. @username 이나 정확한 이름이 필요해요."
@@ -87,7 +87,7 @@ _HONORIFICS = ("대표님", "사장님", "실장님", "이사님", "회장님", 
 
 
 async def _fuzzy_members(ctx: ToolCtx, name: str):
-    """'우주대표님' → '우주' 를 이름·@아이디에 포함한 이 방 멤버. 핵심이 2글자 미만이면 안 찾음."""
+    """'하늘대표님' → '하늘' 를 이름·@아이디에 포함한 이 방 멤버. 핵심이 2글자 미만이면 안 찾음."""
     core = name.strip().lstrip("@")
     for h in _HONORIFICS:
         if core.endswith(h) and len(core) > len(h):

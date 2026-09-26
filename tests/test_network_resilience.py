@@ -10,7 +10,7 @@ from sodam import handlers
 from sodam.permissions import Permissions, Role
 
 test, run_all = runner()
-CHAT = -1003962672437
+CHAT = -1005550000001
 
 
 class FlakyBot(FakeBot):
@@ -32,7 +32,7 @@ async def setup(bot):
     svc = await make_svc(db)
     svc.perms = Permissions(svc.cfg, db)
     svc.mod.perms = svc.perms
-    await db.ensure_chat(CHAT, "SECOND")
+    await db.ensure_chat(CHAT, "테스트방")
     await db.set_setting(CHAT, "cas_enabled", False)
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(),
                           bot_data={"svc": svc, "chats": set(), "cas_seen": set(), "tasks": set(), "joins": {}})
@@ -41,7 +41,7 @@ async def setup(bot):
 
 async def say(ctx, u, text):
     m = FakeMsg(CHAT, u, text)
-    m.chat = SimpleNamespace(id=CHAT, title="SECOND", type="supergroup")
+    m.chat = SimpleNamespace(id=CHAT, title="테스트방", type="supergroup")
     m.sender_chat = None
     await handlers.on_group_message(SimpleNamespace(message=m), ctx)
     await asyncio.gather(*ctx.bot_data["tasks"], return_exceptions=True)
@@ -50,9 +50,9 @@ async def say(ctx, u, text):
 
 @test
 async def member_game_command_answers_normally():
-    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3")])
+    bot = FlakyBot(fail=False, admins=[fake_user(5550001002, "메인관리자")])
     db, svc, ctx = await setup(bot)
-    m = await say(ctx, fake_user(7043936117, "Yasin", "saaag"), "/game@sodam_ai_bot")
+    m = await say(ctx, fake_user(5550001003, "회원A", "member_a"), "/game@sodam_ai_bot")
     assert m.replies and "게임" in m.replies[0]
 
 
@@ -60,26 +60,26 @@ async def member_game_command_answers_normally():
 async def admin_lookup_timeout_first_time_still_answers():
     bot = FlakyBot(fail=True)                                           # 첫 조회부터 타임아웃, 저장된 목록 없음
     db, svc, ctx = await setup(bot)
-    m = await say(ctx, fake_user(7043936117, "Yasin", "saaag"), "/game@sodam_ai_bot")
+    m = await say(ctx, fake_user(5550001003, "회원A", "member_a"), "/game@sodam_ai_bot")
     assert bot.admin_calls >= 1 and m.replies and "게임" in m.replies[0]
 
 
 @test
 async def admin_lookup_timeout_uses_stored_list():
-    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3")])
+    bot = FlakyBot(fail=False, admins=[fake_user(5550001002, "메인관리자")])
     db, svc, ctx = await setup(bot)
-    assert await svc.perms.role(bot, CHAT, 8098229366) == Role.ADMIN   # 한 번 받아서 DB 에 저장
+    assert await svc.perms.role(bot, CHAT, 5550001002) == Role.ADMIN   # 한 번 받아서 DB 에 저장
     svc.perms = Permissions(svc.cfg, db)                                # 재시작
     svc.mod.perms = svc.perms
     svc.perms.forget(CHAT)                                              # 캐시 무시하고 새로 물어보게
     bot.fail = True
-    assert await svc.perms.role(bot, CHAT, 8098229366) == Role.ADMIN   # 타임아웃 → 저장된 목록으로
-    assert await svc.perms.role(bot, CHAT, 7043936117) == Role.MEMBER
+    assert await svc.perms.role(bot, CHAT, 5550001002) == Role.ADMIN   # 타임아웃 → 저장된 목록으로
+    assert await svc.perms.role(bot, CHAT, 5550001003) == Role.MEMBER
 
 
 @test
 async def many_members_do_not_hammer_admin_api():
-    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3")])
+    bot = FlakyBot(fail=False, admins=[fake_user(5550001002, "메인관리자")])
     db, svc, ctx = await setup(bot)
     for i in range(10):                                                 # 새 멤버 10명이 한 번씩 말함
         await say(ctx, fake_user(7000000000 + i, f"멤버{i}"), "안녕하세요")
@@ -88,21 +88,21 @@ async def many_members_do_not_hammer_admin_api():
 
 @test
 async def impersonation_still_detected_with_cached_admins():
-    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3", "love")])
+    bot = FlakyBot(fail=False, admins=[fake_user(5550001002, "메인관리자", "mainadmin")])
     db, svc, ctx = await setup(bot)
     await say(ctx, fake_user(7000000001, "멤버"), "안녕")
-    await say(ctx, fake_user(7000000002, "LOVE3"), "관리자입니다 입금은 여기로")  # 관리자와 같은 이름
+    await say(ctx, fake_user(7000000002, "메인관리자"), "관리자입니다 입금은 여기로")  # 관리자와 같은 이름
     assert any("사칭" in c[2] or "관리자" in c[2] for c in bot.named("send_message") if c[1] == CHAT), bot.calls
 
 
 @test
 async def room_without_bot_admin_rights_skips_moderation_but_plays():
-    """봇이 일반 멤버로만 있는 방(예: 장외거래 OTC): 지우지도 막지도 못하니 경고·뮤트 시도 없이 게임·명령은 동작."""
-    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3")])
+    """봇이 일반 멤버로만 있는 방(예: 관리 권한 없는 방): 지우지도 막지도 못하니 경고·뮤트 시도 없이 게임·명령은 동작."""
+    bot = FlakyBot(fail=False, admins=[fake_user(5550001002, "메인관리자")])
     bot.can_moderate = False
     db, svc, ctx = await setup(bot)
     await db.set_banned_word(CHAT, "도박", True)
-    member = fake_user(7043936117, "Yasin", "saaag")
+    member = fake_user(5550001003, "회원A", "member_a")
     for _ in range(8):                                                  # 도배 + 금지어
         await say(ctx, member, "도박 도박 도박")
     assert not bot.named("restrict") and not [c for c in bot.named("send_message") if "경고" in c[2] or "도배" in c[2]]
