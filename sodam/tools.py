@@ -161,6 +161,47 @@ async def t_member_info(ctx: ToolCtx, a: dict) -> str:
     return " / ".join(parts)
 
 
+async def t_room_members(ctx: ToolCtx, a: dict) -> str:
+    """방 멤버 현황: 인원·관리자·활발한 사람·최근 들어온 사람·검색 (panels/members 의 캐시·시간 제한 조회 재사용)."""
+    import asyncio
+
+    from .panels import members as M
+    view = str(a.get("view", "summary"))
+    limit = max(1, min(int(a.get("limit") or 5), 10))
+    db, cid, tz = ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz
+    if cid > 0:
+        return "1:1 채팅이라 방 멤버 정보가 없음."
+    try:
+        known = await M.known_count(db, cid)
+        tg_total = await M.tg_member_count(ctx.bot, cid)
+        admins = await M.admin_ids(ctx.svc, ctx.bot, cid)
+
+        def who(r) -> str:
+            return display_name(r["first_name"], r["last_name"], r["username"])
+        if view == "admins":
+            rows = [r for r in await db._all(
+                "SELECT user_id, first_name, last_name, username FROM users WHERE user_id IN (%s)" %
+                ",".join("?" * len(admins)), tuple(admins))] if admins else []
+            return f"관리자 {len(rows)}명: " + (", ".join(who(r) for r in rows) or "확인 못 함")
+        if view == "active":
+            counts = await M.msg_counts(db, cid)
+            rows = await M.page_rows(db, cid, "msg", 0)
+            top = [f"{who(r)}({counts.get(r['user_id'], 0)}개)" for r in rows[:limit] if counts.get(r["user_id"])]
+            return "최근 90일 메시지 많은 순: " + (", ".join(top) or "기록 없음")
+        if view == "recent_joins":
+            rows = await asyncio.wait_for(db._all(
+                f"SELECT u.user_id, u.first_name, u.last_name, u.username, m.joined_at {M._BASE} AND m.joined_at IS NOT NULL "
+                "ORDER BY m.joined_at DESC LIMIT ?", (cid, limit)), M.DB_TIMEOUT)
+            return "최근 입장: " + (", ".join(f"{who(r)}({fmt_time(r['joined_at'], tz, '%m/%d')})" for r in rows) or "기록 없음")
+        if view == "search":
+            rows = await M.search_rows(db, cid, str(a.get("query", ""))[:40])
+            return "검색 결과: " + (", ".join(who(r) for r in rows[:limit]) or "없음")
+    except (asyncio.TimeoutError, ValueError):
+        return "멤버 조회가 오래 걸려서 중단함. 잠시 후 다시 해달라고 안내할 것."
+    return (f"텔레그램 기준 전체 {tg_total if tg_total is not None else '확인 못 함'}명, 소담이 본 멤버 {known}명, 관리자 {len(admins)}명. "
+            "(봇은 말하거나 들어온 적 있는 사람만 알 수 있음)")
+
+
 async def t_room_rules(ctx: ToolCtx, a: dict) -> str:
     return ctx.settings["rules"] or "등록된 방 규칙이 없음."
 
@@ -363,6 +404,11 @@ TOOLS: list[Tool] = [
          {"hours": {"type": "integer", "description": "1~24"}}, [], t_read_chat),
     Tool("member_info", "방 멤버 정보(메시지 수, 입장일, 포인트)를 조회한다.",
          {"name": {"type": "string", "description": "@username, 이름, 또는 숫자 ID"}}, ["name"], t_member_info),
+    Tool("room_members", "방 멤버 현황을 조회한다. 몇 명인지·관리자가 누구인지·요즘 활발한 사람·최근 들어온 사람·멤버 찾기. "
+         "특정 한 사람의 자세한 정보는 member_info.",
+         {"view": {"type": "string", "enum": ["summary", "admins", "active", "recent_joins", "search"]},
+          "query": {"type": "string", "description": "view=search 일 때 이름·@아이디"},
+          "limit": {"type": "integer", "description": "1~10"}}, ["view"], t_room_members),
     Tool("room_rules", "이 방의 규칙/공지를 확인한다.", {}, [], t_room_rules),
     Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),

@@ -202,7 +202,21 @@ async def scene11():
     check("AI 라고 솔직히", any("AI" in o or "인공지능" in o for o in out))
 
 
-SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9, scene10, scene11]
+async def scene12():
+    print("\n🎬 12. 멤버 현황 질문")
+    r = await room({"captcha_enabled": False})
+    for u, n in ((MINJI, 3), (JUNHO, 6), (SUJIN, 1)):
+        for i in range(n):
+            await say(r, u, f"잡담 {i}")
+    out = await say(r, BOSS, "소담아 우리방 지금 몇 명이야?")
+    check("인원 답함 (텔레그램 100명 기준)", any("100" in o for o in out))
+    out = await say(r, BOSS, "소담아 요즘 제일 말 많은 사람 누구야?")
+    check("가장 활발한 사람 = 박준호", any("준호" in o for o in out))
+    out = await say(r, BOSS, "소담아 관리자 누구누구야?")
+    check("관리자 = 방장", any("방장" in o for o in out))
+
+
+SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9, scene10, scene11, scene12]
 
 
 async def main() -> int:
