@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -13,6 +12,7 @@ from telegram.error import TelegramError
 from . import knowledge, menu, stats, subscription
 from .permissions import Role
 from .services import Services
+from .security import normalize_domain
 from .settings import DEFAULTS, LABELS, coerce, render
 from .sports import SportsError
 from .styles import STYLES, resolve_style, style_list
@@ -282,7 +282,7 @@ async def c_about(ctx: CmdCtx) -> None:
 async def c_settings(ctx: CmdCtx) -> None:
     """그룹헬프처럼 버튼 설정 패널을 관리자 1:1 로 보낸다. '.설정 전체' 는 글 목록."""
     if not (ctx.args and ctx.args[0] in ("전체", "all", "목록")):
-        text, kb = await menu.group_panel(ctx.svc, ctx.chat_id)
+        text, kb = await menu.group_panel(ctx.svc, ctx.bot, ctx.chat_id, ctx.user.id)
         try:
             await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb)
             await _private_notice(ctx, "🔒 관리자님, 봇과의 1:1 채팅에서 설정 메뉴를 확인해주세요.")
@@ -384,8 +384,8 @@ async def c_ban(ctx: CmdCtx) -> None:
 async def c_unban(ctx: CmdCtx) -> None:
     # 밴된 사람은 이름 검색이 안 될 수 있어서 숫자 ID도 바로 받는다
     arg = ctx.args[0] if ctx.args else ""
-    if arg.isdigit():
-        uid, name = int(arg), arg
+    if (uid := to_int(arg)) is not None and uid > 0:
+        name = arg
     else:
         t = await _target(ctx, sanction=False)
         if not t:
@@ -446,7 +446,7 @@ async def c_unlock(ctx: CmdCtx) -> None:
 async def c_announce(ctx: CmdCtx) -> None:
     an, db = ctx.svc.announcer, ctx.svc.db
     sub = ctx.args[0] if ctx.args else "목록"
-    sid = int(ctx.args[1].lstrip("#")) if len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdigit() else None
+    sid = int(ctx.args[1].lstrip("#")) if len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdecimal() else None
 
     if sub in ("목록", "list"):
         await ctx.reply(await an.list_text(ctx.chat_id))
@@ -522,8 +522,8 @@ async def c_cas(ctx: CmdCtx) -> None:
         await ctx.svc.db.set_setting(ctx.chat_id, "cas_enabled", coerce("cas_enabled", sub))
     elif sub in ("확인", "check") and len(ctx.args) > 1:
         arg = ctx.args[1].lstrip("@")
-        if arg.isdigit():
-            uid, name = int(arg), arg
+        if (uid := to_int(arg)) is not None and uid > 0:
+            name = arg
         else:
             ctx.args = ctx.args[1:]
             t = await _target(ctx, sanction=False)
@@ -581,10 +581,11 @@ async def c_whitelist(ctx: CmdCtx) -> None:
     s = await ctx.svc.db.get_settings(ctx.chat_id)
     domains = list(s["whitelist_domains"])
     sub = ctx.args[0] if ctx.args else "목록"
-    dom = (ctx.args[1] if len(ctx.args) > 1 else "").lower().removeprefix("https://").removeprefix("http://")
-    dom = dom.split("/")[0].removeprefix("www.")
+    raw = ctx.args[1] if len(ctx.args) > 1 else ""
+    dom = raw.lower().removeprefix("https://").removeprefix("http://").split("/")[0].removeprefix("www.")
     if sub in ("추가", "add") and dom:
-        if not _DOMAIN_RE.fullmatch(dom):  # '<b>' 같은 값이 저장되면 이후 목록 출력이 깨짐
+        dom = normalize_domain(raw)
+        if not dom:  # '<b>' 같은 값이 저장되면 이후 목록 출력이 깨짐
             await ctx.reply("도메인 형식이 아니에요. 예: <code>youtube.com</code>")
             return
         domains = sorted(set(domains) | {dom})
@@ -597,8 +598,6 @@ async def c_whitelist(ctx: CmdCtx) -> None:
     await ctx.svc.db.set_setting(ctx.chat_id, "whitelist_domains", domains)
     await ctx.reply("✅ 허용 도메인: " + (esc(", ".join(domains)) or "없음"))
 
-
-_DOMAIN_RE = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}")
 
 
 async def c_botadmin(ctx: CmdCtx) -> None:
@@ -723,7 +722,7 @@ async def c_knowledge(ctx: CmdCtx) -> None:
                         f"이제 AI가 관련 질문에 이 자료를 찾아 답해요.{note}")
         return
 
-    if sub in ("삭제", "del") and len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdigit():
+    if sub in ("삭제", "del") and len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdecimal():
         ok = await db.delete_knowledge(scope, int(ctx.args[1].lstrip("#")))
         await ctx.reply("🗑️ 삭제했어요." if ok else f"{scope_name} 자료 중에 그 번호가 없어요.")
         return

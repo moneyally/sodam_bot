@@ -2,20 +2,32 @@
 그룹 관리자는 텔레그램 관리자 여부로 자동 인식 (코드 불필요).
 
 메인(/start) → [➕ 그룹에 추가] [⚙️ 내 그룹 관리] [🪪 내 ID] [❓ 도움말]
-내 그룹 관리 → 방 선택 → 기능 켜기/끄기 · 말투 · 도배 기준 · 구독
+그룹 허브 m:g → 🧩 기능 m:f · 🚪 입장 m:j · 🛡️ 보안 m:sec(⚠️ 경고 단계 m:wl · 🚫 금지어 m:bw · 🔗 허용 도메인 m:dom)
+               · 🎭 말투 m:st · 💳 구독 m:sub (텔레그램 관리자·오너만)
+
+콜백 형식 `m:<코드>:<방ID>[:인자]` (64바이트 이하). 라우터 순서:
+1:1 확인 → 레이트리밋 → 엄격 파싱(알려진 코드·방 ID 형식·DB 에 있는 방) → 권한 확인 → 핸들러가 Screen 반환 → q.answer 정확히 1번.
+토글·프리셋은 목표값을 버튼에 담아서 두 번 눌리거나 옛 패널을 눌러도 결과가 같다.
+버튼에 담기엔 긴 값(금지어 등)과 삭제는 서버 쪽 1회용 토큰(`m:k:<토큰>`)으로.
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
+import secrets
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Awaitable, Callable
 
-from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest, TelegramError
 
-from .settings import LABELS
+from .security import normalize_domain
+from .services import MenuToken, PendingInput
+from .settings import LABELS, coerce, render
 from .styles import STYLES
 from .subscription import STATE_LABEL, chat_title, panel as sub_panel
-from .util import esc, iyeyo, to_int
+from .util import esc, human_minutes, iyeyo
 
 if TYPE_CHECKING:
     from .services import Services
@@ -24,14 +36,80 @@ log = logging.getLogger(__name__)
 
 # 봇을 추가할 때 미리 체크해 둘 관리자 권한 (텔레그램이 추가 화면에서 보여줌)
 ADMIN_RIGHTS = "delete_messages+restrict_members+pin_messages+invite_users"
-TOGGLES = ["ai_enabled", "greet_enabled", "captcha_enabled", "cas_enabled", "link_filter",
-           "injection_guard", "impersonation_guard", "games_enabled", "sports_enabled", "daily_report",
-           "delete_join_message"]
+
+# 권한 단계
+PUBLIC, ADMIN, TG_ADMIN, OWNER = range(4)
+
+CID_RE = re.compile(r"^-\d{5,20}$")
+CALLBACK_PER_MIN = 40
+TOKEN_TTL = 120          # 삭제 확인 버튼
+LIST_TOKEN_TTL = 600     # 목록의 항목 버튼
+MAX_TOKENS = 5000
+INPUT_GRACE = 600        # 입력 시간이 지난 뒤 이 시간 안에 온 글은 '시간 지남' 안내로 받아준다
+LIST_SHOW = 30
+MAX_WORDS = 200
+MAX_DOMAINS = 50
+MAX_ITEMS_PER_INPUT = 20
+CANCEL = {"취소", "cancel", "/cancel"}
+
+# 화면별 켜기/끄기 설정
+FEATURE_TOGGLES = ["ai_enabled", "games_enabled", "sports_enabled", "daily_report"]
+JOIN_TOGGLES = ["greet_enabled", "captcha_enabled", "cas_enabled", "delete_join_message", "impersonation_guard"]
+SEC_TOGGLES = ["link_filter", "injection_guard", "injection_warn"]
+TOGGLES = FEATURE_TOGGLES + JOIN_TOGGLES + SEC_TOGGLES
+
+# 버튼으로 고르는 값: 설정 키 → [(저장값 문자열, 버튼 글자)]. 여기 없는 값은 콜백으로 와도 무시
+PRESETS: dict[str, list[tuple[str, str]]] = {
+    "captcha_minutes": [(v, f"⏱ {v}분") for v in ("1", "3", "5", "10")],
+    "captcha_action": [("kick", "실패→킥"), ("ban", "실패→밴"), ("mute", "실패→뮤트")],
+    "dup_limit": [(v, f"반복 {v}회") for v in ("2", "3", "5")],
+    "newbie_link_hours": [("0", "신규링크 제한 끔"), ("24", "24시간"), ("72", "72시간")],
+    "warn_mute_at": [(v, f"뮤트 {v}회") for v in ("2", "3", "5")],
+    "warn_mute_minutes": [(v, f"뮤트 {human_minutes(int(v))}") for v in ("10", "60", "1440")],
+    "warn_ban_at": [(v, f"밴 {v}회") for v in ("3", "5", "7")],
+}
 FLOOD_PRESETS = {
     "loose": ("느슨", {"flood_count": 10, "flood_seconds": 8, "flood_mute_minutes": 10}),
     "normal": ("보통", {"flood_count": 6, "flood_seconds": 8, "flood_mute_minutes": 30}),
     "strict": ("엄격", {"flood_count": 4, "flood_seconds": 8, "flood_mute_minutes": 60}),
 }
+# 설정을 바꾼 뒤 다시 그릴 화면
+SCREEN_OF: dict[str, str] = {
+    **{k: "f" for k in FEATURE_TOGGLES}, **{k: "j" for k in JOIN_TOGGLES}, **{k: "sec" for k in SEC_TOGGLES},
+    "captcha_minutes": "j", "captcha_action": "j", "dup_limit": "sec", "newbie_link_hours": "sec",
+    "warn_mute_at": "wl", "warn_mute_minutes": "wl", "warn_ban_at": "wl",
+}
+
+
+@dataclass
+class Screen:
+    text: str | None                      # None 이면 화면은 그대로, 토스트만
+    kb: InlineKeyboardMarkup | None = None
+    toast: str | None = None
+    alert: bool = False
+
+
+@dataclass
+class PanelCtx:
+    svc: Services
+    bot: Bot
+    uid: int
+    cid: int | None
+    args: list[str]
+
+    def arg(self, i: int) -> str:
+        return self.args[i] if len(self.args) > i else ""
+
+
+Handler = Callable[[PanelCtx], Awaitable[Screen]]
+
+
+@dataclass(frozen=True)
+class Route:
+    handler: Handler
+    need: int = ADMIN
+    scoped: bool = True    # 두 번째 칸이 방 ID
+    fresh: bool = False    # 권한을 캐시 말고 지금 상태로 확인
 
 
 def B(text: str, data: str) -> InlineKeyboardButton:
@@ -42,6 +120,43 @@ def add_to_group_url(bot_username: str) -> str:
     return f"https://t.me/{bot_username}?startgroup=true&admin={ADMIN_RIGHTS}"
 
 
+def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(rows)
+
+
+def _chunks(buttons: list[InlineKeyboardButton], n: int) -> list[list[InlineKeyboardButton]]:
+    return [buttons[i:i + n] for i in range(0, len(buttons), n)]
+
+
+# ── 권한 · 토큰 ───────────────────────────────────────────
+async def _allowed(svc: Services, bot: Bot, cid: int, uid: int, need: int, fresh: bool = False) -> bool:
+    if need == PUBLIC:
+        return True
+    try:
+        if fresh:
+            svc.perms.forget(cid)
+        if need == ADMIN:
+            return await svc.perms.is_admin(bot, cid, uid)
+        if need == TG_ADMIN:
+            return await svc.perms.is_tg_admin(bot, cid, uid)
+        return uid in await svc.perms.owners()
+    except TelegramError:
+        return False  # 봇이 나간 방 등
+
+
+def _token(svc: Services, uid: int, cid: int, action: str, arg, ttl: int = TOKEN_TTL) -> str:
+    tokens = svc.menu_tokens
+    now = time.time()
+    for key in [k for k, t in tokens.items() if t.expires < now]:
+        del tokens[key]
+    while len(tokens) >= MAX_TOKENS:  # 오래된 것부터
+        del tokens[next(iter(tokens))]
+    key = secrets.token_urlsafe(6)
+    tokens[key] = MenuToken(uid, cid, action, arg, now + ttl)
+    return key
+
+
+# ── 메인 · 그룹 목록 ──────────────────────────────────────
 async def main_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     name = svc.cfg.bot_name
     text = (f"👋 안녕하세요, 소통방 AI 비서 <b>{iyeyo(name)}</b>\n\n"
@@ -85,47 +200,6 @@ async def groups_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, Inlin
     return text, InlineKeyboardMarkup(rows)
 
 
-async def group_panel(svc: Services, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    s = await svc.db.get_settings(chat_id)
-    title = esc(await chat_title(svc, chat_id))
-    lines = [f"⚙️ <b>{title}</b> 설정", "버튼을 누르면 바로 켜지고 꺼져요."]
-    if svc.billing and svc.billing.enabled:
-        st = await svc.billing.status(chat_id)
-        lines.append(f"이용: {STATE_LABEL[st.state]}")
-    rows, pair = [], []
-    for key in TOGGLES:
-        # 누르면 될 '목표값'을 버튼에 담는다 → 두 번 눌리거나 옛 패널을 눌러도 결과가 같음
-        pair.append(B(("✅ " if s[key] else "❌ ") + LABELS[key], f"m:t:{chat_id}:{key}:{0 if s[key] else 1}"))
-        if len(pair) == 2:
-            rows.append(pair)
-            pair = []
-    if pair:
-        rows.append(pair)
-    style = STYLES.get(s["style"])
-    rows.append([B(f"🎭 말투: {style.label if style else s['style']}", f"m:st:{chat_id}")])
-    current = next((k for k, (_, v) in FLOOD_PRESETS.items()
-                    if all(s[kk] == vv for kk, vv in v.items())), None)
-    rows.append([B(("● " if current == k else "") + f"도배 {label}", f"m:fl:{chat_id}:{k}")
-                 for k, (label, _) in FLOOD_PRESETS.items()])
-    if svc.billing and svc.billing.enabled:
-        rows.append([B("💳 이용 기간·구독", f"m:sub:{chat_id}")])
-    rows.append([B("🔄 새로고침", f"m:g:{chat_id}"), B("⬅️ 그룹 목록", "m:groups")])
-    return "\n".join(lines), InlineKeyboardMarkup(rows)
-
-
-def style_menu(chat_id: int, current: str) -> InlineKeyboardMarkup:
-    rows, pair = [], []
-    for s in STYLES.values():
-        pair.append(B(("● " if s.key == current else "") + s.label, f"m:s:{chat_id}:{s.key}"))
-        if len(pair) == 3:
-            rows.append(pair)
-            pair = []
-    if pair:
-        rows.append(pair)
-    rows.append([B("⬅️ 뒤로", f"m:g:{chat_id}")])
-    return InlineKeyboardMarkup(rows)
-
-
 HELP = ("❓ <b>도움말</b>\n\n"
         "<b>그룹에서</b>\n"
         "• 소담아 … — AI에게 말 걸기 (답장·@멘션도 됨)\n"
@@ -136,12 +210,404 @@ HELP = ("❓ <b>도움말</b>\n\n"
         "• /start — 이 메뉴")
 
 
-async def _edit(q: CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
+async def r_home(c: PanelCtx) -> Screen:
+    return Screen(*await main_menu(c.svc, c.bot, c.uid))
+
+
+async def r_groups(c: PanelCtx) -> Screen:
+    return Screen(*await groups_menu(c.svc, c.bot, c.uid))
+
+
+async def r_id(c: PanelCtx) -> Screen:
+    return Screen(None, toast=f"내 텔레그램 ID: {c.uid}", alert=True)
+
+
+async def r_help(c: PanelCtx) -> Screen:
+    return Screen(HELP, _kb([[B("⬅️ 처음으로", "m:home")]]))
+
+
+# ── 그룹 화면 ─────────────────────────────────────────────
+def _toggle_rows(s: dict, cid: int, keys: list[str]) -> list[list[InlineKeyboardButton]]:
+    # 누르면 될 '목표값'을 버튼에 담는다 → 두 번 눌리거나 옛 패널을 눌러도 결과가 같음
+    return _chunks([B(("✅ " if s[k] else "❌ ") + LABELS[k], f"m:t:{cid}:{k}:{0 if s[k] else 1}") for k in keys], 2)
+
+
+def _preset_row(s: dict, cid: int, key: str) -> list[InlineKeyboardButton]:
+    return [B(("● " if str(s[key]) == val else "") + label, f"m:n:{cid}:{key}:{val}") for val, label in PRESETS[key]]
+
+
+def _back(cid: int, to: str = "g") -> list[InlineKeyboardButton]:
+    return [B("⬅️ 뒤로", f"m:{to}:{cid}")]
+
+
+async def s_hub(c: PanelCtx) -> Screen:
+    svc, cid = c.svc, c.cid
+    s = await svc.db.get_settings(cid)
+    lines = [f"⚙️ <b>{esc(await chat_title(svc, cid))}</b> 관리", "무엇을 설정할까요?"]
+    # 이용 기간·구독은 텔레그램 관리자·오너에게만 (.봇관리자 로 추가된 사람에겐 안 보임)
+    show_sub = bool(svc.billing and svc.billing.enabled) and await _allowed(svc, c.bot, cid, c.uid, TG_ADMIN)
+    if show_sub:
+        st = await svc.billing.status(cid)
+        lines.append(f"이용: {STATE_LABEL[st.state]}")
+    style = STYLES.get(s["style"])
+    rows = [[B("🧩 기능 켜기/끄기", f"m:f:{cid}")],
+            [B("🚪 입장·인사", f"m:j:{cid}"), B("🛡️ 보안", f"m:sec:{cid}")],
+            [B(f"🎭 말투: {style.label if style else s['style']}", f"m:st:{cid}")]]
+    if show_sub:
+        rows.append([B("💳 이용 기간·구독", f"m:sub:{cid}")])
+    rows.append([B("🔄 새로고침", f"m:g:{cid}"), B("⬅️ 그룹 목록", "m:groups")])
+    return Screen("\n".join(lines), _kb(rows))
+
+
+async def group_panel(svc: Services, bot: Bot, chat_id: int, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """그룹 허브 화면 (딥링크·.설정 에서 새 메시지로 보낼 때). 호출 전에 관리자 확인할 것."""
+    screen = await s_hub(PanelCtx(svc, bot, user_id, chat_id, []))
+    return screen.text, screen.kb
+
+
+async def s_features(c: PanelCtx) -> Screen:
+    s = await c.svc.db.get_settings(c.cid)
+    return Screen("🧩 <b>기능 켜기/끄기</b>\n버튼을 누르면 바로 바뀌어요.",
+                  _kb(_toggle_rows(s, c.cid, FEATURE_TOGGLES) + [_back(c.cid)]))
+
+
+async def s_join(c: PanelCtx) -> Screen:
+    s = await c.svc.db.get_settings(c.cid)
+    text = ("🚪 <b>입장·인사</b>\n"
+            f"캡차 제한시간: {s['captcha_minutes']}분 · 실패 시: {render('captcha_action', s['captcha_action'])}\n"
+            "캡차를 통과해야 채팅할 수 있고, 통과하면 인사해요.")
+    rows = _toggle_rows(s, c.cid, JOIN_TOGGLES)
+    rows += [_preset_row(s, c.cid, "captcha_minutes"), _preset_row(s, c.cid, "captcha_action"), _back(c.cid)]
+    return Screen(text, _kb(rows))
+
+
+async def s_security(c: PanelCtx) -> Screen:
+    svc, cid = c.svc, c.cid
+    s = await svc.db.get_settings(cid)
+    words = await svc.db.banned_words(cid)
+    newbie = f"{s['newbie_link_hours']}시간" if s["newbie_link_hours"] else "없음"
+    text = ("🛡️ <b>보안</b>\n"
+            f"도배: {s['flood_seconds']}초에 {s['flood_count']}개 → {human_minutes(s['flood_mute_minutes'])} 뮤트\n"
+            f"같은 말 반복: {s['dup_limit']}회면 삭제+경고\n"
+            f"신규 입장자 링크 금지: {newbie}\n"
+            f"경고 단계: {s['warn_mute_at']}회 뮤트({human_minutes(s['warn_mute_minutes'])}) · {s['warn_ban_at']}회 밴")
+    current = next((k for k, (_, v) in FLOOD_PRESETS.items() if all(s[kk] == vv for kk, vv in v.items())), None)
+    rows = [[B(("● " if current == k else "") + f"도배 {label}", f"m:fl:{cid}:{k}")
+             for k, (label, _) in FLOOD_PRESETS.items()],
+            _preset_row(s, cid, "dup_limit")]
+    rows += _toggle_rows(s, cid, SEC_TOGGLES)
+    rows += [_preset_row(s, cid, "newbie_link_hours"),
+             [B(f"🔗 허용 도메인 ({len(s['whitelist_domains'])})", f"m:dom:{cid}"),
+              B(f"🚫 금지어 ({len(words)})", f"m:bw:{cid}")],
+             [B("⚠️ 경고 단계", f"m:wl:{cid}")],
+             _back(cid)]
+    return Screen(text, _kb(rows))
+
+
+async def s_warn(c: PanelCtx) -> Screen:
+    s = await c.svc.db.get_settings(c.cid)
+    lines = ["⚠️ <b>경고 단계</b>",
+             f"경고 {s['warn_mute_at']}회 → {human_minutes(s['warn_mute_minutes'])} 뮤트",
+             f"경고 {s['warn_ban_at']}회 → 밴"]
+    if s["warn_ban_at"] <= s["warn_mute_at"]:
+        lines.append("\n⚠️ 밴 기준이 뮤트 기준보다 낮거나 같아서 뮤트 없이 바로 밴돼요.")
+    rows = [_preset_row(s, c.cid, k) for k in ("warn_mute_at", "warn_mute_minutes", "warn_ban_at")]
+    rows.append(_back(c.cid, "sec"))
+    return Screen("\n".join(lines), _kb(rows))
+
+
+async def s_words(c: PanelCtx) -> Screen:
+    words = sorted(await c.svc.db.banned_words(c.cid))
+    lines = ["🚫 <b>금지어</b>", "이 단어가 들어간 메시지는 지우고 경고해요. (관리자는 제외)"]
+    lines.append(", ".join(esc(w) for w in words) if words else "(없음)")
+    if words:
+        lines.append("\n단어를 누르면 삭제할 수 있어요.")
+    if len(words) > LIST_SHOW:
+        lines.append(f"(버튼은 앞의 {LIST_SHOW}개만. 나머지는 방에서 <code>.금지어 삭제 단어</code>)")
+    btns = [B(f"🗑 {w[:20]}", f"m:k:{_token(c.svc, c.uid, c.cid, 'ask_bw', w, LIST_TOKEN_TTL)}")
+            for w in words[:LIST_SHOW]]
+    rows = _chunks(btns, 3) + [[B("➕ 금지어 추가", f"m:in:{c.cid}:bw")], _back(c.cid, "sec")]
+    return Screen("\n".join(lines), _kb(rows))
+
+
+async def s_domains(c: PanelCtx) -> Screen:
+    domains = list((await c.svc.db.get_settings(c.cid))["whitelist_domains"])
+    lines = ["🔗 <b>허용 도메인</b>", "링크 차단이 켜져 있어도 이 도메인(하위 도메인 포함) 링크는 허용해요."]
+    lines.append(esc(", ".join(domains)) if domains else "(없음)")
+    if domains:
+        lines.append("\n도메인을 누르면 삭제할 수 있어요.")
+    btns = [B(f"🗑 {d[:24]}", f"m:k:{_token(c.svc, c.uid, c.cid, 'ask_dom', d, LIST_TOKEN_TTL)}")
+            for d in domains[:LIST_SHOW]]
+    rows = _chunks(btns, 2) + [[B("➕ 도메인 추가", f"m:in:{c.cid}:dom")], _back(c.cid, "sec")]
+    return Screen("\n".join(lines), _kb(rows))
+
+
+SCREENS: dict[str, Handler] = {"g": s_hub, "f": s_features, "j": s_join, "sec": s_security, "wl": s_warn,
+                               "bw": s_words, "dom": s_domains}
+
+
+def style_menu(chat_id: int, current: str) -> InlineKeyboardMarkup:
+    rows = _chunks([B(("● " if s.key == current else "") + s.label, f"m:s:{chat_id}:{s.key}")
+                    for s in STYLES.values()], 3)
+    rows.append([B("⬅️ 뒤로", f"m:g:{chat_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+# ── 설정 변경 ─────────────────────────────────────────────
+async def _set(c: PanelCtx, key: str, value) -> bool:
+    """바뀐 경우에만 저장·기록 (같은 버튼 재전송은 기록도 안 남김)."""
+    if (await c.svc.db.get_settings(c.cid))[key] == value:
+        return False
+    await c.svc.db.set_setting(c.cid, key, value)
+    await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"{key}={value}")
+    return True
+
+
+async def r_toggle(c: PanelCtx) -> Screen:
+    key = c.arg(0)
+    if key not in TOGGLES:
+        return Screen(None)
+    if c.arg(1) in ("0", "1"):
+        value = c.arg(1) == "1"
+    else:  # 예전 형식 버튼(목표값 없음)은 뒤집기
+        value = not (await c.svc.db.get_settings(c.cid))[key]
+    await _set(c, key, value)
+    screen = await SCREENS[SCREEN_OF[key]](c)
+    screen.toast = f"{LABELS[key]} {'켜짐' if value else '꺼짐'}"
+    return screen
+
+
+async def r_preset(c: PanelCtx) -> Screen:
+    key, val = c.arg(0), c.arg(1)
+    if key not in PRESETS or val not in {v for v, _ in PRESETS[key]}:
+        return Screen(None)
+    value = coerce(key, val)
+    await _set(c, key, value)
+    screen = await SCREENS[SCREEN_OF[key]](c)
+    screen.toast = f"{LABELS[key]}: {render(key, value)}"
+    return screen
+
+
+async def r_flood(c: PanelCtx) -> Screen:
+    if c.arg(0) not in FLOOD_PRESETS:
+        return Screen(None)
+    label, values = FLOOD_PRESETS[c.arg(0)]
+    changed = False
+    for k, v in values.items():
+        if (await c.svc.db.get_settings(c.cid))[k] != v:
+            await c.svc.db.set_setting(c.cid, k, v)
+            changed = True
+    if changed:
+        await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"flood={c.arg(0)}")
+    screen = await s_security(c)
+    screen.toast = (f"도배 기준: {label} ({values['flood_seconds']}초에 {values['flood_count']}개 → "
+                    f"{values['flood_mute_minutes']}분 뮤트)")
+    return screen
+
+
+async def r_style_menu(c: PanelCtx) -> Screen:
+    return Screen("🎭 이 그룹에서 봇이 쓸 기본 말투를 고르세요.\n(멤버는 각자 .말투 로 바꿀 수 있어요)",
+                  style_menu(c.cid, (await c.svc.db.get_settings(c.cid))["style"]))
+
+
+async def r_style(c: PanelCtx) -> Screen:
+    if c.arg(0) not in STYLES:
+        return Screen(None)
+    await _set(c, "style", c.arg(0))
+    screen = await s_hub(c)
+    screen.toast = f"기본 말투: {STYLES[c.arg(0)].label}"
+    return screen
+
+
+async def r_sub(c: PanelCtx) -> Screen:
+    if not (c.svc.billing and c.svc.billing.enabled):
+        return Screen(None)
+    text, kb = await sub_panel(c.svc, c.cid)
+    rows = [list(r) for r in kb.inline_keyboard] if kb else []
+    rows.append(_back(c.cid))
+    return Screen(text, _kb(rows))
+
+
+# ── 1회용 토큰 (목록 항목 · 삭제 확인) ────────────────────
+async def _ask_delete(c: PanelCtx, what: str, item: str, action: str, back: str) -> Screen:
+    tok = _token(c.svc, c.uid, c.cid, action, item)
+    return Screen(f"{what} <b>{esc(item)}</b> 을(를) 삭제할까요?",
+                  _kb([[B("🗑 삭제", f"m:k:{tok}"), B("취소", f"m:{back}:{c.cid}")]]))
+
+
+async def t_ask_bw(c: PanelCtx, word: str) -> Screen:
+    return await _ask_delete(c, "🚫 금지어", word, "del_bw", "bw")
+
+
+async def t_ask_dom(c: PanelCtx, dom: str) -> Screen:
+    return await _ask_delete(c, "🔗 허용 도메인", dom, "del_dom", "dom")
+
+
+async def t_del_bw(c: PanelCtx, word: str) -> Screen:
+    await c.svc.db.set_banned_word(c.cid, word, False)
+    await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"banned_word-={word}")
+    screen = await s_words(c)
+    screen.toast = "삭제했어요."
+    return screen
+
+
+async def t_del_dom(c: PanelCtx, dom: str) -> Screen:
+    domains = [d for d in (await c.svc.db.get_settings(c.cid))["whitelist_domains"] if d != dom]
+    await _set(c, "whitelist_domains", domains)
+    screen = await s_domains(c)
+    screen.toast = "삭제했어요."
+    return screen
+
+
+# 토큰 동작 → (핸들러, 권한을 새로 확인할지)
+TOKEN_ACTIONS: dict[str, tuple[Callable[[PanelCtx, object], Awaitable[Screen]], bool]] = {
+    "ask_bw": (t_ask_bw, False), "ask_dom": (t_ask_dom, False),
+    "del_bw": (t_del_bw, True), "del_dom": (t_del_dom, True),
+}
+EXPIRED = Screen(None, toast="만료된 버튼이에요. 메뉴를 다시 열어주세요.", alert=True)
+
+
+async def r_token(c: PanelCtx) -> Screen:
+    t = c.svc.menu_tokens.pop(c.arg(0), None)  # 1회용: 꺼내면서 지움
+    if not t or t.expires < time.time() or t.user_id != c.uid or t.action not in TOKEN_ACTIONS:
+        return EXPIRED
+    fn, fresh = TOKEN_ACTIONS[t.action]
+    if not await _allowed(c.svc, c.bot, t.chat_id, c.uid, ADMIN, fresh):
+        return Screen(None, toast="그 그룹의 관리자만 바꿀 수 있어요.", alert=True)
+    c.cid = t.chat_id
+    return await fn(c, t.arg)
+
+
+# ── 글자 입력 (금지어·도메인 추가) ────────────────────────
+INPUT_PROMPTS = {
+    "bw": ("🚫 추가할 <b>금지어</b>를 보내주세요.\n여러 개면 쉼표나 줄바꿈으로 구분 (한 번에 최대 20개)", "bw"),
+    "dom": ("🔗 허용할 <b>도메인</b>을 보내주세요. 예: <code>youtube.com</code>\n여러 개면 쉼표로 구분", "dom"),
+}
+
+
+async def r_input(c: PanelCtx) -> Screen:
+    kind = c.arg(0)
+    if kind not in INPUT_PROMPTS:
+        return Screen(None)
+    prompt, back = INPUT_PROMPTS[kind]
+    c.svc.inputs[c.uid] = PendingInput(kind, c.cid)
+    if c.svc.announcer:  # 1:1 에선 입력 흐름 하나만 (예약공지 마법사와 서로 취소)
+        c.svc.announcer.drafts.pop((c.uid, c.uid), None)
+    return Screen(prompt + "\n\n5분 안에 보내주세요. 그만두려면 <code>취소</code>",
+                  _kb([[B("❌ 취소", f"m:{back}:{c.cid}")]]))
+
+
+def _split_items(text: str) -> list[str]:
+    return [x.strip() for x in re.split(r"[,\n]", text) if x.strip()]
+
+
+async def _add_words(c: PanelCtx, text: str) -> tuple[bool, str]:
+    items = list(dict.fromkeys(x.lower() for x in _split_items(text) if len(x) <= 50))[:MAX_ITEMS_PER_INPUT]
+    if not items:
+        return False, "금지어는 1~50자로 보내주세요."
+    existing = set(await c.svc.db.banned_words(c.cid))
+    new = [w for w in items if w not in existing]
+    if len(existing) + len(new) > MAX_WORDS:
+        return False, f"금지어는 방당 {MAX_WORDS}개까지예요. 안 쓰는 걸 먼저 지워주세요."
+    for w in new:
+        await c.svc.db.set_banned_word(c.cid, w, True)
+    if new:
+        await c.svc.db.log_mod(c.cid, c.uid, None, "setting", "banned_word+=" + ",".join(new))
+    return True, f"✅ 금지어 {len(new)}개 추가했어요." if new else "이미 있는 금지어예요."
+
+
+async def _add_domains(c: PanelCtx, text: str) -> tuple[bool, str]:
+    raw = _split_items(text)[:MAX_ITEMS_PER_INPUT]
+    good = [d for d in (normalize_domain(x) for x in raw) if d]
+    if not good:
+        return False, "도메인 형식이 아니에요. 예: <code>youtube.com</code>"
+    domains = list((await c.svc.db.get_settings(c.cid))["whitelist_domains"])
+    merged = sorted(set(domains) | set(good))
+    if len(merged) > MAX_DOMAINS:
+        return False, f"허용 도메인은 방당 {MAX_DOMAINS}개까지예요."
+    await _set(c, "whitelist_domains", merged)
+    skipped = len(raw) - len(good)
+    return True, f"✅ 도메인 {len(merged) - len(domains)}개 추가했어요." + (f" (형식이 틀린 {skipped}개는 뺐어요)" if skipped else "")
+
+
+INPUT_HANDLERS: dict[str, tuple[Callable[[PanelCtx, str], Awaitable[tuple[bool, str]]], Handler]] = {
+    "bw": (_add_words, s_words), "dom": (_add_domains, s_domains),
+}
+
+
+async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
+    """1:1 에서 메뉴가 기다리던 글자 입력이면 처리하고 True. 명령어(./)는 그대로 통과."""
+    user = msg.from_user
+    if not user or msg.chat_id != user.id:
+        return False
+    p = svc.inputs.get(user.id)
+    if not p:
+        return False
+    text = (msg.text or msg.caption or "").strip()
+    if text.startswith((".", "/")) and text not in CANCEL:
+        return False
+    back_kb = _kb([[B("⬅️ 메뉴로", f"m:{p.kind}:{p.chat_id}")]])
+    now = time.time()
+    if p.expires < now:
+        svc.inputs.pop(user.id, None)
+        if now - p.expires > INPUT_GRACE:
+            return False  # 한참 지난 뒤의 말은 평범한 대화로
+        await msg.reply_text("⌛ 입력 시간(5분)이 지나서 취소됐어요. 메뉴에서 다시 눌러주세요.", reply_markup=back_kb)
+        return True
+    if text in CANCEL:
+        svc.inputs.pop(user.id, None)
+        await msg.reply_text("취소했어요.", reply_markup=back_kb)
+        return True
+    # 입력을 기다리는 사이 관리자에서 내려왔을 수도 있으니 다시 확인
+    if not await _allowed(svc, bot, p.chat_id, user.id, ADMIN):
+        svc.inputs.pop(user.id, None)
+        await msg.reply_text("그 그룹의 관리자만 바꿀 수 있어요.")
+        return True
+    if not text:
+        await msg.reply_text("글자로 보내주세요. 그만두려면 <code>취소</code>", parse_mode="HTML")
+        return True
+    add, screen_fn = INPUT_HANDLERS[p.kind]
+    c = PanelCtx(svc, bot, user.id, p.chat_id, [])
+    ok, result = await add(c, text)
+    if not ok:  # 형식 오류: 입력 대기는 유지하고 다시 받기
+        p.expires = now + 300
+        await msg.reply_text(result + "\n다시 보내주거나 <code>취소</code>", parse_mode="HTML")
+        return True
+    svc.inputs.pop(user.id, None)
+    screen = await screen_fn(c)
+    await msg.reply_text(result + "\n\n" + screen.text, parse_mode="HTML", reply_markup=screen.kb)
+    return True
+
+
+# ── 라우터 ────────────────────────────────────────────────
+ROUTES: dict[str, Route] = {
+    "home": Route(r_home, PUBLIC, scoped=False),
+    "groups": Route(r_groups, PUBLIC, scoped=False),
+    "id": Route(r_id, PUBLIC, scoped=False),
+    "help": Route(r_help, PUBLIC, scoped=False),
+    "k": Route(r_token, PUBLIC, scoped=False),  # 토큰 안의 방으로 권한 확인
+    **{code: Route(fn) for code, fn in SCREENS.items()},
+    "t": Route(r_toggle), "n": Route(r_preset), "fl": Route(r_flood),
+    "st": Route(r_style_menu), "s": Route(r_style),
+    "in": Route(r_input),
+    "sub": Route(r_sub, TG_ADMIN, fresh=True),
+}
+
+
+async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen) -> None:
+    await q.answer(screen.toast, show_alert=screen.alert)
+    if screen.text is None:
+        return
     try:
-        await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await q.edit_message_text(screen.text, parse_mode="HTML", reply_markup=screen.kb)
     except BadRequest as e:
-        if "not modified" not in str(e).lower():
-            raise
+        err = str(e).lower()
+        if "not modified" in err:
+            return
+        if "not found" in err or "can't be edited" in err:  # 지워졌거나 오래된 메시지 → 새로 보냄
+            await bot.send_message(uid, screen.text, parse_mode="HTML", reply_markup=screen.kb)
+            return
+        raise
 
 
 async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str]) -> None:
@@ -149,71 +615,30 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         await q.answer("1:1 채팅에서 열어주세요.", show_alert=True)
         return
     uid = q.from_user.id
-    action = parts[0] if parts else "home"
-
-    if action == "home":
-        await q.answer()
-        await _edit(q, *await main_menu(svc, bot, uid))
+    if not svc.menu_limiter.allow(("menu", uid), CALLBACK_PER_MIN):
+        await q.answer("너무 빨리 누르고 있어요. 잠시 후 다시 눌러주세요.")
         return
-    if action == "groups":
-        await q.answer()
-        await _edit(q, *await groups_menu(svc, bot, uid))
-        return
-    if action == "id":
-        await q.answer(f"내 텔레그램 ID: {uid}", show_alert=True)
-        return
-    if action == "help":
-        await q.answer()
-        await _edit(q, HELP, InlineKeyboardMarkup([[B("⬅️ 처음으로", "m:home")]]))
-        return
-    # 여기부터는 특정 그룹 설정: 누를 때마다 그 그룹 관리자인지 다시 확인
-    chat_id = to_int(parts[1]) if len(parts) > 1 else None
-    if chat_id is None or chat_id >= 0:
+    code = parts[0] if parts else "home"
+    route = ROUTES.get(code)
+    if route is None:
         await q.answer()
         return
+    if code != "in":
+        svc.inputs.pop(uid, None)  # 다른 버튼을 누르면 글자 입력 대기는 취소
+    cid, args = None, parts[1:]
+    if route.scoped:
+        raw = parts[1] if len(parts) > 1 else ""
+        if not CID_RE.fullmatch(raw) or not await svc.db.has_chat(int(raw)):
+            await q.answer("없는 그룹이에요. 메뉴를 다시 열어주세요.", show_alert=True)
+            return
+        cid, args = int(raw), parts[2:]
+        # 누를 때마다 그 그룹 관리자인지 다시 확인 (강등되면 바로 막힘)
+        if not await _allowed(svc, bot, cid, uid, route.need, route.fresh):
+            await q.answer("그 그룹의 관리자만 바꿀 수 있어요.", show_alert=True)
+            return
     try:
-        is_admin = await svc.perms.is_admin(bot, chat_id, uid)
-    except TelegramError:
-        is_admin = False
-    if not is_admin:
-        await q.answer("그 그룹의 관리자만 바꿀 수 있어요.", show_alert=True)
-        return
-
-    if action == "g":
-        await q.answer()
-        await _edit(q, *await group_panel(svc, chat_id))
-    elif action == "t" and len(parts) > 2 and parts[2] in TOGGLES:
-        key = parts[2]
-        if len(parts) > 3 and parts[3] in ("0", "1"):
-            value = parts[3] == "1"
-        else:  # 예전 형식 버튼(목표값 없음)은 뒤집기
-            value = not (await svc.db.get_settings(chat_id))[key]
-        await svc.db.set_setting(chat_id, key, value)
-        await svc.db.log_mod(chat_id, uid, None, "setting", f"{key}={value}")
-        await q.answer(f"{LABELS[key]} {'켜짐' if value else '꺼짐'}")
-        await _edit(q, *await group_panel(svc, chat_id))
-    elif action == "st":
-        await q.answer()
-        await _edit(q, "🎭 이 그룹에서 봇이 쓸 기본 말투를 고르세요.\n(멤버는 각자 .말투 로 바꿀 수 있어요)",
-                    style_menu(chat_id, (await svc.db.get_settings(chat_id))["style"]))
-    elif action == "s" and len(parts) > 2 and parts[2] in STYLES:
-        await svc.db.set_setting(chat_id, "style", parts[2])
-        await svc.db.log_mod(chat_id, uid, None, "setting", f"style={parts[2]}")
-        await q.answer(f"기본 말투: {STYLES[parts[2]].label}")
-        await _edit(q, *await group_panel(svc, chat_id))
-    elif action == "fl" and len(parts) > 2 and parts[2] in FLOOD_PRESETS:
-        label, values = FLOOD_PRESETS[parts[2]]
-        for k, v in values.items():
-            await svc.db.set_setting(chat_id, k, v)
-        await svc.db.log_mod(chat_id, uid, None, "setting", f"flood={parts[2]}")
-        await q.answer(f"도배 기준: {label} ({values['flood_seconds']}초에 {values['flood_count']}개 → "
-                       f"{values['flood_mute_minutes']}분 뮤트)")
-        await _edit(q, *await group_panel(svc, chat_id))
-    elif action == "sub" and svc.billing and svc.billing.enabled:
-        await q.answer()
-        text, kb = await sub_panel(svc, chat_id)
-        rows = list(kb.inline_keyboard) if kb else []
-        rows.append((B("⬅️ 뒤로", f"m:g:{chat_id}"),))
-        await _edit(q, text, InlineKeyboardMarkup(rows))
-    else:
-        await q.answer()
+        screen = await route.handler(PanelCtx(svc, bot, uid, cid, args))
+    except TelegramError as e:
+        log.warning("menu %s failed: %s", code, e)
+        screen = Screen(None, toast="텔레그램 연결이 불안정해요. 잠시 후 다시 눌러주세요.", alert=True)
+    await _show(bot, q, uid, screen)

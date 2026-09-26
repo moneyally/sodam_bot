@@ -96,7 +96,7 @@ class Captcha:
         if presser.id != target_id:
             await query.answer("본인만 누를 수 있어요.", show_alert=True)
             return
-        if choice.isdigit() and int(choice) == row["answer"]:
+        if choice.isdecimal() and int(choice) == row["answer"]:
             await query.answer("확인됐어요! 환영합니다 🙌")
             await self.approve(bot, chat_id, target_id, user_name(presser), None)
             return

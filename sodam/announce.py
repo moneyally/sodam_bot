@@ -223,6 +223,8 @@ class Announcer:
                 setattr(draft, k, edit_row[k])
             draft.pin = bool(edit_row["pin"])
         draft.cleanup.append(msg.message_id)
+        if chat_id == user_id:  # 1:1 에선 입력 흐름을 하나만 (메뉴 글자 입력과 서로 취소)
+            self.svc.inputs.pop(user_id, None)
         self.drafts[(chat_id, user_id)] = draft
         head = f"✏️ 예약공지 #{draft.edit_id} 수정" if draft.edit_id else "🗓️ 예약공지 만들기"
         keep = f"\n(지금: {esc(draft.title) or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""

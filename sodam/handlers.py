@@ -11,7 +11,6 @@ import json
 import logging
 import re
 import time
-from collections import deque
 from datetime import datetime
 from datetime import time as dtime
 
@@ -29,27 +28,12 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .services import Services
 from .tools import ToolCtx
-from .util import day_start, esc, iyeyo, mention, user_name
+from .util import RateLimiter, day_start, esc, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다
-
-
-class RateLimiter:
-    def __init__(self):
-        self._hits: dict[tuple, deque[float]] = {}
-
-    def allow(self, key: tuple, per_minute: int) -> bool:
-        now = time.monotonic()
-        q = self._hits.setdefault(key, deque())
-        while q and now - q[0] > 60:
-            q.popleft()
-        if len(q) >= per_minute:
-            return False
-        q.append(now)
-        return True
 
 
 def _svc(context: ContextTypes.DEFAULT_TYPE) -> Services:
@@ -194,9 +178,13 @@ async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
 
 
-async def _is_admin_safe(svc: Services, bot, chat_id: int, user_id: int) -> bool:
+async def _is_admin_safe(svc: Services, bot, chat_id: int, user_id: int, *, fresh: bool = False) -> bool:
+    """fresh=True 는 결제 정보를 보여줄지 판단할 때만 (캐시 무시 → getChatAdministrators 호출).
+    결제 정보는 텔레그램 관리자·오너에게만 (봇관리자 제외)."""
     try:
-        svc.perms.forget(chat_id)  # 결제 정보 노출 여부라 캐시 말고 지금 상태로 확인
+        if fresh:
+            svc.perms.forget(chat_id)
+            return await svc.perms.is_tg_admin(bot, chat_id, user_id)
         return await svc.perms.is_admin(bot, chat_id, user_id)
     except TelegramError:
         return False
@@ -226,7 +214,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except TelegramError as e:
         log.info("welcome send failed: %s", e)
     # 요금 안내는 초대한 사람이 실제 관리자일 때만 (일반 멤버가 초대한 경우 가격이 새지 않게)
-    if adder and svc.billing and svc.billing.enabled and await _is_admin_safe(svc, bot, chat.id, adder.id):
+    if adder and svc.billing and svc.billing.enabled and await _is_admin_safe(svc, bot, chat.id, adder.id, fresh=True):
         await subscription.send_panel_dm(svc, bot, chat.id, adder.id)  # 1:1 을 시작 안 했으면 조용히 실패
     await svc.mod.report(bot, f"[봇 초대] {esc(chat.title or '')} ({chat.id}) by "
                               f"{esc(user_name(adder)) if adder else '?'}({adder.id if adder else '?'})")
@@ -480,12 +468,12 @@ _DEEP_LINK = re.compile(r"^/start\s+(sub|cfg)_(-\d{5,20})\s*$")
 
 
 async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """1:1 채팅: 오너 등록(/owner 코드), 1:1 가능한 명령어, 나머지는 AI 대화."""
+    """1:1 채팅 순서: 딥링크·/start·/owner → 예약공지 마법사 → 메뉴 글자 입력 → 명령어 → AI."""
     msg = update.message
     svc, bot = _svc(context), context.bot
     user = msg.from_user
     text = (msg.text or msg.caption or "").strip()
-    if not user or not text:
+    if not user:
         return
     await svc.db.ensure_chat(msg.chat_id, None)
     await svc.db.upsert_user(user)
@@ -494,15 +482,18 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     deep = _DEEP_LINK.match(text)
     if deep:  # 방의 '⚙️ 봇 설정' 버튼 / .설정 으로 들어온 경우 → 그 방 설정 패널 (관리자만)
         chat_id = int(deep.group(2))
+        # 패널 자체엔 결제 정보가 없어서 캐시로 판단 (💳 버튼은 누를 때 새로 확인)
         if not await _is_admin_safe(svc, bot, chat_id, user.id):
             # 일반 멤버: 거절 대신 평범한 메인 메뉴 (결제·관리 관련 내용 없이)
             text_, kb = await menu.main_menu(svc, bot, user.id)
             await msg.reply_text("그 버튼은 방 관리자용이에요.\n\n" + text_, parse_mode="HTML", reply_markup=kb)
             return
-        text_, kb = await menu.group_panel(svc, chat_id)
+        svc.inputs.pop(user.id, None)
+        text_, kb = await menu.group_panel(svc, bot, chat_id, user.id)
         await msg.reply_text(text_, parse_mode="HTML", reply_markup=kb)
         return
     if re.match(r"^/start(@\w+)?\s*$", text) or text in ("/menu", ".메뉴"):
+        svc.inputs.pop(user.id, None)
         text_, kb = await menu.main_menu(svc, bot, user.id)
         await msg.reply_text(text_, parse_mode="HTML", reply_markup=kb)
         return
@@ -520,6 +511,14 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if re.match(r"^[./](owner|오너)(@\w+)?\s*$", text, re.I):
         await msg.reply_text("오너 등록 코드는 봇을 실행한 서버 터미널 로그에 떠 있어요 (🔑 /owner 숫자8자리).\n"
                              "재시작하면 코드가 바뀌니 가장 최근 코드를 보내주세요. 이미 오너가 있으면 코드가 나오지 않아요.")
+        return
+
+    # 진행 중인 입력 흐름 (사진·영상만 온 메시지도 여기까지 전달)
+    if await svc.announcer.handle_message(bot, msg):
+        return
+    if await menu.handle_input(svc, bot, msg):
+        return
+    if not text:
         return
 
     role = await svc.perms.role(bot, msg.chat_id, user.id)
@@ -584,7 +583,7 @@ async def job_sub_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             await bot.send_message(chat_id, text, reply_markup=subscription.setup_button(bot.username, chat_id))
         except TelegramError as e:
             log.info("sub reminder failed %s: %s", chat_id, e)
-        if row["added_by"] and await _is_admin_safe(svc, bot, chat_id, row["added_by"]):
+        if row["added_by"] and await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
             await subscription.send_panel_dm(svc, bot, chat_id, row["added_by"])
 
 

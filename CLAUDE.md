@@ -11,11 +11,13 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 69개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 81개, 전부 통과 상태로 푸시됨).
+  클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
   - `handlers.py` 이벤트 라우팅(그룹 메시지·입장·1:1·버튼 콜백 접두어 qz/cap/an/pay/act/m, 딥링크 `/start sub_|cfg_<방ID>`)
-  - `menu.py` 버튼 메뉴(1:1 전용, 누를 때마다 관리자 재확인) · `commands.py` `.명령어`
+  - `menu.py` 버튼 메뉴(1:1 전용): `ROUTES` 라우트 테이블 → `Screen` 반환, 권한 PUBLIC/ADMIN/TG_ADMIN/OWNER, 목표값 토글·프리셋 화이트리스트,
+    1회용 토큰(`m:k:<tok>`, 긴 값·삭제 확인), 글자 입력 엔진(`svc.inputs`, `menu.handle_input`) · `commands.py` `.명령어`
   - `billing.py`/`subscription.py`/`tron.py` 구독 결제 · `captcha.py` `cas.py` `moderation.py` 방 관리
   - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
 
@@ -40,7 +42,8 @@
 - 이 PC 에선 파이썬 SSL 이 가끔 "EE certificate key too weak" 로 실패(VPN/보안 프로그램 추정). `tools/tls_check.py` 로 진단.
 - 보안 분류기가 `yua-secrets` 저장소에서 가져온 OpenAI 키 사용을 차단한 적 있음 → 키는 사용자가 직접 `.env` 에 넣고 봇도 사용자가 직접 실행.
 
-## 남은 소소한 버그 (알려진 것)
-- `commands.c_unban`/`c_cas` 의 `arg.isdigit()` → `util.to_int` 로 교체 필요 ("²" 같은 입력에 int() 예외).
-- `handlers._is_admin_safe` 가 매번 `perms.forget()` → `/start sub_…` 연타 시 getChatAdministrators 과다 호출. 결제 노출 판단에만 fresh 확인하도록 인자 분리.
-- `subscription.on_deep_link` 는 실사용 경로에서 안 쓰임(딥링크는 `menu.group_panel` 로 감) → 정리 대상.
+## 해결된 버그 (2026-09-26, 회귀 테스트 있음 — tests/test_menu.py)
+- `'²'` 같은 입력: `isdigit()` 은 True 인데 `int()` 가 터짐 → `util.to_int` / `isdecimal()` 로 교체
+  (commands 밴해제·cas·예약공지·지식삭제, db.find_members, captcha, games 업다운·퀴즈 콜백).
+- `_is_admin_safe(fresh=)` : 결제 노출 판단(봇 초대·만료 안내)만 캐시 무시 + 텔레그램 관리자(`perms.is_tg_admin`) 기준. 딥링크 연타는 캐시 사용.
+- `subscription.on_deep_link` 삭제 (딥링크는 `menu.group_panel` 로). 결제 버튼(`pay:new`)도 TG 관리자·fresh 확인.

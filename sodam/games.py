@@ -314,7 +314,7 @@ class Quiz(Game):
 
     async def on_callback(self, query: CallbackQuery, parts: list[str]) -> None:
         # parts = [token, round, choice]
-        if (len(parts) != 3 or parts[0] != self.token or not parts[1].isdigit() or not parts[2].isdigit()
+        if (len(parts) != 3 or parts[0] != self.token or not parts[1].isdecimal() or not parts[2].isdecimal()
                 or int(parts[1]) != self.round):
             await query.answer("지난 문제예요.")
             return
@@ -413,7 +413,7 @@ class UpDown(Game):
 
     async def on_text(self, msg: Message, text: str) -> bool:
         t = text.strip()
-        if not t.isdigit() or not 1 <= int(t) <= 100:
+        if not t.isdecimal() or not 1 <= int(t) <= 100:
             return False
         self.set_timer(300, self._timeout)
         self.tries += 1

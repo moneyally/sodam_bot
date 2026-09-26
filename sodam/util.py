@@ -1,5 +1,7 @@
 import html
 import re
+import time
+from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -84,3 +86,19 @@ def period_since(word: str, tz: ZoneInfo) -> tuple[int, str]:
         return 0, "전체"
     label = {0: "오늘", 1: "어제부터", 6: "최근 7일", 29: "최근 30일"}.get(days, "오늘")
     return day_start(tz, days), label
+
+
+class RateLimiter:
+    """키별 최근 60초 호출 수 제한."""
+    def __init__(self):
+        self._hits: dict[tuple, deque[float]] = {}
+
+    def allow(self, key: tuple, per_minute: int) -> bool:
+        now = time.monotonic()
+        q = self._hits.setdefault(key, deque())
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= per_minute:
+            return False
+        q.append(now)
+        return True

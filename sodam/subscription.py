@@ -86,20 +86,6 @@ async def send_panel_dm(svc: Services, bot: Bot, chat_id: int, user_id: int) -> 
         return False
 
 
-async def on_deep_link(svc: Services, bot: Bot, msg, chat_id: int) -> None:
-    """t.me/봇?start=sub_<방ID> 로 들어온 경우 (1:1)."""
-    user = msg.from_user
-    try:
-        is_admin = await svc.perms.is_admin(bot, chat_id, user.id)
-    except TelegramError:
-        is_admin = False  # 봇이 없는 방 ID 등
-    if not is_admin:
-        await msg.reply_text("그 방의 관리자만 설정할 수 있어요.")
-        return
-    text, kb = await panel(svc, chat_id)
-    await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
-
-
 async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str]) -> None:
     # 결제 버튼은 1:1 채팅에서만 동작 (방에 떠 있을 일은 없지만 이중 안전장치)
     if not q.message or q.message.chat_id != q.from_user.id:
@@ -113,8 +99,9 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
 
     if action == "new":
         chat_id = n
-        try:
-            ok = await svc.perms.is_admin(bot, chat_id, q.from_user.id)
+        try:  # 결제는 텔레그램 관리자·오너만, 캐시 말고 지금 상태로 확인
+            svc.perms.forget(chat_id)
+            ok = await svc.perms.is_tg_admin(bot, chat_id, q.from_user.id)
         except TelegramError:
             ok = False
         if not ok:

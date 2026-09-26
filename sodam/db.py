@@ -7,6 +7,7 @@ from typing import Any
 import aiosqlite
 
 from .settings import DEFAULTS
+from .util import to_int
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -300,10 +301,10 @@ class DB:
     async def find_members(self, chat_id: int, query: str) -> list[aiosqlite.Row]:
         """@username, 숫자 ID, 이름으로 방 멤버 검색."""
         q = query.strip().lstrip("@")
-        if q.isdigit():
+        if (uid := to_int(q)) is not None:  # '²' 같은 값은 isdigit() 이 True 라 int() 가 터짐
             return await self._all(
                 "SELECT u.* FROM users u JOIN members m ON m.user_id=u.user_id "
-                "WHERE m.chat_id=? AND u.user_id=?", (chat_id, int(q)))
+                "WHERE m.chat_id=? AND u.user_id=?", (chat_id, uid))
         rows = await self._all(
             "SELECT u.* FROM users u JOIN members m ON m.user_id=u.user_id "
             "WHERE m.chat_id=? AND u.username=? COLLATE NOCASE", (chat_id, q))
@@ -340,6 +341,9 @@ class DB:
 
     async def flag_message(self, chat_id: int, msg_id: int) -> None:
         await self._write("UPDATE messages SET flagged=1 WHERE chat_id=? AND msg_id=?", (chat_id, msg_id))
+
+    async def has_chat(self, chat_id: int) -> bool:
+        return await self._one("SELECT 1 FROM chats WHERE chat_id=?", (chat_id,)) is not None
 
     async def all_chat_ids(self) -> list[int]:
         rows = await self._all("SELECT chat_id FROM chats")

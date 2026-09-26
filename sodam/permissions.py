@@ -93,3 +93,9 @@ class Permissions:
     async def protected(self, bot: Bot, chat_id: int, user_id: int) -> bool:
         """제재할 수 없는 대상 (오너·관리자·봇 자신)."""
         return user_id == bot.id or await self.is_admin(bot, chat_id, user_id)
+
+    async def is_tg_admin(self, bot: Bot, chat_id: int, user_id: int) -> bool:
+        """텔레그램 관리자 또는 오너 (.봇관리자 로 추가된 사람은 제외). 결제·구독 화면용."""
+        if user_id in await self.owners():
+            return True
+        return chat_id < 0 and user_id in await self.telegram_admins(bot, chat_id)

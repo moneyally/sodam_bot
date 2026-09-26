@@ -148,3 +148,13 @@ def link_allowed(domains: list[str], whitelist: list[str]) -> bool:
     if not domains:
         return True
     return all(any(d == w or d.endswith("." + w) for w in whitelist) for d in domains)
+
+
+_DOMAIN_RE = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}")
+
+
+def normalize_domain(raw: str) -> str | None:
+    """'https://www.YouTube.com/watch' → 'youtube.com'. 도메인 형식이 아니면 None."""
+    dom = raw.strip().lower().removeprefix("https://").removeprefix("http://")
+    dom = dom.split("/")[0].removeprefix("www.")
+    return dom if _DOMAIN_RE.fullmatch(dom) else None

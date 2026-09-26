@@ -127,12 +127,14 @@ class FakeQuery:
         self.data = data
         self.answers: list[tuple] = []
         self.edits: list[str] = []
+        self.kb = None  # 마지막으로 그린 버튼
 
     async def answer(self, text=None, show_alert=False):
         self.answers.append((text, show_alert))
 
     async def edit_message_text(self, text, **kw):
         self.edits.append(text)
+        self.kb = kw.get("reply_markup")
 
     async def edit_message_reply_markup(self, markup=None):
         self.edits.append("<markup removed>")
@@ -146,6 +148,9 @@ class FakePerms:
         return uid in self.admins or uid == bot.id
 
     async def is_admin(self, bot, chat_id, uid):
+        return uid in self.admins
+
+    async def is_tg_admin(self, bot, chat_id, uid):
         return uid in self.admins
 
     async def owners(self):

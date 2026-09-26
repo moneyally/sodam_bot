@@ -4,7 +4,9 @@ from __future__ import annotations
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .util import RateLimiter
 
 if TYPE_CHECKING:
     from .announce import Announcer
@@ -35,6 +37,24 @@ class PendingAction:
 
 
 @dataclass
+class PendingInput:
+    """버튼 메뉴에서 '글자로 보내주세요' 를 기다리는 중 (1:1, 한 사람당 1개)."""
+    kind: str
+    chat_id: int
+    expires: float = field(default_factory=lambda: time.time() + 300)
+
+
+@dataclass
+class MenuToken:
+    """버튼에 담기엔 긴 값(금지어 등)·파괴적 동작용 서버 쪽 1회용 토큰."""
+    user_id: int
+    chat_id: int
+    action: str
+    arg: Any
+    expires: float
+
+
+@dataclass
 class Services:
     cfg: Config
     db: DB
@@ -52,6 +72,9 @@ class Services:
     captcha: Captcha = None
     announcer: Announcer = None
     pending: dict[str, PendingAction] = field(default_factory=dict)
+    inputs: dict[int, PendingInput] = field(default_factory=dict)      # user_id → 메뉴 글자 입력 대기
+    menu_tokens: dict[str, MenuToken] = field(default_factory=dict)
+    menu_limiter: RateLimiter = field(default_factory=RateLimiter)
 
     async def paid_features(self, chat_id: int) -> bool:
         """구독(또는 체험) 중인 방인지. 결제 기능이 꺼져 있으면 항상 True.

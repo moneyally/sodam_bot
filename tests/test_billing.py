@@ -222,13 +222,9 @@ async def payment_flow_private_only():
     bot = FakeBot()
     admin, member = fake_user(1, "방장"), fake_user(20, "멤버")
 
-    # 딥링크: 관리자만 설정 화면
-    m = FakeMsg(20, member, f"/start sub_{CHAT}")
-    await subscription.on_deep_link(svc, bot, m, CHAT)
-    assert "관리자만" in m.replies[0]
-    m = FakeMsg(1, admin, f"/start sub_{CHAT}")
-    await subscription.on_deep_link(svc, bot, m, CHAT)
-    assert "30.0000 USDT" in m.replies[0] or "30 USDT" in m.replies[0] or "USDT" in m.replies[0]
+    # 구독 화면(관리자 1:1 에서만 열림, 권한 확인은 menu 라우터 몫)에 금액이 나옴
+    text, _ = await subscription.panel(svc, CHAT)
+    assert "USDT" in text
 
     # 방에서 누른 결제 버튼은 거부
     q = FakeQuery(CHAT, admin)
