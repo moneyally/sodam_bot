@@ -42,6 +42,7 @@ class Permissions:
         self._admin_cache: dict[int, tuple[float, set[int]]] = {}
         self._forgotten: set[int] = set()
         self._admin_users: dict[int, tuple[float, list]] = {}  # 관리자 이름 (사칭 검사용)
+        self._bot_rights: dict[int, tuple[float, bool]] = {}   # 봇이 관리 권한이 있는지
         self.on_admins = None  # async fn(bot, chat_id, admins) — services 조립 때 연결
         self._owners: set[int] | None = None
         self.claim_code: str | None = None  # 오너가 없을 때만 생성, 서버 로그에만 출력
@@ -130,6 +131,25 @@ class Permissions:
             log.warning("관리자 이름 조회 실패: chat %s: %s", chat_id, e)
         got = self._admin_users.get(chat_id) or cached
         return got[1] if got else []
+
+    async def bot_can_moderate(self, bot: Bot, chat_id: int) -> bool:
+        """봇이 그 방에서 메시지 삭제 + 사용자 제한 권한이 있는지 (10분 캐시, 봇 권한이 바뀌면 forget_bot).
+        권한 없는 방(일반 멤버로만 초대)에선 도배·금지어·사칭·캡차·CAS 같은 관리 기능을 건너뛴다."""
+        hit = self._bot_rights.get(chat_id)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        try:
+            me = await bot.get_chat_member(chat_id, bot.id)
+            ok = me.status == ChatMemberStatus.OWNER or (
+                me.status == ChatMemberStatus.ADMINISTRATOR
+                and bool(getattr(me, "can_delete_messages", False)) and bool(getattr(me, "can_restrict_members", False)))
+        except TelegramError:
+            return hit[1] if hit else True  # 확인 못 하면 예전 값, 처음이면 시도는 해 본다
+        self._bot_rights[chat_id] = (time.time(), ok)
+        return ok
+
+    def forget_bot(self, chat_id: int) -> None:
+        self._bot_rights.pop(chat_id, None)
 
     async def _stored_admins(self, chat_id: int) -> set[int] | None:
         if not await self.db._one("SELECT 1 FROM chat_admins_fetched WHERE chat_id=?", (chat_id,)):

@@ -108,6 +108,10 @@ class FakeBot:
     # 태그 알림용. 테스트가 bot.member_status = {(방, 사람): "left"} (없으면 "member"), bot.dm_blocked = {사람} 로 지정
     async def get_chat_member(self, chat_id, user_id):
         self.calls.append(("get_chat_member", chat_id, user_id))
+        if user_id == self.id:  # 봇 자신: 기본은 관리 권한 있는 관리자 (can_moderate=False 면 일반 멤버)
+            ok = getattr(self, "can_moderate", True)
+            return SimpleNamespace(status="administrator" if ok else "member", user=SimpleNamespace(id=user_id),
+                                   can_delete_messages=ok, can_restrict_members=ok, is_member=True)
         status = getattr(self, "member_status", {}).get((chat_id, user_id), "member")
         return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left")
 
@@ -174,6 +178,12 @@ class FakePerms:
 
     def forget(self, chat_id):
         pass
+
+    def forget_bot(self, chat_id):
+        pass
+
+    async def bot_can_moderate(self, bot, chat_id):
+        return getattr(bot, "can_moderate", True)
 
     async def admin_users(self, bot, chat_id):
         return [a.user for a in await bot.get_chat_administrators(chat_id)]

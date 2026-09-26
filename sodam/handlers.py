@@ -131,6 +131,11 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
         return
+    if not await svc.perms.bot_can_moderate(bot, chat_id):  # 관리 권한 없는 방: 검사 없이 기록·인사만
+        await svc.db.log_join(chat_id, user.id, user_name(user), user.username)
+        if s["greet_enabled"]:
+            svc.greeter.queue(bot, chat_id, user.id, user_name(user))
+        return
 
     if s["cas_enabled"] and await svc.cas.is_banned(user.id):
         await _cas_ban(context, chat_id, user)
@@ -196,6 +201,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     cmu = update.my_chat_member
     if not cmu or cmu.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
+    _svc(context).perms.forget_bot(cmu.chat.id)  # 봇 권한이 바뀌었을 수 있음 (관리자 지정·해제)
     if _in_chat(cmu.old_chat_member) or not _in_chat(cmu.new_chat_member):
         return  # 새로 들어온 게 아님 (권한 변경·강퇴 등)
     svc, bot = _svc(context), context.bot
@@ -297,7 +303,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if text:
         await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked)
 
-    if role < Role.ADMIN:
+    # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
+    if role < Role.ADMIN and await svc.perms.bot_can_moderate(bot, chat_id):
         s = await svc.db.get_settings(chat_id)
         cas_seen: set = context.bot_data["cas_seen"]
         if s["cas_enabled"] and user.id not in cas_seen:

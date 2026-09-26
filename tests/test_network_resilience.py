@@ -96,6 +96,26 @@ async def impersonation_still_detected_with_cached_admins():
 
 
 @test
+async def room_without_bot_admin_rights_skips_moderation_but_plays():
+    """봇이 일반 멤버로만 있는 방(예: 장외거래 OTC): 지우지도 막지도 못하니 경고·뮤트 시도 없이 게임·명령은 동작."""
+    bot = FlakyBot(fail=False, admins=[fake_user(8098229366, "LOVE3")])
+    bot.can_moderate = False
+    db, svc, ctx = await setup(bot)
+    await db.set_banned_word(CHAT, "도박", True)
+    member = fake_user(7043936117, "Yasin", "saaag")
+    for _ in range(8):                                                  # 도배 + 금지어
+        await say(ctx, member, "도박 도박 도박")
+    assert not bot.named("restrict") and not [c for c in bot.named("send_message") if "경고" in c[2] or "도배" in c[2]]
+    m = await say(ctx, member, "/game@sodam_ai_bot")
+    assert m.replies and "게임" in m.replies[0]
+    bot.can_moderate = True                                             # 관리자로 지정되면 (봇 권한 변경 이벤트)
+    svc.perms.forget_bot(CHAT)
+    for _ in range(2):
+        await say(ctx, fake_user(7000000009, "스패머"), "도박하자")
+    assert [c for c in bot.named("send_message") if "금지어" in c[2] or "경고" in c[2]]
+
+
+@test
 async def app_uses_generous_timeouts():
     import importlib
     main = importlib.import_module("sodam.__main__")
