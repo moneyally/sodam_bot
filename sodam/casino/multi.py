@@ -21,9 +21,10 @@ from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..db import now, register_schema
 from ..util import esc, user_name
-from . import Ctx, register
+from . import SHUTDOWN_HOOKS, Ctx, register
 from . import core
-from .core import balance, credit, fmt, result_line, settle, split_bet, take_bet
+from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet
+from .dealer import line as dealer_line
 
 log = logging.getLogger(__name__)
 
@@ -331,6 +332,7 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
         r = current(cid, game)
         if r is None:                   # 첫 베팅 → 새 판
             r = cls(ctx)
+            r.style = (await ctx.svc.db.get_settings(cid))["style"]  # 딜러 소담 말투 (자유분방=반말)
             r.players[uid] = p
             _start(r)
             await ctx.reply(r.open_text(p, pick_txt))
@@ -427,6 +429,7 @@ class CrashRound(Round):
         total_in = sum(p.bet for p in self.players.values())
         total_out = sum(p.payout for p in self.players.values())
         lines.append(f"\n판돈 {fmt(total_in)} · 지급 {fmt(total_out)}")
+        lines.append(dealer_line(getattr(self, "style", "polite"), total_in, total_out, 10**9))
         lines.append("다음 판: <code>!그래프 금액</code>")
         return "\n".join(lines)
 
@@ -483,7 +486,8 @@ async def g_stop(ctx: Ctx) -> None:
     bal = await r.cash_out(p, m)       # done 은 await 전에 세워짐 → 동시에 두 번 쳐도 한 번만
     if bal is None:
         return
-    await ctx.reply(f"✅ {p.name} <b>{fx(p.cash_at)}</b>에서 내림!\n" + result_line(p.bet, p.payout, bal))
+    await ctx.reply(f"✅ {p.name} <b>{fx(p.cash_at)}</b>에서 내림!\n" + result_line(p.bet, p.payout, bal)
+                    + await dealer_tail(ctx, p.bet, p.payout, bal))
 
 
 # ── 🏇 경마 ──────────────────────────────────────────────
@@ -536,7 +540,10 @@ class HorseRound(Round):
         if lost:
             lines.append(f"\n💸 <b>꽝 {len(lost)}명</b>")
             lines += [f"· {p.name} {p.pick}번 -{fmt(p.bet)}" for p in lost]
-        lines.append("\n다음 경주: <code>!경마 금액 번호</code>")
+        total_in = sum(p.bet for p in self.players.values())
+        total_out = sum(p.payout for p in self.players.values())
+        lines.append("\n" + dealer_line(getattr(self, "style", "polite"), total_in, total_out, 10**9))
+        lines.append("다음 경주: <code>!경마 금액 번호</code>")
         return "\n".join(lines)
 
     def status(self) -> str:
@@ -579,3 +586,10 @@ register(("그래프", "crash", "크래시"), g_crash, usage="금액 [자동배�
 register(("스톱", "멈춰", "stop"), g_stop, help="그래프에서 내리기", group="같이 하는 게임")
 register(("경마", "horse"), g_horse, usage="금액 번호", help="🏇 1~5번 1등 맞히면 ×4.7", group="같이 하는 게임")
 register(("라운드", "round"), g_rounds, help="지금 진행 중인 판", group="같이 하는 게임", needs_account=False)
+
+
+async def _shutdown(svc) -> int:
+    return await abandon_all()
+
+
+SHUTDOWN_HOOKS.append(_shutdown)

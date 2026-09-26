@@ -101,6 +101,23 @@ async def daily_and_bailout_once_per_day():
 
 
 @test
+async def concurrent_join_and_mine_pay_once():
+    db, svc, bot, ctx = await setup()
+    from sodam import casino as C
+
+    def mk(text):
+        m = FakeMsg(CHAT, A, text)
+        m.chat, m.sender_chat = SimpleNamespace(id=CHAT, title="S", type="supergroup"), None
+        return m
+    await asyncio.gather(*(C.dispatch(svc, bot, mk("!가입"), CHAT, A, 0, "!가입") for _ in range(5)))
+    assert await core.balance(db, CHAT, A.id) == core.START_POINTS      # 5번 동시에 눌러도 한 번만
+    await asyncio.gather(*(C.dispatch(svc, bot, mk("!채굴"), CHAT, A, 0, "!채굴") for _ in range(5)))
+    n = (await db._one("SELECT COUNT(*) AS n FROM casino_ledger WHERE user_id=? AND reason='mine'", (A.id,)))["n"]
+    assert n == 1, n                                                    # 채굴도 한 번만
+    assert await ledger_ok(db, A.id)
+
+
+@test
 async def amount_parsing():
     assert core.parse_amount("1000", 5) == 1000 and core.parse_amount("5천", 0) == 5000
     assert core.parse_amount("3만", 0) == 30000 and core.parse_amount("1k", 0) == 1000

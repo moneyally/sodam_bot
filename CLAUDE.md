@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 201개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 260개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -21,6 +21,7 @@
   - `billing.py`/`subscription.py`/`tron.py` 구독 결제 · `captcha.py` `cas.py` `moderation.py` 방 관리
   - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
   - `memory.py` 멤버 기억·방 흐름 요약·대화 기록 · `social.py` 이어 말하기·먼저 끼어들기 · `ai_settings.py` AI 설정 키
+  - `casino/` 포인트 게임(! 명령, 설계 docs/GAMES.md): core 지갑·가입·채굴 · basic 주사위·슬롯·룰렛·사다리 · cards 바카라·블랙잭·하이로우 · multi 그래프·경마 · dealer 딜러 소담 대사
   - `tagnotify.py` 태그·답장 알림 · `hooks.py` 확장 지점 · `panels/*.py` 버튼 화면(greet·tagnotify·owner·announce·ai·log·room)
 
 ## 중요한 결정 (바꾸지 말 것, 바꾸려면 사용자에게 확인)
