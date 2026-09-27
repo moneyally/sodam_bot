@@ -747,10 +747,13 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         return
     allowed = (presser in await svc.perms.owners() if action.from_dm   # 1:1 카드는 오너만
                else await svc.perms.is_admin(bot, action.chat_id, presser))
-    pressed = lambda what: svc.db.log_mod(action.chat_id, presser, action.target_id, f"press_{action.kind}", what)  # noqa: E731
+    pressed = lambda what: svc.db.audit(action.chat_id, presser, action.target_id, f"press_{action.kind}",  # noqa: E731
+                                        f"{what} ({len(action.targets)}명)")
     if not allowed:
         log.info("sanction button refused (not admin): chat %s user %s", action.chat_id, presser)
-        await pressed("거절(관리자 아님)")
+        if presser not in action.refused:          # 아무나 연타해도 기록은 한 줄
+            action.refused.add(presser)
+            await pressed("거절(관리자 아님)")
         await q.answer("관리자만 누를 수 있어요.", show_alert=True)
         return
     # 실행은 누른 사람에게 텔레그램 '사용자 차단' 권한이 있어야 (취소는 관리자 누구나)

@@ -1,5 +1,6 @@
 """SQLite 저장소. 모든 SQL은 이 파일에만 둔다 (나중에 Postgres로 옮기기 쉽게)."""
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -10,6 +11,8 @@ import aiosqlite
 from .search import index_text, match_query, query_words
 from .settings import DEFAULTS
 from .util import to_int
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -226,6 +229,9 @@ def disk_full(e: BaseException) -> bool:
     """SQLite 가 '디스크(또는 DB 최대 크기) 가득 참'으로 쓰기를 못 한 오류인지."""
     return isinstance(e, sqlite3.OperationalError) and "full" in str(e).lower()
 
+
+# 오너만 보는 감사 기록(owner_room_log). 방 관리자용 기록(.기록·🗂️)에선 뺀다 (오너 1:1 요청이 방 관리자에게 보이지 않게)
+NOT_AUDIT = "l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press!_%' ESCAPE '!'"
 
 class DB:
     def __init__(self, path: str):
@@ -886,10 +892,17 @@ class DB:
             "INSERT INTO mod_log(chat_id, actor_id, target_id, action, detail, ts) VALUES(?,?,?,?,?,?)",
             (chat_id, actor_id, target_id, action, detail[:300], now()))
 
+    async def audit(self, chat_id: int, actor_id: int, target_id: int | None, action: str, detail: str) -> None:
+        """오너 감사 기록 (제재 요청 ask_*·버튼 press_*). 실패해도(디스크 가득 등) 제재·버튼 흐름은 계속."""
+        try:
+            await self.log_mod(chat_id, actor_id, target_id, action, detail)
+        except Exception as e:
+            log.warning("audit log failed: %s", e)
+
     async def recent_mod_log(self, chat_id: int, limit: int = 15) -> list[aiosqlite.Row]:
         return await self._all(
             "SELECT l.*, u.first_name AS target_name FROM mod_log l "
-            "LEFT JOIN users u ON u.user_id=l.target_id WHERE l.chat_id=? ORDER BY l.id DESC LIMIT ?",
+            f"LEFT JOIN users u ON u.user_id=l.target_id WHERE l.chat_id=? AND {NOT_AUDIT} ORDER BY l.id DESC LIMIT ?",
             (chat_id, limit))
 
     # ── 활동 리포트·AI 하루 요약 (sodam/reports.py) ─────────

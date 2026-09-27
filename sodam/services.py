@@ -37,6 +37,7 @@ class PendingAction:
     minutes: int = 0   # mute 기간
     extra: tuple[tuple[int, str], ...] = ()   # 같은 확인 버튼으로 함께 처리할 대상들 (한 번에 여러 명)
     from_dm: bool = False   # 오너가 1:1 에서 요청 → 확인 카드는 1:1 에, 원하면 방에 안내
+    refused: set[int] = field(default_factory=set)   # 권한 없이 누른 사람 (기록은 한 번만)
 
     @property
     def targets(self) -> list[tuple[int, str]]:

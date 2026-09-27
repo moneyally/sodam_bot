@@ -89,3 +89,55 @@ async def after_reading_log_no_sanction_or_send_in_same_answer():
                                                             "minutes": 3, "reason": "x"})],
                     chat_id=OWNER.id, role=Role.OWNER)
     assert "확인 버튼을 보냈음" in res[0], "다음 요청(새 답변)에선 다시 됨"
+
+
+# ── 2차 검토에서 재현된 것 ──────────────────────────────
+@test
+async def dotted_words_and_emails_are_kept():
+    for ok in ("Mr.Kim 대표님", "Node.js로 개발", "report.pdf 보내드릴게요", "abc@gmail.com", "Node.js/React 둘 다"):
+        assert strip_unsafe(ok) == ok, (ok, strip_unsafe(ok))
+    assert memory.clean_fact("Node.js 개발자로 일함"), "기억에서 조용히 빠지면 안 됨"
+
+
+@test
+async def audit_write_failure_does_not_break_buttons_or_cards():
+    r = await room()
+
+    async def full(*a, **k):
+        raise Exception("database or disk is full")
+    r.db.log_mod = full
+    res = await ask(r, BOSS, [tool_call("mute_member", {"names": ["조이킨"], "minutes": 3, "reason": "x"})])
+    assert "확인 버튼을 보냈음" in res[0], res
+    key = next(iter(r.svc.pending))
+    q = await press(r, A, key, "y")
+    assert q.answers and q.answers[-1][1] is True, "권한 없는 사람도 알림은 받아야 (버튼이 계속 돌지 않게)"
+    q = await press(r, BOSS, key, "n")
+    assert q.edits and "취소" in q.edits[-1], q.edits
+
+
+@test
+async def audit_rows_hidden_from_room_admin_log_and_refusals_logged_once():
+    from sodam.panels import log as panel
+    r = await room()
+    await ask(r, BOSS, [tool_call("mute_member", {"names": ["조이킨"], "minutes": 3, "reason": "x"})])
+    key = next(iter(r.svc.pending))
+    for _ in range(5):
+        await press(r, A, key, "y")
+    n = (await r.db._one("SELECT COUNT(*) AS n FROM mod_log WHERE action='press_mute'"))["n"]
+    assert n == 1, n
+    assert not [x for x in await r.db.recent_mod_log(Room.CHAT) if x["action"].startswith(("ask_", "press_"))]
+    rows, *_ , total = await panel._page(r.svc, Room.CHAT, 0)
+    assert total == 0 and not rows, "방 관리자 기록 화면엔 오너용 감사 기록 없음"
+
+
+@test
+async def room_log_days_null_and_long_output_fits():
+    r = await room()
+    r.svc.perms.owner_ids = {OWNER.id}
+    for i in range(30):
+        await r.db.log_mod(Room.CHAT, BOSS.id, B.id, "ask_mute", f"확인 카드: {'가' * 150} {i}")
+    out = await log(r, "attempt", days=None)
+    assert "도구 입력 오류" not in out and "생략" in out, out[-200:]
+    assert len(out) < 4000 and "개 생략)" in out, len(out)
+    await memory.record_turn(r.db, Room.CHAT, BOSS.id, "call", "뮤트 해줘", "네", None)
+    assert "14일만" in await log(r, "requests", days=30)

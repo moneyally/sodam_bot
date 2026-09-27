@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .. import menu
+from ..db import NOT_AUDIT
 from ..menu import B, HubItem, PanelCtx, Screen
 from ..settings import CHOICES, LABELS, choice_label
 from ..styles import STYLES
@@ -48,14 +49,14 @@ def describe(action: str, detail: str) -> str:
 
 
 async def _page(svc, cid: int, page: int) -> tuple[list, int, int, int]:
-    total = (await svc.db._one("SELECT COUNT(*) AS n FROM mod_log WHERE chat_id=?", (cid,)))["n"]
+    total = (await svc.db._one(f"SELECT COUNT(*) AS n FROM mod_log l WHERE chat_id=? AND {NOT_AUDIT}", (cid,)))["n"]
     pages = max(1, -(-total // PAGE))
     page = min(max(page, 0), pages - 1)
     rows = await svc.db._all(
         "SELECT l.*, a.first_name AS a_first, a.last_name AS a_last, a.username AS a_user, "
         "t.first_name AS t_first, t.last_name AS t_last, t.username AS t_user FROM mod_log l "
         "LEFT JOIN users a ON a.user_id=l.actor_id LEFT JOIN users t ON t.user_id=l.target_id "
-        "WHERE l.chat_id=? ORDER BY l.id DESC LIMIT ? OFFSET ?", (cid, PAGE, page * PAGE))
+        f"WHERE l.chat_id=? AND {NOT_AUDIT} ORDER BY l.id DESC LIMIT ? OFFSET ?", (cid, PAGE, page * PAGE))
     return rows, page, pages, total
 
 

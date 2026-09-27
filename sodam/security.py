@@ -98,7 +98,10 @@ def wrap(tag: str, body: str, n: str, **attrs: str) -> str:
 
 # ── 출력 필터 ─────────────────────────────────────────────
 # 'evil.xyz/?d=비밀'·'비밀.evil.lol' 처럼 주소만 써도 텔레그램이 링크로 만들고 미리보기를 불러 정보가 샐 수 있어 도메인 모양은 전부
-_URL = re.compile(r"(https?://\S+|www\.\S+|\btg://\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,63}\b(?:[/?#]\S*)?)",
+# 'Node.js'·'report.pdf'·메일 주소는 두고, 흔한·사기에 잘 쓰이는 끝(TLD)만
+_TLD = ("com|net|org|io|co|kr|me|xyz|lol|top|site|app|link|cc|gg|ai|info|biz|ru|cn|jp|dev|online|store|shop|live|pro|"
+        "vip|fun|club|to|ly|sh|tv|us|uk|de|tk|ml|ga|cf|gq|win|bet|cash|money|click|icu|buzz|cyou|sbs|cfd|pw|ws|su")
+_URL = re.compile(r"(https?://\S+|www\.\S+|\btg://\S+|(?<![@\w-])(?:[a-z0-9-]+\.)+(?:" + _TLD + r")\b(?:[/?#]\S*)?)",
                   re.I | re.A)
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)  # AI 답엔 링크 미리보기 안 띄움 (누르지 않아도 주소를 불러오는 통로)
 _MENTION = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{3,31})")
