@@ -67,17 +67,44 @@ class FakeClient:
         self.calls.append(("entity", peer))
         return peer
 
-    async def iter_participants(self, entity, limit=None):
+    @staticmethod
+    def user(m):
+        """members 항목 (id, 이름, 아이디[, 봇[, 성]]) → 텔레그램 User 흉내."""
+        return SimpleNamespace(id=m[0], first_name=m[1], username=m[2], bot=m[3] if len(m) > 3 else False,
+                               last_name=m[4] if len(m) > 4 else None, deleted=False, min=False)
+
+    async def iter_participants(self, entity, limit=None):   # 기본 그룹 (getFullChat)
         self.calls.append(("participants", entity, limit))
         self._maybe_raise()
         for m in self.members[:limit]:
-            yield SimpleNamespace(id=m[0], first_name=m[1], username=m[2], bot=m[3] if len(m) > 3 else False)
+            yield self.user(m)
 
     async def get_dialogs(self, limit=None):
         self.calls.append(("dialogs", limit))
 
+    usernames: dict = {}   # 아이디 → members 항목 (resolveUsername)
+
     async def __call__(self, req):
-        self.calls.append(("call", type(req).__name__, list(req.id), req.increment))
+        kind = type(req).__name__
+        if kind == "GetParticipantsRequest":
+            self.calls.append(("page", req.channel, req.offset, req.limit))
+            self._maybe_raise()
+            page = self.members[req.offset:req.offset + req.limit]
+            inviter = self.user((424242, "초대한 사람", "inviter"))   # users 엔 참가자 아닌 사람도 섞여 옴
+            return SimpleNamespace(participants=[SimpleNamespace(user_id=m[0]) for m in page],
+                                   users=[self.user(m) for m in page] + ([inviter] if page else []))
+        if kind == "ResolveUsernameRequest":
+            self.calls.append(("resolve", req.username))
+            self._maybe_raise()
+            m = self.usernames.get(req.username.lower())
+            if m is None:
+                from telethon.errors import UsernameNotOccupiedError
+                raise UsernameNotOccupiedError(req)
+            from telethon.tl.types import PeerChannel, PeerUser
+            if m == "channel":
+                return SimpleNamespace(peer=PeerChannel(5), users=[self.user((5, "관련 없는 사람", "x"))], chats=[])
+            return SimpleNamespace(peer=PeerUser(m[0]), users=[self.user(m)], chats=[])
+        self.calls.append(("call", kind, list(req.id), req.increment))
         self._maybe_raise()
         return SimpleNamespace(views=[SimpleNamespace(views=self.view_counts.get(i)) for i in req.id])
 

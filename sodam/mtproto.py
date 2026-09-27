@@ -1,7 +1,8 @@
 """MTProto 도우미 (선택 기능): Bot API 로는 못 얻는 데이터를 Telethon 으로.
 
-① 봇 세션 — 같은 봇 토큰 + MTPROTO_API_ID/HASH(.env) 로 로그인. `participants`·`member_diff` (channels.getParticipants:
-   core.telegram.org "Both users and bots can use this method", 봇이 관리자여야 함).
+① 봇 세션 — 같은 봇 토큰 + MTPROTO_API_ID/HASH(.env) 로 로그인. `participants`·`member_diff`·`snapshot`
+   (channels.getParticipants 200명씩: core.telegram.org "Both users and bots can use this method", 봇이 관리자여야 함),
+   `resolve_username` (contacts.resolveUsername, 봇 가능). namehist 가 전체 멤버 이름 순찰·@아이디 조회에 씀.
 ② 사용자 세션 — 기본 꺼짐. 오너가 서버에서 `python tools/mtproto_login.py` 로 전용 계정 세션을 만들면(data/mtproto_user.session, 0600)
    켜짐. `views` (messages.getMessagesViews: "Only users can use this method"). 채널마다 30분에 1번만 부르고 DB 에 캐시.
    로그인 코드는 절대 텔레그램 채팅으로 받지 않음 (채팅에 올라온 코드는 텔레그램이 무효화함) → 서버 터미널에서만.
@@ -18,6 +19,7 @@ import logging
 import os
 import sqlite3
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -32,14 +34,19 @@ CALL_TIMEOUT = 120          # 한 번의 조회 (참가자 1만 명 = 요청 ~50
 CONNECT_TIMEOUT = 30
 VIEWS_GAP = 30 * 60         # 채널마다 조회수 호출 간격
 VIEWS_MAX_IDS = 100
+PAGE = 200                  # channels.getParticipants 한 번에 (텔레그램 최대)
+PAGE_GAP = 0.5              # 쪽 사이 쉼
+RESOLVE_PER_HOUR = 60       # contacts.resolveUsername 시간당 상한 (조회는 누구나 할 수 있어서)
+NOT_FOUND_TTL = 86400       # 없는 @아이디는 하루 다시 안 물어봄
 RESTART_GAP = 30            # [🔄 다시 연결] 연타 방지 (봇 로그인 반복은 FloodWait 을 부름)
 _sleep = asyncio.sleep      # 테스트가 바꿔 끼움
 
 dbm.register_schema("""
 CREATE TABLE IF NOT EXISTS mtproto_members (
-    chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, first_name TEXT, username TEXT,
+    chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, first_name TEXT, last_name TEXT, username TEXT,
     is_bot INTEGER NOT NULL DEFAULT 0, seen_ts INTEGER NOT NULL, PRIMARY KEY (chat_id, user_id));
-CREATE TABLE IF NOT EXISTS mtproto_snap (chat_id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, count INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS mtproto_snap (chat_id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, count INTEGER NOT NULL,
+    partial INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS mtproto_views (
     chat_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, views INTEGER NOT NULL, ts INTEGER NOT NULL,
     PRIMARY KEY (chat_id, msg_id));
@@ -89,6 +96,11 @@ def make_client(session: str, api_id: int, api_hash: str):
                           flood_sleep_threshold=0, device_model="sodam-helper", connection_retries=2)
 
 
+def _user(u) -> dict:
+    return {"id": u.id, "first_name": u.first_name or "", "last_name": u.last_name or "", "username": u.username or "",
+            "is_bot": bool(u.bot), "deleted": bool(getattr(u, "deleted", False)), "min": bool(getattr(u, "min", False))}
+
+
 def _flood_seconds(e: BaseException) -> int | None:
     secs = getattr(e, "seconds", None)
     return secs if "Wait" in type(e).__name__ and isinstance(secs, int) else None
@@ -130,6 +142,9 @@ class MTProto:
         self._task: asyncio.Task | None = None
         self._restart_at = 0.0
         self._warmed = False
+        self.call_log: deque[float] = deque()                        # ① 요청 시각 (시간당 상한)
+        self.resolve_log: deque[float] = deque(maxlen=RESOLVE_PER_HOUR)
+        self._not_found: dict[str, float] = {}
 
     @property
     def enabled(self) -> bool:
@@ -250,40 +265,116 @@ class MTProto:
         return None
 
     # ── ① 봇: 참가자 ─────────────────────────────────────────
+    def _count_call(self) -> None:
+        self.call_log.append(time.time())
+
+    def calls_last_hour(self) -> int:
+        """① 봇 세션이 지난 1시간 동안 텔레그램에 보낸 요청 수 (참가자 쪽수·아이디 조회) — 순찰의 시간당 상한용."""
+        cut = time.time() - 3600
+        while self.call_log and self.call_log[0] < cut:
+            self.call_log.popleft()
+        return len(self.call_log)
+
+    @property
+    def bot_ready(self) -> bool:
+        return self.bot.client is not None and time.time() >= self.bot.flood_until
+
     async def participants(self, chat_id: int, limit: int = 10000) -> list[dict] | None:
+        """[{id, first_name, last_name, username, is_bot, deleted, min}]. 슈퍼그룹·채널은 channels.getParticipants
+        (Recent, 200명씩 — 텔레그램이 Recent 로 주는 건 1만 명까지), 기본 그룹은 messages.getFullChat 1번."""
+        peer = to_peer(chat_id)
+
         async def fetch(client):
-            entity = await client.get_input_entity(to_peer(chat_id))
-            return [{"id": u.id, "first_name": u.first_name or "", "username": u.username or "", "is_bot": bool(u.bot)}
-                    async for u in client.iter_participants(entity, limit=limit)]
+            from telethon.tl.functions.channels import GetParticipantsRequest
+            from telethon.tl.types import ChannelParticipantsRecent, PeerChannel
+            entity = await client.get_input_entity(peer)
+            self._count_call()
+            if not isinstance(peer, PeerChannel):
+                return [_user(u) async for u in client.iter_participants(entity, limit=limit)]
+            out: dict[int, dict] = {}
+            offset = 0
+            while len(out) < limit:
+                if offset:
+                    await _sleep(PAGE_GAP)
+                self._count_call()
+                res = await client(GetParticipantsRequest(entity, ChannelParticipantsRecent(), offset,
+                                                          min(PAGE, limit - len(out)), 0))
+                parts = getattr(res, "participants", None) or []
+                if not parts:
+                    break
+                users = {u.id: u for u in res.users}   # users 엔 초대한 사람 등 참가자 아닌 사람도 섞여 옴
+                for p in parts:
+                    u = users.get(getattr(p, "user_id", None))
+                    if u is not None:
+                        out[u.id] = _user(u)
+                offset += len(parts)
+            return list(out.values())[:limit]
         return await self._run(self.bot, fetch)
 
     async def member_diff(self, chat_id: int, limit: int = 10000) -> dict | None:
         """지난 스냅샷 대비 들어온·나간 사람. {first, joined, left, count, partial}. 첫 스냅샷은 first=True·빈 목록.
         partial(limit 에 걸림) 이면 '나감'은 알 수 없어서 비우고 스냅샷에서 지우지도 않음."""
         members = await self.participants(chat_id, limit)
-        if members is None:
-            return None
+        return None if members is None else await self.snapshot(chat_id, members, limit)
+
+    async def snapshot(self, chat_id: int, members: list[dict], limit: int = 10000) -> dict:
         partial, now = len(members) >= limit, int(time.time())
 
         def run(c: sqlite3.Connection) -> dict:
             first = c.execute("SELECT 1 FROM mtproto_snap WHERE chat_id=?", (chat_id,)).fetchone() is None
-            old = {r[0]: r for r in c.execute(
-                "SELECT user_id, first_name, username, is_bot FROM mtproto_members WHERE chat_id=?", (chat_id,))}
+            old = {r[0]: r for r in c.execute("SELECT user_id, first_name, last_name, username, is_bot "
+                                              "FROM mtproto_members WHERE chat_id=?", (chat_id,))}
             cur = {m["id"]: m for m in members}
             joined = [] if first else [m for uid, m in cur.items() if uid not in old]
-            left = [] if first or partial else [{"id": r[0], "first_name": r[1] or "", "username": r[2] or "", "is_bot": bool(r[3])}
-                                                for uid, r in old.items() if uid not in cur]
+            left = [] if first or partial else [
+                {"id": r[0], "first_name": r[1] or "", "last_name": r[2] or "", "username": r[3] or "", "is_bot": bool(r[4])}
+                for uid, r in old.items() if uid not in cur]
             if not partial:
                 c.executemany("DELETE FROM mtproto_members WHERE chat_id=? AND user_id=?",
                               [(chat_id, uid) for uid in old if uid not in cur])
-            c.executemany("INSERT INTO mtproto_members(chat_id, user_id, first_name, username, is_bot, seen_ts) "
-                          "VALUES(?,?,?,?,?,?) ON CONFLICT(chat_id, user_id) DO UPDATE SET first_name=excluded.first_name, "
-                          "username=excluded.username, is_bot=excluded.is_bot, seen_ts=excluded.seen_ts",
-                          [(chat_id, m["id"], m["first_name"], m["username"], int(m["is_bot"]), now) for m in members])
-            c.execute("INSERT INTO mtproto_snap(chat_id, ts, count) VALUES(?,?,?) ON CONFLICT(chat_id) "
-                      "DO UPDATE SET ts=excluded.ts, count=excluded.count", (chat_id, now, len(members)))
+            c.executemany("INSERT INTO mtproto_members(chat_id, user_id, first_name, last_name, username, is_bot, seen_ts) "
+                          "VALUES(?,?,?,?,?,?,?) ON CONFLICT(chat_id, user_id) DO UPDATE SET first_name=excluded.first_name, "
+                          "last_name=excluded.last_name, username=excluded.username, is_bot=excluded.is_bot, "
+                          "seen_ts=excluded.seen_ts",
+                          [(chat_id, m["id"], m["first_name"], m["last_name"], m["username"], int(m["is_bot"]), now)
+                           for m in members])
+            c.execute("INSERT INTO mtproto_snap(chat_id, ts, count, partial) VALUES(?,?,?,?) ON CONFLICT(chat_id) "
+                      "DO UPDATE SET ts=excluded.ts, count=excluded.count, partial=excluded.partial",
+                      (chat_id, now, len(members), int(partial)))
             return {"first": first, "joined": joined, "left": left, "count": len(members), "partial": partial}
         return await self.db.atomic(run)
+
+    async def resolve_username(self, username: str) -> dict | None:
+        """@아이디 → 사람 (contacts.resolveUsername, core.telegram.org: "Both users and bots can use this method").
+        사람이면 _user 사전, 없는 아이디·채널·그룹이면 {}, 못 물어봄(꺼짐·FloodWait·시간당 상한)이면 None.
+        없는 아이디는 하루 기억 (같은 걸 계속 물어 FloodWait 받지 않게)."""
+        name = username.lstrip("@").lower()
+        if time.time() - self._not_found.get(name, 0) < NOT_FOUND_TTL:
+            return {}
+        if not self.bot_ready or len(self.resolve_log) >= RESOLVE_PER_HOUR and \
+                self.resolve_log[0] > time.time() - 3600:
+            return None
+
+        async def fetch(client):
+            from telethon.errors import UsernameInvalidError, UsernameNotOccupiedError
+            from telethon.tl.functions.contacts import ResolveUsernameRequest
+            from telethon.tl.types import PeerUser
+            self._count_call()
+            self.resolve_log.append(time.time())
+            try:
+                res = await client(ResolveUsernameRequest(name))
+            except (UsernameInvalidError, UsernameNotOccupiedError):
+                return {}
+            if not isinstance(res.peer, PeerUser):
+                return {}
+            u = next((u for u in res.users if u.id == res.peer.user_id), None)
+            return _user(u) if u is not None else {}
+        got = await self._run(self.bot, fetch)
+        if got == {}:
+            self._not_found[name] = time.time()
+            if len(self._not_found) > 5000:
+                self._not_found.clear()
+        return got
 
     # ── ② 사용자: 조회수 ──────────────────────────────────────
     async def views(self, chat_id: int, msg_ids) -> dict[int, int] | None:

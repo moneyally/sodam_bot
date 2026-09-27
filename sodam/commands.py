@@ -251,6 +251,7 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
     db, tz = ctx.svc.db, ctx.svc.cfg.tz
     group = ctx.chat_id < 0
     uid: int | None = ctx.user.id
+    remote = False
     reply = ctx.msg.reply_to_message
     if self_only:
         pass
@@ -269,6 +270,8 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
         if uid is None and group:
             rows = await db.find_members(ctx.chat_id, ctx.argstr)
             uid = rows[0]["user_id"] if len(rows) == 1 else None
+        if uid is None:   # 기록에 없는 @아이디 → MTProto 도우미로 지금 주인 확인 (켜져 있을 때만)
+            uid, remote = await namehist.resolve_remote(ctx.svc, ctx.args[0], ctx.user.id)
         if uid is None:
             await ctx.reply(f"'{esc(ctx.argstr[:40])}' 기록을 못 찾았어요. @아이디(예전 아이디도 됨)·숫자 ID·답장으로 해주세요.")
             return
@@ -281,7 +284,8 @@ async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> No
         await ctx.reply("🔒 볼 수 없는 기록이에요.")
         return
     title = "내 이름 기록" if uid == ctx.user.id else None
-    await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title),
+    await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title,
+                                                note=namehist.REMOTE_NOTE if remote else None),
                     reply_markup=namehist.buttons(uid, mode, ctx.bot.username))
 
 

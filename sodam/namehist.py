@@ -7,6 +7,8 @@
   결과 아래 [최근][전체][이름만][아이디만] 버튼(nh:<모드>:<ID>) — 누를 때마다 권한 재확인
 - 권한: 누구나, 소담이 본 모든 사람의 기록을 조회 가능 (사용자 결정 — 익명 방이라 사칭 확인 우선)
 - 1:1: 메시지를 전달하면 보낸 사람 기록 · 메뉴 🕵️ 이름 기록
+- MTProto 도우미(sodam/mtproto.py)가 켜져 있으면: 관리자인 방마다 12시간에 1번 전체 멤버 순찰(mt_sweep, 말 안 한 멤버도)
+  · 기록에 없는 @아이디는 텔레그램에서 지금 주인을 확인(resolve_remote). 둘 다 처음 보는 사람은 알림 없이 기록만.
 봇이 들어오기 전의 변경이나 봇이 없는 방에서의 변경은 알 수 없다.
 """
 from __future__ import annotations
@@ -14,11 +16,13 @@ from __future__ import annotations
 import logging
 import re
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import RetryAfter, TelegramError
 
+from . import mtproto as _mtproto  # noqa: F401  mtproto_snap 표 등록 (아래 순찰이 읽음)
 from .db import now, register_schema
 from .settings import register_setting
 from .util import display_name, esc, fmt_time, to_int
@@ -54,20 +58,48 @@ def _name(first, last) -> str:
     return " ".join(x for x in (first, last) if x).strip()
 
 
+def _cur(user) -> dict:
+    return {"name": _name(user.first_name, user.last_name), "username": user.username or ""}
+
+
+def _last(row) -> dict:
+    return {"name": _name(row[0], row[1]), "username": row[2] or ""}
+
+
+_LAST_SQL = "SELECT first_name, last_name, username FROM name_history WHERE user_id=? ORDER BY id DESC LIMIT 1"
+_INSERT_SQL = "INSERT INTO name_history(user_id, first_name, last_name, username, ts) VALUES(?,?,?,?,?)"
+
+
 async def record(db: DB, user) -> tuple[dict, dict] | None:
     """지금 이름을 기록. 바뀌었으면 (예전, 지금) 을 돌려준다. 처음 보는 사람은 기록만 하고 None."""
     if getattr(user, "is_bot", False):
         return None
-    cur = {"name": _name(user.first_name, user.last_name), "username": user.username or ""}
-    row = await db._one("SELECT first_name, last_name, username FROM name_history WHERE user_id=? "
-                        "ORDER BY id DESC LIMIT 1", (user.id,))
-    if row:
-        last = {"name": _name(row["first_name"], row["last_name"]), "username": row["username"] or ""}
-        if last == cur:
-            return None
-    await db._write("INSERT INTO name_history(user_id, first_name, last_name, username, ts) VALUES(?,?,?,?,?)",
-                    (user.id, user.first_name, user.last_name, user.username, now()))
-    return (last, cur) if row else None
+    cur = _cur(user)
+    row = await db._one(_LAST_SQL, (user.id,))
+    if row and _last(row) == cur:
+        return None
+    await db._write(_INSERT_SQL, (user.id, user.first_name, user.last_name, user.username, now()))
+    return (_last(row), cur) if row else None
+
+
+async def record_many(db: DB, users) -> list[tuple[int, tuple[dict, dict]]]:
+    """record 를 여러 명 한 번에 (한 트랜잭션, MTProto 전체 멤버 순찰용). 비교·저장 규칙은 record 와 같음 →
+    바뀐 사람만 [(ID, (예전, 지금))], 처음 보는 사람은 기록만."""
+    ts = now()
+
+    def run(c) -> list:
+        out = []
+        for u in users:
+            if getattr(u, "is_bot", False):
+                continue
+            cur, row = _cur(u), c.execute(_LAST_SQL, (u.id,)).fetchone()
+            if row and _last(row) == cur:
+                continue
+            c.execute(_INSERT_SQL, (u.id, u.first_name, u.last_name, u.username, ts))
+            if row:   # 처음 보는 사람(row 없음)은 알림 없이 기록만
+                out.append((u.id, (_last(row), cur)))
+        return out
+    return await db.atomic(run)
 
 
 def change_notice(user_id: int, old: dict, new: dict) -> str:
@@ -104,7 +136,11 @@ def _fmt(v: str, field: str) -> str:
     return esc(v) if v else "(이름 없음)"
 
 
-async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title: str | None = None) -> str:
+REMOTE_NOTE = "ℹ️ 소담이 본 적 없는 사람이라 지금 이름만 있어요 (텔레그램에서 방금 확인)."
+
+
+async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title: str | None = None,
+                       note: str | None = None) -> str:
     rows = await history(db, user_id)
     if not rows:
         return (f"🕵️ ID <code>{user_id}</code> 의 이름 기록이 없어요.\n"
@@ -123,7 +159,7 @@ async def history_text(db: DB, user_id: int, tz, *, mode: str = "recent", title:
             lines.append(f"<code>{fmt_time(ts, tz, '%y.%m.%d')}</code> {_fmt(v, field)}" + (" ← 지금" if i == 0 else ""))
         if len(items) > limit:
             lines.append(f"… 이전 {len(items) - limit}개 더 (전체 기록 버튼)" if mode == "recent" else f"… 이전 {len(items) - limit}개 생략")
-    lines.append("\n소담이 본 뒤부터의 기록이에요. 날짜는 처음 본 날.")
+    lines.append("\n" + (note or "소담이 본 뒤부터의 기록이에요. 날짜는 처음 본 날."))
     return "\n".join(lines)
 
 
@@ -184,6 +220,38 @@ async def resolve(db: DB, raw: str, chat_id: int | None = None) -> int | None:
 
 
 _USERNAME = re.compile(r"[A-Za-z0-9_]{3,32}")
+RESOLVE_PER_MIN = 3   # 한 사람이 1분에 텔레그램에 물어볼 수 있는 @아이디 수 (조회는 누구나 → 남용 방지, 전체 상한은 mtproto)
+
+
+async def resolve_remote(svc, raw: str, requester: int) -> tuple[int | None, bool]:
+    """우리 기록에 없는 @아이디 → MTProto ① contacts.resolveUsername 로 지금 주인 확인 후 기록 (알림 없음).
+    (ID, 처음 본 사람인지). '@' 로 시작하는 아이디만 (이름 같은 낱말로 남의 계정을 찾지 않게). 도우미 꺼짐이면 (None, False)."""
+    raw = raw.strip()
+    mt = getattr(svc, "mtproto", None)
+    if not raw.startswith("@") or not _USERNAME.fullmatch(raw[1:]) or mt is None or not mt.bot_ready:
+        return None, False
+    if not svc.menu_limiter.allow(("nhr", requester), RESOLVE_PER_MIN):
+        return None, False
+    got = await mt.resolve_username(raw[1:])
+    if not got or got["is_bot"] or got["deleted"] or got["min"]:
+        return None, False
+    u = _person(got)
+    first = not await history(svc.db, u.id, 1)
+    await record(svc.db, u)   # 처음이면 기록만. 여기선 어느 방에도 알림 안 보냄
+    await svc.db.atomic(lambda c: _upsert_users(c, [u], now()))
+    return u.id, first
+
+
+def _person(m: dict) -> SimpleNamespace:
+    return SimpleNamespace(id=m["id"], first_name=m["first_name"] or None, last_name=m["last_name"] or None,
+                           username=m["username"] or None, is_bot=False)
+
+
+def _upsert_users(c, people, ts: int) -> None:
+    c.executemany("INSERT INTO users(user_id, username, first_name, last_name, is_bot, updated_at) VALUES(?,?,?,?,0,?) "
+                  "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, "
+                  "last_name=excluded.last_name, updated_at=excluded.updated_at",
+                  [(u.id, u.username, u.first_name, u.last_name, ts) for u in people])
 
 
 def forwarded_user(msg) -> tuple[int | None, str | None]:
@@ -316,13 +384,15 @@ async def record_admins(svc, bot, chat_id: int, admins) -> None:
 async def sweep(svc, bot) -> int:
     """조용한 멤버 확인: 말을 안 해도 이름을 바꿨는지 getChatMember 로 조금씩 확인 (한 사람 12시간마다).
     확인한 수를 돌려준다. 텔레그램이 속도 제한을 걸면 이번 회차는 멈춘다."""
+    await mt_sweep(svc, bot)
     now_ts = now()
-    rows = await svc.db._all(
+    rows = await svc.db._all(   # MTProto 순찰이 최근 전체를 본 방은 건너뜀 (getChatMember 는 도우미가 꺼졌을 때의 대체)
         "SELECT m.chat_id, m.user_id FROM members m JOIN users u ON u.user_id=m.user_id AND u.is_bot=0 "
         "LEFT JOIN name_scan s ON s.chat_id=m.chat_id AND s.user_id=m.user_id "
         "WHERE m.chat_id < 0 AND COALESCE(m.last_seen, 0) > ? AND COALESCE(s.ts, 0) < ? "
+        "AND m.chat_id NOT IN (SELECT chat_id FROM mtproto_snap WHERE ts > ? AND partial=0) "
         "ORDER BY COALESCE(s.ts, 0) LIMIT ?",
-        (now_ts - SCAN_ACTIVE_DAYS * 86400, now_ts - SCAN_EVERY, SCAN_PER_TICK))
+        (now_ts - SCAN_ACTIVE_DAYS * 86400, now_ts - SCAN_EVERY, now_ts - 2 * MT_EVERY, SCAN_PER_TICK))
     done, start = 0, time.monotonic()
     for r in rows:
         if time.monotonic() - start > SCAN_BUDGET:   # 느린 네트워크에서 다음 차례(1분)를 막지 않게 — 남은 건 다음 차례에
@@ -346,3 +416,69 @@ async def sweep(svc, bot) -> int:
         if changed and str(member.status) in ("member", "administrator", "creator", "restricted"):
             await _notify(svc, bot, chat_id, user_id, changed)
     return done
+
+
+# ── MTProto 전체 멤버 순찰 (sodam/mtproto.py ① 봇 세션, 선택) ─────────────
+# getChatMember(1명 1번) 대신 channels.getParticipants 200명씩 → 1,000명 ≈ 요청 6번 (쪽 5 + 방 확인 1), 방마다 12시간 1번.
+# 결과는 record_many(record 와 같은 규칙: 처음 보는 사람은 알림 없음, 바뀐 사람만 방 알림) + users/members(말 안 한 멤버,
+# last_seen 은 안 올림) + 나간 사람 표시. 도우미가 꺼져 있으면 아무것도 안 하고 위 getChatMember 순찰이 그대로.
+register_schema("CREATE TABLE IF NOT EXISTS name_mt_scan (chat_id INTEGER PRIMARY KEY, ts INTEGER NOT NULL);",
+                migrate={"name_mt_scan": "drop"})
+MT_EVERY = 12 * 3600          # 방마다 전체 순찰 간격
+MT_CALLS_PER_HOUR = 300       # ① 세션 요청 시간당 상한 (아이디 조회 포함) ≈ 시간당 멤버 5만 명
+MT_NOTICES = 5                # 순찰 한 번에 방 알림 최대 (나머지는 한 줄 요약)
+
+
+async def mt_sweep(svc, bot) -> int:
+    """때가 된 방 하나를 MTProto 로 전체 순찰 (작업 1번 = 방 1개 → 하루에 고르게 퍼짐). 기록한 멤버 수를 돌려준다."""
+    mt = getattr(svc, "mtproto", None)
+    if mt is None or not mt.bot_ready:
+        return 0
+    now_ts = now()
+    rows = await svc.db._all(
+        "SELECT c.chat_id, COALESCE(p.count, 0) AS n FROM chats c LEFT JOIN name_mt_scan s ON s.chat_id=c.chat_id "
+        "LEFT JOIN mtproto_snap p ON p.chat_id=c.chat_id WHERE c.chat_id < 0 AND COALESCE(s.ts, 0) < ? "
+        "ORDER BY COALESCE(s.ts, 0), c.chat_id LIMIT 20", (now_ts - MT_EVERY,))
+    for r in rows:
+        chat_id = r["chat_id"]
+        if mt.calls_last_hour() + 2 + r["n"] // _mtproto.PAGE > MT_CALLS_PER_HOUR:   # 이번 시간 몫을 다 씀
+            return 0
+        # 결과와 상관없이 12시간 뒤에 다시 (권한 없는 방·실패하는 방을 계속 두드리지 않게)
+        await svc.db._write("INSERT INTO name_mt_scan(chat_id, ts) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET ts=excluded.ts",
+                            (chat_id, now_ts))
+        try:
+            if not await svc.perms.bot_can_moderate(bot, chat_id):   # 소담이 관리자인 방만
+                continue
+        except TelegramError:
+            continue
+        members = await mt.participants(chat_id)
+        if members is None:
+            return 0
+        diff = await mt.snapshot(chat_id, members)
+        await _apply_members(svc, bot, chat_id, members, diff)
+        return len(members)
+    return 0
+
+
+async def _apply_members(svc, bot, chat_id: int, members: list[dict], diff: dict) -> None:
+    people = [_person(m) for m in members if not (m["is_bot"] or m["deleted"] or m["min"])]
+    changes = await record_many(svc.db, people)
+    gone = [m["id"] for m in diff["left"] if not m["is_bot"]]
+    ts = now()
+
+    def run(c) -> None:
+        _upsert_users(c, people, ts)
+        c.executemany("INSERT OR IGNORE INTO members(chat_id, user_id) VALUES(?,?)", [(chat_id, u.id) for u in people])
+        c.executemany("DELETE FROM member_left WHERE chat_id=? AND user_id=?", [(chat_id, u.id) for u in people])
+        c.executemany("INSERT INTO member_left(chat_id, user_id, ts) VALUES(?,?,?) ON CONFLICT(chat_id, user_id) "
+                      "DO UPDATE SET ts=excluded.ts", [(chat_id, uid, ts) for uid in gone])
+    from .panels import members as _members  # noqa: F401  member_left 표 등록
+    await svc.db.atomic(run)
+    for uid, changed in changes[:MT_NOTICES]:
+        await _notify(svc, bot, chat_id, uid, changed)
+    if len(changes) > MT_NOTICES and chat_id < 0 and (await svc.db.get_settings(chat_id))["name_change_notice"]:
+        try:
+            await bot.send_message(chat_id, f"🔄 그 밖에 {len(changes) - MT_NOTICES}명이 이름·아이디를 바꿨어요. "
+                                            "<code>.기록 @아이디</code> 로 확인할 수 있어요.", parse_mode="HTML")
+        except TelegramError as e:
+            log.info("name change summary failed: %s", e)

@@ -26,7 +26,7 @@ test, run_all = runner()
 OWNER, BOSS = fake_user(1, "오너"), fake_user(2, "방장")
 CH = -1001234567890
 TOKEN = "999:AAbbcc"
-mtproto.MIN_GAP = 0   # 요청 간격 1초는 테스트에선 안 기다림
+mtproto.MIN_GAP = mtproto.PAGE_GAP = 0   # 요청·쪽 간격은 테스트에선 안 기다림
 
 
 async def world(connect=True, **kw):
@@ -104,10 +104,22 @@ async def participants_mapping():
     svc, mt = await world(members=[(10, "민지", "minji"), (11, None, None, True)])
     assert mt.bot.connected and mt.bot.me == "@sodambot"
     got = await mt.participants(CH, limit=50)
-    assert got == [{"id": 10, "first_name": "민지", "username": "minji", "is_bot": False},
-                   {"id": 11, "first_name": "", "username": "", "is_bot": True}], got
+    base = {"last_name": "", "deleted": False, "min": False}
+    assert got == [{"id": 10, "first_name": "민지", "username": "minji", "is_bot": False, **base},
+                   {"id": 11, "first_name": "", "username": "", "is_bot": True, **base}], got
     c = mt.bot.client
-    assert ("entity", PeerChannel(1234567890)) in c.calls and ("participants", PeerChannel(1234567890), 50) in c.calls
+    assert ("entity", PeerChannel(1234567890)) in c.calls and ("page", PeerChannel(1234567890), 0, 50) in c.calls
+    assert 424242 not in [m["id"] for m in got], "users 에 섞여 온 초대한 사람은 참가자가 아님"
+    # 200명씩 쪽 넘김 · 요청 수 셈 · limit
+    c.members = [(1000 + i, f"u{i}", "", False, "성" if i == 0 else None) for i in range(450)]
+    n0 = mt.calls_last_hour()
+    got = await mt.participants(CH)
+    assert len(got) == 450 and got[0]["last_name"] == "성"
+    assert [x[2:] for x in c.calls if x[0] == "page"][-4:] == [(0, 200), (200, 200), (400, 200), (450, 200)]
+    assert mt.calls_last_hour() - n0 == 1 + 4, "entity 1 + 쪽 4 (마지막 빈 쪽 포함)"
+    assert len(await mt.participants(CH, limit=300)) == 300 and [x[2:] for x in c.calls if x[0] == "page"][-2:] == [(0, 200), (200, 100)]
+    # 기본 그룹은 getFullChat 1번 (iter_participants)
+    assert len(await mt.participants(-4242)) == 450 and ("participants", PeerChat(4242), 10000) in c.calls
 
 
 # ── 4. member_diff: 첫 스냅샷 · 들어옴/나감 · limit 에 걸리면 나감 모름 ─

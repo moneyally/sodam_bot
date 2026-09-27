@@ -33,18 +33,21 @@ async def r_query(c: PanelCtx) -> Screen:
 
 
 async def _lookup(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    remote = False
     if getattr(msg, "forward_origin", None) is not None:
         uid, err = namehist.forwarded_user(msg)
         if uid is None:
             return True, err
     else:
         uid = await namehist.resolve(c.svc.db, (msg.text or "").strip())
+        if uid is None:   # 기록에 없는 @아이디 → MTProto 도우미 (켜져 있을 때만)
+            uid, remote = await namehist.resolve_remote(c.svc, (msg.text or "").strip(), c.uid)
         if uid is None:
             return False, "그 아이디는 기록에 없어요. @아이디 또는 숫자 ID로 보내주세요."
     owner = c.uid in await c.svc.perms.owners()
     if not await namehist.can_view(c.svc.db, c.uid, uid, 0, owner):
         return True, "🔒 볼 수 없는 기록이에요."
-    return True, await namehist.history_text(c.svc.db, uid, c.svc.cfg.tz)
+    return True, await namehist.history_text(c.svc.db, uid, c.svc.cfg.tz, note=namehist.REMOTE_NOTE if remote else None)
 
 
 async def s_after(c: PanelCtx) -> Screen:
