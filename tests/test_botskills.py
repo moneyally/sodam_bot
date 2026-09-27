@@ -381,3 +381,26 @@ async def echo_bot_with_intent_still_one_send():
 
 if __name__ == "__main__":
     run_all()
+
+
+@test
+async def learns_commands_from_bot_help_text_and_defaults_play():
+    """실제 사례: 멜론봇이 /help 로 /play·/skip… 을 다 보여줬는데 소담은 /help 만 배워서 '재생 명령 모름'."""
+    r = await blroom("interact")
+    await trust(r, MELON)
+    help_text = ("🍈 멜론뮤직 사용법\n▶️ /play 곡명 또는 링크(유튜브·사운드클라우드) — 노래 재생 / 대기열 추가\n"
+                 "⏭ /skip — 다음 곡으로\n⏸ /pause · ▶️ /resume — 일시정지 / 다시재생\n📜 /queue — 대기열 보기\n"
+                 "🙋 안 들어오면 /userbotjoin")
+    await bot_says(r, MELON, help_text)
+    got = sk_map(await botskills.skills(r.db, Room.CHAT, MELON.id))
+    assert got["/play"][:2] == ("help", "play") and got["/skip"][1] == "skip" and got["/resume"][1] == "resume", got
+    await bot_says(r, MELON, "재생 시작 /play 로 신청됨")                   # 명령 하나뿐인 답 = 사용법 아님
+    assert len(await botskills.skills(r.db, Room.CHAT, MELON.id)) == len(got)
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "멜론", "intent": "play", "query": "먼데이키즈 발자국"})])
+    assert "확인 버튼" in res[0], res
+    assert "/play@melon_bot 먼데이키즈 발자국" in [c for c in r.bot.named("send_message") if "보낼까요" in c[2]][-1][2]
+    r2 = await blroom("interact")
+    await trust(r2, YT)                                                   # 배운 게 없어도 흔한 이름(/play)으로 카드
+    res = await ask(r2, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "밤편지"})])
+    assert "확인 버튼" in res[0] and "/play@ytmusic_player_bot 밤편지" in \
+        [c for c in r2.bot.named("send_message") if "보낼까요" in c[2]][-1][2]

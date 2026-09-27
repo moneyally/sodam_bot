@@ -30,8 +30,19 @@ log = logging.getLogger(__name__)
 INTENTS = ("play", "skip", "pause", "resume", "stop", "queue", "search", "dice", "bet", "other")
 INTENT_LABEL = {"play": "재생·신청", "skip": "건너뛰기", "pause": "일시정지", "resume": "다시 재생", "stop": "정지",
                 "queue": "대기열", "search": "검색", "dice": "주사위", "bet": "베팅", "other": "기타"}
-WIDE = ("play", "search")          # 인자 100자 + 유튜브 링크 허용 (botlink.build wide)
-SOURCE_BADGE = {"preset": "📌직접", "manual": "📌직접", "seen": "👀본 것", "helper": "🔧헬퍼"}
+WIDE = ("play", "search")
+DEFAULT_NAME = ("play", "skip", "pause", "resume", "stop", "queue")   # 음악봇 대부분이 이 이름          # 인자 100자 + 유튜브 링크 허용 (botlink.build wide)
+SOURCE_BADGE = {"preset": "📌직접", "manual": "📌직접", "seen": "👀본 것", "helper": "🔧헬퍼", "help": "📖안내"}
+# 봇이 올린 사용법 글의 '/명령 설명' 줄 (실제 사례: 멜론봇 /help 에 /play·/skip… 이 다 있는데 /help 만 배움)
+HELP_CMD = re.compile(r"(?<![\w/@])/([A-Za-z][A-Za-z0-9_]{0,31})(?![\w@])([^\n/]*)")
+
+
+def help_commands(text: str) -> list[tuple[str, str]]:
+    """사용법 글 → [(명령, 설명)]. 명령이 2개 이상 있을 때만 (명령 하나 되풀이한 답은 사용법이 아님)."""
+    found = {}
+    for name, rest in HELP_CMD.findall(text or ""):
+        found.setdefault(name.lower(), " ".join(rest.replace("—", " ").replace("-", " ").split()))
+    return list(found.items()) if len(found) >= 2 else []
 MAX_SKILLS = 30                    # 봇마다
 MAX_HINT = 30
 LEARN_WINDOW = 10.0                # 사람 명령 → 그 봇 답장까지
@@ -247,8 +258,8 @@ async def record_seen(db, chat_id: int, bot_id: int, command: str, has_args: boo
     return await db.atomic(work)
 
 
-async def save_helper(db, chat_id: int, bot_id: int, cmds) -> int:
-    """헬퍼가 받은 [(명령, 설명)] — 새 명령만 넣고, 전에 헬퍼가 넣은 줄만 고침 (관리자·본 것은 안 덮음)."""
+async def save_helper(db, chat_id: int, bot_id: int, cmds, source: str = "helper") -> int:
+    """헬퍼·사용법 글에서 얻은 [(명령, 설명)] — 새 명령만 넣고, 같은 출처가 넣은 줄만 고침 (관리자·본 것은 안 덮음)."""
     now, rows = int(time.time()), []
     for name, desc in list(cmds)[:100]:
         name = str(name or "").lower()
@@ -267,7 +278,7 @@ async def save_helper(db, chat_id: int, bot_id: int, cmds) -> int:
             n += c.execute("INSERT INTO botlink_skills(chat_id, bot_id, command, args_hint, source, intent, updated) "
                            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(chat_id, bot_id, command) DO UPDATE SET "
                            "args_hint=excluded.args_hint, intent=excluded.intent, updated=excluded.updated "
-                           "WHERE botlink_skills.source='helper'", (chat_id, bot_id, cmd, hint, "helper", intent, now)).rowcount
+                           "WHERE botlink_skills.source=excluded.source", (chat_id, bot_id, cmd, hint, source, intent, now)).rowcount
         return n
     return await db.atomic(work)
 
@@ -321,6 +332,9 @@ async def on_bot_seen(svc: Services, bot, msg, status: str, now: float) -> None:
         got = st.pending.pop((cid, r.message_id), None)
         if got and got[0] == msg.from_user.id and now - got[3] <= LEARN_WINDOW:
             await record_seen(svc.db, cid, got[0], got[1], got[2])
+    cmds = help_commands(msg.text or msg.caption or "")
+    if cmds:
+        await save_helper(svc.db, cid, msg.from_user.id, cmds[:MAX_SKILLS], source="help")
     if getattr(svc, "mtproto", None) is not None and msg.from_user.username:
         key = (cid, msg.from_user.id)
         if now - st.helper.get(key, 0) >= HELPER_EVERY:

@@ -306,8 +306,10 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         return reason
     if intent and not raw:
         sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)
+        known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
+        if not sk and intent in botskills.DEFAULT_NAME and not any(k["intent"] in ("dice", "bet") for k in known):
+            sk = {"command": "/" + intent}   # 음악봇 흔한 이름(/play 등) — 처음엔 확인 카드라 사람이 보고 누름 (게임봇엔 안 씀)
         if not sk:
-            known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
             return (f"{_bot_label(row)} 의 '{intent}' 명령을 아직 모름. 아는 명령: {botskills.describe(known)}. "
                     f"명령을 알려주려면 {botskills.ADD_HOW} (또는 관리자가 '/명령' 을 직접 말해 주면 command 로 보냄).")
         raw = sk["command"] + (f" {query}" if query else "")
