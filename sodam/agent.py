@@ -31,7 +31,7 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
     messages = build_messages(
         bot_name=svc.cfg.bot_name, bot_id=ctx.bot.id, style_key=style_key, tz=svc.cfg.tz,
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
-        reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, **extras)
+        reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, in_dm=ctx.chat_id > 0, **extras)
     tools = available(ctx.role, ctx.settings, ctx.chat_id > 0)
     if mode in ("chime", "morning"):
         tools = [t for t in tools if t.name in CHIME_TOOLS]

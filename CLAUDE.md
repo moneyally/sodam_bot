@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 554개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 564개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -94,6 +94,12 @@
 - menu 토큰: 다른 사람이 누르면 '요청한 사람만' 으로 거절하고 토큰은 남김 (방에 뜬 카드를 남이 눌러 무효화 못 하게).
 - 게임 중: 게임 답(AI 답에 단 답장 포함)이 AI 보다 먼저, AI 엔 진행 중 게임 단서(ai_hint). start_game 성공이면 AI 답 안 보냄(ctx.quiet).
 - 스팸 명단 차단 안내에 [↩️ 차단 풀기](이 방에선 다시 안 막음, chat_state cas_ok:<id>) [🔕 끄기] ('사용자 차단' 권한 관리자).
+- 알림 규칙(`rules.py`, 🔔 메뉴, AI 도구 alert_rule + 확인 카드): 규칙 = 데이터(정해진 부품만, AI 는 말→부품 번역).
+  언제 keyword/user/join/quiet · 하면 dm/call/post · 쿨다운(한 문장 UPDATE 로 차지)·하루 30번·만든 사람 관리자 재확인. 제재 부품 없음.
+- 대표님 비서(`my_rooms`, where=dm): 1:1 에서 내가 '지금' 관리자인 방들 24시간 현황(코드) / 방 하나 대화 요약(도구 없는 AI) → tainted.
+  프롬프트 user 에 '지금 대화: 1:1/그룹방' 한 줄 (1:1 인지 몰라서 '여기선 못 해요' 하던 것).
+- 연달아 보낸 말은 BURST_SECONDS(1.5초) 안이면 마지막 메시지에 한 번 답(요청 합침) · '천천히' 안내 1분 1번 · user_rate_per_min 기본 5.
+  테스트는 fakes.py 가 BURST_SECONDS=0.
 - 하루 1번 봇에게 관리 권한 없는 방을 오너에게 알림 (job_rights). 하트비트는 텔레그램 get_webhook_info 성공 때만 기록.
 
 - 네트워크 재전송(`util.send_retry`): 방에 보이는 글은 연결 자체가 실패한 경우만(확실히 안 보내짐) 다시, 응답만 끊긴 경우는

@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
+from . import (accountage, addressee, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
                subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
@@ -55,6 +55,8 @@ async def _delete_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
+BURST_SECONDS = 1.5      # 같은 사람이 이 안에 연달아 보낸 말은 한 번에 답 (마지막 메시지에, 앞의 말도 함께 읽고)
+_BURSTS: dict[tuple[int, int], list[tuple[int, str]]] = {}
 MUTE_NOTICE_TTL = 600  # 자동 채팅 금지 안내는 관리자가 [풀기] 버튼을 볼 수 있게 10분
 
 
@@ -595,10 +597,22 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         await send_temp(context, chat_id, "🔌 아직 AI 키가 설정되지 않아서 대화는 못 해요. 명령어(.도움말)는 쓸 수 있어요!", 30)
         return
 
+    key = (chat_id, user.id)
+    burst = _BURSTS.setdefault(key, [])
+    burst.append((msg.message_id, request))
+    await asyncio.sleep(BURST_SECONDS)
+    if _BURSTS.get(key) is not burst or burst[-1][0] != msg.message_id:
+        return                                   # 더 늦게 온 말이 한꺼번에 답함
+    del _BURSTS[key]
+    if len(burst) > 1:
+        request = "\n".join(r for _, r in burst if r)
+        scan = security.scan(request)
+
     limiter: RateLimiter = context.bot_data["limiter"]
     if not (limiter.allow(("u", chat_id, user.id), s["user_rate_per_min"])
             and limiter.allow(("r", chat_id), s["room_rate_per_min"])):
-        await send_temp(context, chat_id, "⏳ 조금만 천천히 불러주세요!", 10)
+        if limiter.allow(("slow", chat_id, user.id), 1):   # 안내는 1분에 한 번만 (안내가 도배가 되지 않게)
+            await send_temp(context, chat_id, "⏳ 조금만 천천히 불러주세요! 1분 뒤에 다시 불러주세요.", 10)
         return
 
     # 무료 한도 먼저: 한도를 넘은 사람의 긴 메시지가 2층 AI 판별(유료 호출)을 무제한으로 부르지 않게
@@ -1083,6 +1097,11 @@ async def job_rights(context: ContextTypes.DEFAULT_TYPE) -> None:
                                   "'메시지 삭제'·'사용자 차단' 권한을 켜 주세요.")
 
 
+async def job_quiet_rules(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """10분마다: 알림 규칙 '방이 N시간 조용하면' (sodam/rules.py)."""
+    await rules.check_quiet(_svc(context), context.bot)
+
+
 async def job_gametime(context: ContextTypes.DEFAULT_TYPE) -> None:
     """10분마다: 장시간 게임 알림 (sodam/gametime.py)."""
     await gametime.check(_svc(context), context.bot)
@@ -1189,5 +1208,6 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
     jq.run_repeating(job_rights, interval=3600, first=600, name="rights")   # 안에서 하루 1번만 알림
     jq.run_repeating(job_gametime, interval=600, first=180, name="gametime")
+    jq.run_repeating(job_quiet_rules, interval=600, first=240, name="quiet_rules")
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
     jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)

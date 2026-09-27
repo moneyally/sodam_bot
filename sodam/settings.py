@@ -9,7 +9,7 @@ DEFAULTS: dict[str, Any] = {
     "ai_enabled": True,
     "style": "polite",              # 방 기본 말투
     "reply_max_chars": 400,         # 답변 최대 글자 수
-    "user_rate_per_min": 3,         # 1인당 분당 AI 호출
+    "user_rate_per_min": 5,         # 1인당 분당 AI 호출 (연달아 보낸 말은 한 번으로 셈 — handlers.BURST_SECONDS)
     "room_rate_per_min": 20,        # 방 전체 분당 AI 호출
     "web_search_daily": 30,         # 방당 하루 웹검색 횟수
     # 입장

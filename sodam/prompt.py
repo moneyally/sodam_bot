@@ -147,7 +147,8 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    notes: dict, history: list, reply_to: str | None, request: str,
                    user_memory: list[str] | None = None, room_memory: str = "",
                    past_turns: list[str] | None = None, mode: str = "call",
-                   hints: list[str] | None = None, images: list[dict] | None = None) -> list[dict]:
+                   hints: list[str] | None = None, images: list[dict] | None = None,
+                   in_dm: bool = False) -> list[dict]:
     n = nonce()
     now = korean_now(datetime.now(tz))
     speaker = json.dumps(
@@ -158,6 +159,7 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
 
     parts = [
         f"현재 시각: {now}",
+        "지금 대화: " + ("봇과 1:1 개인 대화" if in_dm else "그룹방"),
         wrap("speaker", speaker, n),
     ]
     # 기억은 지시가 아니라 데이터 → system 이 아닌 여기(nonce 태그 안)에만 넣는다

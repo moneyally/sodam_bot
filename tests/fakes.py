@@ -323,3 +323,8 @@ def runner():
         return failed
 
     return test, run_all
+
+
+from sodam import handlers as _handlers  # noqa: E402
+
+_handlers.BURST_SECONDS = 0   # 테스트는 연달아 말해도 기다리지 않음 (연속 전송 합치기는 test_burst 가 따로 켬)
