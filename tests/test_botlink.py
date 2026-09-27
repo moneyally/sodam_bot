@@ -413,8 +413,12 @@ async def members_can_request_approved_play_only():
         assert "10분에 3곡" in res[0], "멤버는 10분에 3번"
         await botlink.approve(r.db, Room.CHAT, DICE.id, "/skip", BOSS.id)
         res = await ask(r, A, [tool_call("bot_command", {"bot": "dice_bot", "intent": "skip"})], role=Role.MEMBER)
-        assert "재생·대기열·검색" in res[0], "넘기기는 관리자만"
-        await r.db.set_setting(Room.CHAT, "botlink_members", False)
+        assert "만 시킬 수 있음" in res[0] and "조작까지" in res[0], "신청만 = 넘기기는 관리자만"
+        await r.db.set_setting(Room.CHAT, "botlink_members", "control")
+        await r.db._write("DELETE FROM botlink_sent")
+        res = await ask(r, A, [tool_call("bot_command", {"bot": "dice_bot", "intent": "skip"})], role=Role.MEMBER)
+        assert "보냈음" in res[0], "조작까지 = 멤버도 넘기기"
+        await r.db.set_setting(Room.CHAT, "botlink_members", "off")
         res = await ask(r, BOSS, [tool_call("bot_command", {**play, "query": "관리자곡"})])
         assert "보냈음" in res[0]
         await r.db._write("DELETE FROM botlink_sent")
