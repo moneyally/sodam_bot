@@ -49,9 +49,9 @@ class Config:
     # all: 한 봇이 전부 / main: 포인트 게임(!) 빼고 전부 / dealer: 포인트 게임만 (게임 전용 딜러 봇)
     # 같은 DB_PATH 를 쓰면 포인트·방 설정·구독을 두 봇이 같이 본다
     bot_role: str = "all"
-    # 생각하는 에이전트 (agent.wants_thinking): off / auto(여러 단계·분석 요청만) / always.
-    # 켜면 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀)
-    agent_think: str = "off"
+    # 생각하는 에이전트 (agent.wants_thinking): off / auto(기본: 관리자·오너 요청 + 여러 단계·분석 요청) / always.
+    # 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀). 멤버 잡담은 예전 방식(싸게)
+    agent_think: str = "auto"
     agent_think_effort: str = "low"
     # MTProto 도우미 (sodam/mtproto.py, 선택): my.telegram.org 에서 받은 API ID/HASH. 비우면 꺼짐
     mtproto_api_id: int = 0
@@ -104,7 +104,7 @@ def load_config() -> Config:
         invoice_minutes=min(180, max(10, int(os.getenv("INVOICE_MINUTES", "60")))),
         trongrid_api_key=os.getenv("TRONGRID_API_KEY", "").strip(),
         bot_role=_role(os.getenv("BOT_ROLE", "")),
-        agent_think=_choice("AGENT_THINK", "off", ("off", "auto", "always")),
+        agent_think=_choice("AGENT_THINK", "auto", ("off", "auto", "always")),
         agent_think_effort=_choice("AGENT_THINK_EFFORT", "low", ("low", "medium", "high")),
         mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
         mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),

@@ -29,7 +29,7 @@ def routing_picks_multistep_and_why_only():
              "이수진이랑 박준호 둘 다 10분 뮤트해줘", "도배 기준 엄격으로 하면 누가 걸릴지 보고 괜찮으면 바꿔줘"]
     simple = ["안녕~ 오늘 날씨 좋다", "점심 뭐 먹을까 추천해줘", "박준호 도배해서 10분 뮤트해줘", "끝말잇기 하자",
               "나도 여행 하고 싶어", "오늘 비트코인 시세 검색해서 알려줘", "이 방 말투 친근하게 바꿔줘", "밥 먹고 왔어"]
-    for t in multi:
+    for t in multi:          # 멤버 요청은 코드 규칙으로만 (관리자·오너 요청은 전부 — tests/test_agent_codex.py)
         assert wants_thinking("auto", t, "call"), t
     for t in simple:
         assert not wants_thinking("auto", t, "call"), t
@@ -83,7 +83,7 @@ async def think_calls_responses_with_reasoning_and_tools():
     msg = await llm.think([{"role": "user", "content": "요약"}], tools=[schema], effort="medium", purpose="agent:admin:think",
                           chat_id=-100)
     kw = sent[0]
-    assert kw["reasoning"] == {"effort": "medium"} and kw["store"] is False
+    assert kw["reasoning"] == {"effort": "medium"} and kw["store"] is False and kw["text"] == {"verbosity": "low"}
     assert kw["include"] == ["reasoning.encrypted_content"] and kw["parallel_tool_calls"] is False
     assert kw["tools"] == [{"type": "function", "name": "read_chat", "description": "d", "parameters": {"type": "object"},
                             "strict": False}]
@@ -146,11 +146,12 @@ async def think_run_carries_reasoning_across_tool_rounds():
 async def simple_request_and_flag_off_stay_on_chat():
     old = fast_timers()
     try:
-        for think, text in (("auto", "소담아 안녕"), ("off", "소담아 방금 먹튀 얘기한 사람 찾아서 알려줘")):
+        for think, who, text in (("auto", JUNHO, "소담아 안녕"), ("off", BOSS, "소담아 방금 먹튀 얘기한 사람 찾아서 알려줘")):
             r = await _room(think)
             r.llm.script = [reply("안녕하세요!")]
-            await r.say(BOSS, text)
-            assert not r.llm.think_calls and len(r.llm.of("chat", "agent:admin")) == 1, think
+            await r.say(who, text)
+            purpose = "agent:admin" if who is BOSS else "agent:member"
+            assert not r.llm.think_calls and len(r.llm.of("chat", purpose)) == 1, think
     finally:
         restore_timers(old)
 

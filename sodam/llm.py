@@ -204,12 +204,14 @@ class LLM:
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
-        store=False (서버에 대화 안 남김) + reasoning.encrypted_content (OpenAI 추론 가이드의 상태 없는 방식)."""
+        store=False (서버에 대화 안 남김) + reasoning.encrypted_content (OpenAI 추론 가이드의 상태 없는 방식).
+        text.verbosity=low: 단톡방 답은 짧게 (Codex CLI 와 같은 설정)."""
         await self._check_budget(chat_id)
         model = self.cfg.model
         kwargs: dict[str, Any] = {
             "model": model, "input": to_input(messages), "max_output_tokens": max_tokens,
             "reasoning": {"effort": effort}, "store": False, "include": ["reasoning.encrypted_content"],
+            "text": {"verbosity": "low"},
             **self._cache(purpose),
         }
         if tools:

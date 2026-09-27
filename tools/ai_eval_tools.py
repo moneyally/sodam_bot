@@ -4,7 +4,7 @@
     python tools/ai_eval_tools.py 3 7        # 3·7번만
     python tools/ai_eval_tools.py --repeat 2 # 같은 상황을 여러 번 (모델 답이 매번 달라서)
     python tools/ai_eval_tools.py --route    # AI 호출 없이: 어떤 요청이 '생각하는 에이전트'로 가는지만 (AGENT_THINK=auto 기준)
-    AGENT_THINK=auto python tools/ai_eval_tools.py   # 생각하는 에이전트 켜고 비교 (.env 값보다 환경변수가 우선)
+    AGENT_THINK=off python tools/ai_eval_tools.py    # 예전 방식과 비교 (기본 auto: 관리자 요청은 전부 생각. 환경변수가 .env 보다 우선)
 그림 도구는 실제 그림을 만들지 않는다 (LLM.image 를 가짜로 — 비용 0).
 """
 import asyncio
@@ -24,6 +24,7 @@ from fakes import close_open_dbs  # noqa: E402
 
 from sodam import agent, costs, knowledge  # noqa: E402
 from sodam.llm import LLM  # noqa: E402
+from sodam.permissions import Role  # noqa: E402
 
 USED: list[str] = []
 ARGS: list[dict] = []
@@ -183,8 +184,9 @@ async def run_case(i: int, who, text, want, forbid, setup=None, check=None) -> b
 
 
 def route_report() -> int:
-    """AI 호출 없이: AGENT_THINK=auto 면 어떤 요청이 생각하는 에이전트로 가는지 (여러 단계 블록은 전부 가야 함)."""
-    hits = [agent.wants_thinking("auto", c[1], "call") for c in CASES]
+    """AI 호출 없이: AGENT_THINK=auto 면 어떤 요청이 생각하는 에이전트로 가는지 (여러 단계 블록은 전부 가야 함).
+    방장(BOSS)은 관리자라 전부, 멤버는 코드 규칙(이유·여러 단계)에 걸릴 때만."""
+    hits = [agent.wants_thinking("auto", c[1], "call", Role.ADMIN if c[0] is L.BOSS else Role.MEMBER) for c in CASES]
     for i, (c, hit) in enumerate(zip(CASES, hits), 1):
         print(f"  {'🧠' if hit else '  '} {i}. {c[1]}")
     easy, hard = hits[:HARD_FROM], hits[HARD_FROM:]

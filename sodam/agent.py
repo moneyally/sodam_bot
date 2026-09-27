@@ -5,22 +5,25 @@ import re
 
 from openai import BadRequestError
 
-from . import agentlog, memory
+from . import agentlog, costs, memory
 from .llm import BudgetExceeded
+from .permissions import Role
 from .prompt import build_messages
 from .security import nonce, wrap
 from .tools import READ_ONLY, ToolCtx, available, execute
 
 log = logging.getLogger(__name__)
 
-MAX_STEPS = 4          # 도구 호출 라운드 최대 횟수
+# Codex CLI 처럼 모델이 도구를 그만 부를 때까지 돌되, 라운드·요금 상한은 둔다 (넘으면 도구 없이 마무리 답)
+MAX_STEPS = 8          # 도구 호출 라운드 최대 횟수
+RUN_USD_CAP = 0.05     # 한 실행(도구 안 AI 포함, agentlog.Run.usd_micro)이 이만큼 쓰면 더는 도구 라운드 안 함
 MAX_TOKENS = 1500      # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
 # 먼저 끼어들 때는 방 자료만 볼 수 있게 (웹검색·제재·게임 같은 도구는 숨김 → 비용·오작동 방지)
 CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 
-# 생각이 필요한 요청 (코드 판단, 비용 0): 이유·분석을 묻거나, 한 요청에 일이 둘 이상 이어진 것
-# ('찾아서 경고', '요약 올리고 알림도', '확인하고 괜찮으면'). 잡담·도구 하나로 끝나는 요청은 지금처럼 추론 없이.
+# 생각이 필요한 요청 (코드 판단, 비용 0): 관리자·오너 요청 전부 + 멤버는 이유·분석을 묻거나 한 요청에 일이 둘 이상
+# 이어진 것('찾아서 경고', '요약 올리고 알림도', '확인하고 괜찮으면'). 멤버 잡담·도구 하나로 끝나는 요청은 추론 없이(싸게).
 _WHY = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|(하|올리|바꾸|켜|끄|걸|주|먹이|보내|정리하)고[\s,](?!\s*싶)|"
                     r"그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각|하면\s|(?<![가-힣])(걔|쟤|그\s?사람|저\s?사람)(?![가-힣])")
@@ -53,11 +56,12 @@ def unsupported_numbers(answer: str, sources: list[str]) -> list[str]:
     return out
 
 
-def wants_thinking(mode_setting: str, request: str, mode: str) -> bool:
-    """이 요청을 생각하는 에이전트(Responses API 추론+도구)로 돌릴지. mode_setting = cfg.agent_think."""
+def wants_thinking(mode_setting: str, request: str, mode: str, role: int = Role.MEMBER) -> bool:
+    """이 요청을 생각하는 에이전트(Responses API 추론+도구)로 돌릴지. mode_setting = cfg.agent_think.
+    끼어들기(chime·morning)는 어떤 설정이든 안 함 (비용)."""
     if mode_setting == "off" or mode not in ("call", "follow"):
         return False
-    if mode_setting == "always":
+    if mode_setting == "always" or role >= Role.ADMIN:
         return True
     text = " ".join(request.split())
     return bool(_WHY.search(text) or _CHAIN.search(text) or len(_ACTS.findall(text)) >= 2)
@@ -104,7 +108,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     schemas = [t.schema() for t in tools]
     allowed = {t.name for t in tools}
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
-    think = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode)
+    think = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
     run.purpose = purpose + (":think" if think else "")
 
     async def call(tool_choice: str = "auto"):
@@ -124,7 +128,10 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
 
     used = checked = num_checked = read = False
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
-    for _ in range(MAX_STEPS):
+    for step in range(MAX_STEPS):
+        if step and run.usd_micro >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
+            log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
+            break
         msg = await call()
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
         if not calls:
@@ -167,5 +174,5 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", result[:4000], nonce())})
 
-    # 도구 라운드를 다 쓰면 도구 없이 마무리 답변만 받는다
+    # 도구 라운드·요금 상한을 다 쓰면 도구 없이 마무리 답변만 받는다
     return (await call("none")).content or ""

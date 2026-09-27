@@ -22,7 +22,7 @@ KEEP_DAYS = 14
 TRIGGER_CHARS = 200
 ARGS_CHARS = 120
 RESULT_CHARS = 120
-MAX_STEPS_KEPT = 12       # 도구 라운드는 최대 4번이지만 한 라운드에 여러 개일 수 있어 넉넉히
+MAX_STEPS_KEPT = 12       # 도구 라운드는 최대 8번(agent.MAX_STEPS), 보통 1~3번
 PRUNE_EVERY = 3600
 STATUS = {"answered": "✅ 답함", "tool_only": "🛠️ 도구만", "empty": "💤 빈 답", "error": "❌ 오류", "budget": "⛔ 한도"}
 

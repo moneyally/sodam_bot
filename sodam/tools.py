@@ -1013,6 +1013,24 @@ READ_ONLY = {"owner_rooms", "owner_room_log", "my_rooms", "chat_stats", "search_
              "room_rules", "points_ranking", "search_knowledge", "get_my_requests", "answer_sources"}
 
 
+# 도구 실패를 모델에게 돌려줄 때 (Codex CLI 방식: 실패도 결과로 → 모델이 다른 방법으로 다시)
+RETRY_HINT = "(다른 인자나 다른 도구로 한 번 더 시도해 보고, 그래도 안 되면 사실대로 답할 것)"
+# 다시 해 볼 만한 실패: 못 찾음·형식 틀림·없는 명령·빈 결과·도구 오류
+SOFT_FAIL = ("찾을 수 없", "못 찾", "찾지 못", "특정하지 못", "형식 오류", "입력 오류", "형식이 안 맞", "실행 중 오류", "해석 실패",
+             "명령이 없음", "없는 말투", "비어 있음", "2글자 이상", "여러 명이", "여러 개 찾음", "기록 없음", "기록이 없음",
+             "대화 없음", "결과 없음")
+# 그대로 끝내야 하는 결과: 권한·보안·제재·한도·확인 카드 (다시 시도하면 우회·중복이 됨)
+FINAL = ("권한", "보안", "제재", "한도", "다 썼", "확인 버튼", "확인 카드", "버튼을 방에", "못 씀", "사용할 수 없음", "이용 기간",
+         "'했다'고", "'보냈다'고", "기록이 없다고")
+
+
+def retry_hint(result: str) -> str:
+    """부드러운 실패면 결과 끝에 RETRY_HINT (결과 문장은 그대로). 권한·보안·제재·한도·확인 카드 결과엔 안 붙임."""
+    if RETRY_HINT in result or any(m in result for m in FINAL) or not any(m in result for m in SOFT_FAIL):
+        return result
+    return f"{result} {RETRY_HINT}"
+
+
 async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
     tool = _BY_NAME.get(name)
     # 2중 검사: 목록에서 숨겼더라도 실행 직전에 다시 확인
@@ -1025,15 +1043,17 @@ async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
         if not isinstance(args, dict):
             raise ValueError
     except (json.JSONDecodeError, ValueError):
-        return "도구 입력 형식 오류."
+        return retry_hint("도구 입력 형식 오류.")
     ctx.name_notes.clear()
     try:
         result = await tool.fn(ctx, args)
         if ctx.name_notes:   # 예전 이름으로 찾은 사람 → AI 가 지금 이름으로 부르게
             result += "\n" + " ".join(ctx.name_notes) + " 지금 이름으로 부를 것."
-        return result
+        return retry_hint(result)
     except (TypeError, ValueError) as e:
-        return f"도구 입력 오류: {e}"
+        return retry_hint(f"도구 입력 오류: {e}")
+    except BudgetExceeded:   # 한도는 다시 해도 안 됨 → 그대로 끝
+        return "오늘 AI 사용량 한도를 다 써서 못 함. 내일 다시 가능하다고 안내할 것."
     except Exception:  # 도구 하나 실패로 답변 전체가 죽지 않게
         log.exception("tool %s failed", name)
-        return "도구 실행 중 오류가 났음. 잠시 후 다시 해달라고 안내할 것."
+        return retry_hint("도구 실행 중 오류가 났음. 잠시 후 다시 해달라고 안내할 것.")
