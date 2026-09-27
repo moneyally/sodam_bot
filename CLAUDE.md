@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 574개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 577개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -91,6 +91,8 @@
 - 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
   (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
+- 방에 올리는 확인 카드(schedule_task·alert_rule)는 `menu.lasting_token` 으로 DB(menu_tokens)에도 저장 — 봇 재시작(배포) 뒤에도 30분 유효
+  (실제 사례: OTC 방 예약 카드 → 1분 뒤 배포 재시작 → [✅ 예약] 만료). 예약 deliver room/me(만든 관리자 1:1), action post=정해진 글.
 - menu 토큰: 다른 사람이 누르면 '요청한 사람만' 으로 거절하고 토큰은 남김 (방에 뜬 카드를 남이 눌러 무효화 못 하게).
 - 게임 중: 게임 답(AI 답에 단 답장 포함)이 AI 보다 먼저, AI 엔 진행 중 게임 단서(ai_hint). start_game 성공이면 AI 답 안 보냄(ctx.quiet).
 - 스팸 명단 차단 안내에 [↩️ 차단 풀기](이 방에선 다시 안 막음, chat_state cas_ok:<id>) [🔕 끄기] ('사용자 차단' 권한 관리자).

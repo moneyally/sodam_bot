@@ -275,7 +275,8 @@ class DB:
         """예전 버전 DB에 없는 컬럼 추가."""
         wanted = {"schedules": {"title": "TEXT NOT NULL DEFAULT ''", "media_type": "TEXT", "media_id": "TEXT",
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
-                                "skill": "TEXT", "at_ts": "INTEGER"}}         # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
+                                "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
+                                "deliver": "TEXT NOT NULL DEFAULT 'room'"}}   # room 방에 / me 만든 관리자 1:1
         for table, cols in wanted.items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
@@ -650,13 +651,14 @@ class DB:
     async def add_schedule(self, chat_id: int, *, kind: str, at_time: str | None, interval_min: int | None,
                            title: str, text: str, media_type: str | None, media_id: str | None,
                            pin: bool, created_by: int, action: str = "post", skill: str | None = None,
-                           at_ts: int | None = None) -> int:
+                           at_ts: int | None = None, deliver: str = "room") -> int:
         return await self._write(
             "INSERT INTO schedules(chat_id, kind, at_time, interval_min, title, text, media_type, media_id, "
-            "pin, created_by, last_sent, action, skill, at_ts) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "pin, created_by, last_sent, action, skill, at_ts, deliver) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             # 반복 공지는 등록 시점부터 간격을 센다 (등록하자마자 올라가지 않게)
             (chat_id, kind, at_time, interval_min, title[:100], text[:3500], media_type, media_id,
-             int(pin), created_by, now() if kind == "interval" else None, action, skill, at_ts))
+             int(pin), created_by, now() if kind == "interval" else None, action, skill, at_ts,
+             "me" if deliver == "me" else "room"))
 
     async def update_schedule(self, chat_id: int, sid: int, **fields: Any) -> bool:
         fields = {k: v for k, v in fields.items() if k in self.SCHEDULE_FIELDS}

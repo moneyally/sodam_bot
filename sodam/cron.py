@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-ACTIONS = {"remind": "⏰ 알람", "ai": "🤖 AI 작업"}
+ACTIONS = {"remind": "⏰ 알람", "ai": "🤖 AI 작업", "post": "📢 공지 글"}   # post = 예약공지 엔진(announce.publish) 그대로
 MAX_OUT = 1500
 SUMMARY_MAX_CHARS = 12000
 
@@ -95,7 +95,13 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
             log.info("cron #%s off: creator %s no longer admin", row["id"], creator)
             return False
         title = esc(row["title"]) if row["title"] else ""
-        if row["action"] == "remind":
+        to_me = row["deliver"] == "me"   # 만든 관리자 1:1 로 (방엔 안 올림)
+        if to_me:
+            from .subscription import chat_title  # 늦게 import (순환 방지)
+            title = (title + " · " if title else "") + esc(await chat_title(svc, cid))
+        if row["action"] == "remind" and to_me:
+            body = f"⏰ <b>{title}</b>\n{esc(row['text'] or '알람이에요')}"
+        elif row["action"] == "remind":
             name = await svc.db.first_name(creator) or "관리자"
             body = f"⏰ {mention(creator, name)} {esc(row['text'] or '알람이에요')}"
         else:
@@ -105,7 +111,7 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
             usernames = {r["username"].lower() for r in await svc.db.member_names(cid) if r["username"]}
             body = f"🤖 <b>{title or SKILLS[row['skill']].label}</b>\n" + esc(
                 filter_output(out, max_chars=MAX_OUT, allowed_usernames=usernames))
-        await bot.send_message(cid, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
+        await bot.send_message(creator if to_me else cid, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
         return True
     except BudgetExceeded:
         log.info("cron #%s skipped: AI budget", row["id"])
@@ -118,20 +124,22 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
 
 def describe(row) -> str:
     """목록·카드용 한 줄: 종류 · 스킬."""
+    me = " → 1:1" if row["deliver"] == "me" else ""
     if row["action"] == "ai":
-        return f"🤖 {SKILLS.get(row['skill'] or '', Skill('?', '')).label}"
-    return ACTIONS.get(row["action"], "📢 공지")
+        return f"🤖 {SKILLS.get(row['skill'] or '', Skill('?', '')).label}{me}"
+    return ACTIONS.get(row["action"], "📢 공지") + me
 
 
 async def create(svc: Services, chat_ids: list[int], *, uid: int, when: tuple, action: str, skill: str | None,
-                 text: str, title: str = "") -> list[int]:
+                 text: str, title: str = "", deliver: str = "room") -> list[int]:
     """같은 예약을 여러 방에 (방마다 한 줄). 방당 한도는 부르는 쪽이 확인."""
     kind, at_time, interval, at_ts = when
     ids = []
     for cid in chat_ids:
         sid = await svc.db.add_schedule(cid, kind=kind, at_time=at_time, interval_min=interval, title=title,
                                         text=text, media_type=None, media_id=None, pin=False, created_by=uid,
-                                        action=action, skill=skill if action == "ai" else None, at_ts=at_ts)
+                                        action=action, skill=skill if action == "ai" else None, at_ts=at_ts,
+                                        deliver=deliver)
         await svc.db.log_mod(cid, uid, None, "schedule", f"#{sid} {action}/{skill or '-'} {text[:60]}")
         ids.append(sid)
     return ids

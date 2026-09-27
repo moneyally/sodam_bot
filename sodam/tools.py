@@ -711,19 +711,24 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         return f"시간 해석 실패: {e}. 이 형식으로 다시: 매일 09:00 / 반복 2시간 / 30분 뒤 / 내일 09:00 / 09-28 21:00"
     action, skill = str(a.get("action", "")), str(a.get("skill", "")) or None
     if action not in cron.ACTIONS or (action == "ai" and skill not in cron.SKILLS):
-        return "action 은 remind / ai, ai 면 skill 은 summary / search / stats / write 중 하나."
+        return "action 은 remind / post / ai, ai 면 skill 은 summary / search / stats / write 중 하나."
     if action == "ai" and when[0] == "interval" and when[2] < 60:
         return "AI 작업은 1시간 이상 간격으로만 반복할 수 있음."
     if len(await ctx.svc.db.schedules(ctx.chat_id)) >= MAX_PER_CHAT:
         return f"이 방 예약이 이미 {MAX_PER_CHAT}개라 더 못 만듦. 관리자 1:1 메뉴 🗓️ 에서 정리하라고 안내."
     text, title = str(a.get("text", "")).strip()[:500], str(a.get("title", "")).strip()[:40]
-    spec = {"when": when, "action": action, "skill": skill if action == "ai" else None, "text": text, "title": title}
-    ok = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_save", spec, 600)
-    no = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_no", None, 600)
+    deliver = "me" if a.get("to") == "me" else "room"
+    if action == "post" and deliver == "me":      # 공지는 방에 올리는 것 → 1:1 이면 알람과 같음
+        action = "remind"
+    spec = {"when": when, "action": action, "skill": skill if action == "ai" else None, "text": text, "title": title,
+            "deliver": deliver}
+    ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_save", spec, 1800)
+    no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_no", None, 1800)
     what = cron.ACTIONS[action] + (f" · {cron.SKILLS[skill].label}" if action == "ai" else "")
     await ctx.bot.send_message(
         ctx.chat_id, f"⏰ 이렇게 예약할까요?\n언제: <b>{describe_when(*when[:3])}</b>\n종류: {what}\n"
-                     f"내용: {esc(text) or '(없음)'}\n(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
+                     f"내용: {esc(text) or '(없음)'}\n보낼 곳: {'요청한 분 1:1' if deliver == 'me' else '이 방'}\n"
+                     f"(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ 예약", callback_data=f"m:k:{ok}"),
                                                               InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))
     return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 저장된다고 짧게 안내할 것. 아직 저장된 게 아니니 '했다'고 말하지 말 것."
@@ -745,8 +750,8 @@ async def t_alert_rule(ctx: ToolCtx, a: dict) -> str:
         return f"못 만듦: {err}"
     if len(await rules.room_rules(ctx.svc.db, ctx.chat_id)) >= rules.MAX_RULES:
         return f"이 방 규칙이 이미 {rules.MAX_RULES}개라 더 못 만듦. 1:1 메뉴 🔔 알림 규칙에서 정리하라고 안내."
-    ok = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_save", spec, 600)
-    no = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_no", None, 600)
+    ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_save", spec, 1800)
+    no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_no", None, 1800)
     await ctx.bot.send_message(
         ctx.chat_id, f"🔔 이 알림 규칙을 만들까요?\n<b>{esc(await rules.describe(ctx.svc, spec))}</b>\n"
                      f"(쿨다운 {spec['cooldown']}분 · 요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
@@ -843,7 +848,8 @@ TOOLS: list[Tool] = [
           "action": {"type": "string", "enum": list(gametime.ACTIONS), "description": "notify=알림만, button=알림+뮤트 버튼, auto=자동 뮤트"},
           "mute_hours": {"type": "integer", "description": "뮤트 시간 (1~48)"}}, ["on"], t_game_alert, Role.ADMIN,
          where="room"),
-    Tool("schedule_task", "알람·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘' → remind, "
+    Tool("schedule_task", "알람·공지·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘'(요청한 사람을 부름) → remind, "
+         "'매일 아침 9시 방에 인사 올려'(정해진 글) → post, "
          "'매일 밤 10시에 오늘 대화 요약해서 올려' → ai+summary, '매일 아침 8시 비트코인 뉴스' → ai+search, "
          "'매일 자정 수다 랭킹' → ai+stats, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
          {"when": {"type": "string", "description": "매일 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM"},
@@ -852,7 +858,10 @@ TOOLS: list[Tool] = [
           "text": {"type": "string", "description": "remind: 그 시각에 방에 그대로 올라갈 알림 내용 자체 (예: '회의 시간이에요', '치킨 도착!'), "
                                                     "'알려드릴게요' 같은 예약 말투 금지 / "
                                                     "ai: 작업 지시·검색 주제"},
-          "title": {"type": "string"}}, ["when", "action", "text"], t_schedule_task, Role.ADMIN, where="room"),
+          "title": {"type": "string"},
+          "to": {"type": "string", "enum": ["room", "me"], "description": "room=방에 올림(기본), me=요청한 관리자 1:1 로만 "
+                                                                        "('나한테 알려줘', '나한테 보고' 같은 말)"}},
+         ["when", "action", "text"], t_schedule_task, Role.ADMIN, where="room"),
     Tool("alert_rule", "알림 규칙 만들기 (확인 버튼을 보냄). '누가 입금 얘기하면 알려줘' → keyword, '@홍길동 말하면 나 불러' → "
          "user+call, '누가 들어오면 알려줘' → join, '방 3시간 조용하면 인사 올려' → quiet+post. 정해진 시각 알람은 schedule_task.",
          {"trigger": {"type": "string", "enum": list(rules.TRIGGERS)},

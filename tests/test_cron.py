@@ -151,3 +151,51 @@ async def panel_input_creates_ai_task_and_copies_to_my_rooms():
         menu.admin_groups = orig
     [copy] = await r.db.schedules(other)
     assert (copy["skill"], copy["created_by"]) == ("summary", BOSS.id) and not await r.db.schedules(foreign)
+
+
+@test
+async def confirm_card_survives_bot_restart():
+    """실제 사례: 예약 확인 카드를 띄운 뒤 봇이 재시작(배포)되자 [✅ 예약]이 '만료'로 저장 안 됨."""
+    r = await room()
+    await ask(r, BOSS, [tool_call("schedule_task", {"when": "매일 23:00", "action": "ai", "skill": "summary",
+                                                    "text": "대화 요약"})])
+    [card] = [c for c in room_msgs(r) if "예약할까요" in c[2]]
+    ok = card[3]["reply_markup"].inline_keyboard[0][0].callback_data
+    r.svc.menu_tokens.clear()                                            # 재시작 = 메모리 토큰 사라짐
+    q = await press(r, A, ok)
+    assert "요청한 사람만" in q.answers[-1][0] and not await r.db.schedules(Room.CHAT)
+    q = await press(r, BOSS, ok)
+    [row] = await r.db.schedules(Room.CHAT)
+    assert row["skill"] == "summary" and "예약했어요" in q.edits[-1]
+    q = await press(r, BOSS, ok)                                          # 1회용
+    assert len(await r.db.schedules(Room.CHAT)) == 1
+
+
+@test
+async def deliver_to_me_goes_to_creator_dm_not_room():
+    """'대화 요약해서 나한테 보고해줘' → 방이 아니라 만든 관리자 1:1 로."""
+    r = await room()
+    await ask(r, BOSS, [tool_call("schedule_task", {"when": "30분 뒤", "action": "remind", "text": "회의", "to": "me"})])
+    [card] = [c for c in room_msgs(r) if "예약할까요" in c[2]]
+    assert "요청한 분 1:1" in card[2]
+    await press(r, BOSS, card[3]["reply_markup"].inline_keyboard[0][0].callback_data)
+    [row] = await r.db.schedules(Room.CHAT)
+    assert row["deliver"] == "me"
+    await r.db._write("UPDATE schedules SET at_ts=? WHERE id=?", (int(time.time()) - 5, row["id"]))
+    before = len(room_msgs(r))
+    await r.svc.announcer.run_due(r.bot)
+    dms = [c for c in r.bot.named("send_message") if c[1] == BOSS.id]
+    assert dms and "회의" in dms[-1][2] and len(room_msgs(r)) == before, dms
+
+
+@test
+async def post_action_is_plain_notice_in_room():
+    r = await room()
+    await ask(r, BOSS, [tool_call("schedule_task", {"when": "30분 뒤", "action": "post", "text": "좋은 아침입니다"})])
+    [card] = [c for c in room_msgs(r) if "예약할까요" in c[2]]
+    await press(r, BOSS, card[3]["reply_markup"].inline_keyboard[0][0].callback_data)
+    [row] = await r.db.schedules(Room.CHAT)
+    await r.db._write("UPDATE schedules SET at_ts=? WHERE id=?", (int(time.time()) - 5, row["id"]))
+    await r.svc.announcer.run_due(r.bot)
+    posts = [c[2] for c in room_msgs(r) if "좋은 아침입니다" in c[2] and "예약" not in c[2]]
+    assert posts and posts[-1].startswith("📢") and "tg://user" not in posts[-1], posts

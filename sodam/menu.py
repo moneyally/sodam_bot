@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest, TelegramError
 
+from .db import register_schema
 from .security import normalize_domain
 from .services import MenuToken, PendingInput
 from .settings import LABELS, coerce, render
@@ -562,10 +564,11 @@ EXPIRED = Screen(None, toast="만료된 버튼이에요. 메뉴를 다시 열어
 
 
 async def r_token(c: PanelCtx) -> Screen:
-    t = c.svc.menu_tokens.get(c.arg(0))
+    t = c.svc.menu_tokens.get(c.arg(0)) or await _stored_token(c.svc, c.arg(0))   # 재시작 뒤엔 DB 에서
     if t and t.user_id != c.uid and t.expires >= time.time():   # 방에 뜬 카드를 남이 눌러도 토큰은 그대로 (주인이 누를 수 있게)
         return Screen(None, toast="요청한 사람만 누를 수 있어요.", alert=True)
     c.svc.menu_tokens.pop(c.arg(0), None)  # 1회용: 꺼내면서 지움
+    await c.svc.db._write("DELETE FROM menu_tokens WHERE tok=?", (c.arg(0),))
     if not t or t.expires < time.time() or t.action not in TOKEN_ACTIONS:
         return EXPIRED
     fn, fresh = TOKEN_ACTIONS[t.action]
@@ -728,6 +731,33 @@ def register_token_action(action: str, fn: Callable[[PanelCtx, object], Awaitabl
 def token(svc: Services, uid: int, cid: int, action: str, arg, ttl: int = TOKEN_TTL) -> str:
     """패널 모듈용 공개 이름."""
     return _token(svc, uid, cid, action, arg, ttl)
+
+
+register_schema("""
+CREATE TABLE IF NOT EXISTS menu_tokens (
+    tok     TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    action  TEXT NOT NULL,
+    arg     TEXT NOT NULL,
+    expires REAL NOT NULL
+);
+""", migrate={"menu_tokens": "plain"})
+
+
+async def lasting_token(svc: Services, uid: int, cid: int, action: str, arg, ttl: int = 600) -> str:
+    """방에 올리는 확인 카드(말로 한 예약·알림 규칙)용: DB 에도 적어 봇이 재시작돼도 버튼이 산다. arg 는 JSON 으로."""
+    key = _token(svc, uid, cid, action, arg, ttl)
+    now = time.time()
+    await svc.db._write("DELETE FROM menu_tokens WHERE expires < ?", (now,))
+    await svc.db._write("INSERT INTO menu_tokens(tok, user_id, chat_id, action, arg, expires) VALUES(?,?,?,?,?,?)",
+                        (key, uid, cid, action, json.dumps(arg, ensure_ascii=False), now + ttl))
+    return key
+
+
+async def _stored_token(svc: Services, key: str) -> MenuToken | None:
+    row = await svc.db._one("SELECT * FROM menu_tokens WHERE tok=?", (key,))
+    return MenuToken(row["user_id"], row["chat_id"], row["action"], json.loads(row["arg"]), row["expires"]) if row else None
 
 
 # ── 라우터 ────────────────────────────────────────────────

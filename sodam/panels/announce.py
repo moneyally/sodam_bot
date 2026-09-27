@@ -212,7 +212,8 @@ async def t_cron_save(c: PanelCtx, spec) -> Screen:
     if len(await c.svc.db.schedules(c.cid)) >= MAX_PER_CHAT:
         return Screen(f"예약은 방마다 {MAX_PER_CHAT}개까지예요. 관리자 1:1 메뉴 🗓️ 에서 정리해 주세요.", None)
     [sid] = await cron.create(c.svc, [c.cid], uid=c.uid, when=tuple(spec["when"]), action=spec["action"],
-                              skill=spec["skill"], text=spec["text"], title=spec["title"])
+                              skill=spec["skill"], text=spec["text"], title=spec["title"],
+                              deliver=spec.get("deliver", "room"))
     return Screen(f"✅ 예약했어요 (#{sid} · {describe_when(*spec['when'][:3])} · {esc(spec['text'][:60])})\n"
                   "끄기·삭제는 관리자 1:1 메뉴 🗓️ 예약공지에서", None, toast="예약했어요")
 
@@ -242,7 +243,7 @@ async def r_copy(c: PanelCtx) -> Screen:
         sid = await c.svc.db.add_schedule(g, kind=r["kind"], at_time=r["at_time"], interval_min=r["interval_min"],
                                           title=r["title"], text=r["text"], media_type=r["media_type"],
                                           media_id=r["media_id"], pin=bool(r["pin"]), created_by=c.uid,
-                                          action=r["action"], skill=r["skill"], at_ts=r["at_ts"])
+                                          action=r["action"], skill=r["skill"], at_ts=r["at_ts"], deliver=r["deliver"])
         await c.svc.db.log_mod(g, c.uid, None, "schedule", f"#{sid} ← {c.cid}#{r['id']} 복사")
     screen = await s_item(c)
     screen.toast = f"📤 {len(ids)}개 방에 만들었어요"
