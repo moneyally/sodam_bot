@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 519개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 523개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -81,6 +81,9 @@
 
 - 오너 보고(도배 뮤트·사칭·자동 밴·CAS)에 바로가기 버튼 [풀기][1일 연장][내보내기]/[밴 해제] (ow:, 오너만).
 - 하루 1번 봇에게 관리 권한 없는 방을 오너에게 알림 (job_rights). 하트비트는 텔레그램 get_webhook_info 성공 때만 기록.
+
+- 네트워크 재전송(`util.send_retry`): 방에 보이는 글은 연결 자체가 실패한 경우만(확실히 안 보내짐) 다시, 응답만 끊긴 경우는
+  이미 보내졌을 수 있어 안 보냄(중복 방지). 오너 보고는 둘 다 다시. 이름 순찰은 한 차례 40초 제한.
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서

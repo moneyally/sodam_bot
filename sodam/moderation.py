@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from telegram import Bot, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
-from telegram.error import TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 
 from . import casino
 from .config import Config
@@ -16,7 +16,7 @@ from .db import DB
 from .permissions import Permissions
 from .security import find_links, find_mentions, link_allowed, normalize
 from .settings import register_setting
-from .util import esc, human_minutes, mention, user_name
+from .util import esc, human_minutes, mention, send_retry, user_name
 
 log = logging.getLogger(__name__)
 
@@ -188,12 +188,15 @@ class Moderator:
         """
         targets = ([self.cfg.log_chat_id] if self.cfg.log_chat_id else []) + sorted(await self.perms.owners())
         for chat_id in targets:
-            try:
-                await bot.send_message(chat_id, "📣 " + text, parse_mode="HTML", reply_markup=kb)
-            except TelegramError as e:
+            try:   # 1:1·로그방이라 중복돼도 괜찮음 → 응답만 끊긴 경우도 한 번 더 보냄
+                await send_retry(lambda c=chat_id: bot.send_message(c, "📣 " + text, parse_mode="HTML", reply_markup=kb),
+                                 dup_ok=True)
+            except (Forbidden, BadRequest) as e:   # 봇과 1:1 을 시작 안 했거나 봇을 차단함 (한 번만 알림)
                 if chat_id not in self._unreachable:
                     self._unreachable.add(chat_id)
                     log.warning("관리자 보고 전송 실패 (%s): %s — 봇과 1:1 채팅을 먼저 시작해야 받을 수 있어요", chat_id, e)
+            except TelegramError as e:
+                log.warning("관리자 보고 전송 실패 (%s, 네트워크): %s", chat_id, e)
 
     # ── 메시지 자동 검사 (관리자는 호출하지 않음) ─────────
     async def check_message(self, bot: Bot, msg: Message, text: str, *, game_active: bool = False) -> str | None:

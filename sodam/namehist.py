@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -237,6 +238,7 @@ CREATE TABLE IF NOT EXISTS name_scan (
 
 SCAN_PER_TICK = 20          # 조용한 멤버 확인: 한 번에 몇 명 (getChatMember)
 SCAN_EVERY = 12 * 3600      # 한 사람을 이 간격마다 다시 확인
+SCAN_BUDGET = 40            # 한 차례 최대 초 (작업 간격 60초보다 짧게)
 SCAN_ACTIVE_DAYS = 90       # 이 기간 안에 본 멤버만
 
 
@@ -321,8 +323,10 @@ async def sweep(svc, bot) -> int:
         "WHERE m.chat_id < 0 AND COALESCE(m.last_seen, 0) > ? AND COALESCE(s.ts, 0) < ? "
         "ORDER BY COALESCE(s.ts, 0) LIMIT ?",
         (now_ts - SCAN_ACTIVE_DAYS * 86400, now_ts - SCAN_EVERY, SCAN_PER_TICK))
-    done = 0
+    done, start = 0, time.monotonic()
     for r in rows:
+        if time.monotonic() - start > SCAN_BUDGET:   # 느린 네트워크에서 다음 차례(1분)를 막지 않게 — 남은 건 다음 차례에
+            break
         chat_id, user_id = r["chat_id"], r["user_id"]
         try:
             member = await bot.get_chat_member(chat_id, user_id)

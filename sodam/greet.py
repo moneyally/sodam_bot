@@ -25,7 +25,7 @@ from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import filter_output
 from .settings import register_setting
-from .util import esc, mention
+from .util import esc, mention, send_retry
 
 if TYPE_CHECKING:
     from .services import Services
@@ -163,11 +163,12 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
         fits = _plain_len(text_html) <= CAPTION_LIMIT
         try:
             if fits:
-                return [await send(chat_id, file_id, caption=text_html, parse_mode="HTML", reply_markup=kb)]
-            sent.append(await send(chat_id, file_id))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
+                return [await send_retry(lambda: send(chat_id, file_id, caption=text_html, parse_mode="HTML",
+                                                      reply_markup=kb))]
+            sent.append(await send_retry(lambda: send(chat_id, file_id)))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
         except BadRequest as e:
             log.warning("greet media failed, sending text only: %s", e)
-    sent.append(await bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb))
+    sent.append(await send_retry(lambda: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb)))
     return sent
 
 

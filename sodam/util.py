@@ -6,7 +6,8 @@ from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from telegram.error import TelegramError
+import httpx
+from telegram.error import NetworkError, TelegramError
 
 esc = html.escape
 
@@ -154,3 +155,25 @@ def post_temp(bot, chat_id: int, text: str, seconds: int = 120) -> None:
     task = asyncio.create_task(run())
     _BG.add(task)
     task.add_done_callback(_BG.discard)
+
+
+RETRY_DELAY = 3.0
+
+
+def surely_unsent(e: BaseException) -> bool:
+    """연결 자체가 안 된 네트워크 오류 = 텔레그램이 요청을 못 받음 → 다시 보내도 중복 없음.
+    응답만 끊긴 경우(서버가 응답 없이 끊음·읽기 시간 초과)는 이미 보내졌을 수 있어서 False."""
+    return isinstance(e, NetworkError) and isinstance(e.__cause__, (httpx.ConnectError, httpx.ConnectTimeout,
+                                                                    httpx.PoolTimeout))
+
+
+async def send_retry(make, *, dup_ok: bool = False, tries: int = 2):
+    """make() = 보내기 코루틴을 새로 만드는 함수. 네트워크 오류면 RETRY_DELAY 뒤 다시 보낸다.
+    dup_ok=False(방에 보이는 글): 확실히 안 보내진 경우만 다시 → 같은 글이 두 번 올라가지 않게."""
+    for i in range(tries):
+        try:
+            return await make()
+        except NetworkError as e:
+            if i == tries - 1 or not (dup_ok or surely_unsent(e)):
+                raise
+            await asyncio.sleep(RETRY_DELAY)
