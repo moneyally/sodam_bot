@@ -257,6 +257,19 @@
 - 성능(tools/hotpath_bench.py): 메시지당 DB 왕복 13.6→2.6 (자유 멤버·봇관리자·금지어·공동 차단·알림 규칙 방별 캐시, 바꾸는 코드가 즉시 비움,
   다른 프로세스 변경은 30초 안). 이름·last_seen 쓰기는 바뀌었거나 60초마다. 테스트가 왕복 5 넘으면 실패.
 
+## 📢 채널 관리 + ✍️ 글 편집기 (`channel.py`, `composer.py`, `panels/channel.py`·`composer.py`, tests/test_channel.py·test_composer.py)
+- 소담을 채널 관리자로 넣으면 등록 + 넣은 사람 1:1 권한 체크리스트. 관리 = 그 채널 TG 관리자 + 오너 (올리기·예약·승인은 매번 텔레그램 재확인).
+- 편집기: 허용 HTML(b,i,u,s,code,pre,a,blockquote,tg-spoiler)만, 깨진 태그는 위치와 함께 거절, 텔레그램 서식 글은 자동 변환. URL 버튼 줄 편집.
+  초안은 DB(재시작 OK), 올리기·수정은 DB 차지로 한 번만. 예약은 announce 시각 형식. AI `channel_draft`(1:1, 버튼 눌러야 올라감)·`channel_posts`(방, 읽기).
+- 요금: 예약·AI 초안·방 알림은 이용 중인 방에 연결된 채널 1개(방당). 지금 올리기·가입 신청·구독자 추이는 무료. 방 예약공지는 아직 옛 마법사.
+## 🔧 MTProto 헬퍼 (`mtproto.py`, `panels/mtproto.py`, tests/test_mtproto.py·test_namehist_mtproto.py)
+- .env MTPROTO_API_ID/HASH(비밀, 템플릿엔 빈칸). ① 봇 토큰 세션(receive_updates=False): 참가자 명단·@아이디 조회 → 이름 기록 전체 멤버 순찰(12시간마다, 첫 발견은 알림 없음).
+  ② 사람 계정(선택, `tools/mtproto_login.py` 서버 터미널에서만): 채널 조회수 30분 1번. **클라우드 컨테이너에선 MTProto(TCP) 가 프록시에 막혀 연결 안 됨 → VPS 에서만.**
+## 👋 퇴장 인사 (`farewell.py`, `panels/farewell.py`, tests/test_farewell.py)
+- 기본 꺼짐. 스스로 나간 사람만(by.id == user.id — 관리자·자동 관리 내보냄 제외), 상태 업데이트·서비스 메시지 둘 다 받고 60초 차지로 1번.
+  말투별 기본 문구(AI 없음) + 🆔 줄, 20초 안 여러 명은 합침, raid 중 없음, 자동 삭제 선택.
+- 다른 봇 명령(bot_command): 이 방에서 봇을 한 번도 못 봤으면 켜는 순서(BotFather → 🤖 명령까지 → ✅ 믿는 봇)를 돌려줌.
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
