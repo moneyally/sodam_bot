@@ -408,3 +408,11 @@ async def learns_commands_from_bot_help_text_and_defaults_play():
     assert await botskills.learn_from_history(r2.db, Room.CHAT, YT.id)    # 기능 전에 기록된 사용법 글도 DB 로 배움
     got = sk_map(await botskills.skills(r2.db, Room.CHAT, YT.id))
     assert got["/yplay"][0] == "help" and "/next" in got, got
+
+
+@test
+async def queue_intent_prefers_same_name_over_remove():
+    r = await blroom("interact")
+    await trust(r, MELON)
+    await bot_says(r, MELON, "사용법\n📜 /queue — 대기열 보기\n❌ /remove 번호 — 대기열에서 곡 빼기")
+    assert (await botskills.for_intent(r.db, Room.CHAT, MELON.id, "queue"))["command"] == "/queue"

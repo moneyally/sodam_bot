@@ -27,11 +27,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-INTENTS = ("play", "skip", "pause", "resume", "stop", "queue", "search", "dice", "bet", "other")
+INTENTS = ("play", "skip", "pause", "resume", "stop", "queue", "remove", "search", "dice", "bet", "other")
 INTENT_LABEL = {"play": "재생·신청", "skip": "건너뛰기", "pause": "일시정지", "resume": "다시 재생", "stop": "정지",
-                "queue": "대기열", "search": "검색", "dice": "주사위", "bet": "베팅", "other": "기타"}
-WIDE = ("play", "search")
-DEFAULT_NAME = ("play", "skip", "pause", "resume", "stop", "queue")   # 음악봇 대부분이 이 이름          # 인자 100자 + 유튜브 링크 허용 (botlink.build wide)
+                "queue": "대기열", "remove": "대기열에서 빼기", "search": "검색", "dice": "주사위", "bet": "베팅", "other": "기타"}
+WIDE = ("play", "search")          # 인자 100자 + 유튜브 링크 허용 (botlink.build wide)
 SOURCE_BADGE = {"preset": "📌직접", "manual": "📌직접", "seen": "👀본 것", "helper": "🔧헬퍼", "help": "📖안내"}
 # 봇이 올린 사용법 글의 '/명령 설명' 줄 (실제 사례: 멜론봇 /help 에 /play·/skip… 이 다 있는데 /help 만 배움)
 HELP_CMD = re.compile(r"(?<![\w/@])/([A-Za-z][A-Za-z0-9_]{0,31})(?![\w@])([^\n/]*)")
@@ -66,12 +65,13 @@ _BY_NAME = {
     **dict.fromkeys(("resume", "unpause", "continue", "r"), "resume"),
     **dict.fromkeys(("stop", "leave", "end", "disconnect", "dc", "exit"), "stop"),
     **dict.fromkeys(("queue", "q", "list", "playlist", "np", "nowplaying"), "queue"),
+    **dict.fromkeys(("remove", "rm", "delete", "del", "cancel", "unqueue"), "remove"),
     **dict.fromkeys(("search", "find", "yt", "youtube", "ytsearch"), "search"),
     **dict.fromkeys(("dice", "roll", "d"), "dice"),
     **dict.fromkeys(("bet", "b", "wager"), "bet"),
 }
 # 설명 낱말 → intent (순서 중요: '일시정지' ⊃ '정지', '재생목록' ⊃ '재생', '다시 재생'·'재개' 먼저)
-_BY_WORD = (("pause", ("일시정지", "일시 정지", "pause")), ("resume", ("재개", "다시 재생", "이어", "resume")),
+_BY_WORD = (("remove", ("빼기", "빼", "삭제", "취소", "remove")), ("pause", ("일시정지", "일시 정지", "pause")), ("resume", ("재개", "다시 재생", "이어", "resume")),
             ("queue", ("대기열", "재생목록", "목록", "queue", "playlist")), ("skip", ("건너", "스킵", "다음 곡", "skip")),
             ("stop", ("정지", "멈춤", "종료", "stop")), ("search", ("검색", "search")),
             ("play", ("재생", "신청", "틀어", "노래", "play")), ("dice", ("주사위", "dice")),
@@ -108,8 +108,12 @@ async def skills(db, chat_id: int, bot_id: int) -> list:
 
 async def for_intent(db, chat_id: int, bot_id: int, intent: str):
     """그 봇에서 intent 를 하는 명령 — 여럿이면 가장 최근 것 (newest wins)."""
+    # 관리자가 정한 것(최근 것) 먼저 → 저절로 배운 것 중엔 이름이 intent 와 같은 명령 먼저
+    # (실제 사례: 사용법 글의 /queue·/remove 가 둘 다 '대기열' → /remove 를 고를 수 있었음)
     return await db._one("SELECT * FROM botlink_skills WHERE chat_id=? AND bot_id=? AND intent=? "
-                         "ORDER BY updated DESC, count DESC LIMIT 1", (chat_id, bot_id, intent))
+                         "ORDER BY source IN ('manual','preset') DESC, "
+                         "CASE WHEN source IN ('manual','preset') THEN updated ELSE 0 END DESC, "
+                         "command = '/' || intent DESC, updated DESC, count DESC LIMIT 1", (chat_id, bot_id, intent))
 
 
 async def intent_of(db, chat_id: int, bot_id: int, command: str) -> str:

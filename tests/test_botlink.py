@@ -178,7 +178,7 @@ async def command_needs_admin_interact_trusted_and_valid_form():
     r = await blroom("observe")
     await bot_says(r, DICE, "안녕")
     res = await ask(r, A, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})], role=Role.MEMBER)
-    assert "사용할 수 없음" in res[0], "멤버는 도구 자체가 없음"
+    assert "관리자에게 켜 달라고" in res[0] and not r.bot.named("send_message"), "꺼진 방에서 멤버는 카드도 없음"
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
     assert "연동 켜기" in res[0], res                                    # 꺼진 방 = 켜기 카드 (명령은 안 감)
     on = [c for c in r.bot.named("send_message") if "켤까요" in c[2]][-1][3]["reply_markup"].inline_keyboard[0][0].callback_data
@@ -304,16 +304,17 @@ async def one_send_per_answer():
     await botlink.approve(r.db, Room.CHAT, DICE.id, "/dice", BOSS.id)
     botlink.WAIT_SECONDS, old = 0.01, botlink.WAIT_SECONDS
     try:
-        res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"}),
-                                  tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"}, "c2")])
+        from sodam.panels import botlink as blp
+        res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"}, f"c{i}")
+                                  for i in range(blp.SENDS_PER_ANSWER + 1)])
     finally:
         botlink.WAIT_SECONDS = old
-    assert "보냈음" in res[0] and "지어내지" in res[0] and "이미" in res[1], res
-    assert len([c for c in r.bot.named("send_message") if c[2].startswith("/dice")]) == 1
-    for _ in range(botlink.OUT_PER_MIN - 1):                                # 분당 한도 다 씀 → 도구도 안 보냄
+    assert all("보냈음" in x for x in res[:-1]) and "이미" in res[-1], res       # 한 답변에 SENDS_PER_ANSWER 번까지
+    assert len([c for c in r.bot.named("send_message") if c[2].startswith("/dice")]) == blp.SENDS_PER_ANSWER
+    for _ in range(botlink.OUT_PER_MIN - blp.SENDS_PER_ANSWER):                                # 분당 한도 다 씀 → 도구도 안 보냄
         assert botlink.reserve(r.svc, Room.CHAT, CASINO.id) is None
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
-    assert "1분에" in res[0] and len([c for c in r.bot.named("send_message") if c[2].startswith("/dice")]) == 1, res
+    assert "1분에" in res[0] and len([c for c in r.bot.named("send_message") if c[2].startswith("/dice")]) == blp.SENDS_PER_ANSWER, res
 
 
 @test
@@ -389,3 +390,47 @@ async def result_posted_as_new_message_counts_as_reply():
     await asyncio.sleep(0)
     await bot_says(r, CASINO, "다른 봇 글")                               # 다른 봇 글은 결과 아님
     assert await waiting is None
+
+
+
+@test
+async def members_can_request_approved_play_only():
+    """실제 사례: 멤버의 '소담아 먼데이키즈 발자국 재생' 은 버려지고 AI 가 '/재생' 이라는 없는 명령을 지어냄."""
+    from sodam import botskills
+    r = await blroom("interact")
+    await trust(r)
+    await bot_says(r, DICE, "사용법\n/play 곡 — 재생\n/skip — 다음 곡\n/queue — 대기열")
+    play = {"bot": "dice_bot", "intent": "play", "query": "발자국"}
+    res = await ask(r, A, [tool_call("bot_command", play)], role=Role.MEMBER)
+    assert "허락하지 않은" in res[0], "관리자가 한 번 쓰기 전엔 멤버 못 보냄"
+    await botlink.approve(r.db, Room.CHAT, DICE.id, "/play", BOSS.id)
+    botlink.WAIT_SECONDS, old = 0.01, botlink.WAIT_SECONDS
+    try:
+        for i in range(3):
+            res = await ask(r, A, [tool_call("bot_command", {**play, "query": f"곡{i}"})], role=Role.MEMBER)
+            assert "보냈음" in res[0], res
+        res = await ask(r, A, [tool_call("bot_command", {**play, "query": "곡4"})], role=Role.MEMBER)
+        assert "10분에 3곡" in res[0], "멤버는 10분에 3번"
+        await botlink.approve(r.db, Room.CHAT, DICE.id, "/skip", BOSS.id)
+        res = await ask(r, A, [tool_call("bot_command", {"bot": "dice_bot", "intent": "skip"})], role=Role.MEMBER)
+        assert "재생·대기열·검색" in res[0], "넘기기는 관리자만"
+        await r.db.set_setting(Room.CHAT, "botlink_members", False)
+        res = await ask(r, BOSS, [tool_call("bot_command", {**play, "query": "관리자곡"})])
+        assert "보냈음" in res[0]
+        await r.db._write("DELETE FROM botlink_sent")
+        res = await ask(r, A, [tool_call("bot_command", play)], role=Role.MEMBER)
+        assert "꺼져" in res[0], "설정 끄면 관리자만"
+    finally:
+        botlink.WAIT_SECONDS = old
+
+
+
+@test
+async def invented_command_is_refused_with_real_list():
+    """실제 사례: '/취소 여름아'·'/다음곡' 을 지어내서 형식 오류 → 실제 명령(/remove 번호) 목록을 돌려줌."""
+    r = await blroom("interact")
+    await trust(r)
+    await bot_says(r, DICE, "사용법\n/play 곡 — 재생\n/queue — 대기열 보기\n/remove 번호 — 대기열에서 곡 빼기")
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/cancel 여름아"})])
+    assert "지어내지" in res[0] and "/remove" in res[0] and "(remove)" in res[0], res
+    assert not [c for c in r.bot.named("send_message") if "보낼까요" in c[2]]
