@@ -162,6 +162,9 @@ OpenAI는 **앞부분이 똑같은 요청**의 입력 토큰을 캐시해서 크
 - 용도별 `prompt_cache_key` 로 같은 캐시에 모이게 함
 - 프롬프트 캐시는 기본 24시간 유지(`OPENAI_CACHE_RETENTION`, gpt-5.4 는 추가 요금 없음). 지원 안 하는 모델이면 `in_memory`
 - `.사용량` 에서 캐시 적중률 확인
+- 생각하는 에이전트(`AGENT_THINK=auto`, 기본 off): 한 요청에 일이 둘 이상('찾아서 경고', '요약 올리고 알림도')이거나 '왜'를 묻는
+  요청만 Responses API 로 추론+도구 (chat.completions 는 도구가 있으면 추론 불가). 암호화된 추론을 도구 라운드 사이에 이어 줌
+  (store=false), 거절되면 그 실행은 예전 방식. 고르기는 코드(`agent.wants_thinking`, 비용 0) — `python tools/ai_eval_tools.py --route`
 - 그 밖에: 인젝션 판별·인사·게임 문제는 작은 모델, 짧고 평범한 요청은 AI 판별 생략, 대화 기록 30줄·300자 제한, 도구 결과 4천 자 제한, 일일 토큰 한도
 
 ## 7-4. 구독 결제 (방당 월정액, USDT TRC20)

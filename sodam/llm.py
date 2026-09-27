@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from openai import AsyncOpenAI, OpenAIError
@@ -36,6 +37,34 @@ def out_of_credit(e: Exception) -> bool:
     """OpenAI 계정 크레딧·결제 한도 소진 (429 insufficient_quota). 일시적 오류와 달리 충전 전엔 안 풀림."""
     code = getattr(e, "code", None) or ""
     return code in ("insufficient_quota", "credit_balance_exhausted") or "insufficient_quota" in str(e)
+
+
+def _parts(content):
+    """chat 의 user content (글 또는 [text, image_url...]) → Responses 입력."""
+    if isinstance(content, str):
+        return content
+    return [{"type": "input_text", "text": p["text"]} if p["type"] == "text" else
+            {"type": "input_image", "image_url": p["image_url"]["url"], "detail": p["image_url"].get("detail", "auto")}
+            for p in content]
+
+
+def to_input(messages: list[dict]) -> list[dict]:
+    """chat 형식 대화 → Responses input 항목. assistant 에 "items"(LLM.think 의 출력 항목)가 있으면 그대로 넣어
+    암호화된 추론이 도구 라운드를 넘어 이어진다 (추론 항목은 뒤따르는 function_call 과 함께 넣어야 함)."""
+    out: list[dict] = []
+    for m in messages:
+        if m["role"] == "tool":
+            out.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
+        elif m["role"] == "assistant" and m.get("items") is not None:
+            out += m["items"]
+        elif m["role"] == "assistant":
+            if m.get("content"):
+                out.append({"role": "assistant", "content": m["content"]})
+            out += [{"type": "function_call", "call_id": c["id"], "name": c["function"]["name"],
+                     "arguments": c["function"]["arguments"]} for c in m.get("tool_calls") or []]
+        else:
+            out.append({"role": m["role"], "content": _parts(m["content"])})
+    return out
 
 
 class AIUnavailable(OpenAIError):
@@ -169,6 +198,30 @@ class LLM:
         resp = await self.client.chat.completions.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
         return resp.choices[0].message
+
+    async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
+                    effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None):
+        """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
+        messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
+        .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
+        store=False (서버에 대화 안 남김) + reasoning.encrypted_content (OpenAI 추론 가이드의 상태 없는 방식)."""
+        await self._check_budget(chat_id)
+        model = self.cfg.model
+        kwargs: dict[str, Any] = {
+            "model": model, "input": to_input(messages), "max_output_tokens": max_tokens,
+            "reasoning": {"effort": effort}, "store": False, "include": ["reasoning.encrypted_content"],
+            **self._cache(purpose),
+        }
+        if tools:
+            kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in tools]
+            kwargs["tool_choice"] = tool_choice
+            kwargs["parallel_tool_calls"] = False
+        resp = await self.client.responses.create(**kwargs)
+        await self._record(resp.usage, chat_id, purpose, model)
+        calls = [SimpleNamespace(id=o.call_id, type="function", function=SimpleNamespace(name=o.name, arguments=o.arguments))
+                 for o in resp.output if o.type == "function_call"]
+        return SimpleNamespace(content=resp.output_text or "", tool_calls=calls or None,
+                               items=[o.model_dump(exclude_unset=True, by_alias=True) for o in resp.output])
 
     async def json(self, system: str, user: str, *, model: str | None = None,
                    max_tokens: int = 1500, purpose: str = "json", chat_id: int | None = None,

@@ -49,6 +49,10 @@ class Config:
     # all: 한 봇이 전부 / main: 포인트 게임(!) 빼고 전부 / dealer: 포인트 게임만 (게임 전용 딜러 봇)
     # 같은 DB_PATH 를 쓰면 포인트·방 설정·구독을 두 봇이 같이 본다
     bot_role: str = "all"
+    # 생각하는 에이전트 (agent.wants_thinking): off / auto(여러 단계·분석 요청만) / always.
+    # 켜면 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀)
+    agent_think: str = "off"
+    agent_think_effort: str = "low"
 
 
 def load_config() -> Config:
@@ -97,7 +101,16 @@ def load_config() -> Config:
         invoice_minutes=min(180, max(10, int(os.getenv("INVOICE_MINUTES", "60")))),
         trongrid_api_key=os.getenv("TRONGRID_API_KEY", "").strip(),
         bot_role=_role(os.getenv("BOT_ROLE", "")),
+        agent_think=_choice("AGENT_THINK", "off", ("off", "auto", "always")),
+        agent_think_effort=_choice("AGENT_THINK_EFFORT", "low", ("low", "medium", "high")),
     )
+
+
+def _choice(key: str, default: str, allowed: tuple[str, ...]) -> str:
+    value = os.getenv(key, "").strip().lower() or default
+    if value not in allowed:
+        raise SystemExit(f"{key} 는 비우거나 {' / '.join(allowed)} 중 하나여야 해요.")
+    return value
 
 
 def _role(raw: str) -> str:

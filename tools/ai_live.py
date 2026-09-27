@@ -42,7 +42,8 @@ async def room(settings=None) -> Room:
     cfg = load_config()
     r.svc.cfg = r.svc.cfg.__class__(**{**r.svc.cfg.__dict__, "openai_api_key": cfg.openai_api_key,
                                        "model": cfg.model, "guard_model": cfg.guard_model,
-                                       "reasoning_effort": cfg.reasoning_effort})
+                                       "reasoning_effort": cfg.reasoning_effort, "agent_think": cfg.agent_think,
+                                       "agent_think_effort": cfg.agent_think_effort})
     r.svc.llm = LLM(r.svc.cfg, r.db)
     r.svc.mod.cfg = r.svc.cfg
     for u in (MINJI, JUNHO, SUJIN, BOSS):
