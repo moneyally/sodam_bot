@@ -1,4 +1,5 @@
 """AI 비용 기록·계산: python tests/run_all.py costs"""
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,7 +62,8 @@ async def usage_report_runs_read_only():
     await db.bump("2026-09-27", 0, "m:gpt-5.4:in", 500_000)
     await db.conn.commit()
     out = subprocess.run([sys.executable, str(ROOT / "tools" / "usage_report.py"), "--day", "2026-09-27", "--db", db.path],
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "DAILY_TOKEN_BUDGET": "2000000"})   # 실제 .env 값과 무관하게
     assert out.returncode == 0, out.stderr
     assert "예산 다 씀" in out.stdout and "gpt-5.4" in out.stdout and "모델 기록 전" in out.stdout, out.stdout
 
