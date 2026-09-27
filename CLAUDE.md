@@ -107,7 +107,7 @@
   ask_/press_ 는 방 관리자 기록(.기록·🗂️)엔 안 보임(db.NOT_AUDIT), 기록 실패해도 버튼·카드 계속(db.audit), 거절 연타는 1줄.
 - 장시간 게임 알림(`gametime.py`, 🎮 메뉴, 기본 꺼짐): 멤버가 보낸 게임 명령(/ ! 🎲 또는 gt_cmds 목록) 시각으로 연속 세션
   (gt_gap 분 쉬면 새로) → 10분 job 이 gt_hours 넘은 세션 1번 알림(방 + 알릴 관리자 1:1). 조치 notify/button(뮤트 버튼)/auto(자동 뮤트,
-  관리자·자유 멤버 제외). 다른 게임봇 결과는 텔레그램이 봇끼리 안 보여줘서 못 봄. AI 도구 game_alert(요청한 관리자가 받음), 📤 다른 방에 복사.
+  관리자·자유 멤버 제외). 다른 게임봇 결과는 기본으론 안 보임 — Bot-to-Bot Communication Mode(2026-05, BotFather 설정 + 관리자 + Privacy Mode 꺼짐)를 켜면 볼 수 있음(아직 미구현, 켜면 봇 루프 방지 필요). AI 도구 game_alert(요청한 관리자가 받음), 📤 다른 방에 복사.
 - 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
   (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
