@@ -299,7 +299,7 @@ async def c_memory(ctx: commands.CmdCtx) -> None:
     notes = json.loads(member["notes"]) if member else {}
     lines = [f"🧠 <b>{esc(josa(ctx.svc.cfg.bot_name, '이가'))} 기억하는 {esc(user_name(ctx.user))}님</b>"]
     lines += [f"· {esc(k)}: {esc(v)}" for k, v in notes.items()]
-    lines += [f"· {esc(r['fact'])}" for r in facts]
+    lines += [f"· {esc(memory.fact_line(r))}" for r in facts]
     if len(lines) == 1:
         lines.append("아직 기억하는 게 없어요. 자기소개를 해주시면 기억해둘게요!")
     lines.append("\n지우려면 <code>.기억 지우기</code>")

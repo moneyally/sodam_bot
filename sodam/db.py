@@ -220,6 +220,13 @@ def register_schema(sql: str, *, migrate: dict[str, str] | None = None) -> None:
 
 
 EXTRA_MIGRATE: dict[str, str] = {}
+EXTRA_COLUMNS: dict[str, dict[str, str]] = {}   # register_columns: 기능 모듈 테이블에 나중에 더한 컬럼 (예전 DB 는 _migrate 가 추가)
+
+
+def register_columns(table: str, cols: dict[str, str]) -> None:
+    """register_schema 로 만든 테이블에 새 컬럼을 더할 때 (CREATE 문에도 넣고, 예전 DB 용으로 여기에도).
+    decl 은 ALTER TABLE ADD COLUMN 에 쓸 수 있는 것만 (NOT NULL 이면 DEFAULT 필수)."""
+    EXTRA_COLUMNS.setdefault(table, {}).update(cols)
 
 
 SETTINGS_TTL = 30.0   # 초. 메인·딜러 봇이 DB 를 같이 쓰면 상대가 바꾼 설정을 이 안에 반영
@@ -289,6 +296,8 @@ class DB:
                                 "deliver": "TEXT NOT NULL DEFAULT 'room'"},   # room 방에 / me 만든 관리자 1:1
                   "messages": {"reply_to_msg_id": "INTEGER", "reply_to_user": "INTEGER"},  # 답장 관계
                   "knowledge_docs": {"updated_at": "INTEGER"}}   # 자료 고친 시각 (예전 자료는 NULL → ts)
+        for table, cols in EXTRA_COLUMNS.items():
+            wanted[table] = {**wanted.get(table, {}), **cols}
         for table, cols in wanted.items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
