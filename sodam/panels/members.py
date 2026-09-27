@@ -151,18 +151,20 @@ async def s_members(c: PanelCtx) -> Screen:
     except asyncio.TimeoutError:
         return Screen(None, toast="조회가 오래 걸려요. 잠시 후 다시 눌러주세요.", alert=True)
     tg_total, admins = await tg_member_count(c.bot, cid), await admin_ids(svc, c.bot, cid)
-    head = [f"👥 <b>멤버 목록</b> · {SORTS[sort]} ({page + 1}/{pages}쪽)",
+    head = [f"👥 <b>멤버 목록</b> · {SORTS[sort]} ({page + 1}/{pages}쪽) · 🧾 번호 = 타임라인",
             f"텔레그램 기준 <b>{tg_total if tg_total is not None else '?'}명</b> · 소담이 본 사람 <b>{total_known}명</b>"]
     if tg_total and total_known < tg_total:
         head.append("<i>말하거나 들어온 적 없는 사람은 텔레그램이 봇에게 알려주지 않아서 목록에 없어요.</i>")
     lines = [_line(page * PAGE + i + 1, r, svc.cfg.tz, admins, counts) for i, r in enumerate(rows)] or ["(아직 본 사람이 없어요)"]
     sort_row = [B(("● " if k == sort else "") + v, f"m:mb:{cid}:{k}:0") for k, v in SORTS.items()]
+    # 🧾 번호 = 그 줄 멤버의 타임라인 (panels/insight.py, 관리자만). m:mbt:<방>:<사람>:<정렬> ≤ 64바이트
+    who = [B(f"🧾 {page * PAGE + i + 1}", f"m:mbt:{cid}:{r['user_id']}:{sort}") for i, r in enumerate(rows)]
     nav = []
     if page > 0:
         nav.append(B("◀ 이전", f"m:mb:{cid}:{sort}:{page - 1}"))
     if page < pages - 1:
         nav.append(B("다음 ▶", f"m:mb:{cid}:{sort}:{page + 1}"))
-    rows_kb = [sort_row] + ([nav] if nav else []) + [
+    rows_kb = [sort_row] + [who[i:i + 5] for i in range(0, len(who), 5)] + ([nav] if nav else []) + [
         [B("🔎 검색", f"m:in:{cid}:mbq"), B("📄 CSV 받기", f"m:mbx:{cid}")],
         [B("🔄 새로고침", f"m:mbr:{cid}:{sort}"), B("⬅️ 뒤로", f"m:g:{cid}")]]
     return Screen("\n".join(head) + "\n\n" + "\n".join(lines), _kb(rows_kb))

@@ -165,6 +165,19 @@
   방 관리자 그룹 허브 📒(m:alg·agv) = 자기 방 기록만, **금액은 안 보임**(한도의 %만), 한도 % 프리셋. 저장된 글은 전부 esc.
 - 오너 `.사용량`(commands.py)은 아직 토큰 기준 — 달러는 📒 화면·`tools/usage_report.py`(방별 요금 vs 요금제).
 
+## 멤버 타임라인·상황 분석 (`insight.py`, tests/test_insight.py · 뮤테이션 15개)
+- 사실은 코드가 기록에서만 셈, 해석은 AI. 도구 안에서 AI 호출 없음. '위험' 같은 딱지 없이 숫자·날짜만.
+- 🧾 타임라인(👥 멤버 목록의 🧾 번호 → `m:mbt:<방>:<사람>:<정렬>`, `panels/insight.py`, 방 관리자만·그 방 멤버만):
+  처음 본 날·입장·이름/아이디 변경(namehist)·메시지 7일/30일/보관 전체·답장(db.reply_stats)·링크 글·경고·제재(mod_log 90일, 자동/관리자)·
+  최근 24시간 vs 그 전 7일 하루 평균. **📋 기록된 사실과 🧠 AI 기억 메모(member_memory+notes, '확인 안 됨')는 칸을 나눔.**
+- AI 도구(전부 read_only, 방 관리자·where=room): `member_timeline`(메모 포함 → ctx.tainted) · `analyze_member(name, days≤30)`
+  = 신호 + **코드 규칙 추천 후보**(`insight.suggest`: 경고 3↑ 뮤트 1일, 2 뮤트 1시간, 뮤트 뒤 또 경고 1일, 링크 글 3↑ 뮤트 1시간,
+  사기 의심 2↑ 밴 검토, 이름 2번↑ 사칭 확인, 급증 도배 확인, 관리자는 없음) — 추천만, 실행은 기존 warn/mute/ban 확인 카드 ·
+  `room_changes(today|24h|7d)` = 입장·나감(member_left, 사람당 마지막 1번)·내보낸 기록·시간대(7d 는 날짜) 메시지/관리 기록(reports.MOD_ITEMS 분류)/
+  예약 공지·가장 바쁜 3칸, 원인은 '추정'. 오너 1:1 `owner_room_insight(room, kind)` (tainted).
+- 사람별 링크 '삭제' 기록은 아직 없음(moderation 은 방 단위 counters rep_link 만) → 링크는 '링크 들어간 글' 수(삭제 여부 무관).
+  mod_log `link_del`(대상=사람)을 남기면 insight 가 자동으로 '링크 지움'으로 셈.
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
