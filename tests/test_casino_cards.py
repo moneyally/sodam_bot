@@ -431,6 +431,7 @@ async def hilo_max_steps_and_expiry():
     await cmd(svc, bot, u, "!하이로우 1000")
     C.HANDS[("hl", CHAT, u.id)].expires = 0
     assert await C.sweep() == 1 and not C.HANDS
+    await asyncio.gather(*list(C._BG))                               # 만료 화면은 뒤에서 (돈은 이미 정산)
     assert "자동으로 그만" in bot.named("edit_text")[-1][3]
     assert await core.balance(svc.db, CHAT, u.id) == bal
     unfix()

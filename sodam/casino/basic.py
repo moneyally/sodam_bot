@@ -17,7 +17,7 @@ import secrets
 from datetime import timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyParameters
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
 from ..util import esc, user_name
 from . import Ctx, anim, register, register_callback
@@ -146,9 +146,11 @@ async def _roll(ctx: Ctx, emoji: str, game: str, bet: int) -> int | None:
             ctx.msg.message_id, allow_sending_without_reply=True))
     except TelegramError as e:
         log.warning("send_dice failed (%s): %s", game, e)
-        bal = await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, f"refund:{game}")
+        bal = await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, f"refund:{game}", close=bet)
         handoff(ctx, bet)
-        await ctx.bot.send_message(ctx.chat_id, f"{emoji} 주사위를 못 굴려서 베팅 {fmt(bet)}을 돌려드렸어요. "
+        why = ("주사위 결과를 받지 못해서 (방에 주사위가 보여도 이번 판은 무효)" if isinstance(e, NetworkError)
+               else "주사위를 못 굴려서")                     # 시간 초과면 방엔 굴러갔을 수 있음 → 무효라고 알림
+        await ctx.bot.send_message(ctx.chat_id, f"{emoji} {why} 베팅 {fmt(bet)}을 돌려드렸어요. "
                                                 f"잔액 {fmt(bal)}", parse_mode="HTML")
         return None
     await sleep(DICE_WAIT)

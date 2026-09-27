@@ -9,7 +9,10 @@
 - 시작한 사람만 누를 수 있다. 한 방에서 한 사람당 게임별로 한 판만.
 - 2분 동안 안 누르면 만료: 블랙잭은 자동 스탠드, 하이로우는 자동 그만(현재 상금 지급).
   따로 타이머 태스크는 없고, 다음 카드 게임 명령·버튼 때 만료된 판을 정리한다(lazy).
-- 판 상태는 메모리에만 있다 (봇 재시작 시 진행 중인 판은 사라짐).
+- 판 상태는 메모리에만 있다. 정상 종료면 refund_open_hands 가 정리, 강제 종료(kill -9)면 걸린 돈은
+  core.casino_open 에 남아 다음 시작 때 환불된다.
+- 정산이 실패하면(DB 오류) 판을 다시 열어 둔다 → 다음 누름·만료 정리 때 다시 정산 (이긴 돈이 사라지지 않게).
+- 만료 정리(sweep)는 돈만 바로 정산하고 화면 수정은 뒤에서 (한 방의 느린 수정이 다른 방 게임·버튼을 막지 않게).
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, cardimg, register, register_callback
 from .basic import edit_live, show, show_anim
 from .board import record
-from .core import OPEN_CHECKS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet
+from .core import OPEN_CHECKS, SWEEPS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet
 
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
@@ -289,6 +292,18 @@ def _key(game: str, chat_id: int, uid: int) -> tuple[str, int, int]:
 
 
 OPEN_CHECKS.append(lambda cid, uid: any((h := HANDS.get(_key(g, cid, uid))) is not None and not h.done for g in ("bj", "hl")))
+_BG: set[asyncio.Task] = set()          # 뒤에서 도는 결과 화면 수정 (만료 정리)
+
+
+def _later(coro) -> None:
+    async def run() -> None:
+        try:
+            await coro
+        except Exception as e:                           # 화면만 못 고침 (돈은 이미 정산)
+            log.warning("card screen update failed: %r", e)
+    task = asyncio.create_task(run())
+    _BG.add(task)
+    task.add_done_callback(_BG.discard)
 
 
 # 화면 = (글자 화면, 사진 캡션, 그림 그리는 함수) — 글자 화면은 카드 글자까지 다 있고, 캡션은 그림에 있는 건 뺀 짧은 글
@@ -332,30 +347,63 @@ async def _send(ctx: Ctx, h: Hand, view: View, kb=None) -> None:
     h.message_id = getattr(sent, "message_id", None)
 
 
-async def _expire(h: Hand, q=None) -> None:
-    """만료된 판 정리: 블랙잭 자동 스탠드 · 하이로우 자동 그만. lock 안에서 부른다."""
+async def _expire(h: Hand, q=None, bg: bool = False) -> None:
+    """만료된 판 정리: 블랙잭 자동 스탠드 · 하이로우 자동 그만. lock 안에서 부른다. bg = 화면 수정은 뒤에서."""
     if h.game == "bj":
-        await _bj_finish(h, q, note="⏰ 2분이 지나 자동 스탠드했어요.")
+        await _bj_finish(h, q, note="⏰ 2분이 지나 자동 스탠드했어요.", bg=bg)
     else:
-        await _hl_cashout(h, q, note="⏰ 2분이 지나 자동으로 그만했어요.")
+        await _hl_cashout(h, q, note="⏰ 2분이 지나 자동으로 그만했어요.", bg=bg)
 
 
 async def sweep(now: float | None = None) -> int:
-    """만료된 판을 모두 정리 (명령·버튼 때마다 호출). 정리한 수."""
+    """만료된 판을 모두 정리 (명령·버튼·파산 구제 때마다 호출). 돈만 바로 정산하고 화면은 뒤에서. 정리한 수."""
     now = time.monotonic() if now is None else now
     n = 0
     for h in [h for h in HANDS.values() if not h.done and h.expires <= now]:
+        if h.lock.locked():                   # 누르는 중인 판은 그 누름이 처리 (여기서 기다리면 다른 방까지 막힘)
+            continue
         async with h.lock:
             if not h.done and h.expires <= now:
-                await _expire(h)
-                n += 1
+                try:
+                    await _expire(h, bg=True)
+                    n += 1
+                except Exception:
+                    log.exception("card hand expire failed")   # 정산 실패 → 판은 다시 열림 (다음 정리 때 다시)
     return n
+
+
+SWEEPS.append(sweep)
 
 
 def _finish(h: Hand) -> None:
     h.done = True
     if HANDS.get(_key(h.game, h.ctx.chat_id, h.ctx.user.id)) is h:
         del HANDS[_key(h.game, h.ctx.chat_id, h.ctx.user.id)]
+
+
+async def _settle_hand(h: Hand, payout: int, game: str) -> int:
+    """_finish 뒤 정산. 저장이 실패하면 판을 다시 열어 둔다 (다음 누름·만료 정리 때 같은 결과로 다시)."""
+    try:
+        return await settle(h.ctx, h.bet, payout, game)
+    except BaseException:
+        h.done = False
+        HANDS.setdefault(_key(h.game, h.ctx.chat_id, h.ctx.user.id), h)
+        raise
+
+
+async def _live(h: Hand, view: View, kb, q, old_tok: str, toast: str) -> str | None:
+    """판 중간 화면 (버튼 새 토큰). 수정이 안 되면(429 등) 새 메시지로, 그것도 안 되면 옛 버튼을 그대로 살려 두고
+    지금 상태를 토스트로 (화면만 못 바뀌고 버튼은 새 토큰이라 아무것도 못 누르던 것)."""
+    if await _edit(h, view, kb, q):
+        return None
+    try:
+        sent = await h.ctx.bot.send_message(h.ctx.chat_id, view[0], parse_mode="HTML", reply_markup=kb)
+        h.message_id, h.photo = sent.message_id, False
+        return None
+    except (TelegramError, RuntimeError) as e:
+        log.warning("card live screen failed: %r", e)
+    h.tok = old_tok
+    return toast
 
 
 async def _start_check(ctx: Ctx, game: str, label: str) -> bool:
@@ -383,15 +431,22 @@ async def _callback(game: str, svc, bot, q, parts: list[str], act_fn) -> None:
         return
     toast, anim = None, None
     async with h.lock:
-        if h.done or not secrets.compare_digest(h.tok, tok):   # 연타: 앞의 누름이 토큰을 바꿨음
-            toast = "이미 처리됐어요."
-        elif h.expires <= time.monotonic():
-            await _expire(h, q)
-            toast = "시간이 지나 자동으로 정리했어요."
-        else:
-            toast = await act_fn(h, act, q)
-            anim, h.anim = h.anim, None       # 이 누름이 만든 연출만 (정산은 이미 끝남)
-    await q.answer(toast)                     # 버튼 로딩 표시는 바로 끝내고
+        try:
+            if h.done or not secrets.compare_digest(h.tok, tok):   # 연타: 앞의 누름이 토큰을 바꿨음
+                toast = "이미 처리됐어요."
+            elif h.expires <= time.monotonic():
+                await _expire(h, q)
+                toast = "시간이 지나 자동으로 정리했어요."
+            else:
+                toast = await act_fn(h, act, q)
+                anim, h.anim = h.anim, None   # 이 누름이 만든 연출만 (정산은 이미 끝남)
+        except Exception:                     # DB 오류 등: 판은 _settle_hand 가 다시 열어 둠 → 같은 버튼 다시 누르면 됨
+            log.exception("card button failed (%s)", game)
+            toast, anim = "⚠️ 잠깐 문제가 생겼어요. 같은 버튼을 다시 눌러주세요.", None
+    try:
+        await q.answer(toast)                 # 버튼 로딩 표시는 바로 끝내고
+    except TelegramError as e:                # 너무 늦은 응답('query is too old') 등 — 결과 화면은 그래도 보여줌
+        log.info("card answer failed: %s", e)
     if anim:
         await anim()                          # 딜러 카드 공개 연출
 
@@ -492,19 +547,22 @@ def bj_reveal_steps(n_dealer: int) -> list[int]:
     return steps if len(steps) <= BJ_REVEAL_MAX else [steps[0], steps[-1]]
 
 
-async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False) -> None:
+async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False, bg: bool = False) -> None:
     """딜러 진행 → 정산 → 메시지. lock 안에서, 한 판에 한 번만.
-    animate: 딜러가 카드를 까는 판이면 연출(h.anim)을 남기고 끝 — _callback 이 버튼 응답 뒤에 돌린다."""
+    animate: 딜러가 카드를 까는 판이면 연출(h.anim)을 남기고 끝 — _callback 이 버튼 응답 뒤에 돌린다. bg: 화면은 뒤에서."""
     if h.done:
         return
     _finish(h)
     dealer_turn = bj_total(h.player) <= 21 and not is_blackjack(h.player)
     if dealer_turn:
-        dealer_play(h.dealer, h.shoe)
+        dealer_play(h.dealer, h.shoe)                                # 다시 정산할 때도 이미 17 이상이라 그대로
     payout, verdict = bj_payout(h.player, h.dealer, h.bet)
-    bal = await settle(h.ctx, h.bet, payout, "blackjack")            # 정산 먼저 (연출이 실패해도 돈은 끝)
+    bal = await _settle_hand(h, payout, "blackjack")                 # 정산 먼저 (연출이 실패해도 돈은 끝)
     footer = (note + "\n" if note else "") + f"━━━━━━━━\n{verdict}\n" + result_line(h.bet, payout, bal) + await dealer_tail(h.ctx, h.bet, payout, bal)
     final = _bj_view(h, True, footer, result=_bj_banner(h, payout))
+    if bg:
+        _later(_edit(h, final, None, None, final=True))
+        return
     if not (animate and dealer_turn):
         await _edit(h, final, None, q, final=True)
         return
@@ -544,9 +602,11 @@ async def _bj_act(h: Hand, act: str, q) -> str | None:
         if bj_total(h.player) >= 21:          # 버스트 또는 21 → 자동으로 끝
             await _bj_finish(h, q, animate=True)
             return None
+        old = h.tok
         h.touch()
-        await _edit(h, _bj_view(h, False, "히트·스탠드 중에 골라주세요."), _bj_kb(h), q)
-        return None
+        return await _live(h, _bj_view(h, False, "히트·스탠드 중에 골라주세요."), _bj_kb(h), q, old,
+                           f"🃏 {RANKS.get(h.player[-1].rank, h.player[-1].rank)} 받음 · "
+                           f"내 합계 {bj_total(h.player)} (화면이 늦게 바뀌어요)")
     return "지난 버튼이에요."
 
 
@@ -567,7 +627,7 @@ async def g_blackjack(ctx: Ctx) -> None:
         return
     # take_bet 이 await 하는 동안 같은 사람이 한 판 더 시작했을 수 있음 → 한 번 더 확인
     if HANDS.get(_key("bj", ctx.chat_id, ctx.user.id)):
-        await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:blackjack")
+        await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:blackjack", close=bet)
         handoff(ctx, bet)
         await ctx.reply("진행 중인 블랙잭이 있어서 베팅을 돌려드렸어요.")
         return
@@ -649,14 +709,17 @@ def _hl_view(h: Hand, footer: str = "", result: tuple[str, int] | None = None) -
             lambda: cardimg.hilo_png(card, hist, step, HL_MAX_STEPS, mh, ml, banner, win))
 
 
-async def _hl_cashout(h: Hand, q=None, note: str = "") -> None:
+async def _hl_cashout(h: Hand, q=None, note: str = "", bg: bool = False) -> None:
     if h.done:
         return
     _finish(h)
-    bal = await settle(h.ctx, h.bet, h.prize, "hilo")
+    bal = await _settle_hand(h, h.prize, "hilo")
     footer = (note + "\n" if note else "") + f"━━━━━━━━\n💰 {fmt(h.prize)} 받고 그만!\n" + result_line(h.bet, h.prize, bal) + await dealer_tail(h.ctx, h.bet, h.prize, bal)
     gain = h.prize - h.bet
     result = (f"CASH OUT +{gain:,}", 1) if gain > 0 else ("CASH OUT", 0)
+    if bg:
+        _later(_edit(h, _hl_view(h, footer, result), None, None, final=True))
+        return
     await _edit(h, _hl_view(h, footer, result), None, q, final=True)
 
 
@@ -684,15 +747,16 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
                                    + result_line(h.bet, 0, bal) + await dealer_tail(h.ctx, h.bet, 0, bal),
                                 ("SAME - MISS" if nxt.rank == prev.rank else "MISS", -1)), None, q, final=True)
         return None
-    h.prize = int(h.prize * mult)
+    h.prize = h.prize * round(mult * 100) // 100      # 정수 센트로 (100×1.15 가 114.999… → 114 로 깎이던 것)
     h.step += 1
     msg = f"{face(prev)} → <b>{face(nxt)}</b> {pick} 적중! ×{mult:g}"
     if h.step >= HL_MAX_STEPS:
         await _hl_cashout(h, q, note=msg + f"\n🏁 {HL_MAX_STEPS}단계 완주!")
         return None
+    old = h.tok
     h.touch()
-    await _edit(h, _hl_view(h, msg + "\n계속 갈까요, 그만할까요? (같은 숫자는 꽝)"), _hl_kb(h), q)
-    return None
+    return await _live(h, _hl_view(h, msg + "\n계속 갈까요, 그만할까요? (같은 숫자는 꽝)"), _hl_kb(h), q, old,
+                       f"{pick} 적중! 지금 카드 {RANKS.get(nxt.rank, nxt.rank)} · 상금 {h.prize:,}P (화면이 늦게 바뀌어요)")
 
 
 async def g_hilo(ctx: Ctx) -> None:
@@ -711,7 +775,7 @@ async def g_hilo(ctx: Ctx) -> None:
     if bet is None:
         return
     if HANDS.get(_key("hl", ctx.chat_id, ctx.user.id)):
-        await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:hilo")
+        await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:hilo", close=bet)
         handoff(ctx, bet)
         await ctx.reply("진행 중인 하이로우가 있어서 베팅을 돌려드렸어요.")
         return
@@ -750,7 +814,7 @@ async def refund_open_hands(svc) -> int:
                 await _hl_cashout(h, note="🔌 봇 점검으로 자동으로 그만했어요.")
             else:
                 _finish(h)
-                await credit(svc.db, h.ctx.chat_id, h.ctx.user.id, h.bet, f"refund:{h.game}")
+                await credit(svc.db, h.ctx.chat_id, h.ctx.user.id, h.bet, f"refund:{h.game}", close=h.bet)
             n += 1
     return n
 

@@ -284,9 +284,11 @@ async def join_replies_are_deleted_after_betting_closes():
         await casino.dispatch(env.svc, env.bot, m3, TM.CHAT, b, None, "!그래프 1000")
         await asyncio.gather(*list(core._TEMP))
         assert m2.replies[0].startswith("🎫") and "이미" in m3.replies[0]
-        deleted = [c[2] for c in env.bot.named("delete")]
-        assert deleted == [10_007, 10_008], deleted                    # 🎫 · '이미 걸었어요' 둘 다 지움
-        assert slept == [15 + 3, core.TEMP_SECS]                       # 🎫 는 베팅 마감(15초) 무렵
+        assert [c[2] for c in env.bot.named("delete")] == [10_008]     # '이미 걸었어요' 는 잠깐 보이고 지움
+        assert slept == [core.TEMP_SECS]
+        assert not env.bot.named("delete_many")                        # 🎫 는 출발 전까지 남김
+        await TM.finish(env, "crash")
+        assert [c[2] for c in env.bot.named("delete_many")] == [[10_007]]   # 출발 때 한 번에 (삭제가 몰려 한도를 쓰지 않게)
     finally:
         core.temp_sleep = asyncio.sleep
         await TM.multi.abandon_all()

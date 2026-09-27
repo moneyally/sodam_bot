@@ -4,7 +4,8 @@
 - 방마다 게임별로 한 판씩만. 한 사람은 한 판에 한 번만 건다.
 - 베팅금은 참가할 때 take_bet 으로 바로 차감, 당첨금은 settle 로 딱 한 번 (Player.done 을 await 전에 세움).
 - 판이 오류·취소로 버려지면 아직 정산 안 된 베팅금은 전부 환불(ledger 'refund:<게임>').
-  봇이 판 도중에 꺼져도: 걸린 돈은 casino_open_stakes 에 적어 두고, 재시작 후 첫 명령 때 환불한다.
+  봇이 판 도중에 꺼져도: 걸린 돈은 core 의 casino_open(차감·정산과 같은 트랜잭션)에 남아 다음 시작 때 환불된다.
+  (예전 casino_open_stakes 표는 옛 버전이 남긴 줄만 시작 때 recover_stale 로 환불.)
 - 시계·sleep·난수는 모듈 변수(_clock/_sleep/_rand)라 테스트가 바꿔 끼운다 (진짜로 기다리지 않음).
 - 버튼 없이 글자 명령만 쓴다 (!그래프 · !스톱 · !경마 · !라운드).
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import logging
 import math
 import re
@@ -50,7 +52,7 @@ _sleep = asyncio.sleep
 _rand = core.rng                 # n → 0..n-1
 _crash_override = None           # 테스트: 다음 판 터지는 지점(센트, 예: 235 = 2.35x)
 
-TICK = 3.0                       # 화면 수정 간격: 그룹은 보내기·수정 합쳐 분당 약 20개 제한 (텔레그램 FAQ)
+TICK = 4.0                       # 화면 수정 간격: 그룹은 보내기·수정·삭제 합쳐 분당 약 20개 (봇 제한기 18) → 수정 15 + 여유
 RETRY_MAX = 30                   # 제한(429)에 걸린 마지막 화면·결과판은 최대 이만큼 기다렸다 다시
 MAX_PLAYERS = 50
 NAME_MAX = 12
@@ -210,27 +212,25 @@ class Round:
         self.live = None                # 수정하는 메시지
         self.last_edit = -1e9
         self.edit_block = 0.0
+        self.join_msgs: list[int] = []  # 🎫 참가 확인 (출발 때 한 번에 지움)
 
-    # 정산 — 전부 여기만 거친다
-    async def _unstake(self, p: Player) -> None:
-        await self.svc.db._write("DELETE FROM casino_open_stakes WHERE chat_id=? AND user_id=? AND game=?",
-                                 (self.chat_id, p.uid, self.game))
-
+    # 정산 — 전부 여기만 거친다. 지급(또는 꽝)과 열린 베팅 닫기는 core 가 한 트랜잭션으로.
     async def pay(self, p: Player, payout: int) -> int | None:
-        """딱 한 번만. 이미 끝났으면 None. 새 잔액."""
+        """딱 한 번만 (꽝도 payout=0 으로 여기를 거쳐 열린 베팅을 닫음). 이미 끝났으면 None. 새 잔액."""
         if p.done:
             return None
         p.done, p.payout = True, payout
-        bal = await settle(p.ctx, p.bet, payout, self.game)
-        await self._unstake(p)
-        return bal
+        try:
+            return await settle(p.ctx, p.bet, payout, self.game)
+        except BaseException:
+            p.done, p.payout = False, 0         # 저장 실패 → 판 오류 처리(refund_all)가 원금이라도 돌려주게
+            raise
 
     async def refund(self, p: Player) -> None:
         if p.done:
             return
         p.done = True
-        await credit(self.svc.db, self.chat_id, p.uid, p.bet, f"refund:{self.game}")
-        await self._unstake(p)
+        await credit(self.svc.db, self.chat_id, p.uid, p.bet, f"refund:{self.game}", close=p.bet)
 
     async def refund_all(self) -> int:
         n = 0
@@ -319,11 +319,21 @@ class Round:
     def left(self) -> int:
         return max(0, math.ceil(self.window - (self.clock() - self.opened)))
 
+    async def clear_joins(self) -> None:
+        """🎫 참가 확인들을 한 번에 지운다 (100개씩, 실패는 그냥 남김)."""
+        ids, self.join_msgs = self.join_msgs, []
+        for i in range(0, len(ids), 100):
+            try:
+                await self.bot.delete_messages(self.chat_id, ids[i:i + 100])
+            except TelegramError as e:
+                log.debug("%s join cleanup failed: %s", self.game, e)
+
     # 진행
     async def run(self) -> None:
         try:
             await self.sleep(self.window)
             self.phase = "running"
+            await self.clear_joins()
             await self.play()
         except asyncio.CancelledError:
             self.phase = "done"
@@ -381,21 +391,19 @@ async def abandon_all() -> int:
 
 
 async def recover_stale(db) -> int:
-    """이 프로세스가 처음 쓰는 DB 면, 남아 있는 걸린 돈(이전 실행에서 끝나지 않은 판)을 환불."""
-    if getattr(db, "_multi_recovered", False):
-        return 0
-    db._multi_recovered = True
-    rows = await db._all("SELECT chat_id, user_id, game, bet FROM casino_open_stakes")
-    n = 0
-    for r in rows:
-        if current(r["chat_id"], r["game"]):
-            continue
-        cur = await db.conn.execute("DELETE FROM casino_open_stakes WHERE chat_id=? AND user_id=? AND game=?",
-                                    (r["chat_id"], r["user_id"], r["game"]))
-        await db.conn.commit()
-        if cur.rowcount == 1:
-            await credit(db, r["chat_id"], r["user_id"], r["bet"], f"refund:{r['game']}")
-            n += 1
+    """봇 시작 때 (판이 없을 때): 옛 버전이 casino_open_stakes 에 남긴 걸린 돈 환불 (지우기·지급을 한 트랜잭션으로).
+    새 베팅은 core.casino_open 이 맡아서 이 표엔 더 쓰지 않는다."""
+    ts = now()
+
+    def run(c) -> int:
+        rows = c.execute("SELECT chat_id, user_id, game, bet FROM casino_open_stakes").fetchall()
+        for cid, uid, game, bet in rows:
+            c.execute("UPDATE members SET points=points+? WHERE chat_id=? AND user_id=?", (bet, cid, uid))
+            c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
+                      (cid, uid, bet, f"refund:{game}"[:40], ts))
+        c.execute("DELETE FROM casino_open_stakes")
+        return len(rows)
+    n = await db.atomic(run)
     if n:
         log.info("casino multi: refunded %d stale stakes", n)
     return n
@@ -403,7 +411,6 @@ async def recover_stale(db) -> int:
 
 async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_txt: str) -> None:
     """참가 공통: 중복·마감 확인 → take_bet → (없으면 판 열기) → 등록."""
-    await recover_stale(ctx.svc.db)
     cid, uid, game = ctx.chat_id, ctx.user.id, cls.game
     r = current(cid, game)
     if r and r.phase != "betting":
@@ -420,9 +427,7 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
         bet = await take_bet(ctx, amount, game)
         if bet is None:
             return
-        await ctx.svc.db._write("INSERT OR REPLACE INTO casino_open_stakes(chat_id, user_id, game, bet, ts) "
-                                "VALUES(?,?,?,?,?)", (cid, uid, game, bet, now()))
-        handoff(ctx, bet)               # 이제 판(과 재시작 때 recover_stale)이 정산·환불을 맡음
+        handoff(ctx, bet)               # 이제 판(과 재시작 때 core.recover_open)이 정산·환불을 맡음
         p = Player(ctx, bet, pick)
         r = current(cid, game)
         if r is None:                   # 첫 베팅 → 새 판
@@ -437,9 +442,11 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
             await ctx.reply(f"⏱ 아슬아슬하게 마감됐어요. {fmt(bet)} 돌려드렸어요.")
             return
         r.players[uid] = p
-        # 🎫 참가 확인은 베팅이 마감될 때쯤 지워짐 (사람마다 방에 영구로 쌓이지 않게) — 참가자 목록은 결과판에
-        await temp_reply(ctx, f"🎫 {p.name} {fmt(bet)}{pick_txt} · 참가 {len(r.players)}명 · {r.left()}초 남음",
-                         r.left() + 3)
+        # 🎫 참가 확인은 출발할 때 한 번에 지움 (deleteMessages 1번 — 사람마다 지우면 출발 직후 삭제가 몰려 전송 한도를
+        # 다 써서 차트가 늦게 뜨던 것). 참가자 목록은 결과판에.
+        sent = await ctx.reply(f"🎫 {p.name} {fmt(bet)}{pick_txt} · 참가 {len(r.players)}명 · {r.left()}초 남음")
+        if getattr(sent, "message_id", None):
+            r.join_msgs.append(sent.message_id)
     finally:
         _PENDING.discard((cid, game, uid))
 
@@ -455,7 +462,7 @@ class CrashRound(Round):
         super().__init__(ctx)
         self.crash = crash_point()
         self.seal(fx(self.crash))
-        self.start = 0.0
+        self.start = 0.0               # 차트가 방에 뜬 시각 (0 = 아직 안 뜸 → 스톱 안 받음)
         self.hist: list[int] = [100]   # 화면 갱신 때마다의 배수 (차트용)
         self.rid = secrets.token_urlsafe(6)   # 🛑 스톱 버튼이 이 판을 가리키는 표 (지난 판 버튼은 안 먹힘)
         self.kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 스톱 (지금 배수로 내리기)", callback_data=f"cs:cr:{self.rid}")]])
@@ -467,7 +474,7 @@ class CrashRound(Round):
                 "출발하면 배수가 올라가요. 터지기 전에 <code>!스톱</code> 치면 그 배수만큼 받아요!")
 
     def now_mult(self) -> int:
-        return mult_at(self.clock() - self.start)
+        return mult_at(self.clock() - self.start) if self.start else 100
 
     def open_players(self) -> list[Player]:
         return [p for p in self.players.values() if not p.done]
@@ -483,6 +490,8 @@ class CrashRound(Round):
             return "이번 판엔 안 타셨어요. 끝나면 다음 판에 타요!", None, None
         if self.phase == "betting":
             return f"아직 출발 전이에요 ({self.left()}초 뒤 출발).", None, None
+        if not self.start:
+            return "곧 출발해요! 차트가 뜨면 내려요.", None, None
         if p.done:
             return (f"이미 {fx(p.cash_at)}에서 내렸어요." if p.cash_at else "💥 이미 터졌어요."), None, None
         m = self.now_mult()
@@ -510,9 +519,8 @@ class CrashRound(Round):
         return "\n".join(lines)
 
     async def play(self) -> None:
-        self.start = self.clock()
         self.live = await self.send(self.live_text(100), self.kb)
-        self.last_edit = self.clock()
+        self.start = self.last_edit = self.clock()   # 차트가 방에 뜬 뒤부터 오름 (보내기가 늦어도 배수가 몰래 오르지 않게)
         t_crash = time_to(self.crash)
         while True:
             el = self.clock() - self.start
@@ -529,10 +537,8 @@ class CrashRound(Round):
         if self.crash >= CRASH_CAP:           # 최대 배수 완주: 끝까지 탄 사람은 그 배수로 내려줌
             for p in self.open_players():
                 await self.cash_out(p, CRASH_CAP)
-        busted = self.open_players()
-        for p in busted:
-            p.done = True                     # 꽝: 이미 차감됨, 지급 없음
-            await self._unstake(p)
+        for p in self.open_players():
+            await self.pay(p, 0)              # 꽝: 이미 차감됨, 지급 없이 열린 베팅만 닫음
         self.phase = "done"
         await record(self.svc.db, self.chat_id, "crash", str(self.crash))   # 🖼 그림장
         head = f"🏆 <b>{fx(self.crash)}</b> 완주!" if self.crash >= CRASH_CAP else f"💥 <b>{fx(self.crash)}</b>에서 터졌어요!"
@@ -610,7 +616,7 @@ async def cb_crash(svc, bot, q, parts: list[str]) -> None:
     text, p, bal = await r.try_stop(q.from_user.id)
     if p is not None:
         text += f" +{fmt(p.payout - p.bet)} · 잔액 {fmt(bal)}"
-    await q.answer(re.sub(r"<[^>]+>", "", text), show_alert=p is not None)
+    await q.answer(html.unescape(re.sub(r"<[^>]+>", "", text)), show_alert=p is not None)   # 이름은 esc 돼 있음 → 팝업은 글자 그대로
 
 
 # ── 🏇 경마 ──────────────────────────────────────────────
@@ -644,15 +650,15 @@ class HorseRound(Round):
     async def play(self) -> None:
         picks = self.pick_counts()
         final = track_text(self.frames[-1], f"🏁 <b>{self.winner + 1}번 우승!</b>", picks, final=True)
+        win_no = self.winner + 1
+        for p in self.players.values():         # 정산 먼저 → 경주는 보여주기만 (연출 중 종료돼도 결과대로, 전원 환불 아님)
+            await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)
         if await self.send_anim(lambda: anim.race(self.frames, TRACK, self.winner),
                                 "🏇 <b>출발!</b> 누가 먼저 들어올까요…"):
             await self.sleep(anim.seconds(anim.race_frame_count(self.frames)))
             await self.edit(final, force=True, caption=True)
         else:
             await self.text_race(picks)
-        win_no = self.winner + 1
-        for p in self.players.values():
-            await self.pay(p, p.bet * HORSE_PAY_X10 // 10 if p.pick == win_no else 0)
         self.phase = "done"
         await record(self.svc.db, self.chat_id, "horse", str(win_no))
         await self.send(self.board())

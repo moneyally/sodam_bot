@@ -82,6 +82,9 @@ async def bot_stuck_player_wins_six():
 
 
 async def press(svc, user, data):
+    g = svc.games.active.get(CHAT)
+    if data.count(":") == 1 and getattr(g, "gid", None):             # 버튼엔 판 표시(gid)가 붙음
+        data += ":" + g.gid
     q = FakeQuery(CHAT, user, data)
     q.message.chat_id = CHAT
     await svc.games.on_callback(q, data.split(":")[1:])
@@ -303,7 +306,7 @@ async def start_button_racing_join_timer_still_starts():
         await asyncio.sleep(0.02)
         return await real_answer(*a, **k)
     q.answer = slow_answer
-    pressing = asyncio.create_task(svc.games.on_callback(q, ["go"]))
+    pressing = asyncio.create_task(svc.games.on_callback(q, ["go", g.gid]))
     await asyncio.sleep(0.005)                                        # 버튼은 응답 대기 중
     g._timer = asyncio.create_task(g._start())                        # 그때 참가 타이머가 울림
     await pressing

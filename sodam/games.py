@@ -9,6 +9,7 @@ import asyncio
 import gzip
 import logging
 import random
+import secrets
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -208,7 +209,7 @@ class WordChain(Game):
         return random.choice([w for w in self.STARTERS if pick_next(w, {w})] or self.STARTERS)
 
     async def begin(self) -> None:
-        self.last, self.stale = self.first_word(), ""
+        self.last, self.stale = self.first_word(), ()
         self.used = {self.last}
         self._said, self.thinking = 0.0, False
         await self.say(f"🔗 <b>끝말잇기</b> 시작! 제가 먼저 할게요: <b>{self.last}</b>\n"
@@ -218,6 +219,10 @@ class WordChain(Game):
 
     def _starts_text(self, word: str | None = None) -> str:
         return "/".join(sorted(starts_for(word or self.last)))
+
+    def _stale_starts(self) -> set[str]:
+        """방금 지나간 문제들의 첫 글자 (그걸로 친 답 = 늦은 답 🙈)."""
+        return set().union(*(starts_for(w) for w in self.stale)) if self.stale else set()
 
     def ai_hint(self) -> str:
         return (super().ai_hint() + f" 끝말잇기 마지막 단어는 '{self.last}' 이고 다음은 '{self._starts_text()}'(으)로 시작하는 "
@@ -256,10 +261,10 @@ class WordChain(Game):
         """이을 수 있으면 None, 아니면 반응 종류. 'no' = 끝말잇기 답이 아님 (평범한 채팅)."""
         if not is_hangul_word(word) or not 2 <= len(word) <= 12:
             return "no"
-        if getattr(self, "thinking", False):          # 소담이 차례(생각 중)에 들어온 답은 늦은 답
-            return "late" if is_word(word) and word[0] in starts_for(self.last) | starts_for(self.stale) else "no"
+        if getattr(self, "thinking", False):          # 소담이 차례(생각 중~소담이 말이 방에 뜰 때까지)에 들어온 답은 늦은 답
+            return "late" if is_word(word) and word[0] in starts_for(self.last) | self._stale_starts() else "no"
         if word[0] not in starts_for(self.last):
-            if self.stale and word[0] in starts_for(self.stale) and is_word(word):
+            if word[0] in self._stale_starts() and is_word(word):
                 return "late"
             return "wrong" if is_word(word) else "no"   # 사전 낱말인데 첫 글자가 틀림 (게임 답일 가능성 큼)
         if word in self.used:
@@ -277,25 +282,25 @@ class WordChain(Game):
             return await self.react(msg, why)
         from . import wordbot   # 늦게 import (wordbot → games)
         self.used.add(word)                           # await 전에 상태를 바꿔 동시에 온 답은 '늦음'이 된다
-        self.stale, self.last, self.thinking = self.last, word, True
+        self.stale, self.last, self.thinking = (self.last,), word, True
         self.cancel_timer()
         try:
             await self.award(msg.from_user, 1)
             s = await self.svc.db.get_settings(self.chat_id)
             nxt, line = await wordbot.move(self.svc, self.chat_id, word, self.used, s["wc_level"], s["wc_ai"])
+            if self.finished:                         # 생각하는 사이 게임이 끝났으면 (.게임끝 등)
+                return True
+            who = mention(msg.from_user.id, user_name(msg.from_user))
+            if not nxt:
+                await self.award(msg.from_user, 5)
+                await self.finish(f"😵 '{esc(word)}' 다음 말이 없어요, 제가 졌어요! {who} 대표님 승리 +6점")
+                return True
+            self.used.add(nxt)
+            self.stale, self.last = (self.stale[0], word), nxt   # 지난 문제·방금 사람 말 둘 다로 친 답 = 늦은 답
+            self.set_timer(self.TURN_SECONDS, self._timeout)     # 전송이 실패해도 게임이 멈추지 않게 먼저
+            await self.pace()
         finally:
-            self.thinking = False
-        if self.finished:                             # 생각하는 사이 게임이 끝났으면 (.게임끝 등)
-            return True
-        who = mention(msg.from_user.id, user_name(msg.from_user))
-        if not nxt:
-            await self.award(msg.from_user, 5)
-            await self.finish(f"😵 '{esc(word)}' 다음 말이 없어요, 제가 졌어요! {who} 대표님 승리 +6점")
-            return True
-        self.used.add(nxt)
-        self.stale, self.last = word, nxt
-        self.set_timer(self.TURN_SECONDS, self._timeout)     # 전송이 실패해도 게임이 멈추지 않게 먼저
-        await self.pace()
+            self.thinking = False                     # 소담이 말이 방에 뜬 뒤부터 새 답 (그 전엔 🙈 — 힌트가 다음 말을 먼저 알려주던 것)
         try:
             await self.say(f"✅ {who} {esc(word)} → 🤖 <b>{nxt}</b>" + (f" {esc(line)}" if line else "")
                            + f"\n'{self._starts_text()}'(으)로 이어주세요!")
@@ -313,7 +318,9 @@ class WordChainTurn(WordChain):
     TURN_START, TURN_MIN = 20, 8
 
     async def begin(self) -> None:
-        self.last, self.stale, self.used, self._said = self.first_word(), "", set(), 0.0
+        self.last, self.stale, self.used, self._said = self.first_word(), (), set(), 0.0
+        self.gid = secrets.token_hex(3)                      # 버튼이 이 판을 가리킴 (지난 판 버튼이 새 판을 움직이지 않게)
+        self.seq, self.heads = 0, ""
         self.used.add(self.last)
         self.players: list[tuple[int, str]] = []
         self.joined = 0
@@ -322,8 +329,8 @@ class WordChainTurn(WordChain):
         self.set_timer(self.JOIN_SECONDS, self._start)
 
     def _join_kb(self) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("🙋 참가", callback_data="wc:j"),
-                                      InlineKeyboardButton("▶️ 바로 시작", callback_data="wc:go")]])
+        return InlineKeyboardMarkup([[InlineKeyboardButton("🙋 참가", callback_data=f"wc:j:{self.gid}"),
+                                      InlineKeyboardButton("▶️ 바로 시작", callback_data=f"wc:go:{self.gid}")]])
 
     def _join_text(self) -> str:
         names = ", ".join(esc(n) for _, n in self.players) or "(아직 없음)"
@@ -338,6 +345,9 @@ class WordChainTurn(WordChain):
 
     async def on_callback(self, query: CallbackQuery, parts: list[str]) -> None:
         user = query.from_user
+        if parts[1:2] != [self.gid]:
+            await query.answer("지난 게임 버튼이에요.")
+            return
         if not self.joining:
             await query.answer("이미 시작했어요. 다음 판에 참가해 주세요!")
             return
@@ -380,10 +390,17 @@ class WordChainTurn(WordChain):
         return max(self.TURN_MIN, self.TURN_START - self.turns // 3)
 
     async def _announce(self, head: str = "") -> None:
+        """차례 안내. 간격(pace)을 기다린 뒤 그때의 차례로 — 기다리는 사이 더 새 안내가 생기면 그쪽이 머리글까지 합쳐 보냄
+        (탈락 안내와 답 안내가 같은 순간 옛 차례로 두 번 나가던 것). 타이머는 안내가 나갈 때부터 (차례 시간이 3초 깎이던 것)."""
+        self.seq += 1
+        me, self.heads = self.seq, self.heads + head
+        await self.pace()
+        if me != self.seq or self.finished:
+            return
+        head, self.heads = self.heads, ""
         uid, name = self.players[0]
         t = self._turn_seconds()
-        self.set_timer(t, self._turn_timeout)                  # 전송이 실패해도 게임이 멈추지 않게 먼저
-        await self.pace()
+        self.set_timer(t, self._turn_timeout)                  # 전송이 실패해도 게임이 멈추지 않게 보내기 전에
         try:
             await self.say(f"{head}👉 {mention(uid, name)} 차례! <b>{self.last}</b> → '{self._starts_text()}'(으)로 ({t}초) "
                            f"· 남은 {len(self.players)}명")
@@ -485,6 +502,11 @@ class GameManager:
         except (OpenAIError, BudgetExceeded) as e:
             log.warning("game AI failed: %s", e)
             await msg.reply_text("AI 연결이 불안정해요. 잠시 후 다시 해주세요.")
+            return True
+        except Exception:                 # DB 잠김 등: 타이머 없이 '게임 중'으로 방이 영영 묶이지 않게 끝낸다
+            log.exception("game on_text failed in %s", msg.chat_id)
+            if not game.finished:
+                await game.finish("게임 진행 중 문제가 생겨서 종료할게요 🙏")
             return True
 
     async def on_callback(self, query: CallbackQuery, parts: list[str]) -> None:

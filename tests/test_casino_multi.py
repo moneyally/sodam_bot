@@ -109,6 +109,8 @@ async def ledger_consistent(env):
         assert s == await bal(env, u), (u.id, s, await bal(env, u))
     left = await env.db._all("SELECT * FROM casino_open_stakes")
     assert not left, [dict(r) for r in left]
+    left = await env.db._all("SELECT * FROM casino_open")          # 끝난 판은 열린 베팅이 남지 않음
+    assert not left, [dict(r) for r in left]
 
 
 async def finish(env, game):
@@ -308,11 +310,32 @@ async def concurrent_joins_and_escaping():
 
 @test
 async def stale_stakes_refunded_after_restart():
+    """kill -9·컨테이너 회수로 판이 정산 없이 사라짐 → 다음 시작 때 casino.startup 이 환불 (한 번만)."""
+    env = await setup(crash=300)
+    a, b = env.users[:2]
+    await say(env, a, "!그래프 1500")
+    await say(env, b, "!그래프 2000")
+    r = multi.current(CHAT, "crash")
+    assert await bal(env, a) == core.START_POINTS - 1500
+    multi._ROUNDS.clear()                                  # 강제 종료 흉내: 판이 정산·환불 없이 사라짐
+    r.players.clear()
+    r.task.cancel()
+    assert await casino.startup(env.svc) == 2
+    assert await casino.startup(env.svc) == 0
+    assert await bal(env, a) == core.START_POINTS and await bal(env, b) == core.START_POINTS
+    await ledger_consistent(env)
+    restore()
+
+
+@test
+async def legacy_open_stakes_refunded_once():
+    """옛 버전이 casino_open_stakes 에 남긴 걸린 돈 (casino_open 은 없음) → 시작 때 한 번 환불."""
     env = await setup(crash=300)
     a = env.users[0]
-    await core.debit(env.db, CHAT, a.id, 1500, "bet:crash")
+    await env.db._write("UPDATE members SET points=points-1500 WHERE chat_id=? AND user_id=?", (CHAT, a.id))
+    await env.db._write("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
+                        (CHAT, a.id, -1500, "bet:crash", 0))
     await env.db._write("INSERT INTO casino_open_stakes VALUES(?,?,?,?,?)", (CHAT, a.id, "crash", 1500, 0))
-    env.db._multi_recovered = False
     assert await multi.recover_stale(env.db) == 1
     assert await multi.recover_stale(env.db) == 0
     assert await bal(env, a) == core.START_POINTS

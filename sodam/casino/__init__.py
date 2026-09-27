@@ -124,6 +124,13 @@ async def on_callback(svc, bot, q, parts: list[str]) -> None:
         log.warning("casino callback %s failed: %s", parts[0], e)
 
 
+async def startup(svc) -> int:
+    """봇 시작 때 (게임을 맡는 프로세스만, 판이 열리기 전): 지난 실행에서 정산 못 한 베팅 환불 (강제 종료 대비)."""
+    from .core import recover_open
+    from .multi import recover_stale
+    return await recover_open(svc.db) + await recover_stale(svc.db)   # 옛 버전이 남긴 멀티 판 표까지
+
+
 async def shutdown(svc) -> None:
     for fn in SHUTDOWN_HOOKS:
         try:

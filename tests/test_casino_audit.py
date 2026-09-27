@@ -72,7 +72,7 @@ async def no_bailout_while_card_hand_open():
     db, svc, bot, ctx = await setup()
     await say(ctx, A, "!가입")
     await db._write("UPDATE members SET points=0 WHERE chat_id=? AND user_id=?", (CHAT, A.id))
-    cards.HANDS[("bj", CHAT, A.id)] = SimpleNamespace(done=False)
+    cards.HANDS[("bj", CHAT, A.id)] = SimpleNamespace(done=False, expires=float("inf"), lock=asyncio.Lock())
     try:
         assert "진행 중인 판" in await say(ctx, A, "!파산")
     finally:

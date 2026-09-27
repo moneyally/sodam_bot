@@ -7,7 +7,7 @@ from pathlib import Path
 
 from telegram import Update
 from telegram.error import NetworkError, TelegramError
-from telegram.ext import AIORateLimiter, Application, ApplicationBuilder, ContextTypes
+from telegram.ext import Application, ApplicationBuilder, ContextTypes
 
 from . import handlers
 from .announce import Announcer
@@ -23,6 +23,7 @@ from .llm import LLM
 from .moderation import Moderator
 from .permissions import Permissions
 from . import casino, namehist
+from .ratelimit import ChatRateLimiter
 from .services import Services
 from .sports import Sports
 from .util import esc
@@ -165,6 +166,8 @@ def build_app(cfg: Config, db: DB) -> Application:
         dealer = cfg.bot_role == "dealer"
         await set_profile(app.bot, dealer)
         svc: Services = app.bot_data["svc"]
+        if cfg.bot_role != "main":          # ! 게임을 맡는 프로세스만 (메인·딜러 분리 때 메인이 딜러의 판을 환불하지 않게)
+            await casino.startup(svc)       # kill -9·컨테이너 회수로 정산 못 한 베팅 환불 (폴링 시작 전)
         code = await svc.perms.prepare_claim_code()
         if code:
             # 서버 화면(터미널)을 볼 수 있는 사람 = 서버 주인만 알 수 있는 1회용 코드
@@ -211,7 +214,7 @@ def build_app(cfg: Config, db: DB) -> Application:
            # 기본 5초는 서버 네트워크가 잠깐 느려지면 메시지 처리가 끊김 → 넉넉하게
            .connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
            .get_updates_read_timeout(30)
-           .rate_limiter(AIORateLimiter(**RATE_LIMIT))
+           .rate_limiter(ChatRateLimiter(**RATE_LIMIT))   # 429 는 그 방만 멈춤 (sodam/ratelimit.py)
            .post_init(post_init)
            .post_stop(post_stop)
            .post_shutdown(post_shutdown)
