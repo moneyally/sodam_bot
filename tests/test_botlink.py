@@ -374,3 +374,18 @@ async def off_room_gets_enable_card_and_seen_bot_trusted_on_press():
     await press_room(r, BOSS, card_buttons(r)[0])
     assert (await botlink.get_bot(r.db, Room.CHAT, DICE.id))["status"] == "trusted"
     assert any(c[2] == "/dice@dice_bot" for c in r.bot.named("send_message")), "눌렀으니 보냄"
+
+
+@test
+async def result_posted_as_new_message_counts_as_reply():
+    """실제 사례: 멜론봇이 '재생 시작'을 소담 글에 답장이 아니라 새 글로 올림 → '응답 없었음' 이라고 잘못 말함."""
+    r = await blroom("interact")
+    await trust(r)
+    waiting = asyncio.create_task(botlink.wait_reply(r.svc, Room.CHAT, 4242, timeout=2, bot_id=DICE.id))
+    await asyncio.sleep(0)
+    await bot_says(r, DICE, "🎶 재생 시작 · 신청: SODAM")
+    assert await waiting == "🎶 재생 시작 · 신청: SODAM"
+    waiting = asyncio.create_task(botlink.wait_reply(r.svc, Room.CHAT, 4243, timeout=0.3, bot_id=DICE.id))
+    await asyncio.sleep(0)
+    await bot_says(r, CASINO, "다른 봇 글")                               # 다른 봇 글은 결과 아님
+    assert await waiting is None

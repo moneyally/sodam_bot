@@ -48,7 +48,7 @@ OUT_PER_DAY = 30       # 방마다 하루 보내는 명령 (DB 로 셈 → 재�
 PAIR_PER_MIN = 8       # 방·봇 쌍 분당 주고받기(받은 글 + 보낸 명령) — 넘으면 보내지 않음
 MAX_DEPTH = 3          # '보냄 → 그 봇이 답함 → 또 보냄' 연속 깊이
 DEPTH_WINDOW = 60      # 이 시간 안에 답이 오고 또 보내면 같은 사슬
-WAIT_SECONDS = 6.0     # 명령 뒤 그 봇의 답(내 글에 단 답장)을 기다리는 시간
+WAIT_SECONDS = 12.0    # 명령 뒤 그 봇의 답을 기다리는 시간 (음악봇은 곡 검색에 몇 초 걸림)
 MAX_TEXT = 1000
 MAX_BOTS = 50          # 방마다 기억하는 봇 수
 KEEP_DAYS = 7
@@ -132,6 +132,7 @@ class _State:
     outbound: dict = field(default_factory=dict)   # chat → deque[시각]
     pairs: dict = field(default_factory=dict)      # (chat, bot) → _Pair
     waiters: dict = field(default_factory=dict)    # (chat, 내 글 ID) → Future[str]
+    by_bot: dict = field(default_factory=dict)     # (chat, 봇 ID) → Future[str] — 답장 없이 새 글로 답하는 봇 (실제 사례: 멜론 '재생 시작')
     replies: dict = field(default_factory=dict)    # (chat, 내 글 ID) → 그 봇의 답 (기다리기 전에 온 빠른 답, 최근 200개)
     dropped: int = 0
     pruned: float = 0.0
@@ -227,6 +228,9 @@ async def on_bot_message(svc: Services, bot: Bot, msg) -> None:
         return
     p = pair(st, cid, user.id)
     _window(p.events, now).append(now)
+    loose = st.by_bot.pop((cid, user.id), None) if not to_us and not to_user else None
+    if loose is not None and not loose.done():      # 명령 뒤 그 봇이 누구에게도 답장 아닌 새 글 = 그 명령의 결과로 봄
+        loose.set_result(text)
     if to_us:
         p.last_reply = now
         fut = st.waiters.pop((cid, r.message_id), None)
@@ -399,21 +403,29 @@ async def send(svc: Services, bot: Bot, chat_id: int, row, text: str, by_uid: in
     return mid
 
 
-async def wait_reply(svc: Services, chat_id: int, msg_id: int | None, timeout: float | None = None) -> str | None:
-    """보낸 명령에 그 봇이 단 답장 글자 (없으면 None). on_bot_message 가 채움."""
+async def wait_reply(svc: Services, chat_id: int, msg_id: int | None, timeout: float | None = None,
+                     bot_id: int | None = None) -> str | None:
+    """보낸 명령의 결과 글자 (없으면 None): 내 글에 단 답장, 또는 bot_id 를 주면 그 봇이 답장 없이 올린 다음 새 글.
+    on_bot_message 가 채움."""
     if msg_id is None:
         return None
     st = state(svc)
     if (chat_id, msg_id) in st.replies:     # 보내는 사이 이미 답이 옴
         return st.replies.pop((chat_id, msg_id))
-    fut = asyncio.get_running_loop().create_future()
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
     st.waiters[(chat_id, msg_id)] = fut
+    loose = None
+    if bot_id is not None:
+        loose = st.by_bot[(chat_id, bot_id)] = loop.create_future()
     try:
-        return await asyncio.wait_for(fut, WAIT_SECONDS if timeout is None else timeout)
-    except asyncio.TimeoutError:
-        return None
+        done, _ = await asyncio.wait([f for f in (fut, loose) if f], timeout=WAIT_SECONDS if timeout is None else timeout,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        return next(iter(done)).result() if done else None
     finally:
         st.waiters.pop((chat_id, msg_id), None)
+        if loose is not None and st.by_bot.get((chat_id, bot_id)) is loose:
+            st.by_bot.pop((chat_id, bot_id), None)
 
 
 async def stats(db, chat_id: int) -> dict:

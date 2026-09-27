@@ -343,7 +343,7 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
     mid = await botlink.send(ctx.svc, ctx.bot, ctx.chat_id, row, text, ctx.caller.id)
     if mid is None:
         return "보내지 못함 (텔레그램 오류). 잠시 뒤 다시."
-    got = await botlink.wait_reply(ctx.svc, ctx.chat_id, mid)
+    got = await botlink.wait_reply(ctx.svc, ctx.chat_id, mid, bot_id=row["bot_id"])
     if got is None:
         return (f"'{text}' 보냈음. {botlink.WAIT_SECONDS:g}초 안에 그 봇의 답장은 없었음 (그 봇 답은 방에 그대로 보임 · "
                 "안 오면 Bot-to-Bot 설정 확인). 결과를 지어내지 말 것.")
