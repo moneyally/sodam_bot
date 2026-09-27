@@ -288,6 +288,8 @@ async def greeter_sends_media_and_buttons():
                        " 대표님 &lt;환영&gt; &amp; 반가워요")
     assert [[b.url for b in r] for r in kw["reply_markup"].inline_keyboard] == [[u] for _, u in BTNS]
     assert not bot.named("send_message")
+    logged = await db._one("SELECT text FROM messages WHERE chat_id=? AND is_bot=1 ORDER BY id DESC", (CHAT,))
+    assert logged["text"] == "<b>해커</b>, 신입 대표님 <환영> & 반가워요", logged["text"]   # AI 맥락엔 {names} 대신 이름
 
     # 설명이 1024자를 넘으면 미디어 따로, 글+버튼 따로
     await db.set_setting(CHAT, "greet_template", "{names} " + "가" * 800)

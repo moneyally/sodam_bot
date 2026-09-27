@@ -29,10 +29,15 @@ _INT = re.compile(r"-?\d{1,18}")  # SQLite INTEGER(int64) 범위 안
 STALE_SEC = 300
 
 
+def sent_at(msg) -> int | None:
+    """메시지를 보낸 시각(epoch). 받은 시각이 아니라서 재시작 뒤 밀린 메시지도 원래 시각 그대로. 모르면 None."""
+    d = getattr(msg, "date", None)
+    return int(d.timestamp()) if isinstance(d, datetime) else None
+
+
 def is_stale(msg, sec: int = STALE_SEC) -> bool:
     """재시작 동안 쌓였다 늦게 받은 메시지인지 (AI 답·끼어들기는 건너뜀, 입장·관리는 그대로 처리)."""
-    d = getattr(msg, "date", None)
-    ts = d.timestamp() if isinstance(d, datetime) else None
+    ts = sent_at(msg)
     return ts is not None and time.time() - ts > sec
 
 

@@ -382,10 +382,11 @@ class DB:
 
     # ── 메시지 기록 / 검색 / 집계 ─────────────────────────
     async def log_message(self, chat_id: int, user_id: int, msg_id: int | None, text: str,
-                          is_bot: bool = False, flagged: bool = False) -> None:
+                          is_bot: bool = False, flagged: bool = False, ts: int | None = None) -> None:
+        """ts = 보낸 시각 (util.sent_at). 없으면 지금."""
         await self._write(
             "INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot, flagged) VALUES(?,?,?,?,?,?,?)",
-            (chat_id, user_id, msg_id, text[:4000], now(), int(is_bot), int(flagged)))
+            (chat_id, user_id, msg_id, text[:4000], ts or now(), int(is_bot), int(flagged)))
 
     async def log_join(self, chat_id: int, user_id: int, name: str, username: str | None) -> None:
         """AI가 '인사해' 때 누가 새로 왔는지 알 수 있게 입장 알림을 대화 기록에 남김 (집계 제외: is_bot).

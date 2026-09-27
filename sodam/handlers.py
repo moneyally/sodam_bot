@@ -31,7 +31,7 @@ from .llm import BudgetExceeded, out_of_credit
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .tools import ToolCtx
-from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
+from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, sent_at, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
@@ -383,7 +383,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         role = Role.MEMBER
     scan = security.scan(text)
     if text:
-        await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked)
+        await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg))
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
     exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음
@@ -819,7 +819,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     scan = security.scan(text)
-    await svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked)
+    await svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg))
     await ai_reply(context, msg, role, text, scan)
 
 

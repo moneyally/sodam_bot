@@ -195,7 +195,10 @@ class Greeter:
         s = await self.svc.db.get_settings(chat_id)
         try:
             sent = await send_greeting(bot, chat_id, s, fill(template, names))
-            await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template, is_bot=True)
+            # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
+            plain = ", ".join(name for _, name in people[:15])
+            await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
+                                          is_bot=True)
         except TelegramError as e:
             log.warning("greet send failed: %s", e)
 
