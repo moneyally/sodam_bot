@@ -7,6 +7,7 @@ from typing import Any, Callable, TypeVar
 
 import aiosqlite
 
+from .search import index_text, match_query, query_words
 from .settings import DEFAULTS
 from .util import to_int
 
@@ -146,6 +147,9 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     content TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_chat ON knowledge_chunks(chat_id);
+-- 전문 검색 색인 (sodam/search.py): rowid = messages.id / knowledge_chunks.id, body = 두 글자씩 자른 글
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(body);
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(body);
 CREATE TABLE IF NOT EXISTS subscriptions (
     chat_id     INTEGER PRIMARY KEY,
     trial_until INTEGER,
@@ -186,6 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_mod_log_chat_ts ON mod_log(chat_id, ts);
 """
 
 
+SEARCH_POOL = 200          # 여러 낱말 검색: bm25 상위 이만큼을 받아 '맞는 낱말 수'로 다시 줄 세움
 KEEP_DAYS = 90             # 대화·요청 기록 보관 (일)
 COUNTER_KEEP_DAYS = 400    # 일일 카운터 보관 (일)
 WAL_LIMIT = 64 * 1024 * 1024
@@ -248,7 +253,17 @@ class DB:
         for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)
         await self._migrate()
+        await self._backfill_fts()
         await self.conn.commit()
+
+    async def _backfill_fts(self) -> None:
+        """색인이 없던 예전 기록을 색인에 넣는다 (id 가 늘기만 해서 '색인된 마지막 id 다음'만 보면 됨)."""
+        for table, fts, col, where in (("messages", "messages_fts", "text", "is_bot=0"),
+                                       ("knowledge_chunks", "knowledge_fts", "content", "1")):
+            last = (await self._one(f"SELECT COALESCE(MAX(rowid), 0) AS n FROM {fts}"))["n"]
+            rows = await self._all(f"SELECT id, {col} AS body FROM {table} WHERE id>? AND {where}", (last,))
+            await self.conn.executemany(f"INSERT INTO {fts}(rowid, body) VALUES(?, ?)",
+                                        [(r["id"], index_text(r["body"])) for r in rows])
 
     async def _migrate(self) -> None:
         """예전 버전 DB에 없는 컬럼 추가."""
@@ -421,10 +436,15 @@ class DB:
     # ── 메시지 기록 / 검색 / 집계 ─────────────────────────
     async def log_message(self, chat_id: int, user_id: int, msg_id: int | None, text: str,
                           is_bot: bool = False, flagged: bool = False, ts: int | None = None) -> None:
-        """ts = 보낸 시각 (util.sent_at). 없으면 지금."""
-        await self._write(
-            "INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot, flagged) VALUES(?,?,?,?,?,?,?)",
-            (chat_id, user_id, msg_id, text[:4000], ts or now(), int(is_bot), int(flagged)))
+        """ts = 보낸 시각 (util.sent_at). 없으면 지금. 사람 메시지는 검색 색인에도 같이 (sodam/search.py)."""
+        row = (chat_id, user_id, msg_id, text[:4000], ts or now(), int(is_bot), int(flagged))
+
+        def run(c: sqlite3.Connection) -> None:
+            mid = c.execute("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot, flagged) "
+                            "VALUES(?,?,?,?,?,?,?)", row).lastrowid
+            if not is_bot:
+                c.execute("INSERT INTO messages_fts(rowid, body) VALUES(?, ?)", (mid, index_text(row[3])))
+        await self.atomic(run)
 
     async def log_join(self, chat_id: int, user_id: int, name: str, username: str | None) -> None:
         """AI가 '인사해' 때 누가 새로 왔는지 알 수 있게 입장 알림을 대화 기록에 남김 (집계 제외: is_bot).
@@ -440,13 +460,22 @@ class DB:
             (chat_id, since, limit))
         return list(reversed(rows))
 
-    async def search_messages(self, chat_id: int, keyword: str, since: int, limit: int = 10) -> list[aiosqlite.Row]:
-        like = "%" + keyword.replace("%", "").replace("_", "") + "%"
-        return await self._all(
-            "SELECT msg.*, u.username, u.first_name FROM messages msg "
+    async def search_messages(self, chat_id: int, query: str, since: int, limit: int = 10) -> list[aiosqlite.Row]:
+        """전문 검색 (sodam/search.py). 낱말 하나면 최신순. 여러 개면 맞는 낱말이 많은 순 → bm25 → 최신순
+        (bm25 만으로는 기록이 적을 때 흔한 낱말 가중치가 0 에 가까워져 '둘 다 맞는 글 먼저'가 안 지켜짐)."""
+        match, n = match_query(query)
+        if not match:
+            return []
+        order = "bm25(messages_fts), msg.id DESC" if n > 1 else "msg.id DESC"
+        rows = await self._all(
+            "SELECT msg.*, u.username, u.first_name FROM messages_fts f JOIN messages msg ON msg.id=f.rowid "
             "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? AND msg.text LIKE ? "
-            "ORDER BY msg.id DESC LIMIT ?", (chat_id, since, like, limit))
+            "WHERE messages_fts MATCH ? AND msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? "
+            f"ORDER BY {order} LIMIT ?", (match, chat_id, since, limit if n == 1 else SEARCH_POOL))
+        if n > 1:
+            words = query_words(query)
+            rows = sorted(rows, key=lambda r: -sum(w in index_text(r["text"]) for w in words))[:limit]  # 안정 정렬
+        return rows
 
     async def top_chatters(self, chat_id: int, since: int, limit: int = 10) -> list[aiosqlite.Row]:
         return await self._all(
@@ -472,14 +501,12 @@ class DB:
             (chat_id, user_id, since))
         return row["n"] if row else 0
 
-    async def prune_messages(self, older_than: int) -> None:
-        await self._write("DELETE FROM messages WHERE ts<?", (older_than,))
-
     async def prune(self, now_ts: int, days: int = KEEP_DAYS) -> None:
         """계속 쌓이는 기록 정리 (매일 새벽, 디스크가 모자라면 더 짧게). 결제·포인트 원장·이름 기록·관리 기록은 남긴다."""
         cut = now_ts - days * 86400
         cut_day = time.strftime("%Y-%m-%d", time.localtime(now_ts - COUNTER_KEEP_DAYS * 86400))
         def run(c: sqlite3.Connection) -> None:
+            c.execute("DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE ts<?)", (cut,))
             c.execute("DELETE FROM messages WHERE ts<?", (cut,))
             c.execute("DELETE FROM requests WHERE ts<?", (cut,))
             c.execute("DELETE FROM counters WHERE day<?", (cut_day,))
@@ -673,8 +700,10 @@ class DB:
             doc_id = c.execute(
                 "INSERT INTO knowledge_docs(chat_id, title, source, added_by, chars, ts) VALUES(?, ?, ?, ?, ?, ?)",
                 (chat_id, title[:100], source[:100], added_by, sum(len(x) for x in chunks), ts)).lastrowid
-            c.executemany("INSERT INTO knowledge_chunks(doc_id, chat_id, idx, content) VALUES(?, ?, ?, ?)",
-                          [(doc_id, chat_id, i, x) for i, x in enumerate(chunks)])
+            for i, x in enumerate(chunks):
+                cid = c.execute("INSERT INTO knowledge_chunks(doc_id, chat_id, idx, content) VALUES(?, ?, ?, ?)",
+                                (doc_id, chat_id, i, x)).lastrowid
+                c.execute("INSERT INTO knowledge_fts(rowid, body) VALUES(?, ?)", (cid, index_text(x)))
             return doc_id
         return await self.atomic(run)
 
@@ -690,19 +719,20 @@ class DB:
         def run(c: sqlite3.Connection) -> bool:
             if not c.execute("DELETE FROM knowledge_docs WHERE chat_id=? AND id=?", (chat_id, doc_id)).rowcount:
                 return False
+            c.execute("DELETE FROM knowledge_fts WHERE rowid IN (SELECT id FROM knowledge_chunks WHERE doc_id=?)", (doc_id,))
             c.execute("DELETE FROM knowledge_chunks WHERE doc_id=?", (doc_id,))
             return True
         return await self.atomic(run)
 
     async def knowledge_candidates(self, chat_id: int, terms: list[str], limit: int = 300) -> list[aiosqlite.Row]:
         """검색어 중 하나라도 들어간 조각 (이 방 + 공통). 점수는 knowledge.py 에서 매긴다."""
-        if not terms:
+        match, _ = match_query(" ".join(terms))
+        if not match:
             return []
-        like = " OR ".join("c.content LIKE ?" for _ in terms)
         return await self._all(
-            f"SELECT c.content, c.doc_id, c.idx, d.title FROM knowledge_chunks c "
-            f"JOIN knowledge_docs d ON d.id=c.doc_id WHERE c.chat_id IN (?, 0) AND ({like}) LIMIT ?",
-            (chat_id, *[f"%{t}%" for t in terms], limit))
+            "SELECT c.content, c.doc_id, c.idx, d.title FROM knowledge_fts f JOIN knowledge_chunks c ON c.id=f.rowid "
+            "JOIN knowledge_docs d ON d.id=c.doc_id WHERE knowledge_fts MATCH ? AND c.chat_id IN (?, 0) "
+            "ORDER BY bm25(knowledge_fts) LIMIT ?", (match, chat_id, limit))
 
     # ── 구독 / 결제 ───────────────────────────────────────
     async def start_subscription(self, chat_id: int, trial_until: int, added_by: int | None) -> None:

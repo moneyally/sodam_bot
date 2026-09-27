@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 495개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 502개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -78,6 +78,11 @@
 - 디스크 가득 참(SQLITE_FULL): DB 는 안 깨지고 쓰기만 실패. 대화·멤버 기록은 `handlers._record` 로 실패해도 관리·명령·AI 계속.
   `diskguard.py` 1시간마다 여유 500MB 미만이면 기록 30일로 긴급 정리 + 오너 알림(6시간 1번).
 - 보관: 대화·요청 90일, 카운터 400일, AI 기록 14일. 결제·포인트 원장·이름·관리 기록은 안 지움. PRAGMA synchronous=NORMAL(WAL 안전), journal_size_limit 64MB.
+
+## 검색
+- 대화·자료 검색 = SQLite FTS5 + 두 글자 겹침 색인(`search.py`, trigram 은 3글자부터라 '원두' 못 찾음). messages_fts/knowledge_fts 의
+  rowid = 원본 id, 기록·정리·자료 삭제 때 같은 db.atomic 안에서 함께. DB 열 때 빠진 색인 자동 채움. 여러 낱말: 맞는 낱말 수 → bm25 → 최신.
+- 다음 단계(필요할 때): 관계 표(사기 계정 무리·평판) → 의미 검색(sqlite-vec). PostgreSQL 은 여러 서버로 나눌 때.
 
 ## 클라우드 세션 서버 실행
 - 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.

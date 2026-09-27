@@ -45,7 +45,7 @@ async def search_text(db: DB, chat_id: int, tz, keyword: str, days: int = 7, lim
     since = 0 if days <= 0 else int(datetime.now(tz).timestamp()) - days * 86400
     rows = await db.search_messages(chat_id, keyword, since, limit)
     if not rows:
-        return f"🔎 '{esc(keyword)}' 가 들어간 메시지를 못 찾았어요."
+        return f"🔎 '{esc(keyword)}' 가 들어간 메시지를 못 찾았어요. (2글자 이상, 여러 낱말은 띄어서)"
     lines = [f"🔎 '{esc(keyword)}' 검색 결과 (최근 {len(rows)}개)"]
     for r in rows:
         text = r["text"].replace("\n", " ")

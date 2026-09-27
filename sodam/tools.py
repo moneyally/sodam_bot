@@ -497,7 +497,8 @@ TOOLS: list[Tool] = [
     Tool("get_my_requests", "지금 말한 사람이 봇에게 요청했던 기록을 조회한다. '내가 뭐 요청했지' 같은 질문에 반드시 사용.",
          {"period": PERIOD}, [], t_my_requests),
     Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다.", {"period": PERIOD}, [], t_chat_stats),
-    Tool("search_chat", "방 대화 기록에서 키워드를 검색한다.",
+    Tool("search_chat", "방 대화 기록에서 키워드를 검색한다 (2글자 이상 부분 일치). 여러 낱말은 띄어 쓰면 하나라도 들어간 "
+         "메시지를 많이 맞는 순으로 찾는다 — 비슷한 말도 같이 넣어라 (예: '환불 반품 돌려').",
          {"keyword": {"type": "string"}, "days": {"type": "integer", "description": "최근 며칠 (1~60)"}},
          ["keyword"], t_search_chat),
     Tool("read_chat", "최근 N시간 방 대화를 읽는다. '요약해줘', '무슨 얘기 했어' 같은 요청에 사용.",
