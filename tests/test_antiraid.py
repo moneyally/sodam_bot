@@ -124,7 +124,7 @@ async def recent_account_gets_captcha_even_if_off():
 
 # ── ④ 가입 신청 1:1 확인 ─────────────────────────────────
 def request(user):
-    return SimpleNamespace(chat_join_request=SimpleNamespace(chat=SimpleNamespace(id=Room.CHAT), from_user=user,
+    return SimpleNamespace(chat_join_request=SimpleNamespace(chat=SimpleNamespace(id=Room.CHAT, type="supergroup"), from_user=user,
                                                              user_chat_id=user.id))
 
 

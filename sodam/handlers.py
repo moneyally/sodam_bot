@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, casino, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
+from . import (accountage, addressee, anomaly, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
                subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
@@ -241,7 +241,10 @@ async def _cas_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """가입 신청 → 1:1 그림 버튼 확인 (sodam/joinreq.py)."""
     try:
-        await joinreq.on_request(_svc(context), context.bot, update.chat_join_request)
+        req = update.chat_join_request
+        if req.chat.type == ChatType.CHANNEL:   # 채널 가입 신청 (sodam/channel.py)
+            return await channel.on_join_request(_svc(context), context.bot, req)
+        await joinreq.on_request(_svc(context), context.bot, req)
     except Exception:
         log.exception("join request failed")
 
@@ -273,6 +276,8 @@ async def _is_admin_safe(svc: Services, bot, chat_id: int, user_id: int, *, fres
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """봇이 방에 초대됐을 때: 무료 체험 시작 + 방엔 짧은 인사와 '⚙️ 봇 설정' 버튼만, 결제 정보는 초대한 사람 1:1 로."""
     cmu = update.my_chat_member
+    if cmu and cmu.chat.type == ChatType.CHANNEL:   # 채널: 등록·권한 체크리스트 (sodam/channel.py)
+        return await channel.on_bot_status(_svc(context), context.bot, cmu)
     if not cmu or cmu.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     _svc(context).perms.forget_bot(cmu.chat.id)  # 봇 권한이 바뀌었을 수 있음 (관리자 지정·해제)
@@ -366,6 +371,8 @@ async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """입장 메시지를 숨긴 방에서도 입장을 잡기 위해 멤버 상태 변경을 본다."""
     cmu = update.chat_member
+    if cmu and cmu.chat.type == ChatType.CHANNEL:   # 채널 구독자 들어옴·나감, 관리자 변경
+        return await channel.on_member(_svc(context), context.bot, cmu)
     if not cmu or cmu.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     svc = _svc(context)
@@ -1006,6 +1013,15 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await ai_reply(context, msg, role, text, scan)
 
 
+async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """채널 새 글·고친 글 → 기록 (연결된 방 AI 참고·새 글 알림, sodam/channel.py)."""
+    msg = update.channel_post or update.edited_channel_post
+    try:
+        await channel.on_post(_svc(context), context.bot, msg, edited=update.edited_channel_post is not None)
+    except Exception:
+        log.exception("channel post failed")
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     # 잠깐 끊겼다 다시 붙는 네트워크 오류는 봇이 자동 재시도하므로 한 줄만 남긴다
     if isinstance(context.error, (NetworkError, TimedOut)):
@@ -1037,7 +1053,8 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     jobs = [("captcha", svc.captcha.expire), ("announce", svc.announcer.run_due),
             ("raid", lambda bot: raid.tick(svc, bot)),  # 끝난 대량 입장 방어 모드 해제
             ("anomaly", lambda bot: anomaly.tick(svc, bot)),  # 이상징후 '보안 강화' 시간 끝나면 설정 되돌림
-            ("joinreq", lambda bot: joinreq.expire(svc, bot))]  # 시간 지난 가입 신청 거절
+            ("joinreq", lambda bot: joinreq.expire(svc, bot)),  # 시간 지난 가입 신청 거절
+            ("hooks", lambda bot: hooks.tick(svc, bot))]  # 채널 예약 글·구독자 수 등 (hooks.add_tick_hook)
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
     for name, fn in jobs:
@@ -1275,6 +1292,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS, on_channel_post))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
 

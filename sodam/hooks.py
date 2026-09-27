@@ -15,6 +15,8 @@ GROUP_EDIT_HOOKS: list = []
 # 봇 글은 이 훅들만 받고 관리·명령·게임·AI·위 GROUP_MESSAGE_HOOKS 는 안 탐 → 여기서도 방에 답을 보내지 말 것 (봇끼리 무한 반복)
 BOT_MESSAGE_HOOKS: list = []
 BOT_EDIT_HOOKS: list = []
+# 30초 틱(handlers.job_tick)마다: async hook(svc, bot). 하나가 터져도 나머지는 계속 (채널 예약 글·구독자 수 — sodam/channel.py)
+TICK_HOOKS: list = []
 
 
 def add_group_message_hook(fn) -> None:
@@ -35,6 +37,20 @@ def add_bot_message_hook(fn) -> None:
 def add_bot_edit_hook(fn) -> None:
     if fn not in BOT_EDIT_HOOKS:
         BOT_EDIT_HOOKS.append(fn)
+
+
+def add_tick_hook(fn) -> None:
+    if fn not in TICK_HOOKS:
+        TICK_HOOKS.append(fn)
+
+
+async def tick(svc, bot) -> None:
+    for fn in TICK_HOOKS:
+        try:
+            await fn(svc, bot)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("tick hook failed: %s", getattr(fn, "__name__", fn))
 
 
 def add_member_left_hook(fn) -> None:

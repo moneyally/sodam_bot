@@ -45,7 +45,7 @@ async def free_member_edit_not_checked():
 async def join_answer_double_press_keeps_pass():
     r = await Room().open(admins={1}, settings={"join_verify": True, "captcha_enabled": True})
     u = fake_user(9_000_000_001, "신청")
-    req = SimpleNamespace(chat_join_request=SimpleNamespace(chat=SimpleNamespace(id=Room.CHAT), from_user=u,
+    req = SimpleNamespace(chat_join_request=SimpleNamespace(chat=SimpleNamespace(id=Room.CHAT, type="supergroup"), from_user=u,
                                                             user_chat_id=u.id))
     await handlers.on_join_request(req, r.ctx)
     ans = (await joinreq._row(r.svc, Room.CHAT, u.id))["answer"]

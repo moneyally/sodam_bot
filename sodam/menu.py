@@ -183,18 +183,20 @@ async def main_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineK
             [B("⚙️ 내 그룹 관리", "m:groups")]]
     owner = user_id in await svc.perms.owners()
     admin = owner or (any(n == ADMIN for *_, n in MAIN_ITEMS) and bool(await admin_groups(svc, bot, user_id)))
-    extra = [B(label, f"m:{code}") for _, code, label, need in sorted(MAIN_ITEMS)
-             if need == PUBLIC or (need == ADMIN and admin) or (need == OWNER and owner)]
+    extra = [B(label, f"m:{code}") for _, code, label, need in sorted(MAIN_ITEMS, key=lambda m: m[:2])
+             if (await need(svc, bot, user_id) if callable(need) else
+                 need == PUBLIC or (need == ADMIN and admin) or (need == OWNER and owner))]
     rows += _chunks(extra, 2)
     rows.append([B("🪪 내 ID", "m:id"), B("❓ 도움말", "m:help")])
     return text, InlineKeyboardMarkup(rows)
 
 
-# 메인 메뉴에 붙는 버튼 (order, 코드, 글자, PUBLIC|ADMIN(어느 방이든 지금 관리자)|OWNER). 패널 모듈이 추가한다
-MAIN_ITEMS: list[tuple[int, str, str, int]] = []
+# 메인 메뉴에 붙는 버튼 (order, 코드, 글자, PUBLIC|ADMIN(어느 방이든 지금 관리자)|OWNER|async fn(svc, bot, uid) → 보일지).
+# 패널 모듈이 추가한다
+MAIN_ITEMS: list[tuple[int, str, str, int | Callable]] = []
 
 
-def register_main(order: int, code: str, label: str, need: int = PUBLIC) -> None:
+def register_main(order: int, code: str, label: str, need: int | Callable = PUBLIC) -> None:
     MAIN_ITEMS[:] = [m for m in MAIN_ITEMS if m[1] != code] + [(order, code, label, need)]
 
 

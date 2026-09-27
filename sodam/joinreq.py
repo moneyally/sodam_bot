@@ -62,33 +62,40 @@ async def _decline(svc: Services, bot, chat_id: int, user_id: int, reason: str) 
 
 
 async def on_request(svc: Services, bot, req) -> None:
+    if (await svc.db.get_settings(req.chat.id))["join_verify"]:
+        from .subscription import chat_title  # 늦게 import (순환 방지)
+        await verify(svc, bot, req, await chat_title(svc, req.chat.id))
+
+
+async def verify(svc: Services, bot, req, title: str) -> bool:
+    """신청 1건 확인 (방·채널 공용 — 채널은 channel.py 가 부름). 처리했으면 True, 1:1 을 못 보내 관리자 몫으로 남기면 False."""
     chat_id, user = req.chat.id, req.from_user
     s = await svc.db.get_settings(chat_id)
-    if not s["join_verify"]:
-        return
     if user.is_bot:
-        return await _decline(svc, bot, chat_id, user.id, "봇 계정")
+        await _decline(svc, bot, chat_id, user.id, "봇 계정")
+        return True
     if await free.is_free(svc.db, chat_id, user.id):
         try:
             await bot.approve_chat_join_request(chat_id, user.id)
         except TelegramError as e:
             log.info("approve free member failed: %s", e)
-        return
+        return True
     if await cas.blocks(svc, chat_id, user.id, s) or \
             (s["fedban_mode"] != "off" and await fedban.lookup(svc.db, user.id)):
-        return await _decline(svc, bot, chat_id, user.id, "스팸·공동 차단 명단")
-    from .subscription import chat_title  # 늦게 import (순환 방지)
+        await _decline(svc, bot, chat_id, user.id, "스팸·공동 차단 명단")
+        return True
     label, answer, rows = puzzle(f"jr:{chat_id}")
     minutes = s["captcha_minutes"]
-    text = (f"🚪 <b>{esc(await chat_title(svc, chat_id))}</b> 입장 신청 확인이에요.\n"
+    text = (f"🚪 <b>{esc(title)}</b> 입장 신청 확인이에요.\n"
             f"<b>{minutes}분 안에</b> 아래에서 <b>{label}</b> 버튼을 눌러주세요. 맞히면 바로 들어가요.")
     try:
         await bot.send_message(req.user_chat_id, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
     except TelegramError as e:   # 1:1 을 못 보냄 → 관리자가 직접 승인하도록 그대로 둠
         log.info("join verify dm failed %s/%s: %s", chat_id, user.id, e)
-        return
+        return False
     await svc.db._write("INSERT OR REPLACE INTO join_requests(chat_id, user_id, answer, expires) VALUES(?, ?, ?, ?)",
                         (chat_id, user.id, answer, int(time.time()) + minutes * 60))
+    return True
 
 
 async def on_callback(svc: Services, bot, q, parts: list[str]) -> None:

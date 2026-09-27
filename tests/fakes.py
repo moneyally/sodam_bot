@@ -87,7 +87,7 @@ class FakeBot:
         self.calls.append(("reaction", chat_id, message_id, reaction))
 
     async def edit_message_caption(self, chat_id=None, message_id=None, caption=None, **kw):
-        self.calls.append(("edit_caption", chat_id, message_id, caption))
+        self.calls.append(("edit_caption", chat_id, message_id, caption, kw))
 
     async def send_animation(self, chat_id, animation, caption=None, **kw):
         return await self._send_media("send_animation", chat_id, animation, caption, **kw)
@@ -135,14 +135,15 @@ class FakeBot:
                 from telegram.error import BadRequest
                 raise BadRequest("Chat not found")
             return SimpleNamespace(id=-1009 - len(chat_id), type=kind, username=chat_id[1:])
-        return SimpleNamespace(id=chat_id, permissions=self.chat_permissions)
+        return SimpleNamespace(id=chat_id, permissions=self.chat_permissions,
+                               linked_chat_id=getattr(self, "linked", {}).get(chat_id))   # 채널 토론 그룹 (테스트가 bot.linked 지정)
 
     async def set_chat_permissions(self, chat_id, permissions, **kw):
         self.calls.append(("set_perms", chat_id, permissions))
         self.chat_permissions = permissions
 
-    async def get_chat_administrators(self, chat_id):
-        return [SimpleNamespace(user=u, status="administrator") for u in self.admins]
+    async def get_chat_administrators(self, chat_id):   # 방·채널마다 다르게: bot.chat_admins = {방: [사람]}
+        return [SimpleNamespace(user=u, status="administrator") for u in getattr(self, "chat_admins", {}).get(chat_id, self.admins)]
 
     # 태그 알림용. 테스트가 bot.member_status = {(방, 사람): "left"} (없으면 "member"), bot.dm_blocked = {사람} 로 지정
     async def get_chat_member_count(self, chat_id):
@@ -154,7 +155,8 @@ class FakeBot:
         if user_id == self.id:  # 봇 자신: 기본은 관리 권한 있는 관리자 (can_moderate=False 면 일반 멤버)
             ok = getattr(self, "can_moderate", True)
             return SimpleNamespace(status="administrator" if ok else "member", user=SimpleNamespace(id=user_id),
-                                   can_delete_messages=ok, can_restrict_members=ok, is_member=True)
+                                   can_delete_messages=ok, can_restrict_members=ok, is_member=True,
+                                   can_post_messages=ok, can_edit_messages=ok, can_invite_users=ok)   # 채널 권한
         status = getattr(self, "member_status", {}).get((chat_id, user_id), "member")
         return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left")
 
