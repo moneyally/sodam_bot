@@ -89,6 +89,7 @@
   갱신: `git --work-tree=/home/user/sodam_run checkout HEAD -- sodam tests tools docs requirements.txt` 후
   `pkill -f "venv/bin/python -m sodam$"` (봇만 끄면 감시가 새 코드로 다시 켬 — 봇을 직접 nohup 으로 켜지 말 것, 두 개 뜸).
 - 감시: `tools/supervise.sh` (죽으면 5초 뒤·하트비트 3분 멈추면 재시작, flock 으로 하나만). 세션 시작 훅(~/.claude/settings.json)이 켬.
+- 감시 자체를 바꿔 다시 켤 땐 `pkill -f` 에 명령줄 글자를 쓰지 말 것 (그 명령을 실행한 셸도 같이 죽음). PID 로 kill → 훅 명령으로 다시 켬.
 - 컨테이너가 회수되면 안에서는 못 살림 → Routine '소담 봇 생존 확인'(매시 49분)이 세션을 깨워 훅이 다시 켬. 최대 약 1시간 공백.
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)
