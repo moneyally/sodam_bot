@@ -297,6 +297,13 @@ async def report_screen_admin_only_and_digest_preset():
     assert (await db.get_settings(A))["digest_hour"] == -1 and "방 기본 시각: <b>끔" in q3.edits[-1]
 
 
+@test
+async def digest_string_topics_not_split_into_letters():
+    db, svc, bot = await digest_world(digest_script=[{"topics": "단가 협상", "conflict": "", "unanswered": "세금계산서 언제?"}])
+    d = await reports.digest_data(svc, A)
+    assert d.topics == ["단가 협상"] and d.unanswered == ["세금계산서 언제?"], (d.topics, d.unanswered)
+
+
 if __name__ == "__main__":
     import asyncio
     sys.exit(1 if asyncio.run(run_all()) else 0)

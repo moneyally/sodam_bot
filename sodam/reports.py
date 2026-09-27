@@ -313,10 +313,15 @@ async def digest_data(svc: Services, chat_id: int, now: int | None = None) -> Di
     if data is None:
         d.failed = True
         return d
-    d.topics = [t for t in (_clean(x, 80) for x in (data.get("topics") or [])[:3]) if t]
+    d.topics = [t for t in (_clean(x, 80) for x in _items(data.get("topics"))[:3]) if t]
     d.conflict = _clean(data.get("conflict"), 200)
-    d.unanswered = [t for t in (_clean(x, 100) for x in (data.get("unanswered") or [])[:3]) if t]
+    d.unanswered = [t for t in (_clean(x, 100) for x in _items(data.get("unanswered"))[:3]) if t]
     return d
+
+
+def _items(v) -> list:
+    """AI 가 목록 대신 글 하나를 주면 한 항목으로 (문자열을 [:3] 하면 글자 3개가 됨)."""
+    return [v] if isinstance(v, str) else v if isinstance(v, list) else []
 
 
 def _counts_line(d: Digest) -> str:
