@@ -9,7 +9,7 @@ from . import agentlog, memory
 from .llm import BudgetExceeded
 from .prompt import build_messages
 from .security import nonce, wrap
-from .tools import ToolCtx, available, execute
+from .tools import READ_ONLY, ToolCtx, available, execute
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +29,28 @@ _CLAIM = re.compile(r"(뮤트|밴|경고|차단|내보냈|예약|등록|저장|�
                     r"(했어|했습니다|완료|처리했|해\s?드렸|뒀어|놨어|뒀습니다|됐어요|되었습니다)")
 VERIFY_NOTE = ("검사: 이번 답에서 도구를 하나도 부르지 않았는데 무언가를 '했다'고 말했습니다. 실제로 해야 하는 일이면 지금 도구를 부르세요. "
                "기록에 있는 과거 사실을 전한 것이면 그대로 답하되, 도구로 한 일이 아니면 '했다'고 하지 마세요.")
+# 조회 도구를 쓴 답의 숫자 검사: '12명·3건·40%' 같은 숫자가 이번 도구 결과(또는 요청)에 하나도 없으면 한 번 다시 물음
+_COUNT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:명|개|번|건|회|%)")
+_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
+NUMBER_NOTE = ("검사: 답에 적은 숫자 {nums} 가 이번에 조회한 도구 결과에 없습니다. 도구 결과에 있는 숫자로 고치세요. "
+               "도구 결과의 숫자로 직접 계산한 값이면 그대로 두고, 추측한 숫자면 빼고 답하세요.")
 _ACTS = re.compile(r"(해|줘|드려|올려|알려|걸어|바꿔|켜|꺼|찾아|정리해|보여)(줘|주세요|줄래|요)?(?=[\s,.!?]|$)")
+
+
+def _norm_num(n: str) -> str:
+    n = n.replace(",", "")
+    return n.rstrip("0").rstrip(".") if "." in n else (n.lstrip("0") or "0")
+
+
+def unsupported_numbers(answer: str, sources: list[str]) -> list[str]:
+    """답의 '숫자+단위(명·개·번·건·회·%)' 중 sources(도구 결과·요청) 어디에도 없는 숫자. 0 은 '없음'과 같아 뺌."""
+    have = {_norm_num(n) for src in sources for n in _NUM.findall(src)}
+    out = []
+    for n in _COUNT.findall(answer):
+        v = _norm_num(n)
+        if v != "0" and v not in have and v not in out:
+            out.append(v)
+    return out
 
 
 def wants_thinking(mode_setting: str, request: str, mode: str) -> bool:
@@ -101,16 +122,25 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
                                   purpose=purpose, chat_id=ctx.chat_id)
 
-    used = checked = False
+    used = checked = num_checked = read = False
+    results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
     for _ in range(MAX_STEPS):
         msg = await call()
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
         if not calls:
             text = msg.content or ""
-            if used or checked or not allowed or mode not in ("call", "follow") or not _CLAIM.search(text):
+            if not used:
+                if checked or not allowed or mode not in ("call", "follow") or not _CLAIM.search(text):
+                    return text
+                checked = True                   # 한 번만 다시 물음 (추가 호출은 이 경우만)
+                messages += [{"role": "assistant", "content": text}, {"role": "system", "content": VERIFY_NOTE}]
+                continue
+            # 조회 도구를 쓴 답: 결과에 없는 숫자를 세어 말하면 한 번만 다시 (도구 안 쓴 실행은 검사 비용 0)
+            if num_checked or not read or not (bad := unsupported_numbers(text, [*results, request])):
                 return text
-            checked = True                       # 한 번만 다시 물음 (추가 호출은 이 경우만)
-            messages += [{"role": "assistant", "content": text}, {"role": "system", "content": VERIFY_NOTE}]
+            num_checked = True
+            messages += [{"role": "assistant", "content": text},
+                         {"role": "system", "content": NUMBER_NOTE.format(nums=", ".join(bad[:5]))}]
             continue
         used = True
         messages.append({
@@ -126,6 +156,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 result = "이 도구는 지금 사용할 수 없음."
             else:
                 result = await execute(c.function.name, c.function.arguments, ctx)
+                results.append(result)
+                read = read or c.function.name in READ_ONLY
             log.info("도구 %s chat=%s user=%s 인자=%s → %s", c.function.name, ctx.chat_id, ctx.caller.id,
                      (c.function.arguments or "")[:200], result[:200].replace("\n", " "))
             try:

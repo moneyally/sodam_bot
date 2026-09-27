@@ -23,6 +23,11 @@ RECENT_JOIN_MIN = 60
 NAME_SCAN_LIMIT = 400
 _STYLE_ASK = re.compile(r"(?:^|\s)[./]\s?(?:말투|style)\s+(\S+)|말투(?:를|는)?\s*(\S+?)(?:로|으로)\s*(?:바꿔|해|변경)")
 _WORD = re.compile(r"[0-9A-Za-z가-힣_]{2,}")
+# 지시어 ('걔 뮤트해', '그 사람 누구야') → 답장한 글의 작성자, 없으면 바로 전 대화(ai_turns)에서 마지막으로 나온 사람
+_PRONOUN = re.compile(r"(?<![가-힣])(그\s?사람|저\s?사람|이\s?사람|그\s?분|이\s?분|저\s?분|걔|쟤|얘)"
+                      r"(?:은|는|이|가|을|를|한테|에게|랑|이랑|하고|도|의|좀|께)?(?![가-힣])")
+PRONOUN_TURN_MIN = 30     # 이 시간 안의 대화만
+PRONOUN_TURNS = 4
 
 
 JOSA = ("한테서", "한테", "에게", "께서", "께", "이랑", "랑", "하고", "처럼", "까지", "부터", "은", "는", "이", "가",
@@ -108,6 +113,20 @@ async def collect(svc: Services, bot, msg, chat_id: int, caller, request: str) -
             (chat_id, now - RECENT_JOIN_MIN * 60)):
         add(row["user_id"], _name(row["first_name"], row["last_name"], row["username"]), 2,
             f"{max(1, (now - row['joined_at']) // 60)}분 전에 새로 들어옴")
+    # 5) 지시어 → 가리키는 사람 ★★★ (답장 대상 > 바로 전 대화에서 마지막으로 나온 사람)
+    pm = _PRONOUN.search(request)
+    if pm:
+        word = pm.group(1)
+        if r is not None and getattr(r, "from_user", None) and not r.from_user.is_bot and r.from_user.id != caller.id:
+            notes.append(f"요청의 '{word}' = 답장한 메시지의 작성자 "
+                         f"{_name(r.from_user.first_name, r.from_user.last_name, r.from_user.username)} (ID {r.from_user.id}).")
+        else:
+            who = await last_named(db, chat_id, caller.id, getattr(bot, "id", None), now)
+            if who:
+                add(who[0], who[1], 3, f"요청의 '{word}' = 바로 전 대화에서 마지막으로 말한 사람")
+                notes.append(f"요청의 '{word}' = {who[1]} (ID {who[0]}) (바로 전 대화 기준). 도구엔 이 ID 를 넣을 것.")
+            else:
+                notes.append(f"요청의 '{word}' 가 누구인지 단서가 없다 → 추측하지 말고 누구인지 짧게 되물을 것.")
     lines = []
     for uid, c in sorted(cands.items(), key=lambda kv: -kv[1]["score"])[:MAX_LINES]:
         lines.append(f"{'★' * c['score']} {c['name']} (ID {uid}): {', '.join(c['why'])}")
@@ -120,3 +139,33 @@ async def collect(svc: Services, bot, msg, chat_id: int, caller, request: str) -
         notes.append(f"요청에 말투 변경 부탁이 섞여 있다: '{want}'. 누구 말투인지(특정인·방 전체·요청자 본인) 판단해 "
                      "다른 부탁과 함께 처리할 것.")
     return lines + notes
+
+
+async def last_named(db, chat_id: int, caller_id: int, bot_id: int | None, now: int) -> tuple[int, str] | None:
+    """부른 사람과 소담의 최근 대화(ai_turns, 30분·4번)에서 마지막으로 이름·@아이디가 나온 이 방 멤버 (본인·봇 제외).
+    최신 대화부터, 한 대화 안에선 글 뒤쪽(답 > 요청)에 나온 사람."""
+    turns = await db._all("SELECT request, answer FROM ai_turns WHERE chat_id=? AND user_id=? AND ts>=? "
+                          "ORDER BY id DESC LIMIT ?", (chat_id, caller_id, now - PRONOUN_TURN_MIN * 60, PRONOUN_TURNS))
+    if not turns:
+        return None
+    rows = await db._all(
+        "SELECT u.user_id, u.first_name, u.last_name, u.username FROM members m JOIN users u ON u.user_id=m.user_id "
+        "WHERE m.chat_id=? AND u.is_bot=0 AND COALESCE(m.last_seen,0) > ? ORDER BY m.last_seen DESC LIMIT ?",
+        (chat_id, now - 90 * 86400, NAME_SCAN_LIMIT))
+    people = []
+    for row in rows:
+        if row["user_id"] in (caller_id, bot_id):
+            continue
+        keys = {_squash(f"{row['first_name'] or ''}{row['last_name'] or ''}"), _squash(row["first_name"] or ""),
+                _squash(row["username"] or "")}
+        people.append((row, {k for k in keys if len(k) >= 2 and k not in GENERIC}))
+    for t in turns:   # 최신 대화부터
+        flat = _squash(f"{t['request']}\n{t['answer']}")
+        best, pos = None, -1
+        for row, keys in people:
+            p = max((flat.rfind(k) for k in keys), default=-1)
+            if p > pos:
+                best, pos = row, p
+        if best is not None:
+            return best["user_id"], _name(best["first_name"], best["last_name"], best["username"])
+    return None

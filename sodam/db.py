@@ -142,7 +142,8 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
     source   TEXT,                      -- 파일명 또는 '메시지'
     added_by INTEGER,
     chars    INTEGER NOT NULL,
-    ts       INTEGER NOT NULL
+    ts       INTEGER NOT NULL,              -- 올린 시각
+    updated_at INTEGER                      -- 고친 시각 (없으면 ts) · 자료끼리 다를 때 최신 판단 (knowledge.conflicts)
 );
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,7 +287,8 @@ class DB:
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
                                 "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
                                 "deliver": "TEXT NOT NULL DEFAULT 'room'"},   # room 방에 / me 만든 관리자 1:1
-                  "messages": {"reply_to_msg_id": "INTEGER", "reply_to_user": "INTEGER"}}  # 답장 관계
+                  "messages": {"reply_to_msg_id": "INTEGER", "reply_to_user": "INTEGER"},  # 답장 관계
+                  "knowledge_docs": {"updated_at": "INTEGER"}}   # 자료 고친 시각 (예전 자료는 NULL → ts)
         for table, cols in wanted.items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
@@ -768,8 +770,8 @@ class DB:
 
         def run(c: sqlite3.Connection) -> int:   # 문서와 조각을 한 번에 (조각 없는 문서가 남지 않게)
             doc_id = c.execute(
-                "INSERT INTO knowledge_docs(chat_id, title, source, added_by, chars, ts) VALUES(?, ?, ?, ?, ?, ?)",
-                (chat_id, title[:100], source[:100], added_by, sum(len(x) for x in chunks), ts)).lastrowid
+                "INSERT INTO knowledge_docs(chat_id, title, source, added_by, chars, ts, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, title[:100], source[:100], added_by, sum(len(x) for x in chunks), ts, ts)).lastrowid
             for i, x in enumerate(chunks):
                 cid = c.execute("INSERT INTO knowledge_chunks(doc_id, chat_id, idx, content) VALUES(?, ?, ?, ?)",
                                 (doc_id, chat_id, i, x)).lastrowid
@@ -800,7 +802,7 @@ class DB:
         if not match:
             return []
         return await self._all(
-            "SELECT c.content, c.doc_id, c.idx, d.title FROM knowledge_fts f JOIN knowledge_chunks c ON c.id=f.rowid "
+            "SELECT c.content, c.doc_id, c.idx, d.title, COALESCE(d.updated_at, d.ts) AS doc_ts FROM knowledge_fts f JOIN knowledge_chunks c ON c.id=f.rowid "
             "JOIN knowledge_docs d ON d.id=c.doc_id WHERE knowledge_fts MATCH ? AND c.chat_id IN (?, 0) "
             "ORDER BY bm25(knowledge_fts) LIMIT ?", (match, chat_id, limit))
 
