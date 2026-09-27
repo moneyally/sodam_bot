@@ -609,11 +609,12 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     burst = _BURSTS.setdefault(key, [])
     burst.append((msg.message_id, request))
     await asyncio.sleep(BURST_SECONDS)
-    if _BURSTS.get(key) is not burst or burst[-1][0] != msg.message_id:
-        return                                   # 더 늦게 온 말이 한꺼번에 답함
+    # 가장 늦게 보낸 말(메시지 ID)이 한꺼번에 답함 — 처리 순서(동시 처리)는 보낸 순서와 다를 수 있어서 ID 로
+    if _BURSTS.get(key) is not burst or max(burst)[0] != msg.message_id:
+        return
     del _BURSTS[key]
     if len(burst) > 1:
-        request = "\n".join(r for _, r in burst if r)
+        request = "\n".join(r for _, r in sorted(burst) if r)
         scan = security.scan(request)
 
     limiter: RateLimiter = context.bot_data["limiter"]
