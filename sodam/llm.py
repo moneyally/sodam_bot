@@ -56,8 +56,9 @@ class LLM:
             if await self.db.counter(self._today(), chat_id, ROOM_TOKENS) >= cap:
                 raise BudgetExceeded
 
-    async def _record(self, usage, chat_id: int | None = None, purpose: str = "misc") -> None:
-        """토큰 사용량 기록. 캐시로 읽은 입력 토큰(할인됨)을 따로 세서 절감 효과를 볼 수 있게 한다."""
+    async def _record(self, usage, chat_id: int | None = None, purpose: str = "misc", model: str = "") -> None:
+        """토큰 사용량 기록. 캐시로 읽은 입력 토큰(할인됨)을 따로 세서 절감 효과를 볼 수 있게 한다.
+        모델별(m:<모델>:in/cached/out)로도 세서 비용을 정확히 계산 (tools/usage_report.py · sodam/costs.py)."""
         if not usage:
             return
         day = self._today()
@@ -75,6 +76,14 @@ class LLM:
         if cached:
             await self.db.bump(day, 0, "cached_tokens", cached)
             await self.db.bump(day, 0, f"cached:{purpose}", cached)
+        if model:
+            if prompt:
+                await self.db.bump(day, 0, f"m:{model}:in", prompt)
+            if cached:
+                await self.db.bump(day, 0, f"m:{model}:cached", cached)
+            if total - prompt > 0:
+                await self.db.bump(day, 0, f"m:{model}:out", total - prompt)
+            await self.db.bump(day, 0, f"m:{model}:calls", 1)
 
     async def usage_today(self) -> dict[str, int]:
         day = self._today()
@@ -124,7 +133,7 @@ class LLM:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = await self.client.chat.completions.create(**kwargs)
-        await self._record(resp.usage, chat_id, purpose)
+        await self._record(resp.usage, chat_id, purpose, model)
         return resp.choices[0].message
 
     async def json(self, system: str, user: str, *, model: str | None = None,
@@ -148,11 +157,13 @@ class LLM:
         if source is not None:
             ext = source.mime.split("/")[-1]
             # sunburst 는 원본 유지가 기본 (input_fidelity 인자를 받지 않음 — 실제 API 400 확인)
-            resp = await self.client.images.edit(model=self.cfg.image_edit_model,
+            model = self.cfg.image_edit_model
+            resp = await self.client.images.edit(model=model,
                                                  image=(f"photo.{ext}", source.data, source.mime), **common)
         else:
-            resp = await self.client.images.generate(model=self.cfg.image_model, **common)
-        await self._record(resp.usage, chat_id, "image")
+            model = self.cfg.image_model
+            resp = await self.client.images.generate(model=model, **common)
+        await self._record(resp.usage, chat_id, "image", model)
         return base64.b64decode(resp.data[0].b64_json)
 
     async def web_search(self, query: str, chat_id: int | None = None) -> str:
@@ -169,7 +180,8 @@ class LLM:
             input=query[:300],
             max_output_tokens=800,
         )
-        await self._record(resp.usage, chat_id, "web_search")
+        await self._record(resp.usage, chat_id, "web_search", self.cfg.guard_model)
+        await self.db.bump(self._today(), 0, "web_search_calls", 1)   # 검색 1번당 요금이 따로 붙음
         return (resp.output_text or "").strip()
 
     async def classify_injection(self, text: str, chat_id: int | None = None) -> tuple[bool, str]:
