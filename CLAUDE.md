@@ -155,6 +155,10 @@
 ## 검색
 - 대화·자료 검색 = SQLite FTS5 + 두 글자 겹침 색인(`search.py`, trigram 은 3글자부터라 '원두' 못 찾음). messages_fts/knowledge_fts 의
   rowid = 원본 id, 기록·정리·자료 삭제 때 같은 db.atomic 안에서 함께. DB 열 때 빠진 색인 자동 채움. 여러 낱말: 맞는 낱말 수 → bm25 → 최신.
+- 답장 관계: messages.reply_to_msg_id/reply_to_user (예전 DB 는 `_migrate` 가 컬럼 추가). 기록은 `handlers.reply_ref`
+  (포럼 토픽 첫 글 답장 제외, 채널·익명 관리자 글은 사람 없음) — 그룹·1:1·봇 AI 답(부른 사람에게). 답장받은 사람도 users 에 upsert.
+  AI chat_log·방 흐름 요약 입력에 `[시각] 이름(ID) ↩상대: 글` (`prompt.reply_mark`, 이름은 db.REPLY_JOIN 한 번, 20자, 글 인용 없음).
+  집계 `db.reply_stats(chat_id, since, user_id=None)` = (from_id, to_id, n), 봇·자기 답장 제외. 수정된 메시지는 다시 기록 안 함.
 - 다음 단계(필요할 때): 관계 표(사기 계정 무리·평판) → 의미 검색(sqlite-vec). PostgreSQL 은 여러 서버로 나눌 때.
 
 ## 클라우드 세션 서버 실행

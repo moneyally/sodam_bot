@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS messages (
     text     TEXT NOT NULL,
     ts       INTEGER NOT NULL,
     is_bot   INTEGER NOT NULL DEFAULT 0,
-    flagged  INTEGER NOT NULL DEFAULT 0
+    flagged  INTEGER NOT NULL DEFAULT 0,
+    reply_to_msg_id INTEGER,              -- 답장한 텔레그램 메시지 ID (예전 DB 는 _migrate 가 추가)
+    reply_to_user   INTEGER               -- 답장받은 사람 user_id
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_id, ts);
 CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(chat_id, user_id, ts);
@@ -230,6 +232,10 @@ def disk_full(e: BaseException) -> bool:
     return isinstance(e, sqlite3.OperationalError) and "full" in str(e).lower()
 
 
+# 답장받은 사람 이름 (메시지 조회에 JOIN 한 번 — 줄마다 따로 조회하지 않게)
+REPLY_COLS = "ru.first_name AS reply_first, ru.username AS reply_username"
+REPLY_JOIN = "LEFT JOIN users ru ON ru.user_id=msg.reply_to_user "
+
 # 오너만 보는 감사 기록(owner_room_log). 방 관리자용 기록(.기록·🗂️)에선 뺀다 (오너 1:1 요청이 방 관리자에게 보이지 않게)
 NOT_AUDIT = "l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press!_%' ESCAPE '!'"
 
@@ -276,7 +282,8 @@ class DB:
         wanted = {"schedules": {"title": "TEXT NOT NULL DEFAULT ''", "media_type": "TEXT", "media_id": "TEXT",
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
                                 "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
-                                "deliver": "TEXT NOT NULL DEFAULT 'room'"}}   # room 방에 / me 만든 관리자 1:1
+                                "deliver": "TEXT NOT NULL DEFAULT 'room'"},   # room 방에 / me 만든 관리자 1:1
+                  "messages": {"reply_to_msg_id": "INTEGER", "reply_to_user": "INTEGER"}}  # 답장 관계
         for table, cols in wanted.items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
@@ -444,13 +451,16 @@ class DB:
 
     # ── 메시지 기록 / 검색 / 집계 ─────────────────────────
     async def log_message(self, chat_id: int, user_id: int, msg_id: int | None, text: str,
-                          is_bot: bool = False, flagged: bool = False, ts: int | None = None) -> None:
-        """ts = 보낸 시각 (util.sent_at). 없으면 지금. 사람 메시지는 검색 색인에도 같이 (sodam/search.py)."""
-        row = (chat_id, user_id, msg_id, text[:4000], ts or now(), int(is_bot), int(flagged))
+                          is_bot: bool = False, flagged: bool = False, ts: int | None = None,
+                          reply_to_msg_id: int | None = None, reply_to_user: int | None = None) -> None:
+        """ts = 보낸 시각 (util.sent_at). 없으면 지금. 사람 메시지는 검색 색인에도 같이 (sodam/search.py).
+        reply_to_* = 답장한 메시지·사람 (handlers.reply_ref)."""
+        row = (chat_id, user_id, msg_id, text[:4000], ts or now(), int(is_bot), int(flagged),
+               reply_to_msg_id, reply_to_user)
 
         def run(c: sqlite3.Connection) -> None:
-            mid = c.execute("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot, flagged) "
-                            "VALUES(?,?,?,?,?,?,?)", row).lastrowid
+            mid = c.execute("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot, flagged, "
+                            "reply_to_msg_id, reply_to_user) VALUES(?,?,?,?,?,?,?,?,?)", row).lastrowid
             if not is_bot:
                 c.execute("INSERT INTO messages_fts(rowid, body) VALUES(?, ?)", (mid, index_text(row[3])))
         await self.atomic(run)
@@ -462,9 +472,10 @@ class DB:
         await self.log_message(chat_id, user_id, None, f"{name[:40]}({handle}{user_id}) 님이 방에 들어옴", is_bot=True)
 
     async def recent_messages(self, chat_id: int, limit: int = 30, since: int = 0) -> list[aiosqlite.Row]:
+        """reply_first/reply_username = 답장받은 사람 (prompt.reply_mark 가 '↩이름' 으로)."""
         rows = await self._all(
-            "SELECT msg.*, u.username, u.first_name FROM messages msg "
-            "LEFT JOIN users u ON u.user_id=msg.user_id "
+            "SELECT msg.*, u.username, u.first_name, " + REPLY_COLS + " FROM messages msg "
+            "LEFT JOIN users u ON u.user_id=msg.user_id " + REPLY_JOIN +
             "WHERE msg.chat_id=? AND msg.flagged=0 AND msg.ts>=? ORDER BY msg.id DESC LIMIT ?",
             (chat_id, since, limit))
         return list(reversed(rows))
@@ -509,6 +520,21 @@ class DB:
             "SELECT COUNT(*) AS n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND is_bot=0",
             (chat_id, user_id, since))
         return row["n"] if row else 0
+
+    async def reply_stats(self, chat_id: int, since: int, user_id: int | None = None,
+                          limit: int = 50) -> list[aiosqlite.Row]:
+        """누가 누구에게 답장했는지 (from_id → to_id, n 많은 순). 봇 기록·자기 글 답장 제외.
+        user_id 를 주면 그 사람이 보낸·받은 답장만 (멤버 타임라인 '답장 수')."""
+        who = "" if user_id is None else "AND (msg.user_id=? OR msg.reply_to_user=?) "
+        return await self._all(
+            "SELECT msg.user_id AS from_id, msg.reply_to_user AS to_id, COUNT(*) AS n, "
+            "fu.first_name AS from_first, fu.username AS from_username, "
+            "tu.first_name AS to_first, tu.username AS to_username FROM messages msg "
+            "LEFT JOIN users fu ON fu.user_id=msg.user_id LEFT JOIN users tu ON tu.user_id=msg.reply_to_user "
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.is_bot=0 AND msg.reply_to_user IS NOT NULL "
+            "AND msg.reply_to_user<>msg.user_id " + who +
+            "GROUP BY msg.user_id, msg.reply_to_user ORDER BY n DESC, from_id LIMIT ?",
+            (chat_id, since, *(() if user_id is None else (user_id, user_id)), limit))
 
     async def prune(self, now_ts: int, days: int = KEEP_DAYS) -> None:
         """계속 쌓이는 기록 정리 (매일 새벽, 디스크가 모자라면 더 짧게). 결제·포인트 원장·이름 기록·관리 기록은 남긴다."""

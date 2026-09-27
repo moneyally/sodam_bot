@@ -21,8 +21,9 @@ from typing import TYPE_CHECKING
 from openai import OpenAIError
 
 from . import ai_settings  # noqa: F401  (설정 키 등록)
-from .db import register_schema
+from .db import REPLY_COLS, REPLY_JOIN, register_schema
 from .llm import BudgetExceeded
+from .prompt import reply_mark
 from .security import nonce, normalize, scan, strip_unsafe, wrap
 
 if TYPE_CHECKING:
@@ -329,9 +330,9 @@ async def refresh_room(svc: Services, chat_id: int, *, force: bool = False) -> b
     if await db.bump(_day(svc), chat_id, "room_memory") > ROOM_DAILY:
         return False
     rows = await db._all(
-        "SELECT msg.id, msg.user_id, msg.text, msg.ts, msg.is_bot, u.first_name, u.username FROM messages msg "
-        "LEFT JOIN users u ON u.user_id=msg.user_id WHERE msg.chat_id=? AND msg.id>? AND msg.flagged=0 "
-        "ORDER BY msg.id DESC LIMIT 150", (chat_id, upto))
+        "SELECT msg.id, msg.user_id, msg.text, msg.ts, msg.is_bot, msg.reply_to_user, u.first_name, u.username, "
+        + REPLY_COLS + " FROM messages msg LEFT JOIN users u ON u.user_id=msg.user_id " + REPLY_JOIN +
+        "WHERE msg.chat_id=? AND msg.id>? AND msg.flagged=0 ORDER BY msg.id DESC LIMIT 150", (chat_id, upto))
     rows = list(reversed(rows))
     if not rows:
         return False
@@ -339,7 +340,7 @@ async def refresh_room(svc: Services, chat_id: int, *, force: bool = False) -> b
     lines = []
     for r in rows:
         who = "봇" if r["is_bot"] else f"{r['first_name'] or r['username'] or '?'}({r['user_id']})"
-        lines.append(f"[{datetime.fromtimestamp(r['ts'], tz).strftime('%m/%d %H:%M')}] {who}: "
+        lines.append(f"[{datetime.fromtimestamp(r['ts'], tz).strftime('%m/%d %H:%M')}] {who}{reply_mark(r)}: "
                      f"{r['text'][:200].replace(chr(10), ' ')}")
     n_ = nonce()
     user = (wrap("previous", row["summary"] if row else "(없음)", n_) + "\n" + wrap("chat_log", "\n".join(lines), n_)
