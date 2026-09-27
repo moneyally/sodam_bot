@@ -254,6 +254,8 @@ class Announcer:
                     log.warning("announce pin failed: %s", e)
         except TelegramError as e:
             log.warning("announce #%s send failed: %s", row["id"], e)
+            from . import opsdesk   # 📥 운영 인박스용 기록 (sodam/opsdesk.py, 늦게 import — 순환 방지)
+            await opsdesk.schedule_failed(self.svc, row, "send", e.message)
         # 실패해도 기록: 안 그러면 다음 틱마다 계속 재시도하며 에러를 쏟아냄
         await self.svc.db.mark_schedule_sent(row["id"], now_ts, msg_id)
 
@@ -262,6 +264,8 @@ class Announcer:
         for row in await self.svc.db.schedules():
             if row["kind"] == "once" and now_ts - (row["at_ts"] or 0) >= ONCE_GRACE:    # 너무 늦게 켜짐: 안 하고 끔
                 await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
+                from . import opsdesk   # 📥 운영 인박스용 기록 (sodam/opsdesk.py)
+                await opsdesk.schedule_failed(self.svc, row, "missed")
             elif is_due(row, now_ts, self.svc.cfg.tz) and await self.svc.paid_features(row["chat_id"]):
                 await self.publish(bot, row)
 
