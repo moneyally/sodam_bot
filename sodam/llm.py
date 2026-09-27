@@ -1,12 +1,14 @@
-"""OpenAI 호출 래퍼. 일일 토큰 한도, JSON 호출, 격리된 웹검색, 인젝션 판별, 이미지 만들기·고치기."""
+"""OpenAI 호출 래퍼. 하루 예산(달러)·방 한도, JSON 호출, 격리된 웹검색, 인젝션 판별, 이미지 만들기·고치기."""
 import base64
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
 from openai import AsyncOpenAI, OpenAIError
 
+from . import agentlog, costs
 from .ai_settings import ROOM_TOKENS_MAX
 from .config import Config
 from .db import DB
@@ -19,7 +21,15 @@ ROOM_TOKENS = "room_tokens"  # counters 키: 방별 하루 토큰 (전체 합계
 
 
 class BudgetExceeded(Exception):
-    pass
+    """하루 한도 넘음. args[0] = 어느 한도인지 (usd·tokens·room_usd·room_tokens)."""
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, "").strip() or default)
+    except ValueError:
+        log.warning("%s 값이 숫자가 아니라 기본값 %s 사용", key, default)
+        return default
 
 
 def out_of_credit(e: Exception) -> bool:
@@ -38,6 +48,10 @@ class LLM:
         self.db = db
         self.enabled = bool(cfg.openai_api_key)
         self.client = AsyncOpenAI(api_key=cfg.openai_api_key or "disabled", timeout=60, max_retries=2)
+        # 하루 예산은 달러로 (캐시 입력은 10% 값인데 토큰으로 세면 전액처럼 잡힘). 0 이하 = 끔
+        self.usd_budget = _env_float("DAILY_USD_BUDGET", costs.DEFAULT_USD_BUDGET)
+        # 토큰 예산은 .env 에 DAILY_TOKEN_BUDGET 을 직접 적은 경우만 (예전 설정 그대로 지키기). 없으면 0 = 안 봄
+        self.token_budget = cfg.daily_token_budget if os.getenv("DAILY_TOKEN_BUDGET", "").strip() else 0
 
     def _today(self) -> str:
         return datetime.now(self.cfg.tz).strftime("%Y-%m-%d")
@@ -48,42 +62,62 @@ class LLM:
     async def _check_budget(self, chat_id: int | None = None) -> None:
         if not self.enabled:
             raise AIUnavailable("OPENAI_API_KEY 가 설정되지 않았어요")
-        if await self.tokens_today() >= self.cfg.daily_token_budget:
-            raise BudgetExceeded
+        day = self._today()
+        if self.token_budget and await self.tokens_today() >= self.token_budget:
+            raise BudgetExceeded("tokens")
+        if self.usd_budget > 0 and await self.db.counter(day, 0, costs.USD) >= int(self.usd_budget * costs.MICRO):
+            raise BudgetExceeded("usd")
         if chat_id:  # 방(또는 1:1)별 하루 한도: 한 방이 전체 예산을 다 쓰지 못하게
-            cap = (await self.db.get_settings(chat_id)).get("ai_room_daily_tokens", 0)
-            cap = min(cap or ROOM_TOKENS_MAX, ROOM_TOKENS_MAX)  # 예전에 저장된 0(무제한)·큰 값도 상한으로
-            if await self.db.counter(self._today(), chat_id, ROOM_TOKENS) >= cap:
-                raise BudgetExceeded
+            s = await self.db.get_settings(chat_id)
+            cap = min(s.get("ai_room_daily_tokens", 0) or ROOM_TOKENS_MAX, ROOM_TOKENS_MAX)  # 예전에 저장된 0(무제한)·큰 값도 상한으로
+            if await self.db.counter(day, chat_id, ROOM_TOKENS) >= cap:
+                raise BudgetExceeded("room_tokens")
+            if chat_id > 0 and (chat_id in self.cfg.owner_ids or chat_id in await self.db.owner_ids()):
+                return   # 오너 1:1 은 방 달러 한도 없음 (전체 예산만)
+            if await self.db.counter(day, chat_id, costs.ROOM_USD) >= await costs.room_cap_micro(self.db, chat_id, s):
+                raise BudgetExceeded("room_usd")
 
-    async def _record(self, usage, chat_id: int | None = None, purpose: str = "misc", model: str = "") -> None:
+    async def _record(self, usage, chat_id: int | None = None, purpose: str = "misc", model: str = "",
+                      extra_micro: int = 0) -> None:
         """토큰 사용량 기록. 캐시로 읽은 입력 토큰(할인됨)을 따로 세서 절감 효과를 볼 수 있게 한다.
-        모델별(m:<모델>:in/cached/out)로도 세서 비용을 정확히 계산 (tools/usage_report.py · sodam/costs.py)."""
-        if not usage:
+        모델별(m:<모델>:in/cached/out)로도 세서 비용을 정확히 계산 (tools/usage_report.py · sodam/costs.py).
+        요금(마이크로달러)은 전체·방별로 세고(하루 예산·방 한도), 에이전트 실행 중이면 그 기록(agentlog)에도 더한다.
+        extra_micro = 토큰 말고 호출마다 붙는 요금 (웹 검색)."""
+        if not usage and not extra_micro:
             return
         day = self._today()
         total = getattr(usage, "total_tokens", 0) or 0
-        if chat_id and total:
-            await self.db.bump(day, chat_id, ROOM_TOKENS, total)
         prompt = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0
         details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
         cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+        out = max(0, total - prompt)
+        micro = extra_micro + (costs.usd_micro(model or self.cfg.model, prompt, cached, out, self.cfg.model)
+                               if total else 0)
+        agentlog.add_usage(model, prompt, cached, out, micro)
+        rows: list[tuple[int, str, int]] = []
+        if chat_id and total:
+            rows.append((chat_id, ROOM_TOKENS, total))
+        if chat_id and micro:
+            rows.append((chat_id, costs.ROOM_USD, micro))
+        if micro:
+            rows.append((0, costs.USD, micro))
         if total:
-            await self.db.bump(day, 0, "tokens", total)
+            rows.append((0, "tokens", total))
         if prompt:
-            await self.db.bump(day, 0, "prompt_tokens", prompt)
-            await self.db.bump(day, 0, f"prompt:{purpose}", prompt)    # 기능별 → 캐시가 새는 곳 찾기 (.사용량)
+            rows += [(0, "prompt_tokens", prompt), (0, f"prompt:{purpose}", prompt)]   # 기능별 → 캐시가 새는 곳 찾기 (.사용량)
         if cached:
-            await self.db.bump(day, 0, "cached_tokens", cached)
-            await self.db.bump(day, 0, f"cached:{purpose}", cached)
-        if model:
-            if prompt:
-                await self.db.bump(day, 0, f"m:{model}:in", prompt)
-            if cached:
-                await self.db.bump(day, 0, f"m:{model}:cached", cached)
-            if total - prompt > 0:
-                await self.db.bump(day, 0, f"m:{model}:out", total - prompt)
-            await self.db.bump(day, 0, f"m:{model}:calls", 1)
+            rows += [(0, "cached_tokens", cached), (0, f"cached:{purpose}", cached)]
+        if model and usage:
+            rows += [(0, f"m:{model}:{k}", n) for k, n in (("in", prompt), ("cached", cached), ("out", out)) if n]
+            rows.append((0, f"m:{model}:calls", 1))
+        if rows:   # 한 번에 (DB 스레드에서 전부/전무 — 방 요금만 빠지고 전체는 남는 일 없게)
+            await self.db.atomic(lambda c: c.executemany(
+                "INSERT INTO counters(day, chat_id, key, n) VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(day, chat_id, key) DO UPDATE SET n=n+excluded.n", [(day, *r) for r in rows]))
+
+    async def usd_today(self, chat_id: int = 0) -> int:
+        """오늘 쓴 요금 (마이크로달러). chat_id=0 은 전체."""
+        return await self.db.counter(self._today(), chat_id, costs.USD if chat_id == 0 else costs.ROOM_USD)
 
     async def usage_today(self) -> dict[str, int]:
         day = self._today()
@@ -180,7 +214,8 @@ class LLM:
             input=query[:300],
             max_output_tokens=800,
         )
-        await self._record(resp.usage, chat_id, "web_search", self.cfg.guard_model)
+        await self._record(resp.usage, chat_id, "web_search", self.cfg.guard_model,
+                           extra_micro=round(costs.WEB_SEARCH_PER_CALL * costs.MICRO))
         await self.db.bump(self._today(), 0, "web_search_calls", 1)   # 검색 1번당 요금이 따로 붙음
         return (resp.output_text or "").strip()
 
