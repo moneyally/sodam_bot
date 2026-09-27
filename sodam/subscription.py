@@ -76,9 +76,19 @@ def invoice_buttons(inv_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+DM_EXTRA_ROWS: list = []   # 패널이 붙이는 버튼 줄: async fn(svc, chat_id, user_id) → [[버튼]] (예: 🚀 빠른 설정)
+
+
 async def send_panel_dm(svc: Services, bot: Bot, chat_id: int, user_id: int) -> bool:
     """관리자에게 1:1 로 설정 화면 전송. 봇과 대화를 시작한 적 없으면 False."""
     text, kb = await panel(svc, chat_id)
+    rows = [list(r) for r in kb.inline_keyboard] if kb else []
+    for fn in DM_EXTRA_ROWS:
+        try:
+            rows += await fn(svc, chat_id, user_id)
+        except Exception as e:   # 덧붙이는 버튼 때문에 초대 안내가 안 가면 안 됨
+            log.warning("panel dm extra rows failed: %s", e)
+    kb = InlineKeyboardMarkup(rows) if rows else None
     try:
         await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
         return True
