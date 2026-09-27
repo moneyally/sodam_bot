@@ -24,6 +24,11 @@ CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 _WHY = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|(하|올리|바꾸|켜|끄|걸|주|먹이|보내|정리하)고[\s,](?!\s*싶)|"
                     r"그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각|하면\s|(?<![가-힣])(걔|쟤|그\s?사람|저\s?사람)(?![가-힣])")
+# 도구를 하나도 안 불렀는데 '했어요' 라고 하는 답 (Claude Code 의 stop hook 처럼 보내기 전에 코드가 한 번 검사)
+_CLAIM = re.compile(r"(뮤트|밴|경고|차단|내보냈|예약|등록|저장|삭제|지웠|켰|껐|바꿨|보냈|걸어|걸었|알림)[^\n.?!]{0,6}"
+                    r"(했어|했습니다|완료|처리했|해\s?드렸|뒀어|놨어|뒀습니다|됐어요|되었습니다)")
+VERIFY_NOTE = ("검사: 이번 답에서 도구를 하나도 부르지 않았는데 무언가를 '했다'고 말했습니다. 실제로 해야 하는 일이면 지금 도구를 부르세요. "
+               "기록에 있는 과거 사실을 전한 것이면 그대로 답하되, 도구로 한 일이 아니면 '했다'고 하지 마세요.")
 _ACTS = re.compile(r"(해|줘|드려|올려|알려|걸어|바꿔|켜|꺼|찾아|정리해|보여)(줘|주세요|줄래|요)?(?=[\s,.!?]|$)")
 
 
@@ -96,11 +101,18 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
                                   purpose=purpose, chat_id=ctx.chat_id)
 
+    used = checked = False
     for _ in range(MAX_STEPS):
         msg = await call()
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
         if not calls:
-            return msg.content or ""
+            text = msg.content or ""
+            if used or checked or not allowed or mode not in ("call", "follow") or not _CLAIM.search(text):
+                return text
+            checked = True                       # 한 번만 다시 물음 (추가 호출은 이 경우만)
+            messages += [{"role": "assistant", "content": text}, {"role": "system", "content": VERIFY_NOTE}]
+            continue
+        used = True
         messages.append({
             "role": "assistant",
             "content": msg.content or "",

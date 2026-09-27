@@ -89,6 +89,12 @@
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
   인사했다고만 하고 안 보내서였음 → 진짜 Greeter 로. 인사 꺼진 방은 AI 가 greet_members 로 멘션.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
+- 생각하는 에이전트(`AGENT_THINK` off 기본/auto/always, tests/test_agent_think.py): auto = 코드 규칙(`agent.wants_thinking`: 이유·분석 질문,
+  일이 둘 이상 이어진 요청, '걔' 같은 지시어)만 Responses API(추론+도구 동시, `llm.think`, 암호화 추론을 라운드 사이 전달)로.
+  400 이면 그 실행은 예전 방식. **아직 실제 호출로 검증 안 함** — 켜기 전에 `ai_eval_tools.py` 를 off/auto 로 한 번씩 (39개, 약 $1~2, 사용자 승인 필요).
+- 보내기 전 검사(`agent._CLAIM`, tests/test_agent_verify.py): 한 실행에서 도구를 하나도 안 불렀는데 '뮤트했어요·등록 완료' 같은 답이면
+  system 검사 문구로 **한 번만** 다시 물음 (Claude Code stop hook 방식, 추가 호출은 이 경우만).
+- **AI 키로 하는 테스트(ai_live·ai_eval_*)는 사용자 허락 없이 돌리지 않는다** (사용자 결정 2026-09-28: 비용). 오프라인 가짜 LLM 으로.
 
 ## 제재·AI 도구 권한
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
