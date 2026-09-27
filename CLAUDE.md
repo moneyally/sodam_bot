@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 569개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 570개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -104,6 +104,7 @@
   WORDS_LICENSE.md, 41ways/kkeutmal 가공본) → 즉시·비용 0. 자유 모드 '끝말잇기' = 선착순(await 전에 상태 변경), 늦은 답 🙈·사전 없음 🤔·
   중복 🤨 은 글 대신 반응, 봇 말 GAP_SECONDS(3초) 간격(그룹 분당 20개 한도). 차례 모드 '끝말잇기 차례' = [🙋 참가](wc:j)·[▶️ 바로 시작](wc:go,
   시작한 사람·관리자) → 차례(20→8초) → 시간 초과 탈락 → 마지막 1명 우승 +5+2×참가자. 첫 낱말·봇 낱말은 한방 단어 안 씀(can_follow).
+  봇 낱말은 흔한 말 먼저, 없으면 사전 전체(_BY_FIRST) — 시뮬레이션 주고받기 중앙값 24→35번.
   참고 설계: On9 Word Chain(텔레그램, 참가·차례·탈락). 테스트는 fakes.py 가 GAP_SECONDS=0.
 - 하루 1번 봇에게 관리 권한 없는 방을 오너에게 알림 (job_rights). 하트비트는 텔레그램 get_webhook_info 성공 때만 기록.
 

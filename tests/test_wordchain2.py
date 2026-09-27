@@ -127,3 +127,12 @@ async def no_dead_end_start_or_bot_word():
     finally:
         games.random.choice = orig
     assert pools and dead not in pools[0] and all(games.can_follow(w) for w in pools[0]), dead
+
+
+@test
+async def bot_falls_back_to_full_dictionary():
+    """흔한 말로 못 이으면 사전 전체에서 (흔한 말만 쓰던 봇이 쉽게 지던 것)."""
+    games.load_words()
+    ch = next(c for c, ws in games._BY_FIRST.items() if c not in games._COMMON and any(games.can_follow(w) for w in ws))
+    nxt = games.pick_next("가" + ch, set())
+    assert nxt and nxt[0] == ch and games.can_follow(nxt), (ch, nxt)

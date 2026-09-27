@@ -145,23 +145,24 @@ CATEGORIES = ["동물", "음식", "과일", "물건", "직업", "장소", "스�
 WORDS_PATH = Path(__file__).parent / "data_files" / "words_ko.txt.gz"
 _WORDS: set[str] = set()
 _COMMON: dict[str, list[str]] = {}      # 첫 글자 → 흔한 낱말 (봇이 이을 말)
-_FIRSTS: set[str] = set()                # 사전 낱말의 첫 글자들 (이을 말이 있는지 = 한방 단어 아님)
+_BY_FIRST: dict[str, list[str]] = {}    # 첫 글자 → 사전 전체 낱말 (흔한 말로 못 이을 때)
 GAP_SECONDS = 3.0                        # 게임이 방에 올리는 글 사이 최소 간격 (텔레그램: 한 그룹에 분당 20개)
 
 
 def load_words(lines: list[str] | None = None) -> None:
     """사전 읽기 ('*' = 흔한 낱말). 테스트는 lines 로 작은 목록을 넣는다."""
-    global _WORDS, _COMMON, _FIRSTS
+    global _WORDS, _COMMON, _BY_FIRST
     if lines is None:
         lines = gzip.decompress(WORDS_PATH.read_bytes()).decode().split("\n")
-    words, common = set(), {}
+    words, common, by_first = set(), {}, {}
     for line in lines:
         w = line.lstrip("*")
         if w:
             words.add(w)
+            by_first.setdefault(w[0], []).append(w)
             if line.startswith("*"):
                 common.setdefault(w[0], []).append(w)
-    _WORDS, _COMMON, _FIRSTS = words, common, {w[0] for w in words}
+    _WORDS, _COMMON, _BY_FIRST = words, common, by_first
 
 
 def is_word(word: str) -> bool:
@@ -170,13 +171,17 @@ def is_word(word: str) -> bool:
 
 def can_follow(word: str) -> bool:
     """이을 말이 사전에 있는지 (없으면 '한방 단어')."""
-    return any(ch in _FIRSTS for ch in starts_for(word))
+    return any(ch in _BY_FIRST for ch in starts_for(word))
 
 
 def pick_next(word: str, used: set[str]) -> str | None:
-    """봇이 이을 말: 흔한 낱말 중 안 쓴 것·사람이 이을 수 있는 것 (봇이 한방 단어로 이기지 않게), 없으면 None (봇 패배)."""
-    pool = [w for ch in starts_for(word) for w in _COMMON.get(ch, ()) if w not in used and can_follow(w)]
-    return random.choice(pool) if pool else None
+    """봇이 이을 말: 흔한 낱말 먼저, 없으면 사전 전체에서 (흔한 말만 쓰면 쉽게 져서 판이 짧음 — 시뮬레이션 중앙값 24→45번).
+    사람이 이을 수 있는 것만 (봇이 한방 단어로 이기지 않게), 사전 전체에도 없으면 None (봇 패배)."""
+    for src in (_COMMON, _BY_FIRST):
+        pool = [w for ch in starts_for(word) for w in src.get(ch, ()) if w not in used and can_follow(w)]
+        if pool:
+            return random.choice(pool)
+    return None
 
 
 REACT = {"late": "🙈", "used": "🤨", "unknown": "🤔"}
