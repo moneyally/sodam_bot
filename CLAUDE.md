@@ -86,7 +86,10 @@
 
 ## 클라우드 세션 서버 실행
 - 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.
-  갱신: `git --work-tree=/home/user/sodam_run checkout HEAD -- sodam tests tools docs requirements.txt` 후 재시작.
+  갱신: `git --work-tree=/home/user/sodam_run checkout HEAD -- sodam tests tools docs requirements.txt` 후
+  `pkill -f "venv/bin/python -m sodam$"` (봇만 끄면 감시가 새 코드로 다시 켬 — 봇을 직접 nohup 으로 켜지 말 것, 두 개 뜸).
+- 감시: `tools/supervise.sh` (죽으면 5초 뒤·하트비트 3분 멈추면 재시작, flock 으로 하나만). 세션 시작 훅(~/.claude/settings.json)이 켬.
+- 컨테이너가 회수되면 안에서는 못 살림 → Routine '소담 봇 생존 확인'(매시 49분)이 세션을 깨워 훅이 다시 켬. 최대 약 1시간 공백.
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)
 - Claude 앱은 AppData 를 `…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…` 로 가상화함 → 앱 내부에서 설치한 python/git 경로가 앱 밖 터미널에선 다름.
