@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+from telegram.error import TimedOut
 
 from fakes import FakeBot, cfg, make_db, make_svc, runner
 from test_billing import CHAT, PAY, FakeTronGrid, setup
@@ -297,7 +298,15 @@ async def heartbeat_job_registered_and_writes_file():
         assert len(jobs) == 1 and jobs[0].trigger.interval.total_seconds() == main_mod.HEARTBEAT_SEC
         assert hb.exists()
         os.utime(hb, (0, 0))
-        await jobs[0].callback(SimpleNamespace(job=jobs[0]))
+
+        async def down():
+            raise TimedOut()
+
+        async def up():
+            return None
+        await jobs[0].callback(SimpleNamespace(job=jobs[0], bot=SimpleNamespace(get_webhook_info=down)))
+        assert hb.stat().st_mtime == 0, "텔레그램에 안 닿으면 기록 안 함 (감시가 재시작하게)"
+        await jobs[0].callback(SimpleNamespace(job=jobs[0], bot=SimpleNamespace(get_webhook_info=up)))
         assert time.time() - hb.stat().st_mtime < 5 and abs(int(hb.read_text()) - time.time()) < 5
     finally:
         await app.post_shutdown(app)

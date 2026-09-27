@@ -103,6 +103,12 @@ def write_heartbeat(path: Path) -> None:
 
 
 async def job_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """텔레그램에 실제로 닿을 때만 기록 → 연결이 끊긴 채 멈춰 있으면 하트비트가 멈춰 감시(supervise.sh·systemd)가 재시작."""
+    try:
+        await asyncio.wait_for(context.bot.get_webhook_info(), timeout=20)   # 가벼운 호출 (시작 때 get_me 는 안 부름)
+    except Exception as e:  # 연결 오류·시간 초과: 이번엔 기록 안 함 (3분 넘게 이어지면 재시작됨)
+        logging.warning("heartbeat: 텔레그램 확인 실패 (%s)", e)
+        return
     try:
         await asyncio.to_thread(write_heartbeat, context.job.data)
     except OSError as e:

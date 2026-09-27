@@ -7,7 +7,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from telegram import Bot, ChatPermissions, Message, User
+from telegram import Bot, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
 from . import casino
@@ -68,6 +68,16 @@ def _squash(name: str) -> str:
     name = unicodedata.normalize("NFKC", name).lower()
     name = name.translate(str.maketrans({"0": "o", "1": "l", "|": "l", "!": "i"}))
     return re.sub(r"[^0-9a-z가-힣]", "", name)
+
+
+def owner_kb(chat_id: int, user_id: int, kind: str) -> InlineKeyboardMarkup:
+    """오너 보고에 붙는 바로가기 (handlers._owner_action, 오너만 누름). kind = mute | ban."""
+    data = lambda a: f"ow:{chat_id}:{user_id}:{a}"  # noqa: E731
+    if kind == "ban":
+        return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ 밴 해제", callback_data=data("n"))]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔊 풀기", callback_data=data("u")),
+                                  InlineKeyboardButton("⏱ 1일로 연장", callback_data=data("x")),
+                                  InlineKeyboardButton("🚫 내보내기", callback_data=data("b"))]])
 
 
 class Notice(str):
@@ -156,7 +166,8 @@ class Moderator:
             if count >= s["warn_ban_at"]:
                 await self.ban(bot, chat_id, user_id, actor_id, f"경고 {count}회 누적")
                 text += f"\n🚫 경고 {count}회 누적으로 내보냈어요."
-                await self.report(bot, f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 {count}회 누적 ({esc(reason)})")
+                await self.report(bot, f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 {count}회 누적 ({esc(reason)})",
+                                  owner_kb(chat_id, user_id, "ban"))
             elif count >= s["warn_mute_at"]:
                 await self.mute(bot, chat_id, user_id, s["warn_mute_minutes"], actor_id, f"경고 {count}회 누적")
                 text = muted_notice(text + f"\n🔇 경고 누적으로 {human_minutes(s['warn_mute_minutes'])} 채팅 금지예요.",
@@ -169,7 +180,7 @@ class Moderator:
             text += "\n(봇 권한이 부족해서 제재는 못 했어요)"
         return text
 
-    async def report(self, bot: Bot, text: str) -> None:
+    async def report(self, bot: Bot, text: str, kb: InlineKeyboardMarkup | None = None) -> None:
         """관리자 보고: 관리 로그방(LOG_CHAT_ID) + 오너 개인 텔레그램으로 전달.
 
         봇은 먼저 대화를 시작한 사람에게만 개인 메시지를 보낼 수 있어서,
@@ -178,7 +189,7 @@ class Moderator:
         targets = ([self.cfg.log_chat_id] if self.cfg.log_chat_id else []) + sorted(await self.perms.owners())
         for chat_id in targets:
             try:
-                await bot.send_message(chat_id, "📣 " + text, parse_mode="HTML")
+                await bot.send_message(chat_id, "📣 " + text, parse_mode="HTML", reply_markup=kb)
             except TelegramError as e:
                 if chat_id not in self._unreachable:
                     self._unreachable.add(chat_id)
@@ -218,7 +229,7 @@ class Moderator:
                 log.warning("flood mute failed: %s", e)
                 return None
             await self.report(bot, f"[도배 뮤트] chat {chat_id} / {esc(name)}({user.id}) "
-                                   f"{human_minutes(s['flood_mute_minutes'])}")
+                                   f"{human_minutes(s['flood_mute_minutes'])}", owner_kb(chat_id, user.id, "mute"))
             return muted_notice(f"🔇 {mention(user.id, name)}님 {s['flood_seconds']}초에 {s['flood_count']}개 이상 "
                                 f"보내셔서 {human_minutes(s['flood_mute_minutes'])} 채팅 금지예요.", user.id)
 
@@ -393,5 +404,6 @@ class Moderator:
         text = (f"🛡️ {mention(user.id, user_name(user))}님은 관리자 {esc(suspicious)}님과 이름이 비슷해서 "
                 f"사칭 방지로 채팅을 막았어요. 오해라면 관리자가 아래 버튼으로 풀어주세요.\n"
                 f"※ 관리자는 절대 먼저 개인 메시지로 송금·코인을 요구하지 않아요.")
-        await self.report(bot, f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}")
+        await self.report(bot, f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}",
+                          owner_kb(chat_id, user.id, "mute"))
         return muted_notice(text, user.id)

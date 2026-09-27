@@ -27,6 +27,7 @@ from . import (accountage, addressee, casino, commands, diskguard, free, hooks, 
                subscription, vision)
 from .agent import run_agent
 from .db import disk_full
+from .moderation import owner_kb
 from .panels import members as members_panel
 from .commands import CmdCtx
 from .llm import BudgetExceeded, out_of_credit
@@ -189,7 +190,8 @@ async def _cas_ban(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User)
         log.warning("CAS ban failed: %s", e)
         return
     await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 스팸 계정 명단(CAS·lols)에 등록된 계정이라 차단했어요.", 120)
-    await svc.mod.report(context.bot, f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴")
+    await svc.mod.report(context.bot, f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴",
+                         owner_kb(chat_id, user.id, "ban"))
 
 
 async def _cas_background(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User) -> None:
@@ -662,12 +664,47 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _confirm_action(svc, bot, q, parts)
     elif prefix == "cs":
         await casino.on_callback(svc, bot, q, parts)
+    elif prefix == "ow":
+        await _owner_action(svc, bot, q, parts)
     elif prefix == "jr":
         await joinreq.on_callback(svc, bot, q, parts)
     elif prefix == "um":
         await _unmute_button(svc, bot, q, parts)
     else:
         await q.answer()
+
+
+OWNER_ACTIONS = {"u": "채팅 금지를 풀었어요", "x": "1일 채팅 금지로 바꿨어요", "b": "내보냈어요", "n": "밴을 풀었어요"}
+
+
+async def _owner_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
+    """오너 보고의 바로가기 버튼 (moderation.owner_kb): ow:<방>:<사람>:u|x|b|n. 오너만 (관리 로그방의 다른 사람은 못 누름)."""
+    chat_id, uid = to_int(parts[0] if parts else ""), to_int(parts[1] if len(parts) > 1 else "")
+    act = parts[2] if len(parts) > 2 else ""
+    if not chat_id or not uid or act not in OWNER_ACTIONS:
+        return await q.answer()
+    if q.from_user.id not in await svc.perms.owners():
+        log.info("owner action refused: user %s", q.from_user.id)
+        return await q.answer("오너만 누를 수 있어요.", show_alert=True)
+    mod, me = svc.mod, q.from_user.id
+    try:
+        if act == "u":
+            await mod.unmute(bot, chat_id, uid, me)
+        elif act == "x":
+            await mod.mute(bot, chat_id, uid, 1440, me, "오너 연장")
+        elif act == "b":
+            await mod.ban(bot, chat_id, uid, me, "오너 판단")
+        else:
+            await mod.unban(bot, chat_id, uid, me)
+    except TelegramError as e:
+        log.warning("owner action %s failed: chat %s user %s: %s", act, chat_id, uid, e)
+        return await q.answer(f"실패했어요: {e.message[:100]}", show_alert=True)
+    await q.answer(OWNER_ACTIONS[act])
+    try:
+        text = getattr(q.message, "text_html", None) or ""
+        await q.edit_message_text(f"{text}\n→ ✅ {OWNER_ACTIONS[act]}", parse_mode="HTML")
+    except TelegramError:
+        pass
 
 
 async def _unmute_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
@@ -973,6 +1010,33 @@ async def job_prune(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _svc(context).db.prune(int(time.time()))
 
 
+RIGHTS_KEY = "rights_alert"   # counters: 하루 1번만 알림
+
+
+async def job_rights(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """하루 1번: 봇에게 관리 권한(메시지 삭제·사용자 차단)이 없는 방을 오너에게 알림 — 그 방에선 도배 정리·캡차·뮤트가 안 됨."""
+    svc, bot = _svc(context), context.bot
+    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+    if await svc.db.counter(day, 0, RIGHTS_KEY):
+        return
+    missing = []
+    for chat_id in await svc.db.all_chat_ids():
+        if chat_id >= 0:
+            continue
+        svc.perms.forget_bot(chat_id)   # 캐시 말고 지금 권한으로
+        try:
+            if not await svc.perms.bot_can_moderate(bot, chat_id):
+                missing.append(chat_id)
+        except Exception:
+            log.exception("rights check failed for %s", chat_id)
+    await svc.db.bump(day, 0, RIGHTS_KEY)
+    if missing:
+        titles = [esc(await subscription.chat_title(svc, c)) for c in missing]
+        await svc.mod.report(bot, "⚠️ 봇에게 관리 권한이 없는 방: " + ", ".join(titles) + "\n"
+                                  "이 방에선 도배·링크 정리, 캡차, 경고·뮤트가 동작하지 않아요. 방장이 봇을 관리자로 올리고 "
+                                  "'메시지 삭제'·'사용자 차단' 권한을 켜 주세요.")
+
+
 async def job_disk(context: ContextTypes.DEFAULT_TYPE) -> None:
     """1시간마다: 디스크 여유 공간이 모자라면 정리·오너 알림 (sodam/diskguard.py)."""
     try:
@@ -1072,5 +1136,6 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")
     jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
+    jq.run_repeating(job_rights, interval=3600, first=600, name="rights")   # 안에서 하루 1번만 알림
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
     jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)
