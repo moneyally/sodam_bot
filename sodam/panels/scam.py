@@ -140,6 +140,11 @@ async def r_alert(c: PanelCtx) -> Screen:
         return Screen(None, toast=no_right_text(right), alert=True)
     if (row["done"] in (act, "b", "t")) or (act == "d" and row["deleted"]):
         return Screen(None, toast="이미 처리된 알림이에요.", alert=True)
+    # 먼저 한 문장으로 차지 (두 번 빨리 누르거나 두 관리자가 같이 눌러도 하나만), 텔레그램이 실패하면 되돌림
+    prev = row["done"]
+    if not await c.svc.db.atomic(lambda cn: cn.execute("UPDATE scam_alerts SET done=? WHERE id=? AND done IS ?",
+                                                       (act, aid, prev)).rowcount):
+        return Screen(None, toast="이미 처리된 알림이에요.", alert=True)
     uid = row["user_id"]
     reason = "사기 의심: " + row["reason"][:80]
     svc, bot = c.svc, c.bot
@@ -155,10 +160,10 @@ async def r_alert(c: PanelCtx) -> Screen:
             await scamguard.trust(svc.db, c.cid, uid, c.uid)
             await svc.db.log_mod(c.cid, c.uid, uid, "scam_trust", "괜찮음")
     except TelegramError as e:
+        await svc.db._write("UPDATE scam_alerts SET done=? WHERE id=? AND done=?", (prev, aid, act))
         need = "메시지 삭제" if act == "d" else "사용자 차단"
         return Screen(None, toast=f"실패했어요: {e.message[:100]} (봇에게 '{need}' 권한이 있는지 확인해주세요)",
                       alert=True)
-    await svc.db._write("UPDATE scam_alerts SET done=? WHERE id=?", (act, aid))
     who = f"{esc(row['name'])}(<code>{uid}</code>)"
     title = esc(await chat_title(svc, c.cid))
     kb = None

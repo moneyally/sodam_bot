@@ -5,6 +5,8 @@
 import asyncio
 from types import SimpleNamespace
 
+from telegram.error import BadRequest
+
 from fake_llm import Room, reply, tool_call
 from fakes import FakeQuery, runner
 from test_sanction_multi import A, B, BOSS, ask, room
@@ -104,6 +106,40 @@ async def hot_path_db_round_trips_per_message():
     import hotpath_bench
     res = await hotpath_bench.run(600, 2)
     assert res["trips_per_msg"] < 5, res
+
+
+
+@test
+async def scam_alert_double_tap_acts_once():
+    """🕵️ 사기 의심 알림 [🚫 밴]을 두 번 빨리 누르거나 두 관리자가 [🚫 밴]·[✅ 괜찮음]을 같이 누르면 둘 다 실행됐음
+    (처리 표시를 텔레그램 호출 뒤에 따로 적어서). 이제 한 문장으로 먼저 차지 → 하나만."""
+    r = await room()
+    aid = await r.db._write("INSERT INTO scam_alerts(chat_id, user_id, msg_id, name, reason, ts) VALUES(?,?,?,?,?,?)",
+                            (Room.CHAT, A.id, 5, "수상한 계정", "지갑주소", dbmod.now()))
+
+    async def press(act):
+        q = FakeQuery(BOSS.id, BOSS, f"m:sgx:{Room.CHAT}:{aid}:{act}")
+        await menu.on_callback(r.svc, r.bot, q, q.data.split(":")[1:])
+        return q
+    await asyncio.gather(press("b"), press("b"), press("t"))
+    done = (await r.db._one("SELECT done FROM scam_alerts WHERE id=?", (aid,)))["done"]
+    bans = len(r.bot.named("ban"))
+    trusted = bool(await r.db._one("SELECT 1 FROM scam_trust WHERE chat_id=? AND user_id=?", (Room.CHAT, A.id)))
+    assert (bans, trusted, done) in ((1, False, "b"), (0, True, "t")), (bans, trusted, done)
+    # 텔레그램이 실패하면 차지를 되돌려 다시 누를 수 있음
+    aid2 = await r.db._write("INSERT INTO scam_alerts(chat_id, user_id, msg_id, name, reason, ts) VALUES(?,?,?,?,?,?)",
+                             (Room.CHAT, B.id, 6, "또 다른 계정", "초대 링크", dbmod.now()))
+    orig = r.bot.restrict_chat_member
+
+    async def fail(*a, **kw):
+        raise BadRequest("Not enough rights")
+    r.bot.restrict_chat_member = fail
+    q = FakeQuery(BOSS.id, BOSS, f"m:sgx:{Room.CHAT}:{aid2}:m")
+    await menu.on_callback(r.svc, r.bot, q, q.data.split(":")[1:])
+    assert "실패" in q.answers[-1][0] and (await r.db._one("SELECT done FROM scam_alerts WHERE id=?", (aid2,)))["done"] is None
+    r.bot.restrict_chat_member = orig
+    await menu.on_callback(r.svc, r.bot, q, q.data.split(":")[1:])
+    assert (await r.db._one("SELECT done FROM scam_alerts WHERE id=?", (aid2,)))["done"] == "m"
 
 
 if __name__ == "__main__":
