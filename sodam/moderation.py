@@ -70,6 +70,17 @@ def _squash(name: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", name)
 
 
+class Notice(str):
+    """방 안내문. muted = 이 안내와 함께 자동으로 채팅 금지된 사람 → 안내에 관리자용 [🔊 채팅 금지 풀기] 버튼."""
+    muted: int | None = None
+
+
+def muted_notice(text: str, user_id: int) -> Notice:
+    n = Notice(text)
+    n.muted = user_id
+    return n
+
+
 class Moderator:
     def __init__(self, cfg: Config, db: DB, perms: Permissions):
         self.cfg = cfg
@@ -148,7 +159,8 @@ class Moderator:
                 await self.report(bot, f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 {count}회 누적 ({esc(reason)})")
             elif count >= s["warn_mute_at"]:
                 await self.mute(bot, chat_id, user_id, s["warn_mute_minutes"], actor_id, f"경고 {count}회 누적")
-                text += f"\n🔇 경고 누적으로 {human_minutes(s['warn_mute_minutes'])} 채팅 금지예요."
+                text = muted_notice(text + f"\n🔇 경고 누적으로 {human_minutes(s['warn_mute_minutes'])} 채팅 금지예요.",
+                                    user_id)
             else:
                 left = s["warn_mute_at"] - count
                 text += f"\n(앞으로 {left}회 더 받으면 채팅 금지)"
@@ -207,8 +219,8 @@ class Moderator:
                 return None
             await self.report(bot, f"[도배 뮤트] chat {chat_id} / {esc(name)}({user.id}) "
                                    f"{human_minutes(s['flood_mute_minutes'])}")
-            return (f"🔇 {mention(user.id, name)}님 {s['flood_seconds']}초에 {s['flood_count']}개 이상 "
-                    f"보내셔서 {human_minutes(s['flood_mute_minutes'])} 채팅 금지예요.")
+            return muted_notice(f"🔇 {mention(user.id, name)}님 {s['flood_seconds']}초에 {s['flood_count']}개 이상 "
+                                f"보내셔서 {human_minutes(s['flood_mute_minutes'])} 채팅 금지예요.", user.id)
 
         norm = normalize(text).lower()
         if not norm:
@@ -379,7 +391,7 @@ class Moderator:
             log.warning("impersonation mute failed: %s", e)
             return None
         text = (f"🛡️ {mention(user.id, user_name(user))}님은 관리자 {esc(suspicious)}님과 이름이 비슷해서 "
-                f"사칭 방지로 채팅을 막았어요. 오해라면 관리자가 <code>.뮤트해제</code> 해주세요.\n"
+                f"사칭 방지로 채팅을 막았어요. 오해라면 관리자가 아래 버튼으로 풀어주세요.\n"
                 f"※ 관리자는 절대 먼저 개인 메시지로 송금·코인을 요구하지 않아요.")
         await self.report(bot, f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}")
-        return text
+        return muted_notice(text, user.id)

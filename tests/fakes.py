@@ -152,12 +152,14 @@ class FakeMsg:
         self.entities, self.caption_entities = (), ()  # PTB 는 튜플
         self.deleted = False
         self.replies: list[str] = []
+        self.reply_kws: list[dict] = []
 
     async def delete(self):
         self.deleted = True
 
     async def reply_text(self, text, **kw):
         self.replies.append(text)
+        self.reply_kws.append(kw)
         return SimpleNamespace(message_id=self.message_id + 10_000)
 
 

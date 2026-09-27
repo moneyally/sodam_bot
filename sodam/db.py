@@ -814,6 +814,10 @@ class DB:
             (chat_id, limit))
 
     # ── 활동 리포트·AI 하루 요약 (sodam/reports.py) ─────────
+    async def first_name(self, user_id: int) -> str | None:
+        row = await self._one("SELECT first_name FROM users WHERE user_id=?", (user_id,))
+        return row["first_name"] if row else None
+
     async def mod_actions(self, chat_id: int, since: int, until: int) -> list[aiosqlite.Row]:
         """[since, until) 관리 기록의 (action, detail, actor_id) — 분류는 reports.py 에서."""
         return await self._all("SELECT action, detail, actor_id FROM mod_log WHERE chat_id=? AND ts>=? AND ts<?",

@@ -31,7 +31,7 @@ from .llm import BudgetExceeded, out_of_credit
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .tools import ToolCtx
-from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
+from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
@@ -51,9 +51,22 @@ async def _delete_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
+MUTE_NOTICE_TTL = 600  # 자동 채팅 금지 안내는 관리자가 [풀기] 버튼을 볼 수 있게 10분
+
+
+def unmute_kb(notice: str) -> InlineKeyboardMarkup | None:
+    """자동 채팅 금지 안내(moderation.Notice.muted)면 관리자용 [🔊 채팅 금지 풀기] 버튼."""
+    muted = getattr(notice, "muted", None)
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔊 채팅 금지 풀기 (관리자)", callback_data=f"um:{muted}")]]) \
+        if muted else None
+
+
 async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, seconds: int = 60,
                     reply_markup=None) -> None:
-    """잠깐 보였다가 사라지는 안내 (도배 경고 등으로 방이 지저분해지지 않게)."""
+    """잠깐 보였다가 사라지는 안내 (도배 경고 등으로 방이 지저분해지지 않게).
+    자동 채팅 금지 안내(moderation.Notice.muted)엔 관리자용 [🔊 채팅 금지 풀기] 버튼을 붙인다."""
+    if reply_markup is None and (reply_markup := unmute_kb(text)):
+        seconds = max(seconds, MUTE_NOTICE_TTL)
     try:
         sent = await context.bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except TelegramError as e:
@@ -548,11 +561,12 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
             blocked, reason = await svc.llm.classify_injection(request, chat_id=chat_id)
         if blocked:
             await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
-            text = "🛡️ 그 요청은 들어드릴 수 없어요."
+            text, kb = "🛡️ 그 요청은 들어드릴 수 없어요.", None
             if s["injection_warn"] and role < Role.ADMIN and chat_id < 0:  # 경고·제재는 그룹방에서만 (1:1 은 양수 ID)
-                text += "\n" + await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
-                                                  f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
-            await msg.reply_text(text, parse_mode="HTML")
+                warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
+                                            f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
+                text, kb = text + "\n" + warned, unmute_kb(warned)
+            await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
             await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
                                       f"{esc(request[:200])} / {esc(reason)}")
             return
@@ -631,8 +645,34 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _confirm_action(svc, bot, q, parts)
     elif prefix == "cs":
         await casino.on_callback(svc, bot, q, parts)
+    elif prefix == "um":
+        await _unmute_button(svc, bot, q, parts)
     else:
         await q.answer()
+
+
+async def _unmute_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
+    """자동 채팅 금지 안내의 [🔊 채팅 금지 풀기]: '사용자 차단' 권한 있는 관리자만."""
+    uid = to_int(parts[0] if parts else "")
+    if not uid or not q.message:  # 너무 오래된 메시지면 message 가 없음
+        await q.answer()
+        return
+    chat_id = q.message.chat_id
+    if not await may(svc.perms, bot, chat_id, q.from_user.id):
+        await q.answer(no_right_text(), show_alert=True)
+        return
+    try:
+        await svc.mod.unmute(bot, chat_id, uid, q.from_user.id)
+    except TelegramError as e:
+        await q.answer(f"풀지 못했어요: {e.message[:100]}", show_alert=True)
+        return
+    await q.answer("채팅 금지를 풀었어요.")
+    try:
+        who = mention(uid, await svc.db.first_name(uid) or "멤버")
+        await q.edit_message_text(f"🔊 관리자 {esc(user_name(q.from_user))}님이 {who}님 채팅 금지를 풀었어요.",
+                                  parse_mode="HTML")
+    except TelegramError:
+        pass
 
 
 async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
