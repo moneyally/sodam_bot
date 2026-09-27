@@ -148,6 +148,12 @@ class Moderator:
     async def unban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
         await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
         await self.db.log_mod(chat_id, actor_id, user_id, "unban")
+        if actor_id:   # 사람이 푼 스팸 명단 밴 = 봐준 것 → 이 방에선 다시 안 막음 (.밴해제·오너 버튼으로 풀어도 [↩️ 차단 풀기]와 같게)
+            last = await self.db._one("SELECT detail FROM mod_log WHERE chat_id=? AND target_id=? AND action='ban' "
+                                      "ORDER BY id DESC LIMIT 1", (chat_id, user_id))
+            if last and (last["detail"] or "").startswith("CAS"):
+                from .cas import ALLOW_KEY   # 늦게 import (순환 방지)
+                await self.db.set_state(chat_id, ALLOW_KEY.format(user_id), 1)
 
     async def kick(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
         await bot.ban_chat_member(chat_id, user_id)

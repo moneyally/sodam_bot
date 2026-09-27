@@ -78,3 +78,20 @@ async def cas_notice_has_admin_buttons_unban_sticks_and_off_works():
     assert len(bot.named("ban")) == bans, "풀어준 사람은 이 방에서 다시 안 막음"
     await press(svc, bot, ctx, 1, "cas:off")
     assert (await db.get_settings(Room.CHAT))["cas_enabled"] is False
+
+
+@test
+async def manual_unban_of_cas_ban_also_sticks():
+    """.밴해제·오너 [밴 해제] 처럼 버튼 말고 다른 길로 풀어도 이 방에선 다시 안 막음 (실제: 풀었는데 또 차단됨)."""
+    db, svc, bot, ctx = await cas_room()
+    await handlers.handle_new_member(ctx, Room.CHAT, "방", fake_user(66, "스패머"))
+    assert bot.named("ban") and not await db.get_state(Room.CHAT, ALLOW_KEY.format(66))
+    await svc.mod.unban(bot, Room.CHAT, 66, 1)                         # 관리자가 직접 풂
+    assert await db.get_state(Room.CHAT, ALLOW_KEY.format(66))
+    bans = len(bot.named("ban"))
+    svc.joins.clear()
+    await handlers.handle_new_member(ctx, Room.CHAT, "방", fake_user(66, "스패머"))
+    assert len(bot.named("ban")) == bans
+    await svc.mod.ban(bot, Room.CHAT, 78, 1, "광고")                    # 스팸 명단 밴이 아니면 예외 안 만듦
+    await svc.mod.unban(bot, Room.CHAT, 78, 1)
+    assert not await db.get_state(Room.CHAT, ALLOW_KEY.format(78))
