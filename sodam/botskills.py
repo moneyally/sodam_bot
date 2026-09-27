@@ -325,6 +325,18 @@ async def on_member_message(svc: Services, bot, msg, role) -> None:
             st.pending.pop(k, None)
 
 
+async def learn_from_history(db, chat_id: int, bot_id: int) -> int:
+    """이미 기록된 그 봇 글(최근 50개, 7일)에서 사용법을 다시 배움 — 기능이 생기기 전에 올라온 /help 도 DB 로."""
+    rows = await db._all("SELECT text FROM botlink_msgs WHERE chat_id=? AND bot_id=? ORDER BY ts DESC LIMIT 50",
+                         (chat_id, bot_id))
+    n = 0
+    for r in rows:
+        cmds = help_commands(r["text"])
+        if cmds:
+            n += await save_helper(db, chat_id, bot_id, cmds[:MAX_SKILLS], source="help")
+    return n
+
+
 async def on_bot_seen(svc: Services, bot, msg, status: str, now: float) -> None:
     """botlink.SEEN_HOOKS: 봇 글이 기록된 뒤. ① 기억해 둔 사람 명령에 LEARN_WINDOW 안에 답장했으면 배움 ② 헬퍼 하루 1번."""
     st, r, cid = state(svc), msg.reply_to_message, msg.chat_id

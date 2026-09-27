@@ -306,12 +306,13 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         return reason
     if intent and not raw:
         sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)
+        if not sk and await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"]):
+            sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)   # 기록된 사용법 글에서 방금 배움
         known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
-        if not sk and intent in botskills.DEFAULT_NAME and not any(k["intent"] in ("dice", "bet") for k in known):
-            sk = {"command": "/" + intent}   # 음악봇 흔한 이름(/play 등) — 처음엔 확인 카드라 사람이 보고 누름 (게임봇엔 안 씀)
         if not sk:
-            return (f"{_bot_label(row)} 의 '{intent}' 명령을 아직 모름. 아는 명령: {botskills.describe(known)}. "
-                    f"명령을 알려주려면 {botskills.ADD_HOW} (또는 관리자가 '/명령' 을 직접 말해 주면 command 로 보냄).")
+            return (f"{_bot_label(row)} 의 '{intent}' 명령이 따로 표시돼 있지 않음. 아는 명령(설명 포함): {botskills.describe(known)}. "
+                    "이 중 요청에 맞는 명령이 있으면 그 명령을 command 로 다시 부를 것. 없으면 관리자가 '/명령' 을 직접 말해 주거나 "
+                    f"{botskills.ADD_HOW} 로 알려 달라고 안내.")
         raw = sk["command"] + (f" {query}" if query else "")
     else:
         head = "/" + raw.lstrip("/").split(" ")[0].split("@")[0].lower()

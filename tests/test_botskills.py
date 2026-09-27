@@ -253,7 +253,7 @@ async def unknown_intent_returns_known_list_and_how_to_add():
     await trust(r, DICE)
     await botskills.apply_preset(r.db, Room.CHAT, DICE.id, "gm")
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "intent": "play", "query": "밤편지"})])
-    assert "모름" in res[0] and "/dice" in res[0] and "/bet {금액}(bet)" in res[0] and "🎓 명령 배우기" in res[0], res
+    assert "표시돼 있지 않음" in res[0] and "/dice" in res[0] and "/bet {금액}(bet)" in res[0] and "🎓 명령 배우기" in res[0], res
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "intent": "fly"})])
     assert "intent 는" in res[0]
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot"})])
@@ -400,7 +400,11 @@ async def learns_commands_from_bot_help_text_and_defaults_play():
     assert "확인 버튼" in res[0], res
     assert "/play@melon_bot 먼데이키즈 발자국" in [c for c in r.bot.named("send_message") if "보낼까요" in c[2]][-1][2]
     r2 = await blroom("interact")
-    await trust(r2, YT)                                                   # 배운 게 없어도 흔한 이름(/play)으로 카드
+    await trust(r2, YT)                                                   # 배운 게 없으면 하드코딩 기본값 없이 목록·안내
     res = await ask(r2, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "밤편지"})])
-    assert "확인 버튼" in res[0] and "/play@ytmusic_player_bot 밤편지" in \
-        [c for c in r2.bot.named("send_message") if "보낼까요" in c[2]][-1][2]
+    assert "따로 표시돼 있지 않음" in res[0] and not [c for c in r2.bot.named("send_message") if "보낼까요" in c[2]], res
+    await r2.db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text, to_user, to_us) VALUES(?,?,?,?,?,?,?)",
+                       (Room.CHAT, YT.id, 999, int(time.time()), "사용법\n/yplay 검색어 — 재생\n/next — 다음 곡", None, 0))
+    assert await botskills.learn_from_history(r2.db, Room.CHAT, YT.id)    # 기능 전에 기록된 사용법 글도 DB 로 배움
+    got = sk_map(await botskills.skills(r2.db, Room.CHAT, YT.id))
+    assert got["/yplay"][0] == "help" and "/next" in got, got
