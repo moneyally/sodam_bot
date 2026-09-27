@@ -290,6 +290,11 @@
 - 봇 스킬: 방·봇별 명령(🎵/📺/🎲 템플릿, 멤버가 쓰고 그 봇이 10초 안에 답하면 자동 학습, 헬퍼 getFullUser) → bot_command(intent=play, query=곡).
   유튜브 링크는 play/search 만. 1:1 입력은 '/' 없이 (menu 가 '/'를 명령으로 넘김).
 
+## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
+- 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
+  10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
+  들어가는 곳: 그룹 허브 맨 위(설정 안 한 방은 한 줄 안내 — `menu.s_hub` 를 감싸서 route "g" 재등록), 🧩 기능, 봇 추가한 사람 1:1(subscription.DM_EXTRA_ROWS).
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
