@@ -395,6 +395,22 @@ async def _run_hook(hook, svc: Services, bot, msg: Message, role: Role) -> None:
         log.exception("group message hook %s failed", getattr(hook, "__name__", hook))
 
 
+def _bot_hooks(context: ContextTypes.DEFAULT_TYPE, fns: list, msg: Message) -> None:
+    """다른 봇 글: 등록된 봇 훅(sodam/botlink.py 기록)만 백그라운드로. 실패해도 계속."""
+    svc, bot = _svc(context), context.bot
+
+    async def run(fn) -> None:
+        try:
+            await fn(svc, bot, msg)
+        except Exception:
+            log.exception("bot message hook %s failed", getattr(fn, "__name__", fn))
+    for fn in fns:
+        task = asyncio.create_task(run(fn))
+        bg: set = context.bot_data.setdefault("tasks", set())
+        bg.add(task)
+        task.add_done_callback(bg.discard)
+
+
 async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg or not msg.from_user:
@@ -403,6 +419,13 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id, user = msg.chat_id, msg.from_user
     # 연결된 채널이 자동으로 올린 글 등, 방 자신이 아닌 채널 명의 글은 건너뜀
     if msg.sender_chat and msg.sender_chat.id != chat_id:
+        return
+    # 다른 봇 글 (Bot-to-Bot 모드: 상대 봇이나 소담 중 하나만 켜도 '/명령@sodam'·소담 글에 단 답장은 옴):
+    # 기록 훅만 (botlink) — 관리·명령·게임·AI·끼어들기·태그 알림·알림 규칙은 절대 안 탐 (봇끼리 무한 주고받기 방지)
+    if user.is_bot:
+        if user.id != bot.id:
+            await _record(svc.db.upsert_user(user))
+            _bot_hooks(context, hooks.BOT_MESSAGE_HOOKS, msg)
         return
     anonymous_admin = msg.sender_chat is not None
 
@@ -502,6 +525,10 @@ async def on_group_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # 채널 명의 글·익명 관리자(sender_chat)는 검사 대상 아님
     if not msg or not msg.from_user or msg.sender_chat is not None:
         return
+    if msg.from_user.is_bot:   # 다른 봇이 고친 글: 기록만 고침 (botlink), 검사·답 없음
+        if msg.from_user.id != context.bot.id:
+            _bot_hooks(context, hooks.BOT_EDIT_HOOKS, msg)
+        return
     svc, bot = _svc(context), context.bot
     text = msg.text or msg.caption or ""
     if not text:
@@ -595,6 +622,8 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
                    request: str, scan: security.ScanResult, via: str = "call") -> None:
     svc, bot = _svc(context), context.bot
     chat_id, user = msg.chat_id, msg.from_user
+    if user is None or user.is_bot:   # 봇 글엔 AI 답 없음 (on_group_message 가 이미 막지만 다른 경로 대비)
+        return
     if is_stale(msg):
         log.info("늦게 받은 메시지라 AI 답 생략 chat=%s msg=%s", chat_id, msg.message_id)
         return
@@ -875,7 +904,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     svc, bot = _svc(context), context.bot
     user = msg.from_user
     text = (msg.text or msg.caption or "").strip()
-    if not user:
+    if not user or user.is_bot:   # 봇이 보낸 1:1 (양쪽 다 Bot-to-Bot 모드면 옴): 답하지 않음 (봇끼리 무한 대화 방지)
         return
     await svc.db.ensure_chat(msg.chat_id, None)
     await svc.db.upsert_user(user)
@@ -1174,7 +1203,7 @@ BOT_MENU = [
 async def on_dealer_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """딜러 봇: 그룹의 '!' 명령만 처리 (관리·AI·인사는 메인 봇 몫)."""
     msg = update.message
-    if not msg or not msg.from_user or msg.sender_chat:
+    if not msg or not msg.from_user or msg.sender_chat or msg.from_user.is_bot:   # 다른 봇의 '!' 에 게임 진행 안 함 (봇끼리 반복)
         return
     svc, bot = _svc(context), context.bot
     text = (msg.text or "").strip()
@@ -1188,7 +1217,7 @@ async def on_dealer_group(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def on_dealer_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    if not msg:
+    if not msg or (msg.from_user and msg.from_user.is_bot):   # 봇의 1:1 엔 안내도 안 보냄
         return
     bot = context.bot
     await msg.reply_text(

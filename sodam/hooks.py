@@ -11,6 +11,10 @@ MEMBER_LEFT_HOOKS: list = []
 MEMBER_JOIN_HOOKS: list = []
 # 수정된 그룹 메시지 (관리자·자유 멤버 제외, 관리 권한 없는 방 포함, 백그라운드): async hook(svc, bot, msg, role)
 GROUP_EDIT_HOOKS: list = []
+# 다른 봇이 그룹에 쓴 글·고친 글 (Bot-to-Bot 모드, sodam/botlink.py): async hook(svc, bot, msg), 백그라운드.
+# 봇 글은 이 훅들만 받고 관리·명령·게임·AI·위 GROUP_MESSAGE_HOOKS 는 안 탐 → 여기서도 방에 답을 보내지 말 것 (봇끼리 무한 반복)
+BOT_MESSAGE_HOOKS: list = []
+BOT_EDIT_HOOKS: list = []
 
 
 def add_group_message_hook(fn) -> None:
@@ -21,6 +25,16 @@ def add_group_message_hook(fn) -> None:
 def add_group_edit_hook(fn) -> None:
     if fn not in GROUP_EDIT_HOOKS:
         GROUP_EDIT_HOOKS.append(fn)
+
+
+def add_bot_message_hook(fn) -> None:
+    if fn not in BOT_MESSAGE_HOOKS:
+        BOT_MESSAGE_HOOKS.append(fn)
+
+
+def add_bot_edit_hook(fn) -> None:
+    if fn not in BOT_EDIT_HOOKS:
+        BOT_EDIT_HOOKS.append(fn)
 
 
 def add_member_left_hook(fn) -> None:
