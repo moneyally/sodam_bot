@@ -1148,7 +1148,8 @@ async def _record(coro) -> None:
 
 
 BOT_MENU = [
-    BotCommand("help", "명령어 목록"),
+    BotCommand("help", "소담 사용법 (말 예시)"),
+    BotCommand("commands", "명령어 전체 목록"),
     BotCommand("rank", "채팅 랭킹"),
     BotCommand("stats", "방 통계"),
     BotCommand("search", "대화 검색"),

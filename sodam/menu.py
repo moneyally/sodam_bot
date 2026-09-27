@@ -814,7 +814,10 @@ async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen, svc: Servi
 
 
 async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str]) -> None:
-    if not q.message or q.message.chat_id != q.from_user.id:
+    # 메뉴는 1:1 전용. 단 방에 올리는 확인 카드(m:k:<토큰> — 말로 한 예약·알림 규칙·방 규칙 저장)는 방에서 누른다
+    # (토큰이 만든 사람·방·만료를 확인하고, 실행 때 관리자인지 다시 봄). 예전엔 이것까지 막혀 방 카드 버튼이 안 먹혔음
+    room_card = bool(parts) and parts[0] == "k"
+    if not q.message or (q.message.chat_id != q.from_user.id and not room_card):
         await q.answer("1:1 채팅에서 열어주세요.", show_alert=True)
         return
     uid = q.from_user.id

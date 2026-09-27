@@ -25,7 +25,8 @@ async def add(r, **kw):
 
 
 async def press(r, user, data):
-    q = FakeQuery(user.id, user, data)
+    # 방에 올라온 확인 카드(m:k:)는 방에서 누름 — 1:1 로 누르는 척하면 '방에서 안 눌리던' 버그를 못 잡음
+    q = FakeQuery(Room.CHAT if data.startswith("m:k:") else user.id, user, data)
     await menu.on_callback(r.svc, r.bot, q, data.split(":")[1:])
     return q
 
