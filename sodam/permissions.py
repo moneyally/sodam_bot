@@ -7,7 +7,7 @@ from enum import IntEnum
 
 from telegram import Bot
 from telegram.constants import ChatMemberStatus
-from telegram.error import NetworkError, TelegramError, TimedOut
+from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError, TimedOut
 
 from .config import Config
 from .db import DB, register_schema
@@ -182,8 +182,10 @@ class Permissions:
             ok = me.status == ChatMemberStatus.OWNER or (
                 me.status == ChatMemberStatus.ADMINISTRATOR
                 and bool(getattr(me, "can_delete_messages", False)) and bool(getattr(me, "can_restrict_members", False)))
+        except (Forbidden, BadRequest):
+            ok = False                      # 봇이 강퇴됐거나 없는 방
         except TelegramError:
-            return hit[1] if hit else True  # 확인 못 하면 예전 값, 처음이면 시도는 해 본다
+            return hit[1] if hit else True  # 네트워크 등으로 확인 못 하면 예전 값, 처음이면 시도는 해 본다
         self._bot_rights[chat_id] = (time.time(), ok)
         return ok
 

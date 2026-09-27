@@ -530,10 +530,11 @@ async def t_owner_sanction(ctx: ToolCtx, a: dict) -> str:
     q = str(a.get("room", "")).strip()
     rows = await _owner_rooms(ctx)
     qn = _norm_title(q)   # '𝐅𝐈𝐑𝐒𝐓' ↔ 'first', 'First그룹방' ↔ 'FIRST' (방 이름이 말 안에 들어 있거나 그 반대)
-    hit = [r for r in rows if str(r["chat_id"]) == q] or [
-        r for r in rows if qn and (tn := _norm_title(r["title"])) and (qn in tn or tn in qn)]
+    tn = {r["chat_id"]: _norm_title(r["title"]) for r in rows}   # ID → 정확히 같은 이름 → 포함 (한 글자 방 이름은 포함 안 씀)
+    hit = ([r for r in rows if str(r["chat_id"]) == q] or [r for r in rows if qn and tn[r["chat_id"]] == qn] or
+           [r for r in rows if qn and (t := tn[r["chat_id"]]) and (qn in t or (len(t) > 1 and t in qn))])
     if len(hit) != 1:
-        names = ", ".join(r["title"] for r in rows) or "없음"
+        names = ", ".join(f"{r['title']}({r['chat_id']})" for r in (hit or rows)) or "없음"
         return (f"'{q}' 방을 {'여러 개 찾음' if hit else '못 찾음'}. 봇이 있는 방: {names}. 어느 방인지 물어볼 것 "
                 "(확인 버튼 안 보냄).")
     room = hit[0]

@@ -116,12 +116,7 @@ async def owner_sanction_unknown_room_lists_rooms():
     r.svc.perms.owner_ids = {OWNER.id}
     res = await ask(r, OWNER, [tool_call("owner_sanction", {"room": "없는방", "action": "mute", "names": ["조이킨"],
                                                             "reason": "x"})], chat_id=OWNER.id, role=Role.OWNER)
-    assert "못 찾음" in res[0] and not r.svc.pending, res
-    await r.db._write("UPDATE chats SET title='FIRST' WHERE chat_id=?", (Room.CHAT,))
-    await r.db.ensure_chat(-1009999, "FIRST 2호점")                     # 비슷한 이름 두 개 → 어느 방인지 물어봄
-    res = await ask(r, OWNER, [tool_call("owner_sanction", {"room": "first", "action": "mute", "names": ["조이킨"],
-                                                            "reason": "x"})], chat_id=OWNER.id, role=Role.OWNER)
-    assert "여러 개" in res[0] and not r.svc.pending, res
+    assert "못 찾음" in res[0] and not r.svc.pending, res   # 여러 방 후보는 test_review2
 
 
 @test

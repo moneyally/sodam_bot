@@ -212,6 +212,8 @@ class Greeter:
                                           is_bot=True)
         except TelegramError as e:
             log.warning("greet send failed: %s", e)
+            for uid, _ in people:           # 못 보냈으면 AI 인사까지 막지 않게
+                self._greeted.pop((chat_id, uid), None)
 
     async def _template(self, chat_id: int, count: int) -> str:
         s = await self.svc.db.get_settings(chat_id)

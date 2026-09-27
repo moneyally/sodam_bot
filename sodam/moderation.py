@@ -71,12 +71,12 @@ def _squash(name: str) -> str:
 
 
 def owner_kb(chat_id: int, user_id: int, kind: str) -> InlineKeyboardMarkup:
-    """오너 보고에 붙는 바로가기 (handlers._owner_action, 오너만 누름). kind = mute | ban."""
+    """오너 보고에 붙는 바로가기 (handlers._owner_action, 오너만 누름). kind = mute | hold(무기한 뮤트) | ban."""
     data = lambda a: f"ow:{chat_id}:{user_id}:{a}"  # noqa: E731
     if kind == "ban":
         return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ 밴 해제", callback_data=data("n"))]])
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔊 풀기", callback_data=data("u")),
-                                  InlineKeyboardButton("⏱ 1일로 연장", callback_data=data("x")),
+    extend = [] if kind == "hold" else [InlineKeyboardButton("⏱ 1일로 연장", callback_data=data("x"))]
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔊 풀기", callback_data=data("u")), *extend,
                                   InlineKeyboardButton("🚫 내보내기", callback_data=data("b"))]])
 
 
@@ -408,5 +408,5 @@ class Moderator:
                 f"사칭 방지로 채팅을 막았어요. 오해라면 관리자가 아래 버튼으로 풀어주세요.\n"
                 f"※ 관리자는 절대 먼저 개인 메시지로 송금·코인을 요구하지 않아요.")
         await self.report(bot, f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}",
-                          owner_kb(chat_id, user.id, "mute"))
+                          owner_kb(chat_id, user.id, "hold"))
         return muted_notice(text, user.id)
