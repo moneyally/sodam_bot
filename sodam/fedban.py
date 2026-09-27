@@ -64,8 +64,19 @@ NOT_PAID = "공동 차단 명단에 올리기는 이용 기간(구독·체험) �
 
 
 # ── 조회 ──────────────────────────────────────────────────
+LISTED = ("fedban_entries",)   # db.cached 키: 명단 user_id 전부 (메시지마다 확인 → 캐시, 올리기·빼기가 지움)
+
+
+async def _listed(db) -> frozenset[int]:
+    async def load():
+        return frozenset(r["user_id"] for r in await db._all("SELECT user_id FROM fedban_entries"))
+    return await db.cached(LISTED, load)
+
+
 async def lookup(db, user_id: int) -> dict | None:
     """명단에 있으면 {name, rooms, reasons(최근 3개)}."""
+    if user_id not in await _listed(db):
+        return None
     entry = await db._one("SELECT name FROM fedban_entries WHERE user_id=?", (user_id,))
     if not entry:
         return None
@@ -111,6 +122,7 @@ async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, acto
     await db.bump(day, chat_id, "fedban_add")
     await db._write("INSERT INTO fedban_entries(user_id, name, ts) VALUES(?, ?, ?) "
                     "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name", (user_id, name[:64], now))
+    db.uncache(LISTED)
     await db._write("INSERT INTO fedban_reports(user_id, chat_id, reason, ts) VALUES(?, ?, ?, ?) "
                     "ON CONFLICT(user_id, chat_id) DO UPDATE SET reason=excluded.reason, ts=excluded.ts",
                     (user_id, chat_id, reason, now))
@@ -136,6 +148,7 @@ async def remove(svc, chat_id: int, user_id: int, actor_id: int, *, owner: bool)
     if owner:
         await db._write("DELETE FROM fedban_reports WHERE user_id=?", (user_id,))
         await db._write("DELETE FROM fedban_entries WHERE user_id=?", (user_id,))
+        db.uncache(LISTED)
         await db._write("DELETE FROM fedban_seen WHERE user_id=?", (user_id,))
         if chat_id:
             await db.log_mod(chat_id, actor_id, user_id, "fedban_remove", "전체 삭제")
@@ -146,6 +159,7 @@ async def remove(svc, chat_id: int, user_id: int, actor_id: int, *, owner: bool)
     left = info["rooms"] - 1
     if not left:
         await db._write("DELETE FROM fedban_entries WHERE user_id=?", (user_id,))
+        db.uncache(LISTED)
     await db.log_mod(chat_id, actor_id, user_id, "fedban_remove", "이 방 표시")
     tail = f"다른 방 {left}곳이 올린 표시는 남아 있어요." if left else "올린 방이 없어서 명단에서 사라졌어요."
     return (f"✅ {esc(info['name'])}(<code>{user_id}</code>)님 공동 차단 표시를 이 방에서 뺐어요. {tail}\n"

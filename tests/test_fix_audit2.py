@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 from fake_llm import Room, reply, tool_call
 from fakes import FakeQuery, runner
-from test_sanction_multi import A, BOSS, ask, room
+from test_sanction_multi import A, B, BOSS, ask, room
 
-from sodam import handlers, menu
+from sodam import db as dbmod, fedban, free, handlers, menu, rules, spamshield
 
 test, run_all = runner()
 
@@ -52,6 +52,58 @@ async def burst_answers_latest_message_even_if_processed_first():
     assert request.index("뭐 먹지") < request.index("매운 걸로"), request[:300]
     assert not m1.replies and m2.replies == ["둘 다 봤어요"], (m1.replies, m2.replies)
 
+
+
+# ── hot path 캐시 (메시지마다 읽던 목록을 캐시) — 바뀌면 바로 보여야 함 ──────────
+@test
+async def hot_path_caches_see_changes_immediately():
+    r = await room()
+    db, cid, now = r.db, Room.CHAT, dbmod.now()
+    await db._write("UPDATE members SET joined_at=? WHERE chat_id=? AND user_id=?", (now - 30 * 86400, cid, A.id))
+    s = await db.get_settings(cid)
+    assert await spamshield.newcomer_since(r.svc, cid, A.id, s, now) is None          # 오래된 멤버 (기억됨)
+    await db.touch_member(cid, A.id, joined=True)                                       # 나갔다 다시 들어옴
+    assert await spamshield.newcomer_since(r.svc, cid, A.id, s, dbmod.now()), "다시 들어오면 바로 신규"
+    assert not await free.is_free(db, cid, A.id)
+    await free.add(db, cid, A.id, BOSS.id)
+    assert await free.is_free(db, cid, A.id)
+    await free.remove(db, cid, A.id)
+    assert not await free.is_free(db, cid, A.id)
+    assert A.id not in await db.bot_admin_ids(cid)
+    await db.set_bot_admin(cid, A.id, True)
+    assert A.id in await db.bot_admin_ids(cid)
+    assert "사기꾼" not in await db.banned_words(cid)
+    await db.set_banned_word(cid, "사기꾼", True)
+    assert "사기꾼" in await db.banned_words(cid)
+    assert await fedban.lookup(db, 99001) is None
+    await fedban.add(r.svc, r.bot, cid, 99001, "스패머", "도박 광고", BOSS.id)
+    assert (await fedban.lookup(db, 99001))["rooms"] == 1
+
+
+@test
+async def alert_rule_change_applies_at_once():
+    """켜진 규칙 목록은 메시지마다 읽어서 캐시 → 🔔 화면에서 받는 방법(1:1 → 방에서 부르기)을 바꾸면 바로 반영.
+    (끄기·삭제는 울릴 때 _claim 이 DB 에서 enabled 를 다시 봐서 캐시와 상관없이 안 울림)"""
+    r = await room()
+    rid = await rules.add(r.svc, Room.CHAT, BOSS.id, {"action": "dm", "trig": "keyword", "arg": "입금"})
+    await r.say(A, "안녕하세요")                                                         # 규칙 목록 캐시됨
+    q = FakeQuery(BOSS.id, BOSS, f"m:rlx:{Room.CHAT}:{rid}:call")
+    await menu.on_callback(r.svc, r.bot, q, q.data.split(":")[1:])
+    await r.say(B, "입금 언제 돼요?")
+    sent = r.bot.named("send_message")
+    assert not [c for c in sent if c[1] == BOSS.id] and [c for c in sent if c[1] == Room.CHAT], sent
+
+
+@test
+async def hot_path_db_round_trips_per_message():
+    """그룹 메시지 hot path (tools/hotpath_bench.py, 가짜 텔레그램·AI 없음): 감사 전 DB 왕복 13.6/메시지 → 2.6.
+    캐시가 빠지거나 훅이 메시지마다 조회를 늘리면 여기서 잡힌다 (대화 기록 쓰기 1번은 꼭 필요)."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    import hotpath_bench
+    res = await hotpath_bench.run(600, 2)
+    assert res["trips_per_msg"] < 5, res
 
 
 if __name__ == "__main__":

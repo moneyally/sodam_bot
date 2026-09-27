@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar
 
 import aiosqlite
 
@@ -246,6 +246,8 @@ class DB:
         self.conn: aiosqlite.Connection | None = None
         self._settings_cache: dict[int, dict[str, Any]] = {}
         self._settings_at: dict[int, float] = {}   # 읽은 시각 (다른 프로세스가 바꾼 설정도 TTL 뒤 반영)
+        self._cache: dict[tuple, tuple[float, Any]] = {}   # cached(): 메시지마다 읽는 방 단위 목록
+        self._cache_epoch = 0
 
     async def open(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -338,6 +340,25 @@ class DB:
         await self.conn.commit()
         return cur.lastrowid
 
+    async def cached(self, key: tuple, load: Callable[[], Awaitable[T]], ttl: float = SETTINGS_TTL) -> T:
+        """메시지마다 읽지만 드물게 바뀌는 값(봇관리자·금지어·자유 멤버 목록·신규 입장자 판단). 바꾸는 쪽이 uncache(key),
+        다른 프로세스(딜러 봇)가 바꾼 건 ttl 뒤 반영. 읽는 도중 무엇이든 uncache 되면 그 값은 저장하지 않는다 (옛 값 방지)."""
+        t = time.monotonic()
+        hit = self._cache.get(key)
+        if hit is not None and t - hit[0] <= ttl:
+            return hit[1]
+        epoch = self._cache_epoch
+        val = await load()
+        if self._cache_epoch == epoch:
+            if len(self._cache) > 100_000:
+                self._cache.clear()
+            self._cache[key] = (t, val)
+        return val
+
+    def uncache(self, key: tuple) -> None:
+        self._cache.pop(key, None)
+        self._cache_epoch += 1
+
     # ── 방 / 설정 ─────────────────────────────────────────
     async def ensure_chat(self, chat_id: int, title: str | None) -> None:
         await self._write(
@@ -385,6 +406,8 @@ class DB:
             (chat_id, user_id, ts if joined else None, ts),
         )
         await self.conn.commit()
+        if joined:   # 다시 들어온 사람은 바로 신규 입장자로 (spamshield.newcomer_since 캐시)
+            self.uncache(("newcomer", chat_id, user_id))
 
     async def get_member(self, chat_id: int, user_id: int) -> aiosqlite.Row | None:
         return await self._one(
@@ -587,25 +610,32 @@ class DB:
         await self._write("UPDATE warnings SET active=0 WHERE chat_id=? AND user_id=?", (chat_id, user_id))
 
     # ── 봇 관리자 / 금지어 ────────────────────────────────
-    async def bot_admin_ids(self, chat_id: int) -> set[int]:
-        rows = await self._all("SELECT user_id FROM bot_admins WHERE chat_id=?", (chat_id,))
-        return {r["user_id"] for r in rows}
+    async def bot_admin_ids(self, chat_id: int) -> frozenset[int]:
+        """일반 멤버 메시지마다 역할 판단에서 읽음 → 캐시 (set_bot_admin 이 지움)."""
+        async def load():
+            return frozenset(r["user_id"] for r in await self._all("SELECT user_id FROM bot_admins WHERE chat_id=?",
+                                                                     (chat_id,)))
+        return await self.cached(("bot_admins", chat_id), load)
 
     async def set_bot_admin(self, chat_id: int, user_id: int, on: bool) -> None:
         if on:
             await self._write("INSERT OR IGNORE INTO bot_admins VALUES(?, ?)", (chat_id, user_id))
         else:
             await self._write("DELETE FROM bot_admins WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        self.uncache(("bot_admins", chat_id))
 
     async def banned_words(self, chat_id: int) -> list[str]:
-        rows = await self._all("SELECT word FROM banned_words WHERE chat_id=?", (chat_id,))
-        return [r["word"] for r in rows]
+        """메시지마다 금지어 검사에서 읽음 → 캐시 (set_banned_word 가 지움). 부르는 쪽이 고쳐도 되게 사본."""
+        async def load():
+            return tuple(r["word"] for r in await self._all("SELECT word FROM banned_words WHERE chat_id=?", (chat_id,)))
+        return list(await self.cached(("banned_words", chat_id), load))
 
     async def set_banned_word(self, chat_id: int, word: str, on: bool) -> None:
         if on:
             await self._write("INSERT OR IGNORE INTO banned_words VALUES(?, ?)", (chat_id, word.lower()))
         else:
             await self._write("DELETE FROM banned_words WHERE chat_id=? AND word=?", (chat_id, word.lower()))
+        self.uncache(("banned_words", chat_id))
 
     # ── 스포츠 구독 ───────────────────────────────────────
     async def sports_subs(self, chat_id: int | None = None) -> list[aiosqlite.Row]:
@@ -857,6 +887,8 @@ class DB:
         await self.atomic(run)
         self._settings_cache.pop(old, None)
         self._settings_cache.pop(new, None)
+        for key in [k for k in self._cache if old in k or new in k]:
+            self.uncache(key)
 
     async def get_invoice(self, invoice_id: int) -> aiosqlite.Row | None:
         return await self._one("SELECT * FROM invoices WHERE id=?", (invoice_id,))

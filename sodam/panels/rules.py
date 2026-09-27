@@ -59,6 +59,7 @@ async def _update(c: PanelCtx, sql: str, value) -> Screen:
     r = await _rule(c)
     if r is not None:
         await c.svc.db._write(f"UPDATE alert_rules SET {sql}=? WHERE id=? AND chat_id=?", (value, r["id"], c.cid))
+        rules.forget(c.svc.db, c.cid)
         await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"알림 규칙 #{r['id']} {sql}={value}")
     screen = await s_item(c)
     screen.toast = "✅ 바꿨어요" if r is not None else screen.toast
@@ -86,6 +87,7 @@ async def r_delete(c: PanelCtx) -> Screen:
         return Screen(f"🗑 규칙 #{r['id']} 을 삭제할까요?\n{esc(await rules.describe(c.svc, r))}",
                       menu._kb([[B("🗑 삭제", f"m:rld:{c.cid}:{r['id']}:1"), B("취소", f"m:rli:{c.cid}:{r['id']}")]]))
     await c.svc.db._write("DELETE FROM alert_rules WHERE id=? AND chat_id=?", (r["id"], c.cid))
+    rules.forget(c.svc.db, c.cid)
     await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"알림 규칙 #{r['id']} 삭제")
     screen = await s_list(c)
     screen.toast = "삭제했어요."
