@@ -26,6 +26,7 @@ from .llm import BudgetExceeded
 from .vision import Attached
 from .permissions import Role, may
 from .services import PendingAction, Services
+from .prompt import reply_mark
 from .settings import DEFAULTS, LABELS, RANGES, coerce, render
 from .sports import SPORTS_KO, SportsError
 from .styles import STYLES, resolve_style
@@ -151,7 +152,7 @@ async def t_read_chat(ctx: ToolCtx, a: dict) -> str:
     lines = []
     for r in rows:
         who = "봇" if r["is_bot"] else f"{r['first_name'] or r['username'] or '?'}({r['user_id']})"
-        lines.append(f"[{fmt_time(r['ts'], ctx.svc.cfg.tz, '%H:%M')}] {who}: {r['text'][:150]}")
+        lines.append(f"[{fmt_time(r['ts'], ctx.svc.cfg.tz, '%H:%M')}] {who}{reply_mark(r, ctx.bot.id, ctx.svc.cfg.bot_name)}: {r['text'][:150]}")
     text = "\n".join(lines) or "해당 시간에 대화 없음."
     return text[-6000:]
 
