@@ -894,6 +894,19 @@ TOOLS: list[Tool] = [
 _BY_NAME = {t.name: t for t in TOOLS}
 
 
+def register_tool(tool: Tool, *, read_only: bool = False) -> None:
+    """다른 모듈이 자기 파일 안에서 AI 도구를 더한다 (tools.py 수정 없이 — 여러 작업이 파일을 안 겹치게).
+    read_only = 이 서버 데이터를 읽기만 함 (방 기록을 읽은 답변에서도 쓸 수 있음, READ_ONLY)."""
+    if tool.name in _BY_NAME:
+        if _BY_NAME[tool.name] is tool:
+            return
+        raise ValueError(f"도구 이름 중복: {tool.name}")
+    TOOLS.append(tool)
+    _BY_NAME[tool.name] = tool
+    if read_only:
+        READ_ONLY.add(tool.name)
+
+
 def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
     """이 사람·이 대화에서 쓸 수 있는 도구 = AI 가 할 수 있는 일의 전부 (안 되는 도구는 아예 안 보여 '된다'고 못 함)."""
     return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))
