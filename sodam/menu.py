@@ -562,8 +562,11 @@ EXPIRED = Screen(None, toast="만료된 버튼이에요. 메뉴를 다시 열어
 
 
 async def r_token(c: PanelCtx) -> Screen:
-    t = c.svc.menu_tokens.pop(c.arg(0), None)  # 1회용: 꺼내면서 지움
-    if not t or t.expires < time.time() or t.user_id != c.uid or t.action not in TOKEN_ACTIONS:
+    t = c.svc.menu_tokens.get(c.arg(0))
+    if t and t.user_id != c.uid and t.expires >= time.time():   # 방에 뜬 카드를 남이 눌러도 토큰은 그대로 (주인이 누를 수 있게)
+        return Screen(None, toast="요청한 사람만 누를 수 있어요.", alert=True)
+    c.svc.menu_tokens.pop(c.arg(0), None)  # 1회용: 꺼내면서 지움
+    if not t or t.expires < time.time() or t.action not in TOKEN_ACTIONS:
         return EXPIRED
     fn, fresh = TOKEN_ACTIONS[t.action]
     if not await _allowed(c.svc, c.bot, t.chat_id, c.uid, TOKEN_NEED.get(t.action, ADMIN), fresh):

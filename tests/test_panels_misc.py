@@ -190,7 +190,7 @@ async def kb_delete_token_single_use_and_fresh():
     q = await press(svc, bot, TGA, f"m:kbd:{CHAT}:{doc_id}")
     confirm = find(q.kb, "🗑 삭제")
     assert "삭제할까요" in q.edits[-1] and confirm.callback_data.startswith("m:k:")
-    assert "만료" in (await press(svc, bot, MEMBER, confirm.callback_data)).answers[0][0]  # 다른 사람 → 소모
+    assert "요청한 사람만" in (await press(svc, bot, MEMBER, confirm.callback_data)).answers[0][0]  # 다른 사람 → 거절
     assert await ai_panel._doc(svc, (CHAT,), doc_id)
     confirm = find((await press(svc, bot, TGA, f"m:kbd:{CHAT}:{doc_id}")).kb, "🗑 삭제")
     before = state.forgets
@@ -338,7 +338,7 @@ async def rules_edit_validate_and_delete():
     confirm = find(q.kb, "🗑 삭제")
     assert "삭제할까요" in q.edits[-1]
     assert denied(await press(svc, bot, MEMBER, f"m:rulesx:{CHAT}"))
-    assert "만료" in (await press(svc, bot, MEMBER, confirm.callback_data)).answers[0][0]
+    assert "요청한 사람만" in (await press(svc, bot, MEMBER, confirm.callback_data)).answers[0][0]
     confirm = find((await press(svc, bot, TGA, f"m:rulesx:{CHAT}")).kb, "🗑 삭제")
     before = state.forgets
     q = await press(svc, bot, TGA, confirm.callback_data)

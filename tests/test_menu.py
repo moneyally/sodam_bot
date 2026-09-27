@@ -203,7 +203,7 @@ async def banned_word_delete_uses_one_time_token():
     ask = find(q.kb, "나쁜말")
     assert ask.callback_data.startswith("m:k:") and "나쁜말" not in ask.callback_data
     q = await press(svc, bot, 99, ask.callback_data)                     # 다른 사람이 토큰을 써도
-    assert "만료" in q.answers[0][0]                                    # (1회용이라 이미 소모됨)
+    assert "요청한 사람만" in q.answers[0][0]                            # (토큰 주인만)
     q = await press(svc, bot, 1, f"m:bw:{CHAT}")
     ask = find(q.kb, "나쁜말")
     q = await press(svc, bot, 1, ask.callback_data)                      # 확인 화면

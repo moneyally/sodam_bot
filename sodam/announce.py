@@ -14,7 +14,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -70,7 +70,45 @@ def parse_when(text: str) -> tuple[str, str | None, int | None]:
     raise ValueError("형식: <code>매일 09:00</code> 또는 <code>반복 120</code> (분) / <code>반복 3시간</code>")
 
 
+_WHEN_AFTER = re.compile(r"^(\d+)\s*(분|시간)\s*(?:뒤|후)(?:에)?$")
+_WHEN_ONCE = re.compile(r"^(?:(오늘|내일|모레)|(?:(\d{4})[-./])?(\d{1,2})[-./](\d{1,2}))\s*(\d{1,2}:\d{2})$")
+ONCE_GRACE = 6 * 3600          # 한 번 예약을 놓쳤을 때(재시작 등) 이 안이면 늦게라도 실행
+
+
+def parse_time(text: str, tz, now_ts: int | None = None) -> tuple[str, str | None, int | None, int | None]:
+    """parse_when + 한 번: '30분 뒤' '2시간 후' '오늘 21:00' '내일 09:00' '09-28 09:00' '2026-09-28 09:00'
+    → ('once', 'MM-DD HH:MM'(표시용), None, 실행 시각). 나머지는 parse_when (+ None)."""
+    t = " ".join(text.split())
+    now = datetime.fromtimestamp(now_ts or time.time(), tz)
+    m = _WHEN_AFTER.match(t)
+    if m:
+        minutes = int(m.group(1)) * (60 if m.group(2) == "시간" else 1)
+        if not 1 <= minutes <= 30 * 1440:
+            raise ValueError("1분 ~ 30일 뒤까지 예약할 수 있어요")
+        at = now + timedelta(minutes=minutes)
+    elif m := _WHEN_ONCE.match(t):
+        hh, mm = map(int, parse_hhmm(m.group(5)).split(":"))
+        if m.group(1):
+            at = (now + timedelta(days=("오늘", "내일", "모레").index(m.group(1)))).replace(hour=hh, minute=mm)
+        else:
+            try:
+                at = now.replace(year=int(m.group(2) or now.year), month=int(m.group(3)), day=int(m.group(4)),
+                                 hour=hh, minute=mm)
+            except ValueError:
+                raise ValueError("없는 날짜예요") from None
+            if not m.group(2) and at <= now:          # 연도 없이 지난 날짜 = 내년
+                at = at.replace(year=at.year + 1)
+        at = at.replace(second=0, microsecond=0)
+        if not now.timestamp() < at.timestamp() <= now.timestamp() + 366 * 86400:
+            raise ValueError("지금보다 뒤의 시각(1년 안)으로 해주세요")
+    else:
+        return (*parse_when(t), None)
+    return "once", at.strftime("%m-%d %H:%M"), None, int(at.timestamp())
+
+
 def describe_when(kind: str, at_time: str | None, interval_min: int | None) -> str:
+    if kind == "once":
+        return f"{at_time} 한 번"
     if kind == "daily":
         return f"매일 {at_time}"
     if interval_min and interval_min % 60 == 0:
@@ -81,6 +119,8 @@ def describe_when(kind: str, at_time: str | None, interval_min: int | None) -> s
 def is_due(row, now_ts: int, tz) -> bool:
     if not row["enabled"]:
         return False
+    if row["kind"] == "once":
+        return row["last_sent"] is None and 0 <= now_ts - (row["at_ts"] or 0) < ONCE_GRACE
     if row["kind"] == "daily":
         hh, mm = map(int, row["at_time"].split(":"))
         now = datetime.fromtimestamp(now_ts, tz)
@@ -171,8 +211,15 @@ class Announcer:
         return await bot.send_message(chat_id, html, **kw)
 
     async def publish(self, bot: Bot, row) -> None:
-        """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록."""
+        """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire."""
         now_ts = int(time.time())
+        if row["kind"] == "once":
+            await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
+        if row["action"] != "post":
+            from . import cron   # 늦게 import (순환 방지)
+            await self.svc.db.mark_schedule_sent(row["id"], now_ts, None)   # 먼저 기록: AI 가 느려도 다음 틱에 또 안 돌게
+            await cron.fire(self.svc, bot, row)
+            return
         if row["last_msg_id"]:
             try:
                 await bot.delete_message(row["chat_id"], row["last_msg_id"])
@@ -197,7 +244,9 @@ class Announcer:
     async def run_due(self, bot: Bot) -> None:
         now_ts = int(time.time())
         for row in await self.svc.db.schedules():
-            if is_due(row, now_ts, self.svc.cfg.tz) and await self.svc.paid_features(row["chat_id"]):
+            if row["kind"] == "once" and now_ts - (row["at_ts"] or 0) >= ONCE_GRACE:    # 너무 늦게 켜짐: 안 하고 끔
+                await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
+            elif is_due(row, now_ts, self.svc.cfg.tz) and await self.svc.paid_features(row["chat_id"]):
                 await self.publish(bot, row)
 
     # ── 목록 ──────────────────────────────────────────────

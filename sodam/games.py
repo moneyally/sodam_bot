@@ -128,6 +128,11 @@ class Game:
     async def on_callback(self, query: CallbackQuery, parts: list[str]) -> None:
         await query.answer()
 
+    def ai_hint(self) -> str:
+        """게임 중 AI 에게 주는 단서: 진행은 게임이 하니 AI 는 끼어들지 않게."""
+        return (f"지금 이 방에서 '{self.title}' 게임이 진행 중이다. 진행·판정은 게임이 따로 한다 — 너는 게임 답을 내거나 "
+                "대신 진행하지 않는다.")
+
 
 CATEGORIES = ["동물", "음식", "과일", "물건", "직업", "장소", "스포츠", "나라", "가전제품", "탈것"]
 
@@ -149,6 +154,10 @@ class WordChain(Game):
 
     def _starts_text(self) -> str:
         return "/".join(sorted(starts_for(self.last)))
+
+    def ai_hint(self) -> str:
+        return (super().ai_hint() + f" 끝말잇기 마지막 단어는 '{self.last}' 이고 다음은 '{self._starts_text()}'(으)로 시작하는 "
+                "단어를 한 단어만 쳐야 한다. 너는 단어를 내지 말고, 필요하면 그렇게 안내만 한다.")
 
     async def _timeout(self) -> None:
         await self.finish(f"⏰ 시간 초과! 제가 이겼어요 😎 (총 {len(self.used)}단어)")

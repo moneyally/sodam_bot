@@ -15,6 +15,13 @@ log = logging.getLogger(__name__)
 TTL_HIT = 24 * 3600    # 스팸 판정은 하루 캐시
 TTL_MISS = 6 * 3600    # 정상 판정은 6시간 캐시 (한 곳이라도 조회 실패면 캐시 안 함)
 LOLS_API = "https://api.lols.bot/account"
+ALLOW_KEY = "cas_ok:{}"   # chat_state: 관리자가 차단 안내의 [↩️ 차단 풀기]로 봐준 사람 (그 방에선 다시 안 막음)
+
+
+async def blocks(svc, chat_id: int, user_id: int, s: dict) -> bool:
+    """이 방에서 스팸 명단으로 막을지: 켜져 있고, 관리자가 풀어준 사람이 아니고, 명단에 있으면."""
+    return (bool(s["cas_enabled"]) and not await svc.db.get_state(chat_id, ALLOW_KEY.format(user_id))
+            and await svc.cas.is_banned(user_id))
 
 
 class Cas:

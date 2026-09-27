@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from telegram import InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from . import fedban, free
+from . import cas, fedban, free
 from .captcha import MAX_ATTEMPTS, puzzle
 from .db import register_schema
 from .settings import register_setting
@@ -74,7 +74,7 @@ async def on_request(svc: Services, bot, req) -> None:
         except TelegramError as e:
             log.info("approve free member failed: %s", e)
         return
-    if (s["cas_enabled"] and await svc.cas.is_banned(user.id)) or \
+    if await cas.blocks(svc, chat_id, user.id, s) or \
             (s["fedban_mode"] != "off" and await fedban.lookup(svc.db, user.id)):
         return await _decline(svc, bot, chat_id, user.id, "스팸·공동 차단 명단")
     from .subscription import chat_title  # 늦게 import (순환 방지)

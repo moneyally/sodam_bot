@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 537개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 554개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -85,6 +85,15 @@
   ask_<종류>(거절 사유·카드), 확인 버튼은 press_<종류>(취소·거절). 기록을 읽은 답변에선 `tools.READ_ONLY` 도구만 (ctx.tainted:
   멤버 글 속 지시가 제재·전송·외부 검색으로 못 이어지게). AI 답은 흔한 TLD 도메인 주소 지우고 링크 미리보기 끔.
   ask_/press_ 는 방 관리자 기록(.기록·🗂️)엔 안 보임(db.NOT_AUDIT), 기록 실패해도 버튼·카드 계속(db.audit), 거절 연타는 1줄.
+- 장시간 게임 알림(`gametime.py`, 🎮 메뉴, 기본 꺼짐): 멤버가 보낸 게임 명령(/ ! 🎲 또는 gt_cmds 목록) 시각으로 연속 세션
+  (gt_gap 분 쉬면 새로) → 10분 job 이 gt_hours 넘은 세션 1번 알림(방 + 알릴 관리자 1:1). 조치 notify/button(뮤트 버튼)/auto(자동 뮤트,
+  관리자·자유 멤버 제외). 다른 게임봇 결과는 텔레그램이 봇끼리 안 보여줘서 못 봄. AI 도구 game_alert(요청한 관리자가 받음), 📤 다른 방에 복사.
+- 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
+  (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
+  만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
+- menu 토큰: 다른 사람이 누르면 '요청한 사람만' 으로 거절하고 토큰은 남김 (방에 뜬 카드를 남이 눌러 무효화 못 하게).
+- 게임 중: 게임 답(AI 답에 단 답장 포함)이 AI 보다 먼저, AI 엔 진행 중 게임 단서(ai_hint). start_game 성공이면 AI 답 안 보냄(ctx.quiet).
+- 스팸 명단 차단 안내에 [↩️ 차단 풀기](이 방에선 다시 안 막음, chat_state cas_ok:<id>) [🔕 끄기] ('사용자 차단' 권한 관리자).
 - 하루 1번 봇에게 관리 권한 없는 방을 오너에게 알림 (job_rights). 하트비트는 텔레그램 get_webhook_info 성공 때만 기록.
 
 - 네트워크 재전송(`util.send_retry`): 방에 보이는 글은 연결 자체가 실패한 경우만(확실히 안 보내짐) 다시, 응답만 끊긴 경우는

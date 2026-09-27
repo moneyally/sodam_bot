@@ -21,7 +21,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from . import knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
+from . import cron, gametime, knowledge, memory, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
 from .llm import BudgetExceeded
 from .vision import Attached
 from .permissions import Role, may
@@ -45,6 +45,7 @@ class ToolCtx:
     mentions: list[tuple[int, str]] = field(default_factory=list)
     sanctioned: bool = False  # 이번 답변(run_agent 1회)에서 경고·뮤트·밴을 이미 했는지 → 인젝션으로 연속 제재 방지
     tainted: bool = False     # 이번 답변에서 다른 방 기록(멤버가 쓴 글)을 읽음 → 이후 읽기 도구만 (execute)
+    quiet: bool = False       # 봇이 이미 방에 올림(게임 시작 등) → AI 답은 보내지 않음
     image: Attached | None = None  # 요청(또는 답장한 메시지)에 붙은 사진 → make_image(mode=edit) 원본
 
 
@@ -384,7 +385,11 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_start_game(ctx: ToolCtx, a: dict) -> str:
-    return await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.caller.id, str(a.get("game", "")))
+    result = await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.caller.id, str(a.get("game", "")))
+    if result.endswith("시작했어요!"):   # 시작 안내(첫 단어 등)는 게임이 이미 올림 → AI 답은 안 보냄 (다른 첫 단어를 말하지 않게)
+        ctx.quiet = True
+        return result + " 게임 안내는 이미 방에 올라갔으니 따로 답하지 않는다."
+    return result
 
 
 async def t_search_knowledge(ctx: ToolCtx, a: dict) -> str:
@@ -646,6 +651,56 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
     return out
 
 
+async def t_game_alert(ctx: ToolCtx, a: dict) -> str:
+    """'12시간 이상 게임하면 나 불러' → 장시간 게임 알림 켜고 알림 받을 사람 = 요청한 관리자."""
+    on = a.get("on", True) is not False
+    changes = {"gt_enabled": on}
+    if on:
+        changes |= {"gt_setter": ctx.caller.id, "gt_notify": "setter",
+                    "gt_hours": max(1, min(int(a.get("hours") or 12), 48))}
+        if a.get("action") in gametime.ACTIONS:
+            changes["gt_action"] = a["action"]
+        if a.get("mute_hours"):
+            changes["gt_mute_hours"] = max(1, min(int(a["mute_hours"]), 48))
+    for k, v in changes.items():
+        await ctx.svc.db.set_setting(ctx.chat_id, k, v)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "setting", f"게임 알림 {changes}")
+    if not on:
+        return "장시간 게임 알림을 껐음."
+    s = await ctx.svc.db.get_settings(ctx.chat_id)
+    return (f"장시간 게임 알림 켬: 게임 명령을 연속 {s['gt_hours']}시간 넘게 보내면 요청한 사람을 방에서 부르고 1:1 로도 알림 "
+            f"(조치: {gametime.ACTIONS[s['gt_action']]}). 자세한 설정은 관리자 1:1 메뉴 🎮 장시간 게임 알림."
+            + ("" if await ctx.svc.paid_features(ctx.chat_id) else " 단 이 방은 이용 기간이 아니라 지금은 동작 안 함."))
+
+
+async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
+    """알람·AI 작업 예약. 바로 저장하지 않고 요청한 관리자에게 확인 카드 (대화 속 숨은 지시로 예약이 생기지 않게)."""
+    from . import menu   # 늦게 import (menu → panels → tools 순환 방지)
+    from .announce import MAX_PER_CHAT, describe_when, parse_time
+    try:
+        when = parse_time(str(a.get("when", "")), ctx.svc.cfg.tz)
+    except ValueError as e:
+        return f"시간 해석 실패: {e}. 이 형식으로 다시: 매일 09:00 / 반복 2시간 / 30분 뒤 / 내일 09:00 / 09-28 21:00"
+    action, skill = str(a.get("action", "")), str(a.get("skill", "")) or None
+    if action not in cron.ACTIONS or (action == "ai" and skill not in cron.SKILLS):
+        return "action 은 remind / ai, ai 면 skill 은 summary / search / stats / write 중 하나."
+    if action == "ai" and when[0] == "interval" and when[2] < 60:
+        return "AI 작업은 1시간 이상 간격으로만 반복할 수 있음."
+    if len(await ctx.svc.db.schedules(ctx.chat_id)) >= MAX_PER_CHAT:
+        return f"이 방 예약이 이미 {MAX_PER_CHAT}개라 더 못 만듦. 관리자 1:1 메뉴 🗓️ 에서 정리하라고 안내."
+    text, title = str(a.get("text", "")).strip()[:500], str(a.get("title", "")).strip()[:40]
+    spec = {"when": when, "action": action, "skill": skill if action == "ai" else None, "text": text, "title": title}
+    ok = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_save", spec, 600)
+    no = menu.token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_no", None, 600)
+    what = cron.ACTIONS[action] + (f" · {cron.SKILLS[skill].label}" if action == "ai" else "")
+    await ctx.bot.send_message(
+        ctx.chat_id, f"⏰ 이렇게 예약할까요?\n언제: <b>{describe_when(*when[:3])}</b>\n종류: {what}\n"
+                     f"내용: {esc(text) or '(없음)'}\n(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ 예약", callback_data=f"m:k:{ok}"),
+                                                              InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))
+    return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 저장된다고 짧게 안내할 것. 아직 저장된 게 아니니 '했다'고 말하지 말 것."
+
+
 async def t_reset_member_styles(ctx: ToolCtx, a: dict) -> str:
     n = (await ctx.svc.db._one("SELECT COUNT(*) AS n FROM members WHERE chat_id=? AND style IS NOT NULL",
                                (ctx.chat_id,)))["n"]
@@ -726,6 +781,22 @@ TOOLS: list[Tool] = [
     Tool("reset_member_styles", "[관리자] 이 방 멤버들이 따로 정한 개인 말투를 모두 지워 방 기본 말투로 맞춘다.",
          {}, [], t_reset_member_styles, Role.ADMIN, where="room"),
     # 오너 전용 (1:1): 다른 방 관리 — 오너에게만, 1:1 에서만 보인다
+    Tool("game_alert", "장시간 게임 알림 켜기/끄기. '12시간 이상 게임하는 사람 있으면 나 불러' 같은 요청에 사용 (요청한 관리자가 "
+         "알림을 받음). 연속 시간은 멤버가 보낸 게임 명령(/, !, 🎲)으로 센다.",
+         {"on": {"type": "boolean"}, "hours": {"type": "integer", "description": "기준 연속 시간 (1~48, 기본 12)"},
+          "action": {"type": "string", "enum": list(gametime.ACTIONS), "description": "notify=알림만, button=알림+뮤트 버튼, auto=자동 뮤트"},
+          "mute_hours": {"type": "integer", "description": "뮤트 시간 (1~48)"}}, ["on"], t_game_alert, Role.ADMIN,
+         where="room"),
+    Tool("schedule_task", "알람·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘' → remind, "
+         "'매일 밤 10시에 오늘 대화 요약해서 올려' → ai+summary, '매일 아침 8시 비트코인 뉴스' → ai+search, "
+         "'매일 자정 수다 랭킹' → ai+stats, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
+         {"when": {"type": "string", "description": "매일 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM"},
+          "action": {"type": "string", "enum": list(cron.ACTIONS)},
+          "skill": {"type": "string", "enum": list(cron.SKILLS), "description": "action=ai 일 때만"},
+          "text": {"type": "string", "description": "remind: 그 시각에 방에 그대로 올라갈 알림 내용 자체 (예: '회의 시간이에요', '치킨 도착!'), "
+                                                    "'알려드릴게요' 같은 예약 말투 금지 / "
+                                                    "ai: 작업 지시·검색 주제"},
+          "title": {"type": "string"}}, ["when", "action", "text"], t_schedule_task, Role.ADMIN, where="room"),
     Tool("owner_rooms", "[오너] 봇이 들어가 있는 방 목록과 방마다 봇 제재 권한 여부.", {}, [], t_owner_rooms, Role.OWNER,
          where="owner_dm"),
     Tool("owner_sanction", "[오너] 1:1 에서 다른 방의 멤버를 경고·뮤트·밴한다 (이 1:1 에 확인 버튼 한 장, 눌러야 실행). "

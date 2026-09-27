@@ -136,8 +136,9 @@ async def hub_has_announce_button_and_list_is_scoped():
 async def empty_list_invites_to_create():
     db, svc, bot, _ = await setup()
     q = await press(svc, bot, f"m:sc:{CHAT}")
-    assert "새로 만들기" in q.edits[-1] and "(0/20)" in q.edits[-1]
-    assert [b.callback_data for b in buttons(q.kb)] == [f"m:scn:{CHAT}", f"m:g:{CHAT}"]
+    assert "새 공지" in q.edits[-1] and "(0/20)" in q.edits[-1]
+    assert [b.callback_data for b in buttons(q.kb)] == [f"m:scn:{CHAT}", f"m:in:{CHAT}:crremind", f"m:scs:{CHAT}",
+                                                        f"m:g:{CHAT}"]
     await db.close()
 
 

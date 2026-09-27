@@ -23,8 +23,9 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, casino, commands, diskguard, free, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
+from . import (accountage, addressee, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
                subscription, vision)
+from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -162,7 +163,7 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
             svc.greeter.queue(bot, chat_id, user.id, user_name(user))
         return
 
-    if s["cas_enabled"] and await svc.cas.is_banned(user.id):
+    if await cas_blocks(svc, chat_id, user.id, s):
         await _cas_ban(context, chat_id, user)
         return
     if await hooks.member_joined(svc, bot, chat_id, user):   # 공동 차단 명단·대량 입장 방어 등 (sodam/hooks.py)
@@ -189,7 +190,9 @@ async def _cas_ban(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User)
     except TelegramError as e:
         log.warning("CAS ban failed: %s", e)
         return
-    await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 스팸 계정 명단(CAS·lols)에 등록된 계정이라 차단했어요.", 120)
+    await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 스팸 계정 명단(CAS·lols)에 등록된 계정이라 차단했어요.", 600,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ 차단 풀기", callback_data=f"cas:{user.id}"),
+                                                        InlineKeyboardButton("🔕 스팸 명단 차단 끄기", callback_data="cas:off")]]))
     await svc.mod.report(context.bot, f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴",
                          owner_kb(chat_id, user.id, "ban"))
 
@@ -198,10 +201,39 @@ async def _cas_background(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user
     """봇 도입 전부터 있던 멤버도 처음 말할 때 한 번 조회 (메시지 처리를 막지 않게 백그라운드)."""
     svc = _svc(context)
     try:
-        if await svc.cas.is_banned(user.id):
+        if await cas_blocks(svc, chat_id, user.id, await svc.db.get_settings(chat_id)):
             await _cas_ban(context, chat_id, user)
     except Exception:
         log.exception("CAS background check failed")
+
+
+async def _cas_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
+    """스팸 명단 차단 안내의 [↩️ 차단 풀기] (이 방에선 다시 안 막음) · [🔕 스팸 명단 차단 끄기]. '사용자 차단' 권한 관리자만."""
+    chat_id, presser, arg = q.message.chat_id, q.from_user.id, (parts or [""])[0]
+    if not await may(svc.perms, bot, chat_id, presser):
+        await q.answer(no_right_text(), show_alert=True)
+        return
+    if arg == "off":
+        await svc.db.set_setting(chat_id, "cas_enabled", False)
+        await svc.db.log_mod(chat_id, presser, None, "setting", "cas_enabled=False")
+        await q.answer("🔕 껐어요. 다시 켜기: .스팸차단 켜기 또는 1:1 메뉴 🚪 입장·인사", show_alert=True)
+        done = "🔕 스팸 명단 차단을 껐어요"
+    elif uid := to_int(arg):
+        try:
+            await svc.mod.unban(bot, chat_id, uid, presser)
+        except TelegramError as e:
+            await q.answer(f"실패했어요: {e.message[:80]}", show_alert=True)
+            return
+        await svc.db.set_state(chat_id, ALLOW_KEY.format(uid), 1)
+        await q.answer("↩️ 풀었어요. 이 방에선 다시 막지 않아요.")
+        done = "↩️ 차단을 풀었어요"
+    else:
+        await q.answer()
+        return
+    try:
+        await q.edit_message_text(f"{q.message.text_html}\n{done} (처리: {esc(user_name(q.from_user))})", parse_mode="HTML")
+    except TelegramError:
+        pass
 
 
 async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -441,6 +473,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if await _prefix_hint(context, chat_id, text):
         return
 
+    # 게임 중이면 게임 답이 먼저 (AI 답에 답장으로 단 단어도 게임이 받음 → AI 가 대신 진행하지 않게)
+    if svc.games.is_active(chat_id) and await svc.games.on_text(msg, text):
+        return
     # 봇 메시지에 답장: AI 답(ai_turns 에 기록된 메시지)일 때만 호출. 게임 결과·경고·인사에 단 답장은 호출 아님
     r = msg.reply_to_message
     reply_is_ai = not (r and r.from_user and r.from_user.id == bot.id) or \
@@ -452,8 +487,6 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         via = "follow"
     if addressed:
         await ai_reply(context, msg, role, request, scan, via=via)
-    else:
-        await svc.games.on_text(msg, text)
 
 
 async def on_group_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -615,6 +648,8 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     except Exception:  # 단서가 없어도 대답은 한다
         log.exception("addressee hints failed")
         hints = []
+    if svc.games.is_active(chat_id):   # 게임 중엔 AI 가 게임을 대신 진행하지 않게
+        hints = [*hints, svc.games.active[chat_id].ai_hint()]
     image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진 (고화질로 읽고, 고쳐 달라면 원본으로)
     ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image)
     try:
@@ -631,6 +666,8 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         else:
             answer = "AI 연결이 잠깐 불안정해요. 잠시 후 다시 불러주세요."
 
+    if ctx.quiet:
+        return
     usernames = {row["username"].lower() for row in await svc.db.member_names(chat_id) if row["username"]}
     out = security.filter_output(answer, max_chars=s["reply_max_chars"], allowed_usernames=usernames)
     body = esc(out)
@@ -670,6 +707,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await joinreq.on_callback(svc, bot, q, parts)
     elif prefix == "um":
         await _unmute_button(svc, bot, q, parts)
+    elif prefix == "cas":
+        await _cas_button(svc, bot, q, parts)
     else:
         await q.answer()
 
@@ -1044,6 +1083,11 @@ async def job_rights(context: ContextTypes.DEFAULT_TYPE) -> None:
                                   "'메시지 삭제'·'사용자 차단' 권한을 켜 주세요.")
 
 
+async def job_gametime(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """10분마다: 장시간 게임 알림 (sodam/gametime.py)."""
+    await gametime.check(_svc(context), context.bot)
+
+
 async def job_disk(context: ContextTypes.DEFAULT_TYPE) -> None:
     """1시간마다: 디스크 여유 공간이 모자라면 정리·오너 알림 (sodam/diskguard.py)."""
     try:
@@ -1144,5 +1188,6 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")
     jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
     jq.run_repeating(job_rights, interval=3600, first=600, name="rights")   # 안에서 하루 1번만 알림
+    jq.run_repeating(job_gametime, interval=600, first=180, name="gametime")
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
     jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)

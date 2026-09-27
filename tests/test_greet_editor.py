@@ -211,7 +211,7 @@ async def delete_uses_single_use_token():
 
     await db.set_setting(CHAT, "greet_template", "안녕")                 # 다른 사람은 토큰을 못 씀
     q = await press(svc, bot, 1, f"m:wd:{CHAT}:t")
-    assert "만료" in (await press(svc, bot, 2, find(q.kb, "삭제").callback_data)).answers[0][0]
+    assert "요청한 사람만" in (await press(svc, bot, 2, find(q.kb, "삭제").callback_data)).answers[0][0]
     assert (await db.get_settings(CHAT))["greet_template"] == "안녕"
 
 
