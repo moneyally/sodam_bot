@@ -695,8 +695,11 @@ async def _unmute_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
 
 
 async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
+    """경고·뮤트·밴 확인 버튼 (tools._ask_sanction). y = 실행, p = 실행 + 방에 안내(오너 1:1 요청), n = 취소.
+    대상이 여러 명이면 한 번에 처리하고 사람마다 결과를 보여 준다."""
     key, yn = (parts + ["", ""])[:2]
     action = svc.pending.get(key)
+    presser = q.from_user.id
     if not action or action.expires < time.time():
         svc.pending.pop(key, None)
         await q.answer("만료된 요청이에요.")
@@ -705,37 +708,49 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         except TelegramError:  # 이미 버튼이 없거나 메시지가 지워진 경우
             pass
         return
-    if not await svc.perms.is_admin(bot, action.chat_id, q.from_user.id):
+    allowed = (presser in await svc.perms.owners() if action.from_dm   # 1:1 카드는 오너만
+               else await svc.perms.is_admin(bot, action.chat_id, presser))
+    if not allowed:
+        log.info("sanction button refused (not admin): chat %s user %s", action.chat_id, presser)
         await q.answer("관리자만 누를 수 있어요.", show_alert=True)
         return
     # 실행은 누른 사람에게 텔레그램 '사용자 차단' 권한이 있어야 (취소는 관리자 누구나)
-    if yn == "y" and not await may(svc.perms, bot, action.chat_id, q.from_user.id):
+    if yn in ("y", "p") and not await may(svc.perms, bot, action.chat_id, presser):
+        log.info("sanction button refused (no right): chat %s user %s", action.chat_id, presser)
         await q.answer(no_right_text(), show_alert=True)
         return
     svc.pending.pop(key, None)
     await q.answer()
-    if yn != "y":
+    if yn not in ("y", "p"):
         await q.edit_message_text("취소했어요.")
         return
-    # 버튼이 떠 있는 동안 대상이 관리자가 됐을 수도 있으니 다시 확인
-    if await svc.perms.protected(bot, action.chat_id, action.target_id):
-        await q.edit_message_text("대상이 관리자라서 제재할 수 없어요.")
-        return
-    who, by = mention(action.target_id, action.target_name), esc(user_name(q.from_user))
-    try:
-        if action.kind == "warn":
-            text = await svc.mod.warn(bot, action.chat_id, action.target_id, action.target_name,
-                                      q.from_user.id, action.reason)
-            await q.edit_message_text(f"{text}\n(처리: {by})", parse_mode="HTML")
-        elif action.kind == "mute":
-            await svc.mod.mute(bot, action.chat_id, action.target_id, action.minutes, q.from_user.id, action.reason)
-            await q.edit_message_text(f"🔇 {who}님 {human_minutes(action.minutes)} 채팅 금지했어요. (처리: {by})",
-                                      parse_mode="HTML")
-        else:
-            await svc.mod.ban(bot, action.chat_id, action.target_id, q.from_user.id, action.reason)
-            await q.edit_message_text(f"🚫 {who}님을 내보냈어요. (처리: {by})", parse_mode="HTML")
-    except TelegramError as e:
-        await q.edit_message_text(f"실패했어요: {esc(e.message)}")
+    by, lines, done = esc(user_name(q.from_user)), [], []
+    for uid, name in action.targets:
+        who = mention(uid, name)
+        if await svc.perms.protected(bot, action.chat_id, uid):  # 버튼이 떠 있는 동안 관리자가 됐을 수도
+            lines.append(f"⛔ {who}님은 관리자라서 제재할 수 없어요.")
+            continue
+        try:
+            if action.kind == "warn":
+                lines.append(await svc.mod.warn(bot, action.chat_id, uid, name, presser, action.reason))
+            elif action.kind == "mute":
+                await svc.mod.mute(bot, action.chat_id, uid, action.minutes, presser, action.reason)
+                lines.append(f"🔇 {who}님 {human_minutes(action.minutes)} 채팅 금지했어요.")
+            else:
+                await svc.mod.ban(bot, action.chat_id, uid, presser, action.reason)
+                lines.append(f"🚫 {who}님을 내보냈어요.")
+            done.append(who)
+        except TelegramError as e:
+            log.warning("sanction %s failed: chat %s user %s: %s", action.kind, action.chat_id, uid, e)
+            lines.append(f"❌ {who}님 실패: {esc(e.message)} (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)")
+    await q.edit_message_text("\n".join(lines) + f"\n(처리: {by})", parse_mode="HTML")
+    if yn == "p" and done:   # 오너 1:1 요청: 방에도 짧게 안내 (정해진 문구 + 사유만, AI 문장 아님)
+        label = {"warn": "경고", "mute": f"{human_minutes(action.minutes)} 채팅 금지", "ban": "내보내기"}[action.kind]
+        try:
+            await bot.send_message(action.chat_id, f"📢 관리자 조치: {', '.join(done)}님 {label}\n사유: {esc(action.reason)}",
+                                   parse_mode="HTML")
+        except TelegramError as e:
+            log.warning("sanction notice failed in %s: %s", action.chat_id, e)
 
 
 _LOOKUP_ONLY = re.compile(r"@[A-Za-z0-9_]{3,32}|\d{5,15}")

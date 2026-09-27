@@ -35,6 +35,12 @@ class PendingAction:
     requested_by: int
     expires: float = field(default_factory=lambda: time.time() + 120)
     minutes: int = 0   # mute 기간
+    extra: tuple[tuple[int, str], ...] = ()   # 같은 확인 버튼으로 함께 처리할 대상들 (한 번에 여러 명)
+    from_dm: bool = False   # 오너가 1:1 에서 요청 → 확인 카드는 1:1 에, 원하면 방에 안내
+
+    @property
+    def targets(self) -> list[tuple[int, str]]:
+        return [(self.target_id, self.target_name), *self.extra]
 
 
 @dataclass

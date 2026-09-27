@@ -9,7 +9,9 @@ import asyncio
 import html
 import json
 import logging
-from dataclasses import dataclass, field
+import re
+import unicodedata
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Awaitable, Callable
 
@@ -53,6 +55,7 @@ class Tool:
     fn: Callable[[ToolCtx, dict], Awaitable[str]]
     min_role: Role = Role.MEMBER
     setting: str | None = None  # 이 설정이 꺼져 있으면 도구를 숨김
+    where: str = "any"          # room = 그룹방에서만 · owner_dm = 오너의 1:1 에서만 (도구 목록 = 할 수 있는 일)
 
     def schema(self) -> dict:
         return {
@@ -340,14 +343,18 @@ async def t_set_member_style(ctx: ToolCtx, a: dict) -> str:
 
 async def t_greet(ctx: ToolCtx, a: dict) -> str:
     names = [str(n) for n in (a.get("names") or [])][:10]
-    found, missing, new = [], [], []
+    found, missing, new, auto = [], [], [], []
     day_ago = int(datetime.now().timestamp()) - 86400
+    greeter = ctx.svc.greeter if ctx.settings.get("greet_enabled") else None
     for n in names:
         row, err = await _resolve(ctx, n)
         if err:
             missing.append(n)
             continue
         if row["user_id"] == ctx.caller.id:   # 부탁한 본인은 멘션하지 않음 (답장이 이미 그 사람에게 감)
+            continue
+        if greeter and greeter.auto_greeted(ctx.chat_id, row["user_id"]):   # 자동 입장 인사를 했거나 곧 함 → 또 하지 않음
+            auto.append(_row_name(row))
             continue
         ctx.mentions.append((row["user_id"], _row_name(row)))
         found.append(_row_name(row))
@@ -364,6 +371,13 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
     if missing:
         result += (f" 못 찾은 이름: {', '.join(missing)} → 방 기록에 없어 멘션은 못 함. 이름 그대로 불러 인사할 것"
                    " ('들어오셨다면' 같은 가정 없이).")
+    if auto:
+        result += (f" 자동 입장 인사를 방금 했거나 몇 초 안에 함: {', '.join(auto)} → 또 환영 인사하지 말고 "
+                   "'방금 인사드렸어요' 정도로 요청한 사람에게만 짧게 답할 것.")
+    if found:
+        style = STYLES.get(ctx.settings.get("style", ""))
+        result += (" 인사는 요청한 사람이 아니라 그 멤버들에게 하는 말이니 방 기본 말투"
+                   + (f"({style.label})" if style else "") + "로 쓰고, 요청한 사람에게 쓰는 호칭·애칭은 쓰지 말 것.")
     return result
 
 
@@ -417,7 +431,12 @@ async def t_points_ranking(ctx: ToolCtx, a: dict) -> str:
 
 
 # ── 관리자 도구 ───────────────────────────────────────────
-SANCTION_ONCE = "제재(경고·뮤트·밴)는 한 번의 요청에 한 번만 할 수 있음. 더 필요하면 관리자가 다시 요청하라고 안내할 것."
+SANCTION_ONCE = ("제재(경고·뮤트·밴) 확인 버튼은 한 번의 요청에 한 번만(한 장) 보낼 수 있음. 여러 명이면 names 에 한 번에 넣었어야 함. "
+                 "관리자에게 다시 요청해 달라고 안내할 것.")
+MAX_TARGETS = 5
+NO_BOT_RIGHT = ("확인 버튼을 보내지 않았음: 이 방에서 봇이 '사용자 차단' 권한이 있는 관리자가 아니라서 제재를 실행할 수 없음. "
+                "'방장이 텔레그램 방 설정에서 봇을 관리자로 올리고 사용자 차단 권한을 켜 주셔야 해요'라고 안내할 것 "
+                "(된다고 말하지 말 것).")
 
 
 def _sanction_used(ctx: ToolCtx) -> bool:
@@ -433,28 +452,99 @@ NO_RIGHT = ("요청한 관리자에게 텔레그램 '사용자 차단' 권한이
 SANCTION_LABEL = {"warn": "경고", "mute": "채팅 금지", "ban": "내보내기"}
 
 
-async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0) -> str:
-    """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action."""
+async def _sanction_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
+    """names(여러 명) 또는 name(한 명) → 방 멤버들. 한 명이라도 못 찾으면 버튼 없이 이유를 돌려준다 (엉뚱한 사람 제재 방지)."""
+    raw = [str(x) for x in (a.get("names") or [])] or ([str(a["name"])] if a.get("name") else [])
+    names = list(dict.fromkeys(n.strip() for n in raw if n.strip()))
+    if not names:
+        return [], "대상 이름이 없음. 누구인지 물어볼 것."
+    if len(names) > MAX_TARGETS:
+        return [], f"한 번에 최대 {MAX_TARGETS}명까지만 제재할 수 있음. 나눠서 요청해 달라고 안내할 것."
+    rows, errors = {}, []
+    for n in names:
+        row, err = await _resolve(ctx, n, for_sanction=True)
+        if err:
+            errors.append(f"{n}: {err}")
+        else:
+            rows[row["user_id"]] = row
+    if errors:
+        return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors)
+    return list(rows.values()), None
+
+
+async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, card_chat: int | None = None,
+                        room_title: str = "") -> str:
+    """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action.
+    여러 명은 확인 카드 한 장·버튼 한 번. card_chat = 카드를 보낼 곳 (오너 1:1 요청이면 1:1, 아니면 그 방)."""
     if not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.caller.id):  # 부른 사람에게 텔레그램 '사용자 차단' 권한
         return NO_RIGHT
-    row, err = await _resolve(ctx, str(a.get("name", "")), for_sanction=True)
+    if not await ctx.svc.perms.bot_can_moderate(ctx.bot, ctx.chat_id):     # 봇에게 그 방 제재 권한이 없으면 버튼도 없음
+        return NO_BOT_RIGHT
+    rows, err = await _sanction_targets(ctx, a)
     if err:
         return err
     if _sanction_used(ctx):
         return SANCTION_ONCE
     reason = str(a.get("reason", "관리자 판단"))[:100]
-    key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, row["user_id"], _row_name(row), reason, ctx.caller.id,
-                                            minutes=minutes))
+    targets = [(r["user_id"], _row_name(r)) for r in rows]
+    key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes,
+                                            extra=tuple(targets[1:]), from_dm=card_chat is not None))
     label = SANCTION_LABEL[kind] + (f" {human_minutes(minutes)}" if minutes else "")
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"✅ {SANCTION_LABEL[kind]}", callback_data=f"act:{key}:y"),
-        InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n"),
-    ]])
+    who = ", ".join(f"{mention(uid, name)}(<code>{uid}</code>)" for uid, name in targets)
+    count = f"{len(targets)}명 " if len(targets) > 1 else ""
+    buttons = ([InlineKeyboardButton(f"✅ {count}{SANCTION_LABEL[kind]} + 방에 안내", callback_data=f"act:{key}:p"),
+                InlineKeyboardButton(f"✅ {SANCTION_LABEL[kind]}만", callback_data=f"act:{key}:y")]
+               if card_chat else [InlineKeyboardButton(f"✅ {count}{SANCTION_LABEL[kind]}", callback_data=f"act:{key}:y")])
+    where = f"방: <b>{esc(room_title)}</b>\n" if card_chat else ""
     await ctx.bot.send_message(
-        ctx.chat_id,
-        f"⚠️ {mention(row['user_id'], _row_name(row))}님 <b>{label}</b> 할까요?\n사유: {esc(reason)}\n"
-        "(관리자만 누를 수 있고 2분 뒤 만료돼요)", parse_mode="HTML", reply_markup=kb)
-    return "확인 버튼을 보냈음. 관리자가 눌러야 실행된다고 짧게 안내할 것."
+        card_chat or ctx.chat_id,
+        f"⚠️ {where}{who}님 <b>{label}</b> 할까요?\n사유: {esc(reason)}\n(관리자만 누를 수 있고 2분 뒤 만료돼요)",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([buttons, [
+            InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n")]]))
+    return (f"확인 버튼을 보냈음 (대상 {len(targets)}명: {', '.join(n for _, n in targets)}). "
+            "관리자가 눌러야 실행된다고 짧게 안내할 것. 아직 실행된 게 아니니 '했다'고 말하지 말 것.")
+
+
+# ── 오너 전용: 1:1 에서 다른 방 관리 ───────────────────────
+def _norm_title(t: str) -> str:
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", t or "")).lower()
+
+
+async def _owner_rooms(ctx: ToolCtx) -> list:
+    return await ctx.svc.db._all("SELECT chat_id, title FROM chats WHERE chat_id < 0 ORDER BY title")
+
+
+async def t_owner_rooms(ctx: ToolCtx, a: dict) -> str:
+    rows = await _owner_rooms(ctx)
+    if not rows:
+        return "봇이 들어가 있는 방이 없음."
+    lines = []
+    for r in rows:
+        ok = await ctx.svc.perms.bot_can_moderate(ctx.bot, r["chat_id"])
+        lines.append(f"- {r['title']} ({r['chat_id']}) · 봇 제재 권한 {'있음' if ok else '없음'}")
+    return "봇이 있는 방:\n" + "\n".join(lines)
+
+
+async def t_owner_sanction(ctx: ToolCtx, a: dict) -> str:
+    """오너가 1:1 에서 '○○방 □□ 30분 뮤트'. 확인 카드는 이 1:1 에 (누를 때 다시 오너·권한 확인)."""
+    q = str(a.get("room", "")).strip()
+    rows = await _owner_rooms(ctx)
+    qn = _norm_title(q)   # '𝐅𝐈𝐑𝐒𝐓' ↔ 'first', 'First그룹방' ↔ 'FIRST' (방 이름이 말 안에 들어 있거나 그 반대)
+    hit = [r for r in rows if str(r["chat_id"]) == q] or [
+        r for r in rows if qn and (tn := _norm_title(r["title"])) and (qn in tn or tn in qn)]
+    if len(hit) != 1:
+        names = ", ".join(r["title"] for r in rows) or "없음"
+        return (f"'{q}' 방을 {'여러 개 찾음' if hit else '못 찾음'}. 봇이 있는 방: {names}. 어느 방인지 물어볼 것 "
+                "(확인 버튼 안 보냄).")
+    room = hit[0]
+    kind = str(a.get("action", ""))
+    if kind not in SANCTION_LABEL:
+        return "action 은 warn / mute / ban 중 하나."
+    minutes = max(1, min(int(a.get("minutes", 30)), 7 * 1440)) if kind == "mute" else 0
+    room_ctx = replace(ctx, chat_id=room["chat_id"], settings=await ctx.svc.db.get_settings(room["chat_id"]))
+    result = await _ask_sanction(room_ctx, kind, a, minutes, card_chat=ctx.chat_id, room_title=room["title"])
+    ctx.sanctioned = ctx.sanctioned or room_ctx.sanctioned
+    return result
 
 
 async def t_warn(ctx: ToolCtx, a: dict) -> str:
@@ -490,8 +580,29 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
         return f"실패: {e}"
     await ctx.svc.db.set_setting(ctx.chat_id, key, parsed)
     await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "setting", f"{key}={parsed}")
-    return f"설정 변경: {LABELS.get(key, key)} = {render(key, parsed)}"
+    out = f"설정 변경: {LABELS.get(key, key)} = {render(key, parsed)}"
+    if key == "style":   # 방 기본 말투: 개인 말투를 따로 정한 사람은 그대로라는 걸 알려야 '방 전체'와 어긋나지 않음
+        own = await ctx.svc.db._all(
+            "SELECT u.first_name FROM members m JOIN users u USING(user_id) WHERE m.chat_id=? AND m.style IS NOT NULL",
+            (ctx.chat_id,))
+        if own:
+            out += (f". 단 개인 말투를 따로 정한 {len(own)}명({', '.join(r['first_name'] or '?' for r in own[:5])})은 "
+                    "그대로임 → 모두 방 기본으로 맞출지 물어보고, 원하면 reset_member_styles 도구를 쓸 것. "
+                    "이 답변은 새 방 기본 말투로 쓸 것.")
+    return out
 
+
+async def t_reset_member_styles(ctx: ToolCtx, a: dict) -> str:
+    n = (await ctx.svc.db._one("SELECT COUNT(*) AS n FROM members WHERE chat_id=? AND style IS NOT NULL",
+                               (ctx.chat_id,)))["n"]
+    await ctx.svc.db._write("UPDATE members SET style=NULL WHERE chat_id=?", (ctx.chat_id,))
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "setting", f"개인 말투 초기화 {n}명")
+    return f"개인 말투 {n}명을 초기화함. 이제 이 방 모두에게 방 기본 말투로 답함."
+
+
+NAMES_PARAM = {"names": {"type": "array", "items": {"type": "string"}, "description": f"대상 1~{MAX_TARGETS}명 (@username·이름·ID)"}}
+WHO_HINT = ("누구인지 이름이 없으면('싸운 두 명') read_chat 으로 최근 대화를 읽고 해당하는 사람을 모두 특정해 names 에 넣는다 "
+            "(확인 카드에 이름이 나와 관리자가 확인함).")
 
 TOOLS: list[Tool] = [
     Tool("get_my_requests", "지금 말한 사람이 봇에게 요청했던 기록을 조회한다. '내가 뭐 요청했지' 같은 질문에 반드시 사용.",
@@ -542,33 +653,47 @@ TOOLS: list[Tool] = [
     Tool("report_to_admin", "멤버가 관리자에게 전하고 싶은 말·신고·건의를 관리자 개인 텔레그램으로 전달한다 (1인 하루 5회).",
          {"message": {"type": "string", "description": "전달할 내용 요약 (500자 이내)"}}, ["message"], t_report_to_admin),
     # 관리자 전용
-    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (확인 버튼이 뜬다). 누적되면 자동 뮤트/밴.",
-         {"name": {"type": "string"}, "reason": {"type": "string"}}, ["name", "reason"], t_warn, Role.ADMIN),
-    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (확인 버튼이 뜬다).",
-         {"name": {"type": "string"}, "minutes": {"type": "integer", "description": "1~10080"},
-          "reason": {"type": "string"}}, ["name", "minutes"], t_mute, Role.ADMIN),
-    Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN),
-    Tool("ban_member", "[관리자] 멤버를 내보낸다. 실제 실행 전 확인 버튼이 뜬다.",
-         {"name": {"type": "string"}, "reason": {"type": "string"}}, ["name", "reason"], t_ban, Role.ADMIN),
+    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+         {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_warn, Role.ADMIN, where="room"),
+    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+         {**NAMES_PARAM, "minutes": {"type": "integer", "description": "1~10080"},
+          "reason": {"type": "string"}}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
+    Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN,
+         where="room"),
+    Tool("ban_member", "[관리자] 멤버를 내보낸다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+         {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_ban, Role.ADMIN, where="room"),
     Tool("set_member_style", "[관리자] 특정 멤버 한 사람에게 쓸 봇 말투를 바꾼다 ('기본' 이면 방 기본으로).",
          {"name": {"type": "string", "description": "@username, 이름, 또는 ID (<addressee_hints> 의 그대로)"},
           "style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}},
-         ["name", "style"], t_set_member_style, Role.ADMIN),
+         ["name", "style"], t_set_member_style, Role.ADMIN, where="room"),
     Tool("change_setting", "[관리자] 방 설정을 바꾼다.",
          {"key": {"type": "string", "enum": list(DEFAULTS)}, "value": {"type": "string"}},
-         ["key", "value"], t_change_setting, Role.ADMIN),
+         ["key", "value"], t_change_setting, Role.ADMIN, where="room"),
+    Tool("reset_member_styles", "[관리자] 이 방 멤버들이 따로 정한 개인 말투를 모두 지워 방 기본 말투로 맞춘다.",
+         {}, [], t_reset_member_styles, Role.ADMIN, where="room"),
+    # 오너 전용 (1:1): 다른 방 관리 — 오너에게만, 1:1 에서만 보인다
+    Tool("owner_rooms", "[오너] 봇이 들어가 있는 방 목록과 방마다 봇 제재 권한 여부.", {}, [], t_owner_rooms, Role.OWNER,
+         where="owner_dm"),
+    Tool("owner_sanction", "[오너] 1:1 에서 다른 방의 멤버를 경고·뮤트·밴한다 (이 1:1 에 확인 버튼 한 장, 눌러야 실행). "
+         "room 은 방 이름(일부) 또는 ID. 대상은 그 방 멤버 이름·@아이디·ID.",
+         {"room": {"type": "string"}, "action": {"type": "string", "enum": ["warn", "mute", "ban"]},
+          **NAMES_PARAM, "minutes": {"type": "integer", "description": "뮤트 분 (1~10080)"},
+          "reason": {"type": "string"}}, ["room", "action", "names", "reason"], t_owner_sanction, Role.OWNER,
+         where="owner_dm"),
 ]
 _BY_NAME = {t.name: t for t in TOOLS}
 
 
-def available(role: Role, settings: dict) -> list[Tool]:
-    return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))]
+def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
+    """이 사람·이 대화에서 쓸 수 있는 도구 = AI 가 할 수 있는 일의 전부 (안 되는 도구는 아예 안 보여 '된다'고 못 함)."""
+    return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))
+            and not (t.where == "room" and in_dm) and not (t.where == "owner_dm" and not in_dm)]
 
 
 async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
     tool = _BY_NAME.get(name)
     # 2중 검사: 목록에서 숨겼더라도 실행 직전에 다시 확인
-    if not tool or tool not in available(ctx.role, ctx.settings):
+    if not tool or tool not in available(ctx.role, ctx.settings, ctx.chat_id > 0):
         return "이 도구는 지금 사용할 수 없음 (권한 없음)."
     try:
         args = json.loads(raw_args or "{}")

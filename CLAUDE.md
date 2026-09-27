@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 507개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 516개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -71,6 +71,13 @@
 - 활동 리포트·AI 하루 요약(`reports.py`, 📊 메뉴): 기록된 데이터로만 셈(mod_log·counters rep_*·ai_turns). 체험 마지막 날 관리자 1:1 리포트+결제 화면 1번,
   하루 요약은 이용 중인 방만 digest_hour(기본 21시)에 1번(counters digest_sent), 대화는 nonce 태그 안 데이터·flagged 제외.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
+
+## 제재·AI 도구 권한
+- 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
+  오너 도구(owner_rooms·owner_sanction, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
+- 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
+  오너 1:1 카드: 오너만 누름, [실행+방에 안내]/[실행만]/[취소], 방 안내는 정해진 문구+사유.
+- 자동 입장 인사 뒤 10분 안의 AI 인사 요청은 중복으로 봄. 제3자(신입)에게 하는 인사는 방 기본 말투.
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서

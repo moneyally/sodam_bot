@@ -197,6 +197,7 @@ class FakePerms:
     def __init__(self, admins=(), db=None):
         self.admins = set(admins)
         self.db = db
+        self.owner_ids: set[int] = set()   # 테스트가 오너를 지정 (오너 = 모든 방 관리자 권한)
 
     async def candidate_chats(self, user_id):
         return await self.db.all_chat_ids() if self.db else []
@@ -205,20 +206,22 @@ class FakePerms:
         return uid in self.admins or uid == bot.id
 
     async def is_admin(self, bot, chat_id, uid):
-        return uid in self.admins
+        return uid in self.admins or uid in self.owner_ids
 
     async def is_tg_admin(self, bot, chat_id, uid):
         return uid in self.admins
 
     async def can(self, bot, chat_id, uid, right="restrict"):
-        return uid in self.admins          # 가짜 권한: 관리자면 모든 세부 권한 (세분화는 test_fedban_perms 가 실제 Permissions 로)
+        return uid in self.admins or uid in self.owner_ids   # 가짜 권한: 관리자면 모든 세부 권한 (세분화는 test_fedban_perms 가 실제 Permissions 로)
 
     async def owners(self):
-        return set()
+        return set(self.owner_ids)
 
     async def role(self, bot, chat_id, uid):
         from sodam.permissions import Role
-        return Role.ADMIN if uid in self.admins else Role.MEMBER
+        if uid in self.owner_ids:
+            return Role.OWNER
+        return Role.ADMIN if uid in self.admins and chat_id < 0 else Role.MEMBER
 
     def forget(self, chat_id):
         pass
@@ -239,6 +242,9 @@ class FakeGreeter:
 
     def queue(self, bot, chat_id, user_id, name):
         self.queued.append((chat_id, user_id, name))
+
+    def auto_greeted(self, chat_id, user_id, within=600):
+        return any(c == chat_id and u == user_id for c, u, _ in self.queued)
 
 
 class FakeCas:

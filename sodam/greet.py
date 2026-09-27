@@ -13,6 +13,7 @@ import html
 import logging
 import random
 import re
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 WAIT_SECONDS = 5
+AUTO_GREET_WINDOW = 600   # 자동 입장 인사 뒤 이 시간 안의 AI 인사 요청은 중복으로 봄
 FALLBACKS = [
     "{names} 대표님, 소통방에 오신 걸 환영합니다! 편하게 인사 나눠주세요 🙌",
     "반갑습니다 {names} 대표님! 궁금한 건 언제든 저를 불러주세요.",
@@ -174,8 +176,16 @@ class Greeter:
         self.svc = svc
         self._pending: dict[int, list[tuple[int, str]]] = {}
         self._tasks: dict[int, asyncio.Task] = {}
+        self._greeted: dict[tuple[int, int], float] = {}   # 자동 인사를 했거나 곧 할 사람 → 시각 (AI 인사 중복 방지)
+
+    def auto_greeted(self, chat_id: int, user_id: int, within: int = AUTO_GREET_WINDOW) -> bool:
+        return time.time() - self._greeted.get((chat_id, user_id), 0) < within
 
     def queue(self, bot: Bot, chat_id: int, user_id: int, name: str) -> None:
+        now = time.time()
+        if len(self._greeted) > 5000:
+            self._greeted = {k: t for k, t in self._greeted.items() if now - t < AUTO_GREET_WINDOW}
+        self._greeted[(chat_id, user_id)] = now
         self._pending.setdefault(chat_id, []).append((user_id, name))
         if chat_id not in self._tasks or self._tasks[chat_id].done():
             self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
