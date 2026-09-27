@@ -1,0 +1,12 @@
+# (선택) GitHub 에 올라온 새 커밋을 자동 배포: install.sh --auto-update 로 켬.
+# 새 커밋이 없으면 아무 일도 안 함. 있으면 update.sh 가 테스트 통과해야만 재시작, 시작 실패면 이전 커밋으로 되돌림.
+[Unit]
+Description=Sodam auto update (git fetch → tests → restart)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sodam/deploy/update.sh --quiet
+TimeoutStartSec=20min
+Nice=10

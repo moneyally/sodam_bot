@@ -1,10 +1,8 @@
-# heartbeat 파일(data/heartbeat, 봇이 30초마다 갱신)이 180초 넘게 안 바뀌면 봇 재시작.
-# 프로세스는 살아 있는데 멈춘(행) 경우용. 죽은 경우는 sodam.service 의 Restart=always 가 처리.
+# 프로세스는 살아 있는데 멈춘(행) 봇 재시작 — tools/supervise.sh 의 하트비트 검사와 같은 일.
+# 죽은 경우는 sodam.service 의 Restart=always 가 처리. 로그: journalctl -u sodam-health
 [Unit]
 Description=Sodam heartbeat check
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'f=/opt/sodam/sodam_bot/data/heartbeat; systemctl is-active -q sodam || exit 0; \
-  [ -f "$f" ] && [ $(( $(date +%%s) - $(stat -c %%Y "$f") )) -lt 180 ] && exit 0; \
-  echo "heartbeat stale -> restart sodam"; systemctl restart sodam'
+ExecStart=/opt/sodam/deploy/healthcheck.sh

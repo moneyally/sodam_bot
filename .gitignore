@@ -6,3 +6,6 @@ __pycache__/
 .claude/
 .env.dealer
 .env.*.local
+/backups/
+/VERSION
+sodam-migrate-*.enc

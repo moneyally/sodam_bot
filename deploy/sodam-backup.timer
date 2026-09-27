@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Sodam SQLite backup
+
+[Timer]
+# 서버 시간대 Asia/Seoul (install.sh) 기준 새벽 4시 30분. 꺼져 있다 켜지면 놓친 백업을 바로 함.
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -93,7 +93,8 @@ def git_version(root: Path = ROOT) -> str | None:
 
 
 def heartbeat_path(cfg: Config) -> Path:
-    return Path(cfg.db_path).resolve().parent / "heartbeat"
+    # 딜러 봇은 같은 DB 폴더를 같이 써서 따로 (한쪽이 멈춰도 다른 쪽 하트비트에 가려지지 않게, deploy/healthcheck.sh)
+    return Path(cfg.db_path).resolve().parent / ("heartbeat-dealer" if cfg.bot_role == "dealer" else "heartbeat")
 
 
 def write_heartbeat(path: Path) -> None:
