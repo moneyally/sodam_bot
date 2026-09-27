@@ -7,7 +7,7 @@ import asyncio
 
 from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 
-from sodam import games
+from sodam import games, wordbot
 from sodam.casino import core
 
 test, run_all = runner()
@@ -31,6 +31,13 @@ def reactions(bot):
     return [(c[2], c[3]) for c in bot.named("reaction")]
 
 
+def plays(word, line=""):
+    async def move(*a, **k):
+        await asyncio.sleep(0)          # 봇이 생각하는 사이에 다른 답이 끼어들 수 있게
+        return word, line
+    return move
+
+
 async def text(svc, user, word, mid=None):
     m = FakeMsg(CHAT, user, word, message_id=mid or (user.id * 100 + len(word)))
     return await svc.games.on_text(m, word), m
@@ -41,15 +48,16 @@ async def dictionary_judges_and_first_answer_wins_late_ones_get_reaction():
     db, svc, bot, g = await setup()
     g.cancel_timer()
     g.last, g.used = "기차", {"기차"}
-    orig, games.pick_next = games.pick_next, lambda w, used: "표범"
+    orig, wordbot.move = wordbot.move, plays("표범")
     try:
         (ok_a, _), (ok_b, mb) = await asyncio.gather(text(svc, A, "차표"), text(svc, B, "차고"))  # 동시에
     finally:
-        games.pick_next = orig
+        wordbot.move = orig
     assert ok_a and ok_b and reactions(bot) == [(mb.message_id, "🙈")], reactions(bot)
     assert any("차표 → 🤖 <b>표범</b>" in t for t in said(bot)) and g.last == "표범"
     assert (await text(svc, C, "범아가"))[0] and reactions(bot)[-1][1] == "🤔", "사전에 없는 말"
-    assert (await text(svc, C, "표범"))[0] is False, "표로 시작 안 함 → 평범한 채팅"
+    assert (await text(svc, C, "나무"))[0] is False, "끝말과 상관없는 말 → 평범한 채팅"
+    assert (await text(svc, C, "표지"))[0] and reactions(bot)[-1][1] == "🙈", "차표에 늦게 이은 말"
     g.used.add("범인")
     assert (await text(svc, C, "범인"))[0] and reactions(bot)[-1][1] == "🤨", "이미 나온 말"
     assert not await svc.games.on_text(FakeMsg(CHAT, C, "범 같은 얘기"), "범 같은 얘기")
@@ -62,11 +70,11 @@ async def bot_stuck_player_wins_six():
     db, svc, bot, g = await setup()
     g.cancel_timer()
     g.last, g.used = "기차", {"기차"}
-    orig, games.pick_next = games.pick_next, lambda w, used: None
+    orig, wordbot.move = wordbot.move, plays(None)
     try:
         await text(svc, A, "차표")
     finally:
-        games.pick_next = orig
+        wordbot.move = orig
     assert g.finished and "제가 졌어요" in said(bot)[-1] and await core.balance(db, CHAT, A.id) == 6
 
 
@@ -136,3 +144,81 @@ async def bot_falls_back_to_full_dictionary():
     ch = next(c for c, ws in games._BY_FIRST.items() if c not in games._COMMON and any(games.can_follow(w) for w in ws))
     nxt = games.pick_next("가" + ch, set())
     assert nxt and nxt[0] == ch and games.can_follow(nxt), (ch, nxt)
+
+
+class Call:
+    def __init__(self, name, args, cid="c1"):
+        self.type, self.id = "function", cid
+        self.function = type("F", (), {"name": name, "arguments": args})()
+
+
+class ScriptLLM:
+    """도구 호출을 대본대로 돌려주는 가짜 LLM (소담이 선수)."""
+    enabled = True
+
+    def __init__(self, steps):
+        self.steps, self.seen = list(steps), []
+
+    async def chat(self, messages, **kw):
+        self.seen.append((messages, kw))
+        return type("M", (), {"content": "", "tool_calls": [self.steps.pop(0)] if self.steps else []})()
+
+
+@test
+async def ai_player_uses_tools_and_code_rejects_bad_words():
+    """클로드코드식: LLM 이 find_words 로 후보를 보고 play → 코드가 검사, 틀리면 '안 됨' 돌려주고 다시."""
+    db, svc, bot, g = await setup()
+    g.cancel_timer()
+    used = {"기차", "차표"}
+    good = wordbot.candidates("차표", used)[0][0]
+    svc.llm = ScriptLLM([Call("find_words", "{}"), Call("play", '{"word": "표가나다라", "line": "x"}', "c2"),
+                         Call("play", '{"word": "%s", "line": "이어보시죠 😏"}' % good, "c3")])
+    word, line = await wordbot.move(svc, CHAT, "차표", used)
+    assert (word, line) == (good, "이어보시죠 😏"), (word, line)
+    msgs, kw = svc.llm.seen[-1]
+    results = [m["content"] for m in msgs if m["role"] == "tool"]
+    assert "이을 말" in results[0] and results[1].startswith("안 됨"), results
+    assert kw["tools"] and kw["purpose"] == "wordchain"
+
+
+@test
+async def ai_player_falls_back_to_code_on_timeout_or_nonsense():
+    db, svc, bot, g = await setup()
+    g.cancel_timer()
+
+    class Slow(ScriptLLM):
+        async def chat(self, messages, **kw):
+            await asyncio.sleep(10)
+    svc.llm = Slow([])
+    orig, wordbot.TIMEOUT = wordbot.TIMEOUT, 0.05
+    try:
+        word, line = await wordbot.move(svc, CHAT, "차표", {"기차", "차표"})
+    finally:
+        wordbot.TIMEOUT = orig
+    assert word and wordbot.why_not(word, "차표", {"기차", "차표"}) is None and line == ""
+    svc.llm = ScriptLLM([Call("play", '{"word": "없는말이다"}')] * 4)
+    word, _ = await wordbot.move(svc, CHAT, "차표", {"기차", "차표"})
+    assert word and wordbot.why_not(word, "차표", {"기차", "차표"}) is None, "끝까지 틀리면 코드가 둠"
+
+
+@test
+async def hard_level_picks_fewest_follow_ups():
+    games.load_words()
+    word = wordbot.code_move("차표", {"차표"}, "hard")
+    counts = [n for _, n in wordbot.candidates("차표", {"차표"}, hard=True, n=10**6)]
+    assert wordbot.follow_count(word) == min(counts), (word, min(counts))
+
+
+@test
+async def answer_during_bot_thinking_is_late_not_a_move():
+    """사람 A 가 '차표' → 소담이 생각 중에 C 가 '표지' (소담이 차례를 가로챔) → 🙈, 게임은 소담이 수로 진행."""
+    db, svc, bot, g = await setup()
+    g.cancel_timer()
+    g.last, g.used = "기차", {"기차"}
+    orig, wordbot.move = wordbot.move, plays("표범")
+    try:
+        (ok_a, _), (ok_c, mc) = await asyncio.gather(text(svc, A, "차표"), text(svc, C, "표지"))
+    finally:
+        wordbot.move = orig
+    assert ok_a and ok_c and reactions(bot) == [(mc.message_id, "🙈")] and g.last == "표범", (reactions(bot), g.last)
+    g.cancel_timer()

@@ -327,7 +327,7 @@ async def group_panel(svc: Services, bot: Bot, chat_id: int, user_id: int) -> tu
 async def s_features(c: PanelCtx) -> Screen:
     s = await c.svc.db.get_settings(c.cid)
     return Screen("🧩 <b>기능 켜기/끄기</b>\n버튼을 누르면 바로 바뀌어요.",
-                  _kb(_toggle_rows(s, c.cid, FEATURE_TOGGLES) + [_back(c.cid)]))
+                  _kb(_toggle_rows(s, c.cid, FEATURE_TOGGLES) + await _extras("f", c) + [_back(c.cid)]))
 
 
 async def s_join(c: PanelCtx) -> Screen:

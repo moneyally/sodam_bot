@@ -163,11 +163,15 @@ async def wordchain_points_go_through_ledger():
     bot = K.Bot()
     g = WordChain(svc.games, bot, chat, u.id)
     g.last, g.used, g.stale, g._said = "기차", {"기차"}, "", 0.0
-    orig, games.pick_next = games.pick_next, lambda *a: None          # 봇이 못 이음 → 1 + 5점
+    from sodam import wordbot
+
+    async def stuck(*a, **k):
+        return None, ""                                                 # 봇이 못 이음 → 1 + 5점
+    orig, wordbot.move = wordbot.move, stuck
     try:
         assert await g.on_text(FakeMsg(chat, u, "차표"), "차표")
     finally:
-        games.pick_next = orig
+        wordbot.move = orig
     assert await core.balance(db, chat, u.id) == 6
     assert await reasons(db, chat, u.id) == ["game:끝말잇기", "game:끝말잇기"]
 

@@ -19,6 +19,7 @@ from telegram.error import TelegramError
 
 from .casino.core import credit
 from .llm import BudgetExceeded
+from .settings import register_setting
 from .util import esc, mention, user_name
 
 if TYPE_CHECKING:
@@ -185,6 +186,10 @@ def pick_next(word: str, used: set[str]) -> str | None:
 
 
 REACT = {"late": "🙈", "used": "🤨", "unknown": "🤔"}
+register_setting("wc_level", "normal", "끝말잇기 소담이 난이도",
+                 choices={"easy": "easy", "쉬움": "easy", "normal": "normal", "보통": "normal", "hard": "hard", "어려움": "hard"},
+                 choice_labels={"easy": "쉬움", "normal": "보통", "hard": "어려움"})
+register_setting("wc_ai", True, "끝말잇기 AI 선수")   # 끄면 코드만 둠 (AI 비용 0)
 
 
 class WordChain(Game):
@@ -203,7 +208,7 @@ class WordChain(Game):
             await asyncio.to_thread(load_words)
         self.last, self.stale = self.first_word(), ""
         self.used = {self.last}
-        self._said = 0.0
+        self._said, self.thinking = 0.0, False
         await self.say(f"🔗 <b>끝말잇기</b> 시작! 제가 먼저 할게요: <b>{self.last}</b>\n"
                        f"'{self._starts_text()}'(으)로 시작하는 낱말을 먼저 치는 사람이 이어요. 두음법칙 OK!\n"
                        f"{self.TURN_SECONDS}초 안에 아무도 못 이으면 제가 이겨요 😎")
@@ -237,6 +242,8 @@ class WordChain(Game):
         """이을 수 있으면 None, 아니면 반응 종류. 'no' = 끝말잇기 답이 아님 (평범한 채팅)."""
         if not is_hangul_word(word) or not 2 <= len(word) <= 12:
             return "no"
+        if getattr(self, "thinking", False):          # 소담이 차례(생각 중)에 들어온 답은 늦은 답
+            return "late" if is_word(word) and word[0] in starts_for(self.last) | starts_for(self.stale) else "no"
         if word[0] not in starts_for(self.last):
             return "late" if self.stale and word[0] in starts_for(self.stale) and is_word(word) else "no"
         if word in self.used:
@@ -250,18 +257,28 @@ class WordChain(Game):
             return False
         if why:
             return await self.react(msg, why)
-        nxt = pick_next(word, self.used | {word})     # await 전에 상태를 바꿔 동시에 온 답은 '늦음'이 된다
-        self.used |= {word, nxt} - {None}
-        self.stale, self.last = self.last, nxt or word
+        from . import wordbot   # 늦게 import (wordbot → games)
+        self.used.add(word)                           # await 전에 상태를 바꿔 동시에 온 답은 '늦음'이 된다
+        self.stale, self.last, self.thinking = self.last, word, True
         self.cancel_timer()
-        await self.award(msg.from_user, 1)
+        try:
+            await self.award(msg.from_user, 1)
+            s = await self.svc.db.get_settings(self.chat_id)
+            nxt, line = await wordbot.move(self.svc, self.chat_id, word, self.used, s["wc_level"], s["wc_ai"])
+        finally:
+            self.thinking = False
+        if self.finished:                             # 생각하는 사이 게임이 끝났으면 (.게임끝 등)
+            return True
         who = mention(msg.from_user.id, user_name(msg.from_user))
         if not nxt:
             await self.award(msg.from_user, 5)
             await self.finish(f"😵 '{esc(word)}' 다음 말이 없어요, 제가 졌어요! {who} 대표님 승리 +6점")
             return True
+        self.used.add(nxt)
+        self.stale, self.last = word, nxt
         await self.pace()
-        await self.say(f"✅ {who} {esc(word)} → 🤖 <b>{nxt}</b>\n'{self._starts_text()}'(으)로 이어주세요!")
+        await self.say(f"✅ {who} {esc(word)} → 🤖 <b>{nxt}</b>" + (f" {esc(line)}" if line else "")
+                       + f"\n'{self._starts_text()}'(으)로 이어주세요!")
         self.set_timer(self.TURN_SECONDS, self._timeout)
         return True
 

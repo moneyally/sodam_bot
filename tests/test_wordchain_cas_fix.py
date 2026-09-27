@@ -33,10 +33,11 @@ async def reply_to_ai_during_game_goes_to_game_and_ai_gets_hint():
     game = r.svc.games.active[Room.CHAT]
     await memory.record_turn(r.db, Room.CHAT, BOSS.id, "call", "안녕", "안녕하세요", 555)
     ai_msg = SimpleNamespace(message_id=555, from_user=r.bot_user(), text="안녕하세요", caption=None)
-    chats = len(r.llm.of("chat"))
+    agent_calls = lambda: [c for c in r.llm.of("chat") if c.get("purpose") != "wordchain"]  # noqa: E731
+    chats = len(agent_calls())
     word = next(w for ch in games.starts_for(game.last) for w in games._COMMON.get(ch, []) if w not in game.used)
     await r.say(A, word, reply_to=ai_msg)                           # AI 답에 답장으로 단 단어
-    assert len(r.llm.of("chat")) == chats, "게임이 받음 (AI 가 대신 진행 안 함)"
+    assert len(agent_calls()) == chats, "게임이 받음 (대화 AI 가 대신 진행 안 함, 소담이 수는 wordchain)"
     assert any(f"{word} →" in c[2] for c in r.bot.named("send_message")), "사전으로 바로 판정·봇이 이음"
     r.llm.script = [reply("단어를 쳐주세요")]
     await r.say(A, "소담아 이거 어떻게 해")
