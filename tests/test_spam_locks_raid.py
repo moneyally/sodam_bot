@@ -299,13 +299,13 @@ async def raid_triggers_captcha_notice_dm_and_report():
     room = [t for t in _room_texts(bot) if "방어 모드" in t]
     assert len(room) == 1, room
     dms = {c[1] for c in bot.named("send_message") if "방어 모드를" in c[2]}
-    assert dms == {ADMIN, 2}, f"관리자 1:1 알림 대상: {dms} (봇·DM 막은 관리자 제외)"
-    reports = [c for c in bot.named("send_message") if c[1] == 7 and "[대량 입장]" in c[2]]
+    assert dms == {ADMIN, 2, 7}, f"관리자·오너 1:1 알림 대상: {dms} (봇·DM 막은 관리자 제외)"
+    reports = [c for c in bot.named("send_message") if c[1] == 7 and "대량 입장" in c[2]]
     assert len(reports) == 1, reports
     for uid in range(111, 125):  # 방어 중 계속 들어와도 안내·보고는 한 번
         await _join(ctx, uid)
     assert len([t for t in _room_texts(bot) if "방어 모드" in t]) == 1
-    assert len([c for c in bot.named("send_message") if c[1] == 7 and "[대량 입장]" in c[2]]) == 1
+    assert len([c for c in bot.named("send_message") if c[1] == 7 and "대량 입장" in c[2]]) == 1
 
 
 @test

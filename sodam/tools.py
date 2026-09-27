@@ -847,6 +847,7 @@ async def t_alert_rule(ctx: ToolCtx, a: dict) -> str:
     no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_no", None, 1800)
     await ctx.bot.send_message(
         ctx.chat_id, f"🔔 이 알림 규칙을 만들까요?\n<b>{esc(await rules.describe(ctx.svc, spec))}</b>\n"
+                     f"{await rules.preview_text(ctx.svc, ctx.chat_id, {**spec, 'created_by': ctx.caller.id})}\n"
                      f"(쿨다운 {spec['cooldown']}분 · 요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ 만들기", callback_data=f"m:k:{ok}"),
                                                               InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))

@@ -195,8 +195,8 @@ async def _cas_ban(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User)
     await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 스팸 계정 명단(CAS·lols)에 등록된 계정이라 차단했어요.", 600,
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ 차단 풀기", callback_data=f"cas:{user.id}"),
                                                         InlineKeyboardButton("🔕 스팸 명단 차단 끄기", callback_data="cas:off")]]))
-    await svc.mod.report(context.bot, f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴",
-                         owner_kb(chat_id, user.id, "ban"))
+    await svc.mod.incident(context.bot, chat_id, "cas", f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴",
+                           owner_kb(chat_id, user.id, "ban"), sub=user.id, label=user_name(user))
 
 
 async def _cas_background(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User) -> None:

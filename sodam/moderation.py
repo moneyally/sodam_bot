@@ -10,7 +10,7 @@ from typing import Callable
 from telegram import Bot, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, Forbidden, TelegramError
 
-from . import casino
+from . import casino, incidents
 from .config import Config
 from .db import DB
 from .permissions import Permissions
@@ -172,8 +172,9 @@ class Moderator:
             if count >= s["warn_ban_at"]:
                 await self.ban(bot, chat_id, user_id, actor_id, f"경고 {count}회 누적")
                 text += f"\n🚫 경고 {count}회 누적으로 내보냈어요."
-                await self.report(bot, f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 {count}회 누적 ({esc(reason)})",
-                                  owner_kb(chat_id, user_id, "ban"))
+                await self.incident(bot, chat_id, "autoban", f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 "
+                                    f"{count}회 누적 ({esc(reason)})", owner_kb(chat_id, user_id, "ban"),
+                                    sub=user_id, label=name)
             elif count >= s["warn_mute_at"]:
                 await self.mute(bot, chat_id, user_id, s["warn_mute_minutes"], actor_id, f"경고 {count}회 누적")
                 text = muted_notice(text + f"\n🔇 경고 누적으로 {human_minutes(s['warn_mute_minutes'])} 채팅 금지예요.",
@@ -186,14 +187,24 @@ class Moderator:
             text += "\n(봇 권한이 부족해서 제재는 못 했어요)"
         return text
 
+    async def report_targets(self) -> list[int]:
+        """관리자 보고 받는 곳: 관리 로그방(LOG_CHAT_ID) + 오너들."""
+        return ([self.cfg.log_chat_id] if self.cfg.log_chat_id else []) + sorted(await self.perms.owners())
+
+    async def incident(self, bot: Bot, chat_id: int, kind: str, text: str, kb: InlineKeyboardMarkup | None = None,
+                       *, key="room", sub=None, label: str = "", extra=()) -> incidents.Result:
+        """방에서 저절로 생긴 관리 일(캡차 실패·도배 뮤트·사칭·자동 밴·스팸 명단)을 보고 — 같은 방·종류는 10분 안이면
+        메시지 하나를 고쳐 가며 (sodam/incidents.py). extra = 함께 받을 사람(방 관리자 등)."""
+        return await incidents.open_or_bump(self, bot, chat_id, kind, key, text, kb,
+                                            [*extra, *await self.report_targets()], sub=sub, label=label)
+
     async def report(self, bot: Bot, text: str, kb: InlineKeyboardMarkup | None = None) -> None:
-        """관리자 보고: 관리 로그방(LOG_CHAT_ID) + 오너 개인 텔레그램으로 전달.
+        """관리자 보고: 관리 로그방(LOG_CHAT_ID) + 오너 개인 텔레그램으로 전달. 방에서 저절로 생기는 일은 incident().
 
         봇은 먼저 대화를 시작한 사람에게만 개인 메시지를 보낼 수 있어서,
         오너가 봇과 1:1 채팅을 한 번도 안 했으면 그 오너에게는 조용히 건너뛴다.
         """
-        targets = ([self.cfg.log_chat_id] if self.cfg.log_chat_id else []) + sorted(await self.perms.owners())
-        for chat_id in targets:
+        for chat_id in await self.report_targets():
             try:   # 1:1·로그방이라 중복돼도 괜찮음 → 응답만 끊긴 경우도 한 번 더 보냄
                 await send_retry(lambda c=chat_id: bot.send_message(c, "📣 " + text, parse_mode="HTML", reply_markup=kb),
                                  dup_ok=True)
@@ -237,8 +248,9 @@ class Moderator:
             except TelegramError as e:
                 log.warning("flood mute failed: %s", e)
                 return None
-            await self.report(bot, f"[도배 뮤트] chat {chat_id} / {esc(name)}({user.id}) "
-                                   f"{human_minutes(s['flood_mute_minutes'])}", owner_kb(chat_id, user.id, "mute"))
+            await self.incident(bot, chat_id, "flood", f"[도배 뮤트] chat {chat_id} / {esc(name)}({user.id}) "
+                                f"{human_minutes(s['flood_mute_minutes'])}", owner_kb(chat_id, user.id, "mute"),
+                                sub=user.id, label=name)
             return muted_notice(f"🔇 {mention(user.id, name)}님 {s['flood_seconds']}초에 {s['flood_count']}개 이상 "
                                 f"보내셔서 {human_minutes(s['flood_mute_minutes'])} 채팅 금지예요.", user.id)
 
@@ -415,6 +427,6 @@ class Moderator:
         text = (f"🛡️ {mention(user.id, user_name(user))}님은 관리자 {esc(suspicious)}님과 이름이 비슷해서 "
                 f"사칭 방지로 채팅을 막았어요. 오해라면 관리자가 아래 버튼으로 풀어주세요.\n"
                 f"※ 관리자는 절대 먼저 개인 메시지로 송금·코인을 요구하지 않아요.")
-        await self.report(bot, f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}",
-                          owner_kb(chat_id, user.id, "hold"))
+        await self.incident(bot, chat_id, "imperson", f"[사칭 의심] chat {chat_id} / user {user.id} → {esc(suspicious)}",
+                            owner_kb(chat_id, user.id, "hold"), sub=user.id, label=user_name(user))
         return muted_notice(text, user.id)

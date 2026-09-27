@@ -3,7 +3,7 @@
 N초에 M명 이상 들어오면(기본 60초 10명) 방어 모드 K분(기본 30분):
 - 그동안 새 입장자는 raid_action 대로: captcha = 캡차 설정과 상관없이 캡차 (handlers.handle_new_member 가 active() 를 봄),
   kick = 안내 없이 바로 내보냄 (재입장은 가능 → 방어가 끝난 뒤 들어오면 평소대로). 끝날 때 내보낸 수를 관리자 1:1 로
-- 방에 사라지는 안내 1번 · 텔레그램 관리자들에게 1:1 알림 · 오너 보고 1번
+- 방에 사라지는 안내 1번 · 텔레그램 관리자들 + 오너에게 1:1 알림 (사건 하나, sodam/incidents.py)
 - 시간이 지나면 handlers.job_tick 이 tick() 으로 해제 (안내 메시지도 지움). 재시작해도 DB(chat_state)에 남아 이어짐
 관리자는 🚨 대량 입장 방어 화면(panels/locks.py)에서 직접 켜고 끌 수 있다.
 입장 수 세기는 hooks.add_member_join_hook 으로 등록 (관리자·권한 없는 방은 handlers 가 훅 전에 걸러냄).
@@ -119,9 +119,9 @@ async def start(svc: Services, bot, chat_id: int, minutes: int, *, joined: int =
               + ("그동안 새로 들어오는 사람은 안내 없이 바로 내보내요 (다시 들어올 수는 있어요)." if action == "kick"
                  else "그동안 새로 들어오는 사람은 모두 캡차를 받아요.")
               + " 끄기: /start → ⚙️ 내 그룹 관리 → 🚨 대량 입장 방어")
-        await _dm_admins(svc, bot, chat_id, dm)
-        await svc.mod.report(bot, f"[대량 입장] {title} ({chat_id}) {seconds}초에 {joined}명 → "
-                                  f"방어 모드 {human_minutes(minutes)}")
+        # 관리자 1:1 + 오너 보고를 사건 하나로 (sodam/incidents.py): 10분 안에 또 켜지면 같은 메시지를 고침
+        admins = [a for a in await svc.perms.admin_users(bot, chat_id) if not getattr(a, "is_bot", False)]
+        await svc.mod.incident(bot, chat_id, "raid", dm, extra=admins)
     return end
 
 

@@ -75,9 +75,9 @@ async def indefinite_mute_report_has_no_shorten_button():
     r.bot.admins = [fake_user(1, "방장")]
     reports = []
 
-    async def report(bot, text, kb=None):
+    async def incident(bot, chat_id, kind, text, kb=None, **kw):
         reports.append(kb)
-    r.svc.mod.report = report
+    r.svc.mod.incident = incident
     assert await r.svc.mod.check_impersonation(r.bot, Room.CHAT, fake_user(66, "방장"))
     [kb] = reports
     texts = [b.text for b in kb.inline_keyboard[0]]

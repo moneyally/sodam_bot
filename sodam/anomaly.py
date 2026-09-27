@@ -34,7 +34,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from . import accountage, free, hooks, raid
+from . import accountage, free, hooks, incidents, raid
 from . import db as dbmod
 from .permissions import Role, may
 from .security import _TLD
@@ -526,14 +526,11 @@ async def alert(svc, bot, chat_id: int, f: Finding) -> int | None:
     await svc.db.log_mod(chat_id, None, None, "anomaly", f"{f.summary} (점수 {f.score})")
     from .subscription import chat_title  # 늦게 import (순환 방지)
     body, kb = alert_text(await chat_title(svc, chat_id), f), alert_kb(chat_id, aid)
-    sent = 0
-    for a in await recipients(svc, bot, chat_id):
-        try:
-            await bot.send_message(a.id, body, parse_mode="HTML", reply_markup=kb)
-            sent += 1
-        except TelegramError:  # 봇과 1:1 을 시작 안 한 관리자 (Forbidden) 등
-            pass
-    await svc.db._write("UPDATE anomaly_alerts SET sent=? WHERE id=?", (sent, aid))
+    # 쿨다운·하루 상한은 위 claim 그대로, 보내기는 사건 묶기로 (10분 안이면 같은 1:1 메시지를 고침 — sodam/incidents.py).
+    # 1:1 막힌 관리자(Forbidden)는 건너뜀
+    res = await incidents.open_or_bump(svc, bot, chat_id, "anomaly", "room", body, kb,
+                                       await recipients(svc, bot, chat_id))
+    await svc.db._write("UPDATE anomaly_alerts SET sent=? WHERE id=?", (res.delivered, aid))
     return aid
 
 

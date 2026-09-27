@@ -16,7 +16,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from . import free, hooks
+from . import free, hooks, incidents
 from .db import register_schema
 from .permissions import Role
 from .settings import register_setting
@@ -211,13 +211,10 @@ async def check(svc, bot, chat_id: int, user, *, spoke: bool = False) -> bool:
     await _mark(svc.db, chat_id, user.id, info["rooms"])
     from .subscription import chat_title
     text = alert_text(await chat_title(svc, chat_id), name, user.id, info, spoke)
-    for admin in await svc.perms.admin_users(bot, chat_id):
-        if getattr(admin, "is_bot", False):
-            continue
-        try:
-            await bot.send_message(admin.id, text, parse_mode="HTML", reply_markup=alert_kb(chat_id, user.id))
-        except TelegramError:
-            pass  # 봇과 1:1 을 시작 안 한 관리자
+    # 방마다 10분 안의 명단 계정은 관리자 1:1 메시지 하나에 (사람마다 [🚫 밴][무시] 버튼 유지, sodam/incidents.py)
+    admins = [a for a in await svc.perms.admin_users(bot, chat_id) if not getattr(a, "is_bot", False)]
+    await incidents.open_or_bump(svc, bot, chat_id, "fedban", "room", text, alert_kb(chat_id, user.id), admins,
+                                 sub=user.id, label=name)
     return False
 
 

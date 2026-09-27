@@ -19,6 +19,10 @@ async def room():
     async def report(bot, text, kb=None):
         reports.append((text, kb))
     r.svc.mod.report = report
+
+    async def incident(bot, chat_id, kind, text, kb=None, **kw):   # 방에서 저절로 생긴 일 = 사건 보고 (sodam/incidents.py)
+        reports.append((text, kb))
+    r.svc.mod.incident = incident
     return r, reports
 
 

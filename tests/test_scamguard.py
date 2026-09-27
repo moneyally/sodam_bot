@@ -179,7 +179,9 @@ async def old_member_with_signals_judged():
     assert len(calls) == 3, len(calls)
     assert "키워드 '수익 보장'" in calls[0]["user"] and "지갑주소" in calls[1]["user"] \
         and "외부 초대 링크" in calls[2]["user"]
-    assert len(dms(r, ADMIN)) == 3
+    assert len(dms(r, ADMIN)) == 1, "같은 사람 10분 안 = 사건 하나 (sodam/incidents.py)"
+    edits = [c for c in r.bot.named("edit_text") if c[1] == ADMIN]
+    assert len(edits) == 2 and "+2건" in edits[-1][2] and "t.me/scamroom" in edits[-1][2], edits
 
 
 @test

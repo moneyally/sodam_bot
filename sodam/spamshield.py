@@ -42,12 +42,12 @@ import time
 import unicodedata
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import TelegramError
 
 from . import db as dbmod
-from . import free, hooks
+from . import free, hooks, incidents
+from .incidents import scam_incident
 from .permissions import Role
-from .security import NO_PREVIEW, WALLETS, find_links, find_mentions, link_allowed, nonce, normalize, wrap
+from .security import WALLETS, find_links, find_mentions, link_allowed, nonce, normalize, wrap
 from .settings import register_setting
 from .util import esc, fmt_time, mention, user_name
 
@@ -699,13 +699,11 @@ async def send_alert(svc, bot, chat_id: int, vid: int) -> int:
     from .subscription import chat_title  # 늦게 import (순환 방지)
     body = detail_text(await chat_title(svc, chat_id), row, svc.cfg.tz)
     kb = InlineKeyboardMarkup(action_rows(chat_id, row))
-    sent = 0
-    for a in await recipients(svc, bot, chat_id):
-        try:
-            await bot.send_message(a.id, body, parse_mode="HTML", reply_markup=kb, link_preview_options=NO_PREVIEW)
-            sent += 1
-        except TelegramError:  # 봇과 1:1 을 시작 안 한 관리자 (Forbidden) 등 → 건너뜀
-            pass
+    # 🕵️ 사기 의심 검사와 같은 사건 키 (방, 'scam', 사람) → 둘 다 켜져 있어도 같은 사람은 1:1 한 통 (sodam/incidents.py).
+    # 1:1 막힌 관리자(Forbidden)는 건너뜀
+    res = await incidents.open_or_bump(svc, bot, chat_id, *scam_incident(row["user_id"]), body, kb,
+                                       await recipients(svc, bot, chat_id), sub=row["user_id"])
+    sent = res.delivered
     await svc.db._write("UPDATE spamshield_verdicts SET sent=? WHERE id=?", (sent, vid))
     await svc.db.audit(chat_id, None, row["user_id"], "spamshield_alert",
                        f"사기 점수 {row['scam']:.2f} · 관리자 {sent}명" if row["scam"] is not None else f"관리자 {sent}명")

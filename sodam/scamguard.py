@@ -11,7 +11,7 @@
   AI 확인(scam_ai, 기본 켬): 걸린 메시지를 guard_model 로 한 번 더 확인(llm.json purpose="scam", effort=low,
     메시지는 nonce 태그 안 데이터). scam && confidence ≥ THRESHOLD 일 때만 관리자에게. 방당 하루 scam_daily_ai 회를
     넘거나 AI 가 실패하면 규칙만(걸린 항목 그대로 관리자 확인 요청). 끄면 규칙만 (AI 비용 0).
-  처리(scam_action): ask = 메시지는 두고 텔레그램 관리자 1:1 로 원문·이유 + [🗑 지우기][🚫 밴][🔇 뮤트 1일][✅ 괜찮음]
+  처리(scam_action): ask = 메시지는 두고 텔레그램 관리자 1:1 로 원문·이유 (🛡️ 스팸 방패와 같은 사건 — 같은 사람은 한 통) + [🗑 지우기][🚫 밴][🔇 뮤트 1일][✅ 괜찮음]
                      hide = 지우고 방에 잠깐 안내 + 관리자 1:1 ([🚫 밴][🔇 뮤트 1일][✅ 괜찮음]).
                      봇에게 삭제 권한이 없으면 hide 여도 알림만. **자동 제재는 하지 않는다.**
 버튼(panels/scam.py, m:sgx)은 누른 사람의 권한(permissions.may) 확인. '괜찮음' = 그 방에선 그 사람 검사 생략.
@@ -28,7 +28,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from . import db as dbmod
-from . import free, hooks
+from . import free, hooks, incidents
 from .permissions import Role
 from .security import WALLETS, nonce, normalize, wrap
 from .settings import register_setting
@@ -327,13 +327,10 @@ async def act(svc, bot, msg, verdict: Verdict, mode: str) -> None:
     body = alert_text(await chat_title(svc, chat_id), user.id, name, msg.text or msg.caption or "", verdict,
                       deleted, mode)
     kb = alert_kb(chat_id, alert_id, deleted)
-    for admin in await svc.perms.admin_users(bot, chat_id):
-        if getattr(admin, "is_bot", False):
-            continue
-        try:
-            await bot.send_message(admin.id, body, parse_mode="HTML", reply_markup=kb)
-        except TelegramError:
-            pass  # 봇과 1:1 을 시작 안 한 관리자
+    # 🛡️ 스팸 방패와 같은 사건 키 (방, 'scam', 사람) → 같은 사람은 1:1 한 통, 10분 안의 다음 알림은 그 메시지를 고침
+    # (sodam/incidents.py). 1:1 막힌 관리자는 건너뜀
+    admins = [a for a in await svc.perms.admin_users(bot, chat_id) if not getattr(a, "is_bot", False)]
+    await incidents.open_or_bump(svc, bot, chat_id, *incidents.scam_incident(user.id), body, kb, admins, sub=user.id)
 
 
 def alert_text(title: str, user_id: int, name: str, body: str, v: Verdict, deleted: bool, mode: str) -> str:

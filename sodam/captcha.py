@@ -196,4 +196,5 @@ class Captcha:
                 await mod.kick(bot, chat_id, user_id, actor_id, reason)
         except TelegramError as e:
             log.info("captcha fail action (%s) failed: %s", action, e)  # 이미 나간 경우 등
-        await mod.report(bot, f"[캡차] chat {chat_id} / user {user_id}: {reason} → {action}")
+        # 입장이 몰리면 실패도 몰림 → 방마다 10분 안의 실패는 보고 메시지 하나를 고쳐 가며 (sodam/incidents.py)
+        await mod.incident(bot, chat_id, "captcha", f"[캡차] chat {chat_id} / user {user_id}: {reason} → {action}")

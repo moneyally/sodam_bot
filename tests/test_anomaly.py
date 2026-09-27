@@ -245,6 +245,7 @@ async def cooldown_and_daily_cap():
     await joins(r, 30, base=OLD + 1000)
     assert len(alerts(r)) == 1, "30분 쿨다운"
     await r.db._write("UPDATE anomaly_alerts SET ts=ts-? WHERE chat_id=?", (anomaly.COOLDOWN + 1, CHAT))
+    await r.db._write("UPDATE incidents SET last=last-? WHERE chat_id=?", (anomaly.COOLDOWN + 1, CHAT))  # 30분 지남
     await join(r, OLD + 5000)
     assert len(alerts(r)) == 2, "쿨다운 지나면 다시"
     f = anomaly.Finding(score=99, summary="x")
@@ -264,6 +265,7 @@ async def concurrent_evaluations_alert_once():
     r = await room()
     await joins(r, 30)
     await r.db._write("DELETE FROM anomaly_alerts")
+    await r.db._write("DELETE FROM incidents")
     r.bot.calls.clear()
     await asyncio.gather(*[anomaly.evaluate(r.svc, r.bot, CHAT) for _ in range(5)])
     assert len(alerts(r)) == 1 and len(await rows(r)) == 1

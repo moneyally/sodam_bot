@@ -5,6 +5,8 @@ m:rla:<방>                      🚪 입장 규칙 바로 만들기
 m:rli:<방>:<번호>               항목: 켜기/끄기 · 알림 방식(dm/call) · 쿨다운 · 삭제
 m:rlt / m:rlx / m:rlc:<방>:<번호>:<값>   켜기/끄기(목표값) · 방식 · 쿨다운(분)
 m:rld:<방>:<번호>[:1]           삭제 확인 → 삭제
+m:rlv:<방>:<번호>               🔎 미리 보기 (지난 7일이면 몇 번 울렸을지, rules.replay)
+m:rlp:<방>:<멈춤>:<r|d>         폭주로 멈춘 규칙 [▶️ 계속 실행][⏸ 오늘 중지] — 만든 사람만·지금 관리자(fresh)·한 번만
 AI 에게 말로('누가 입금 얘기하면 알려줘') 만들면 방에 확인 카드 → 토큰 rule_save / rule_no.
 번호로 찾을 땐 항상 그 방 규칙인지 확인 (다른 방 번호를 버튼에 넣어도 못 건드림).
 """
@@ -12,7 +14,7 @@ from __future__ import annotations
 
 from .. import menu, rules
 from ..menu import B, HubItem, PanelCtx, Route, Screen
-from ..util import esc, to_int
+from ..util import esc, fmt_time, to_int
 
 COOLDOWNS = (1, 10, 60)
 
@@ -30,8 +32,8 @@ async def s_list(c: PanelCtx) -> Screen:
     if not await c.svc.paid_features(c.cid):
         lines.append("⚠️ 이용 기간(구독·체험) 중인 방에서만 동작해요.")
     lines.append("\n방에서 말로도 돼요: <i>소담아 누가 입금 얘기하면 나한테 알려줘</i>")
-    btns = [[B(f"{'🟢' if r['enabled'] else '⏸'} #{r['id']} {(await rules.describe(c.svc, r))[:40]}",
-               f"m:rli:{c.cid}:{r['id']}")] for r in rows]
+    btns = [[B(f"{'🟢' if r['enabled'] and not await rules.active_pause(c.svc.db, r['id']) else '⏸'} #{r['id']} "
+               f"{(await rules.describe(c.svc, r))[:40]}", f"m:rli:{c.cid}:{r['id']}")] for r in rows]
     btns += [[B("🔑 낱말", f"m:in:{c.cid}:rlk"), B("👤 사람", f"m:in:{c.cid}:rlu")],
              [B("🚪 누가 들어오면", f"m:rla:{c.cid}"), B("💤 조용하면", f"m:in:{c.cid}:rlq")], menu._back(c.cid)]
     return Screen("\n".join(lines), menu._kb(btns))
@@ -47,12 +49,52 @@ async def s_item(c: PanelCtx) -> Screen:
     lines = [f"🔔 <b>규칙 #{rid}</b> · {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}", esc(await rules.describe(c.svc, r)),
              f"쿨다운 {r['cooldown']}분 · 오늘 {r['fired'] if r['day'] else 0}번 울림",
              f"만든 사람: {esc(await c.svc.db.first_name(r['created_by']) or str(r['created_by']))}"]
+    pause = await rules.active_pause(c.svc.db, rid)
+    if pause:
+        lines.append(f"⏸ 너무 자주 걸려서 멈춤 (10분에 {pause['hits']}번) · "
+                     f"<code>{fmt_time(pause['until'], c.svc.cfg.tz)}</code>까지"
+                     + (" · 오늘 중지" if pause["status"] == "today" else ""))
     toggle = B("⏸ 끄기", f"m:rlt:{cid}:{rid}:0") if r["enabled"] else B("▶️ 켜기", f"m:rlt:{cid}:{rid}:1")
     how = [B(("● " if r["action"] == a else "") + rules.ACTIONS[a], f"m:rlx:{cid}:{rid}:{a}") for a in ("dm", "call")]
     cool = [B(("● " if r["cooldown"] == m else "") + f"{m}분", f"m:rlc:{cid}:{rid}:{m}") for m in COOLDOWNS]
-    rows = ([how] if r["action"] != "post" else []) + [cool, [toggle, B("🗑 삭제", f"m:rld:{cid}:{rid}")],
-                                                          [B("⬅️ 목록", f"m:rl:{cid}")]]
+    rows = ([rules.pause_buttons(cid, pause["id"])] if pause and pause["status"] is None else []) + \
+        ([how] if r["action"] != "post" else []) + [cool, [toggle, B("🗑 삭제", f"m:rld:{cid}:{rid}")],
+                                                    [B("🔎 미리 보기", f"m:rlv:{cid}:{rid}"), B("⬅️ 목록", f"m:rl:{cid}")]]
     return Screen("\n".join(lines), menu._kb(rows))
+
+
+async def s_preview(c: PanelCtx) -> Screen:
+    """🔎 지난 7일 기록에 이 규칙을 대 보면 (코드로 셈, AI 없음)."""
+    r = await _rule(c)
+    if r is None:
+        return await s_list(c)
+    text = await rules.preview_text(c.svc, c.cid, dict(r))
+    return Screen(f"🔎 <b>규칙 #{r['id']} 미리 보기</b>\n{esc(await rules.describe(c.svc, r))}\n\n{text}\n"
+                  f"(쿨다운 {r['cooldown']}분 · 하루 최대 {rules.DAILY_CAP}번 적용, 기록된 대화·입장 기준)",
+                  menu._kb([[B("⬅️ 규칙", f"m:rli:{c.cid}:{r['id']}")]]))
+
+
+async def r_pause(c: PanelCtx) -> Screen:
+    """폭주 멈춤 알림의 [▶️ 계속 실행](r) · [⏸ 오늘 중지](d). 권한은 누를 때 다시(Route fresh), 만든 사람만, 한 번만."""
+    pid, act = to_int(c.arg(0)), {"r": "resume", "d": "today"}.get(c.arg(1))
+    pause = await c.svc.db._one("SELECT * FROM alert_rule_pauses WHERE id=? AND chat_id=?", (pid, c.cid)) if pid else None
+    r = pause and await c.svc.db._one("SELECT * FROM alert_rules WHERE id=? AND chat_id=?", (pause["rule_id"], c.cid))
+    if not r or not act:
+        screen = await s_list(c)
+        screen.toast = "없는 규칙이에요."
+        return screen
+    if c.uid != r["created_by"]:
+        return Screen(None, toast="규칙을 만든 분만 누를 수 있어요.", alert=True)
+    c.args = [str(r["id"])]
+    if not await rules.resolve_pause(c.svc, pause["id"], act, c.uid):
+        screen = await s_item(c)
+        screen.toast = "이미 처리한 알림이에요."
+        return screen
+    await c.svc.db.log_mod(c.cid, c.uid, None, "setting",
+                           f"알림 규칙 #{r['id']} " + ("계속 실행" if act == "resume" else "오늘 중지"))
+    screen = await s_item(c)
+    screen.toast = "▶️ 다시 울려요 (1시간은 안 멈춰요)" if act == "resume" else "⏸ 오늘은 멈춰 둘게요 (내일 0시에 다시)"
+    return screen
 
 
 async def _update(c: PanelCtx, sql: str, value) -> Screen:
@@ -87,6 +129,7 @@ async def r_delete(c: PanelCtx) -> Screen:
         return Screen(f"🗑 규칙 #{r['id']} 을 삭제할까요?\n{esc(await rules.describe(c.svc, r))}",
                       menu._kb([[B("🗑 삭제", f"m:rld:{c.cid}:{r['id']}:1"), B("취소", f"m:rli:{c.cid}:{r['id']}")]]))
     await c.svc.db._write("DELETE FROM alert_rules WHERE id=? AND chat_id=?", (r["id"], c.cid))
+    await rules.drop_stats(c.svc.db, r["id"])
     rules.forget(c.svc.db, c.cid)
     await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"알림 규칙 #{r['id']} 삭제")
     screen = await s_list(c)
@@ -142,6 +185,8 @@ async def t_no(c: PanelCtx, _) -> Screen:
 menu.register_hub(HubItem(38, "rl", "🔔 알림 규칙"))
 menu.register_screen("rl", s_list)
 menu.register_screen("rli", s_item)
+menu.register_screen("rlv", s_preview)
+menu.register_route("rlp", Route(r_pause, fresh=True))
 for _code, _fn in (("rla", r_join), ("rlt", r_toggle), ("rlx", r_action), ("rlc", r_cooldown), ("rld", r_delete)):
     menu.register_route(_code, Route(_fn))
 menu.register_token_action("rule_save", t_save, fresh=True)
