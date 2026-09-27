@@ -1,6 +1,8 @@
 """테스트용 가짜 텔레그램 객체와 공용 도우미. 네트워크를 쓰지 않는다."""
 import asyncio
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import traceback
@@ -268,6 +270,10 @@ class FakeJobQueue:
     def run_once(self, cb, when, data=None, name=None):
         self.once.append((cb, when, data))
 
+
+# 테스트 임시 DB·파일은 한 폴더에 모아 끝나면 지운다 (안 지우면 돌릴 때마다 쌓여 서버 디스크가 참 — 실제로 30GB 쌓여 봇 쓰기 실패)
+tempfile.tempdir = tempfile.mkdtemp(prefix="sodam-test-")
+atexit.register(shutil.rmtree, tempfile.tempdir, True)
 
 OPEN_DBS: list[DB] = []
 

@@ -26,7 +26,7 @@ from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, cardimg, register, register_callback
 from .basic import edit_live, show, show_anim
 from .board import record
-from .core import balance, credit, dealer_tail, debit, fmt, result_line, rng, settle, split_bet, take_bet
+from .core import OPEN_CHECKS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet
 
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
@@ -288,6 +288,9 @@ def _key(game: str, chat_id: int, uid: int) -> tuple[str, int, int]:
     return (game, chat_id, uid)
 
 
+OPEN_CHECKS.append(lambda cid, uid: any((h := HANDS.get(_key(g, cid, uid))) is not None and not h.done for g in ("bj", "hl")))
+
+
 # 화면 = (글자 화면, 사진 캡션, 그림 그리는 함수) — 글자 화면은 카드 글자까지 다 있고, 캡션은 그림에 있는 건 뺀 짧은 글
 View = tuple[str, str, object]
 
@@ -529,8 +532,6 @@ async def _bj_act(h: Hand, act: str, q) -> str | None:
         extra = h.bet
         if not await debit(h.ctx.svc.db, h.ctx.chat_id, h.ctx.user.id, extra, "bet:blackjack"):
             return f"잔액이 모자라서 더블을 못 해요. (더블엔 {fmt(extra)} 더 필요)"
-        await h.ctx.svc.db._write("UPDATE casino_accounts SET wagered=wagered+? WHERE chat_id=? AND user_id=?",
-                                  (extra, h.ctx.chat_id, h.ctx.user.id))
         h.bet += extra
         h.player.append(h.shoe.draw())
         await _bj_finish(h, q, animate=True)
@@ -567,6 +568,7 @@ async def g_blackjack(ctx: Ctx) -> None:
     # take_bet 이 await 하는 동안 같은 사람이 한 판 더 시작했을 수 있음 → 한 번 더 확인
     if HANDS.get(_key("bj", ctx.chat_id, ctx.user.id)):
         await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:blackjack")
+        handoff(ctx, bet)
         await ctx.reply("진행 중인 블랙잭이 있어서 베팅을 돌려드렸어요.")
         return
     shoe = make_shoe(6)
@@ -584,6 +586,7 @@ async def g_blackjack(ctx: Ctx) -> None:
         return
     h.touch()
     HANDS[_key("bj", ctx.chat_id, ctx.user.id)] = h
+    handoff(ctx, bet)                              # 이제 판이 정산·시간 초과·종료 환불을 맡음
     await _send(ctx, h, _bj_view(h, False, "히트·스탠드·더블 중에 골라주세요. (2분 안에)"), _bj_kb(h))
 
 
@@ -709,6 +712,7 @@ async def g_hilo(ctx: Ctx) -> None:
         return
     if HANDS.get(_key("hl", ctx.chat_id, ctx.user.id)):
         await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, "refund:hilo")
+        handoff(ctx, bet)
         await ctx.reply("진행 중인 하이로우가 있어서 베팅을 돌려드렸어요.")
         return
     shoe = make_shoe(1)
@@ -717,6 +721,7 @@ async def g_hilo(ctx: Ctx) -> None:
     h.card = shoe.draw()
     h.touch()
     HANDS[_key("hl", ctx.chat_id, ctx.user.id)] = h
+    handoff(ctx, bet)                              # 이제 판이 정산·시간 초과·종료 환불을 맡음
     await _send(ctx, h, _hl_view(h, "다음 카드는 더 높을까요, 낮을까요? (같은 숫자는 꽝 · 2분 안에)"), _hl_kb(h))
 
 

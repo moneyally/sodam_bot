@@ -27,7 +27,7 @@ from ..db import now, register_schema
 from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, anim, register, register_callback
 from . import core
-from .core import balance, credit, dealer_tail, fmt, result_line, settle, split_bet, take_bet, temp_reply
+from .core import OPEN_CHECKS, balance, credit, dealer_tail, fmt, handoff, result_line, settle, split_bet, take_bet, temp_reply
 from .board import record
 from .dealer import line as dealer_line
 
@@ -191,6 +191,7 @@ _ROUNDS: dict[tuple[int, str], "Round"] = {}
 _LAST: dict[tuple[int, str], tuple[float, "Round"]] = {}   # 방금 끝난 판 (늦은 !스톱 안내용)
 _TASKS: set[asyncio.Task] = set()
 _PENDING: set[tuple[int, str, int]] = set()   # take_bet 도중인 (방, 게임, 사람) — 동시 두 번 베팅 막기
+OPEN_CHECKS.append(lambda cid, uid: any(k[0] == cid and (p := r.players.get(uid)) and not p.done for k, r in _ROUNDS.items()))
 
 
 class Round:
@@ -421,6 +422,7 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
             return
         await ctx.svc.db._write("INSERT OR REPLACE INTO casino_open_stakes(chat_id, user_id, game, bet, ts) "
                                 "VALUES(?,?,?,?,?)", (cid, uid, game, bet, now()))
+        handoff(ctx, bet)               # 이제 판(과 재시작 때 recover_stale)이 정산·환불을 맡음
         p = Player(ctx, bet, pick)
         r = current(cid, game)
         if r is None:                   # 첫 베팅 → 새 판

@@ -23,7 +23,7 @@ from ..util import esc, user_name
 from . import Ctx, anim, register, register_callback
 from .anim import REDS, WHEEL
 from .board import record
-from .core import balance, credit, finish, fmt, rng, settle_text, split_bet, take_bet
+from .core import balance, credit, finish, fmt, guarded, handoff, rng, settle_text, split_bet, take_bet
 
 log = logging.getLogger(__name__)
 
@@ -147,6 +147,7 @@ async def _roll(ctx: Ctx, emoji: str, game: str, bet: int) -> int | None:
     except TelegramError as e:
         log.warning("send_dice failed (%s): %s", game, e)
         bal = await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, bet, f"refund:{game}")
+        handoff(ctx, bet)
         await ctx.bot.send_message(ctx.chat_id, f"{emoji} 주사위를 못 굴려서 베팅 {fmt(bet)}을 돌려드렸어요. "
                                                 f"잔액 {fmt(bal)}", parse_mode="HTML")
         return None
@@ -352,7 +353,7 @@ async def cb_board(svc, bot, q, parts: list[str]) -> None:
         await q.answer(re.sub(r"<[^>]+>", "", blocked)[:190], show_alert=True)
         return
     await q.answer(f"🎡 {pick} · {fmt(amount)}!")
-    await spin_roulette(ctx, amount, pick)
+    await guarded(ctx, lambda c: spin_roulette(c, amount, pick))
 
 
 # 유럽식 휠의 실제 칸 순서 (0 에서 시계 방향)

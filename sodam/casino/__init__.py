@@ -34,6 +34,8 @@ class Ctx:
     user: User
     role: Role
     args: list[str]
+    staked: int = 0              # 이 명령·버튼에서 차감했지만 아직 정산 안 된 베팅 (core.guarded 가 오류 때 환불)
+    game: str = ""
 
     async def reply(self, text: str, **kw):
         return await self.msg.reply_text(text, parse_mode="HTML", **kw)
@@ -67,7 +69,10 @@ def register(names: tuple[str, ...], fn, *, help: str = "", usage: str = "", gro
 def parse(text: str) -> tuple[CasinoCmd, list[str]] | None:
     if not text.startswith("!") or len(text) < 2:
         return None
-    head, *args = text[1:].split()
+    parts = text[1:].split()
+    if not parts:                                 # '! ' 처럼 이름 없이 공백만
+        return None
+    head, args = parts[0], parts[1:]
     cmd = _INDEX.get(head.lower())
     return (cmd, args) if cmd else None
 
@@ -91,7 +96,7 @@ async def dispatch(svc, bot, msg, chat_id: int, user, role, text: str) -> bool:
                 pass
         return True
     try:
-        await cmd.fn(ctx)
+        await core.guarded(ctx, cmd.fn)
     except TelegramError as e:
         log.warning("casino %s failed: %s", cmd.names[0], e)
     return True

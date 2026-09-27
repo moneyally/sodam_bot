@@ -12,7 +12,7 @@ import re
 import secrets
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ..db import now, register_schema
 from ..settings import register_setting
@@ -84,24 +84,33 @@ async def balance(db, chat_id: int, user_id: int) -> int:
     return row["points"] if row else 0
 
 
-async def credit(db, chat_id: int, user_id: int, amount: int, reason: str) -> int:
-    """포인트 지급. 새 잔액."""
-    if amount <= 0:
+async def credit(db, chat_id: int, user_id: int, amount: int, reason: str,
+                 cond: tuple[str, tuple] | None = None) -> int | None:
+    """포인트 지급. 새 잔액. cond=(UPDATE 문, 인자) 를 주면 그 문장이 한 줄을 바꿀 때만 같이 지급 (쿨타임 표시와 지급을
+    한 번에 — 한쪽만 저장되지 않게), 못 바꾸면 None. 'win:' 은 누적 당첨도 같이."""
+    if amount <= 0 and not cond:
         return await balance(db, chat_id, user_id)
     ts = now()
 
-    def run(c) -> None:   # 잔액과 원장을 함께 (한쪽만 저장되지 않게, db.atomic)
-        c.execute("INSERT INTO members(chat_id, user_id, points, last_seen) VALUES(?, ?, ?, ?) "
-                  "ON CONFLICT(chat_id, user_id) DO UPDATE SET points=points+excluded.points",
-                  (chat_id, user_id, amount, ts))
-        c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
-                  (chat_id, user_id, amount, reason[:40], ts))
-    await db.atomic(run)
+    def run(c) -> bool:   # 잔액과 원장을 함께 (한쪽만 저장되지 않게, db.atomic)
+        if cond and c.execute(*cond).rowcount != 1:
+            return False
+        if amount > 0:
+            c.execute("INSERT INTO members(chat_id, user_id, points, last_seen) VALUES(?, ?, ?, ?) "
+                      "ON CONFLICT(chat_id, user_id) DO UPDATE SET points=points+excluded.points",
+                      (chat_id, user_id, amount, ts))
+            c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
+                      (chat_id, user_id, amount, reason[:40], ts))
+            if reason.startswith("win:"):
+                c.execute("UPDATE casino_accounts SET won=won+? WHERE chat_id=? AND user_id=?", (amount, chat_id, user_id))
+        return True
+    if not await db.atomic(run):
+        return None
     return await balance(db, chat_id, user_id)
 
 
 async def debit(db, chat_id: int, user_id: int, amount: int, reason: str) -> bool:
-    """잔액이 충분할 때만 차감 (한 문장이라 동시 베팅에도 음수 불가). 성공하면 True."""
+    """잔액이 충분할 때만 차감 (한 문장이라 동시 베팅에도 음수 불가). 성공하면 True. 'bet:' 은 누적 베팅도 같이."""
     if amount <= 0:
         return False
     ts = now()
@@ -112,8 +121,47 @@ async def debit(db, chat_id: int, user_id: int, amount: int, reason: str) -> boo
             return False
         c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
                   (chat_id, user_id, -amount, reason[:40], ts))
+        if reason.startswith("bet:"):
+            c.execute("UPDATE casino_accounts SET wagered=wagered+? WHERE chat_id=? AND user_id=?", (amount, chat_id, user_id))
         return True
     return await db.atomic(run)
+
+
+# ── 열린 베팅 (정산 전 오류 환불 · 파산 구제 악용 막기) ──────────────
+_STAKED: dict[tuple[int, int], int] = {}   # (방, 사람) → 명령·버튼 안에서 차감했지만 아직 정산 안 된 베팅
+OPEN_CHECKS: list[Callable[[int, int], bool]] = []   # 명령 밖에서 이어지는 판(카드·멀티)이 열려 있나 — 각 모듈이 등록
+
+
+def _stake(ctx: Ctx, delta: int) -> None:
+    ctx.staked += delta
+    key = (ctx.chat_id, ctx.user.id)
+    n = _STAKED.get(key, 0) + delta
+    if n > 0:
+        _STAKED[key] = n
+    else:
+        _STAKED.pop(key, None)
+
+
+def handoff(ctx: Ctx, bet: int) -> None:
+    """판(카드 핸드·멀티 참가)이 이 베팅의 정산·환불을 맡음 → 명령 쪽 오류 환불에서 뺀다."""
+    _stake(ctx, -min(bet, ctx.staked))
+
+
+def has_open_bet(chat_id: int, user_id: int) -> bool:
+    return bool(_STAKED.get((chat_id, user_id))) or any(f(chat_id, user_id) for f in OPEN_CHECKS)
+
+
+async def guarded(ctx: Ctx, fn) -> None:
+    """명령·버튼 실행: 베팅을 뺀 뒤 정산 전에 오류·취소가 나면 그 베팅을 돌려준다 (돈만 사라지지 않게)."""
+    try:
+        await fn(ctx)
+    except BaseException:
+        if ctx.staked > 0:
+            await credit(ctx.svc.db, ctx.chat_id, ctx.user.id, ctx.staked, f"refund:{ctx.game}")
+            log.warning("casino %s failed after bet: refunded %d", ctx.game, ctx.staked)
+        raise
+    finally:
+        _stake(ctx, -ctx.staked)
 
 
 # ── 베팅 금액 ─────────────────────────────────────────────
@@ -148,37 +196,41 @@ async def take_bet(ctx: Ctx, amount: int | None, game: str) -> int | None:
     """베팅 검사 + 차감. 실패하면 안내하고 None."""
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
     key, t = (cid, uid), time.monotonic()
-    if t - _last_bet.get(key, 0) < BET_GAP:
+    prev = _last_bet.get(key, 0)
+    if t - prev < BET_GAP:
         await ctx.reply("⏳ 조금만 천천히! (2초에 한 번)")
         return None
+    _last_bet[key] = t                     # await 전에 (동시에 온 두 판이 둘 다 간격 검사를 지나지 않게)
+    if len(_last_bet) > 5000:
+        _last_bet.clear()
     bal = await balance(db, cid, uid)
     max_bet = (await db.get_settings(cid))["casino_max_bet"]
     if amount is None:
-        await ctx.reply(f"베팅 금액을 적어주세요. 예: <code>1000</code> · <code>5천</code> · <code>1만</code> · <code>올인</code>\n"
-                        f"내 잔액: <b>{fmt(bal)}</b>")
-        return None
-    if amount < MIN_BET:
-        await ctx.reply(f"최소 베팅은 {fmt(MIN_BET)}예요. 잔액: <b>{fmt(bal)}</b>"
-                        + ("\n포인트가 모자라면 <code>!채굴</code> · <code>!출석</code> · <code>!파산</code>" if bal < MIN_BET else ""))
-        return None
-    if amount > max_bet:
-        await ctx.reply(f"이 방 최대 베팅은 {fmt(max_bet)}예요.")
-        return None
-    if not await debit(db, cid, uid, amount, f"bet:{game}"):
-        await ctx.reply(f"잔액이 모자라요. 잔액: <b>{fmt(bal)}</b>")
-        return None
-    _last_bet[key] = t
-    if len(_last_bet) > 5000:
-        _last_bet.clear()
-    await db._write("UPDATE casino_accounts SET wagered=wagered+? WHERE chat_id=? AND user_id=?", (amount, cid, uid))
-    return amount
+        err = (f"베팅 금액을 적어주세요. 예: <code>1000</code> · <code>5천</code> · <code>1만</code> · <code>올인</code>\n"
+               f"내 잔액: <b>{fmt(bal)}</b>")
+    elif amount < MIN_BET:
+        err = (f"최소 베팅은 {fmt(MIN_BET)}예요. 잔액: <b>{fmt(bal)}</b>"
+               + ("\n포인트가 모자라면 <code>!채굴</code> · <code>!출석</code> · <code>!파산</code>" if bal < MIN_BET else ""))
+    elif amount > max_bet:
+        err = f"이 방 최대 베팅은 {fmt(max_bet)}예요."
+    else:
+        ctx.game = game
+        _stake(ctx, amount)                # 차감 전에 표시 (그 사이 !파산 이 '열린 베팅 없음'으로 보지 않게)
+        if await debit(db, cid, uid, amount, f"bet:{game}"):
+            return amount
+        _stake(ctx, -amount)
+        err = f"잔액이 모자라요. 잔액: <b>{fmt(await balance(db, cid, uid))}</b>"
+    if _last_bet.get(key) == t:            # 거절된 시도는 간격에 안 셈
+        _last_bet[key] = prev
+    await ctx.reply(err)
+    return None
 
 
 async def settle(ctx: Ctx, bet: int, payout: int, game: str) -> int:
     """결과 정산: payout(원금 포함 받을 돈, 지면 0) 지급. 새 잔액."""
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
+    handoff(ctx, bet)                      # 정산이 시작되면 오류 환불 대상 아님 (지급이 반쯤 되고 환불까지 되는 일 없게)
     if payout > 0:
-        await db._write("UPDATE casino_accounts SET won=won+? WHERE chat_id=? AND user_id=?", (payout, cid, uid))
         return await credit(db, cid, uid, payout, f"win:{game}")
     return await balance(db, cid, uid)
 
@@ -304,19 +356,17 @@ async def c_mine(ctx: Ctx) -> None:
     if left > 0:
         await ctx.reply(f"⛏ 곡괭이 식는 중… {left // 60}분 {left % 60}초 뒤에 다시 캘 수 있어요.")
         return
-    # 한 문장으로 쿨타임 확인+갱신 (연타해도 한 번만)
     streak = acc["mine_streak"] + 1 if t - acc["last_mine"] < 3600 else 1
-    cur = await db.conn.execute("UPDATE casino_accounts SET last_mine=?, mine_streak=? "
-                                "WHERE chat_id=? AND user_id=? AND last_mine=?", (t, streak, cid, uid, acc["last_mine"]))
-    await db.conn.commit()
-    if cur.rowcount != 1:
-        return
     base = MINE_MIN + rng(MINE_MAX - MINE_MIN + 1)
     jackpot = rng(MINE_JACKPOT_ODDS) == 0
     bonus_pct = min(streak - 1, MINE_STREAK_MAX) * 10
     amount = base * (10 if jackpot else 1)
     amount += amount * bonus_pct // 100
-    bal = await credit(db, cid, uid, amount, "mine")
+    bal = await credit(db, cid, uid, amount, "mine", (   # 쿨타임 확인+갱신과 지급을 한 번에 (연타해도 한 번만)
+        "UPDATE casino_accounts SET last_mine=?, mine_streak=? WHERE chat_id=? AND user_id=? AND last_mine=?",
+        (t, streak, cid, uid, acc["last_mine"])))
+    if bal is None:
+        return
     head = "💎 <b>대박 광맥 발견!!</b> ×10\n" if jackpot else ""
     streak_txt = f" (연속 {streak}회 +{bonus_pct}%)" if bonus_pct else ""
     await ctx.reply(f"{head}⛏ {esc(user_name(ctx.user))}님 채굴 성공: <b>+{fmt(amount)}</b>{streak_txt}\n잔액 {fmt(bal)} · 10분 뒤 다시")
@@ -325,13 +375,11 @@ async def c_mine(ctx: Ctx) -> None:
 async def c_daily(ctx: Ctx) -> None:
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
     day = today(ctx.svc)
-    cur = await db.conn.execute("UPDATE casino_accounts SET last_daily=? WHERE chat_id=? AND user_id=? AND last_daily<>?",
-                                (day, cid, uid, day))
-    await db.conn.commit()
-    if cur.rowcount != 1:
+    bal = await credit(db, cid, uid, DAILY_POINTS, "daily", (
+        "UPDATE casino_accounts SET last_daily=? WHERE chat_id=? AND user_id=? AND last_daily<>?", (day, cid, uid, day)))
+    if bal is None:
         await ctx.reply("📅 오늘은 이미 출석했어요. 내일 또 와요!")
         return
-    bal = await credit(db, cid, uid, DAILY_POINTS, "daily")
     await ctx.reply(f"📅 출석 완료! <b>+{fmt(DAILY_POINTS)}</b> · 잔액 {fmt(bal)}")
 
 
@@ -340,14 +388,15 @@ async def c_bailout(ctx: Ctx) -> None:
     if await balance(db, cid, uid) >= MIN_BET:
         await ctx.reply(f"파산 구제는 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. <code>!채굴</code> 해보세요!")
         return
+    if has_open_bet(cid, uid):             # 올인 결과를 기다리는 중 구제받고 이기면 둘 다 챙기는 것 막기
+        await ctx.reply("🆘 진행 중인 판이 끝난 뒤에 해주세요.")
+        return
     day = today(ctx.svc)
-    cur = await db.conn.execute("UPDATE casino_accounts SET last_bailout=? WHERE chat_id=? AND user_id=? AND last_bailout<>?",
-                                (day, cid, uid, day))
-    await db.conn.commit()
-    if cur.rowcount != 1:
+    bal = await credit(db, cid, uid, BAILOUT_POINTS, "bailout", (
+        "UPDATE casino_accounts SET last_bailout=? WHERE chat_id=? AND user_id=? AND last_bailout<>?", (day, cid, uid, day)))
+    if bal is None:
         await ctx.reply("🆘 파산 구제는 하루 한 번이에요. <code>!채굴</code> 로 다시 일어서요!")
         return
-    bal = await credit(db, cid, uid, BAILOUT_POINTS, "bailout")
     await ctx.reply(f"🆘 파산 구제 지원금 <b>+{fmt(BAILOUT_POINTS)}</b> · 잔액 {fmt(bal)}\n다시 가보자고요 💪")
 
 

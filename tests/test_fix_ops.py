@@ -161,7 +161,7 @@ def _fake_repo(tests_pass: bool) -> tuple[Path, Path]:
     (origin / "requirements.txt").write_text("")
     (origin / "tests" / "run_all.py").write_text(f"import sys; sys.exit({0 if tests_pass else 1})\n")
     shutil.copy(ROOT / "deploy" / "update.sh", origin / "deploy" / "update.sh")
-    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]  # 테스트용 저장소는 서명 없이 (환경 서명 설정에 안 묶이게)
     subprocess.run(git + ["init", "-q", str(origin)], check=True)
     subprocess.run(git + ["-C", str(origin), "add", "-A"], check=True)
     subprocess.run(git + ["-C", str(origin), "commit", "-qm", "init"], check=True)
