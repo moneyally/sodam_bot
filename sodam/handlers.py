@@ -26,6 +26,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHand
 from . import (accountage, addressee, anomaly, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
+from . import agent
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -657,7 +658,8 @@ async def _style_for_ai(svc: Services, msg: Message, chat_id: int, args: list[st
 
 
 async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
-                   request: str, scan: security.ScanResult, via: str = "call") -> None:
+                   request: str, scan: security.ScanResult, via: str = "call", *, followup: bool = False) -> None:
+    """AI 답. followup=True = 앞 실행이 끝내 못 본 이어 보낸 말(agent.close_steer) — 속도 제한·검사·요청 기록은 이미 함."""
     svc, bot = _svc(context), context.bot
     chat_id, user = msg.chat_id, msg.from_user
     if user is None or user.is_bot:   # 봇 글엔 AI 답 없음 (on_group_message 가 이미 막지만 다른 경로 대비)
@@ -684,36 +686,81 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         request = "\n".join(r for _, r in sorted(burst) if r)
         scan = security.scan(request)
 
-    limiter: RateLimiter = context.bot_data["limiter"]
-    if not (limiter.allow(("u", chat_id, user.id), s["user_rate_per_min"])
-            and limiter.allow(("r", chat_id), s["room_rate_per_min"])):
-        if limiter.allow(("slow", chat_id, user.id), 1):   # 안내는 1분에 한 번만 (안내가 도배가 되지 않게)
-            await send_temp(context, chat_id, "⏳ 조금만 천천히 불러주세요! 1분 뒤에 다시 불러주세요.", 10)
-        return
+    checked = followup
+    if not followup:
+        limiter: RateLimiter = context.bot_data["limiter"]
+        if not (limiter.allow(("u", chat_id, user.id), s["user_rate_per_min"])
+                and limiter.allow(("r", chat_id), s["room_rate_per_min"])):
+            if limiter.allow(("slow", chat_id, user.id), 1):   # 안내는 1분에 한 번만 (안내가 도배가 되지 않게)
+                await send_temp(context, chat_id, "⏳ 조금만 천천히 불러주세요! 1분 뒤에 다시 불러주세요.", 10)
+            return
+        # 이 사람의 답이 아직 만들어지는 중 (Codex inject_if_running): 두 번째 답 대신 그 실행에 넣는다.
+        # 분당 호출 제한엔 세고(위), 하루 무료 한도는 한 번 더 안 씀(실행 1번 = 1). 사진이 붙은 말은 따로 실행 (사진을 읽어야 함)
+        if agent.running(svc, chat_id, user.id) and not vision.has_image(msg):
+            if await _injection_blocked(context, msg, role, request, scan, s):
+                return
+            await svc.db.log_request(chat_id, user.id, request)
+            if agent.steer_into(svc, chat_id, user.id, _steer_text(svc, bot, msg, request), msg):
+                return
+            checked = True   # 검사하는 사이 그 실행이 끝남 → 말을 잃지 않게 보통 새 실행으로 (검사·기록은 이미 함)
 
     # 무료 한도 먼저: 한도를 넘은 사람의 긴 메시지가 2층 AI 판별(유료 호출)을 무제한으로 부르지 않게
     if not await _within_ai_quota(context, chat_id, user.id, role):
         return
-
-    # 인젝션 방어: 1층 규칙 → 애매하거나 긴 요청만 2층 AI 판별
-    if s["injection_guard"] and role < Role.OWNER:
-        blocked, reason = scan.blocked, ", ".join(scan.hits)
-        if not blocked and (scan.suspicious or len(request) > 150):
-            blocked, reason = await svc.llm.classify_injection(request, chat_id=chat_id)
-        if blocked:
-            await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
-            text, kb = "🛡️ 그 요청은 들어드릴 수 없어요.", None
-            # 경고·제재는 그룹방에서만 (1:1 은 양수 ID), 자유 멤버는 경고 없이 거절만
-            if s["injection_warn"] and role < Role.ADMIN and chat_id < 0 and not await free.is_free(svc.db, chat_id, user.id):
-                warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
-                                            f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
-                text, kb = text + "\n" + warned, unmute_kb(warned)
-            await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
-            await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
-                                      f"{esc(request[:200])} / {esc(reason)}")
+    if not checked:
+        if await _injection_blocked(context, msg, role, request, scan, s):
             return
+        await svc.db.log_request(chat_id, user.id, request)
 
-    await svc.db.log_request(chat_id, user.id, request)
+    steer = agent.open_steer(svc, chat_id, user.id)   # 여기부터 이 사람이 이어 보낸 말은 이 실행으로
+    try:
+        await _answer(context, msg, role, request, s, via, steer)
+    finally:
+        left = agent.close_steer(svc, chat_id, user.id, steer)
+    if left:   # 마무리 답 뒤에 온 말 (드묾) → 잃지 않게 새 실행
+        text = "\n".join(t for t, _ in left)
+        await ai_reply(context, left[-1][1] or msg, role, text, security.scan(text), via, followup=True)
+
+
+def _steer_text(svc: Services, bot: Bot, msg: Message, request: str) -> str:
+    """실행에 넣을 이어 보낸 말. 다른 글에 답장했으면 그 글도 짧게 (새 실행이면 <reply_to> 로 갈 정보)."""
+    r = msg.reply_to_message
+    if not (r and r.from_user and (r.text or r.caption)):
+        return request
+    who = f"{svc.cfg.bot_name}(봇)" if r.from_user.id == bot.id else f"{user_name(r.from_user)}({r.from_user.id})"
+    return f"{request}\n(↩ 답장한 글 — {who}: {(r.text or r.caption)[:200]})"
+
+
+async def _injection_blocked(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, request: str,
+                             scan: security.ScanResult, s: dict) -> bool:
+    """인젝션 방어: 1층 규칙 → 애매하거나 긴 요청만 2층 AI 판별. 막았으면 안내·기록하고 True."""
+    svc, bot = _svc(context), context.bot
+    chat_id, user = msg.chat_id, msg.from_user
+    if not s["injection_guard"] or role >= Role.OWNER:
+        return False
+    blocked, reason = scan.blocked, ", ".join(scan.hits)
+    if not blocked and (scan.suspicious or len(request) > 150):
+        blocked, reason = await svc.llm.classify_injection(request, chat_id=chat_id)
+    if not blocked:
+        return False
+    await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
+    text, kb = "🛡️ 그 요청은 들어드릴 수 없어요.", None
+    # 경고·제재는 그룹방에서만 (1:1 은 양수 ID), 자유 멤버는 경고 없이 거절만
+    if s["injection_warn"] and role < Role.ADMIN and chat_id < 0 and not await free.is_free(svc.db, chat_id, user.id):
+        warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
+                                    f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
+        text, kb = text + "\n" + warned, unmute_kb(warned)
+    await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
+    await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
+                              f"{esc(request[:200])} / {esc(reason)}")
+    return True
+
+
+async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, request: str, s: dict, via: str,
+                  steer: agent.Steer) -> None:
+    """검사를 통과한 요청: 맥락을 모아 에이전트를 돌리고 답을 보낸다."""
+    svc, bot = _svc(context), context.bot
+    chat_id, user = msg.chat_id, msg.from_user
     try:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
     except TelegramError:
@@ -747,7 +794,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
                                  request=request or "(사진만 보냄)", mode=via, hints=hints,
-                                 images=[image.part()] if image else None)
+                                 images=[image.part()] if image else None, steer=steer)
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:
@@ -771,7 +818,8 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,   # 누구에게 한 답인지
                                      reply_to_msg_id=msg.message_id if reply else None,
                                      reply_to_user=user.id if reply else None))
-    await memory.record_turn(svc.db, chat_id, user.id, via, request, out, sent.message_id)  # 이어 말하기·'아까 그거'용
+    asked = "\n".join([request, *steer.taken])   # 실행 중 이어 보낸 말까지 (한 답이 둘 다 반영)
+    await memory.record_turn(svc.db, chat_id, user.id, via, asked, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
 
 # ── 버튼 ──────────────────────────────────────────────────
