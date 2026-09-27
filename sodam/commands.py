@@ -296,7 +296,9 @@ async def c_game(ctx: CmdCtx) -> None:
                         "🎰 <b>포인트 게임</b>: 홀짝·슬롯·바카라·블랙잭·그래프·경마…\n"
                         "<code>!가입</code> 후 <code>!도움</code> 으로 전체 목록")
         return
-    await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, " ".join(ctx.args[:2]))))
+    result = await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, " ".join(ctx.args[:2]))
+    if not result.endswith("시작했어요!"):     # 시작했으면 게임 안내가 이미 올라감 (같은 말 두 번 안 함)
+        await ctx.reply(esc(result))
 
 
 async def c_stop_game(ctx: CmdCtx) -> None:

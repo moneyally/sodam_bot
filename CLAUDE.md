@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 577개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 583개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -109,6 +109,11 @@
   봇 낱말은 흔한 말 먼저, 없으면 사전 전체(_BY_FIRST) — 시뮬레이션 주고받기 중앙값 24→35번.
   소담이 수 = `wordbot.py` 클로드코드식: LLM(guard 모델)이 도구 find_words(후보+'이을 말 수')/check_word/play 로 골라 한마디,
   코드가 why_not 으로 다시 검사('안 됨' 돌려주고 재선택), 6초 넘거나 실패하면 code_move(난이도대로). 생각 중(thinking) 들어온 답은 🙈.
+  후보 12개를 요청에 미리 넣어 보통 호출 1번(실측 2번 1,125→1번 ~640 토큰). 캐시용으로 프롬프트 부풀리기는 오히려 비쌈 — 하지 말 것.
+  사전에 있는데 첫 글자가 틀린 답('wrong') = 사람당 게임 1번 '지금은 X→Y' 힌트(무시당하는 느낌 방지). 두음(dueum)은 ㄹ 제11·12항만.
+  사전 로드는 GameManager.start 에서 방 등록 전(to_thread) — 로딩 중 방이 '게임 중'으로 묶이지 않게. 타이머: 봇 수 뒤 set_timer 를
+  say 보다 먼저(전송 실패해도 게임 안 멈춤), 울린 타이머는 _timer 에서 떼어 cancel_timer 가 안내를 못 끊음, wc:go 는 _start 의
+  joining 검사로 참가 타이머와 경쟁해도 한 번만 시작. 방마다 게임 독립(chat_id 키) — '한쪽 멈춤'은 대개 틀린 첫 글자 무시였음.
   🧩 기능 화면: wc_ai(AI 선수 끄면 비용 0)·wc_level 쉬움/보통/어려움(어려움 = 이을 말 가장 적은 흔한 말 먼저).
   참고 설계: On9 Word Chain(텔레그램, 참가·차례·탈락). 테스트는 fakes.py 가 GAP_SECONDS=0.
 - 프롬프트 캐시: prompt_cache_key=sodam:<purpose>, 보관 기본 24h(gpt-5.4·mini 실제 호출로 적중 확인, 추가 요금 없음). 1024 토큰 미만 요청은

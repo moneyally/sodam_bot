@@ -56,7 +56,10 @@ async def dictionary_judges_and_first_answer_wins_late_ones_get_reaction():
     assert ok_a and ok_b and reactions(bot) == [(mb.message_id, "🙈")], reactions(bot)
     assert any("차표 → 🤖 <b>표범</b>" in t for t in said(bot)) and g.last == "표범"
     assert (await text(svc, C, "범아가"))[0] and reactions(bot)[-1][1] == "🤔", "사전에 없는 말"
-    assert (await text(svc, C, "나무"))[0] is False, "끝말과 상관없는 말 → 평범한 채팅"
+    ok, m = await text(svc, C, "나무")                                # 첫 글자 틀린 사전 낱말 → 한 번만 알려줌
+    assert ok and "'표범'" in m.replies[-1], m.replies
+    assert (await text(svc, C, "나무"))[0] is False, "두 번째부턴 평범한 채팅"
+    assert (await text(svc, C, "ㅋㅋㅋ"))[0] is False
     assert (await text(svc, C, "표지"))[0] and reactions(bot)[-1][1] == "🙈", "차표에 늦게 이은 말"
     g.used.add("범인")
     assert (await text(svc, C, "범인"))[0] and reactions(bot)[-1][1] == "🤨", "이미 나온 말"
@@ -221,4 +224,127 @@ async def answer_during_bot_thinking_is_late_not_a_move():
     finally:
         wordbot.move = orig
     assert ok_a and ok_c and reactions(bot) == [(mc.message_id, "🙈")] and g.last == "표범", (reactions(bot), g.last)
+    g.cancel_timer()
+
+
+# ── 게임 감사에서 재현된 것 ─────────────────────────────
+@test
+async def dueum_only_standard_syllables():
+    """한글 맞춤법 제11·12항만: 레·러·렝·뤼는 바꾸지 않음 ('수레' 다음 '네거리'가 통과하던 것)."""
+    assert [games.dueum(c) for c in "력라녀뉴리례뢰르"] == list("역나여유이예뇌느")
+    assert [games.dueum(c) for c in "레러렝뤼롸냐"] == list("레러렝뤼롸냐")
+    assert games.starts_for("수레") == {"레"}
+
+
+@test
+async def game_not_registered_while_dictionary_loads():
+    """재시작 뒤 첫 게임: 사전을 읽는 0.4초 사이 온 말이 반쯤 만든 게임에 닿아 AttributeError."""
+    db = await make_db()
+    svc = await make_svc(db, admins={1})
+    bot = FakeBot()
+    saved, orig = (games._WORDS, games._COMMON, games._BY_FIRST), games.load_words
+    games._WORDS = set()
+
+    def slow_load(lines=None):
+        import time
+        time.sleep(0.2)
+        games._WORDS, games._COMMON, games._BY_FIRST = saved
+    games.load_words = slow_load
+    try:
+        task = asyncio.create_task(svc.games.start(bot, CHAT, A.id, "끝말잇기"))
+        await asyncio.sleep(0.05)
+        assert not svc.games.is_active(CHAT), "읽는 동안엔 게임 없음"
+        assert not await svc.games.on_text(FakeMsg(CHAT, B, "산책"), "산책")
+        assert "시작" in await task and svc.games.is_active(CHAT)
+    finally:
+        games.load_words = orig
+        games._WORDS, games._COMMON, games._BY_FIRST = saved
+    svc.games.active[CHAT].cancel_timer()
+
+
+@test
+async def send_failure_after_bot_move_keeps_timer():
+    db, svc, bot, g = await setup()
+    g.cancel_timer()
+    g.last, g.used = "기차", {"기차"}
+    from telegram.error import RetryAfter
+
+    async def flood(*a, **k):
+        raise RetryAfter(30)
+    orig_move, wordbot.move = wordbot.move, plays("표범")
+    g.say = flood
+    try:
+        assert (await text(svc, A, "차표"))[0]
+    finally:
+        wordbot.move = orig_move
+    t = g._timer
+    assert t and not t.done() and not t.cancelling() and not g.finished, "전송이 실패해도 새 타이머가 살아 있어야 (안 그러면 방이 영원히 게임 중)"
+    g.cancel_timer()
+
+
+@test
+async def start_button_racing_join_timer_still_starts():
+    """[▶️ 바로 시작]이 버튼 응답을 기다리는 사이 참가 타이머가 울려 시작 안내 중 → 버튼 쪽이 타이머를 끊어 게임이 멈추던 것."""
+    db, svc, bot, g = await setup("끝말잇기 차례")
+    for u in (A, B):
+        await press(svc, u, "wc:j")
+    g.cancel_timer()
+    announced = []
+
+    async def slow_announce(head=""):
+        await asyncio.sleep(0.05)
+        announced.append(head)
+    g._announce = slow_announce
+    q = FakeQuery(CHAT, A, "wc:go")
+    q.message.chat_id = CHAT
+    real_answer = q.answer
+
+    async def slow_answer(*a, **k):
+        await asyncio.sleep(0.02)
+        return await real_answer(*a, **k)
+    q.answer = slow_answer
+    pressing = asyncio.create_task(svc.games.on_callback(q, ["go"]))
+    await asyncio.sleep(0.005)                                        # 버튼은 응답 대기 중
+    g._timer = asyncio.create_task(g._start())                        # 그때 참가 타이머가 울림
+    await pressing
+    await asyncio.sleep(0.1)
+    assert announced and not g.joining, announced
+
+
+@test
+async def fired_timer_callback_not_cut_by_cancel():
+    """울린 타이머의 콜백(안내 보내는 중)은 그 사이 들어온 답의 cancel_timer 에 끊기지 않는다."""
+    db, svc, bot, g = await setup("끝말잇기 차례")
+    done = []
+
+    async def slow():
+        await asyncio.sleep(0.05)
+        done.append(1)
+    g.set_timer(0, slow)
+    await asyncio.sleep(0.01)
+    g.cancel_timer()                                                  # 답 처리 쪽이 타이머를 정리
+    await asyncio.sleep(0.1)
+    assert done, "울린 뒤 콜백이 끊김"
+
+
+@test
+async def elimination_notice_not_cut_by_answer():
+    db, svc, bot, g = await setup("끝말잇기 차례")
+    for u in (A, B, C):
+        await press(svc, u, "wc:j")
+    await press(svc, A, "wc:go")
+    g.cancel_timer()
+    g.last, g.used = "기차", {"기차"}
+    real_say = g.say
+
+    async def slow_say(text, **kw):
+        await asyncio.sleep(0.05)
+        return await real_say(text, **kw)
+    g.say = slow_say
+    g.set_timer(0, g._turn_timeout)                                 # 차례 시간 끝 → 탈락 안내 보내는 중
+    await asyncio.sleep(0.01)
+    users = {u.id: u for u in (A, B, C)}
+    await text(svc, users[g.players[0][0]], "차표")                  # 다음 사람이 그 사이 답함
+    await asyncio.sleep(0.2)
+    assert any("탈락" in t for t in said(bot)), said(bot)
     g.cancel_timer()

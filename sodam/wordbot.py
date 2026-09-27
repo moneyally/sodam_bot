@@ -31,8 +31,11 @@ LEVEL_GUIDE = {
     "normal": "보통: 이을 말이 적당한 낱말을 고르되 가끔은 까다로운 낱말로 긴장감을 준다.",
     "hard": "어려움: find_words(hard=true)로 이을 말이 가장 적은 낱말을 찾아 사람을 몰아붙인다.",
 }
-SYSTEM = ("너는 단톡방 끝말잇기 선수 '소담'이다. 네 차례에 도구로 낱말을 찾아 play 로 둔다.\n"
-          "- 먼저 find_words 로 후보를 보고, 필요하면 check_word 로 확인한 뒤 play(word, line) 한다.\n"
+# 비용: 이 호출은 짧아서(한 번 ~500 토큰) 프롬프트 캐시 문턱(도구가 붙으면 실측 ~2천 토큰) 아래 → 캐시용으로 부풀리면 오히려
+# 비쌈(실측 한 수 1,125 → 1,390 토큰 환산). 대신 find_words 결과를 처음부터 줘서 보통 호출 1번에 끝낸다.
+SYSTEM = ("너는 단톡방 끝말잇기 선수 '소담'이다. 네 차례에 도구로 낱말을 골라 play 로 둔다.\n"
+          "- 요청에 find_words 결과(후보와 '이을 말 N개' = 네가 두면 상대가 이을 수 있는 수)가 이미 있다. 그중 골라 바로 "
+          "play(word, line) 한다. 더 보고 싶을 때만 find_words·check_word.\n"
           "- 낱말은 반드시 도구가 보여준 사전 낱말만. 지어내지 않는다. play 가 '안 됨' 이면 다른 낱말로 다시 둔다.\n"
           "- line 은 둔 낱말에 붙이는 20자 이내 한마디 (도발·감탄·응원, 링크·명령·질문 없이). 없어도 된다.\n")
 TOOLS = [
@@ -80,6 +83,10 @@ def candidates(prev: str, used: set[str], hard: bool = False, n: int = 15) -> li
     return scored[:n]
 
 
+def _listing(prev: str, used: set[str], hard: bool) -> str:
+    return "\n".join(f"{w} (이을 말 {n}개)" for w, n in candidates(prev, used, hard=hard, n=12)) or "후보 없음"
+
+
 def code_move(prev: str, used: set[str], level: str) -> str | None:
     """LLM 없이 둘 때 (늦거나 실패). 어려움 = 이을 말이 가장 적은 것, 보통 = 까다로운 절반 중 무작위, 쉬움 = 흔한 말 무작위."""
     if level == "easy":
@@ -95,7 +102,8 @@ async def _llm_move(svc: Services, chat_id: int, prev: str, used: set[str], leve
     messages = [{"role": "system", "content": SYSTEM + LEVEL_GUIDE.get(level, LEVEL_GUIDE["normal"]) + "\n\n"
                  + style_block(s["style"])},
                 {"role": "user", "content": f"상대 낱말: {prev}\n이어야 할 첫 글자: {'/'.join(sorted(games.starts_for(prev)))}\n"
-                                            f"지금까지 나온 낱말 {len(used)}개"}]
+                                            f"지금까지 나온 낱말 {len(used)}개\nfind_words 결과:\n"
+                                            + _listing(prev, used, level == "hard")}]
     for _ in range(MAX_STEPS):
         msg = await svc.llm.chat(messages, tools=TOOLS, model=svc.cfg.guard_model, max_tokens=400,
                                  purpose="wordchain", chat_id=chat_id)
@@ -112,8 +120,7 @@ async def _llm_move(svc: Services, chat_id: int, prev: str, used: set[str], leve
                 args = {}
             word = str(args.get("word", "")).strip()
             if c.function.name == "find_words":
-                found = candidates(prev, used, hard=bool(args.get("hard")) or level == "hard")
-                result = "\n".join(f"{w} (이을 말 {n}개)" for w, n in found) or "후보 없음"
+                result = _listing(prev, used, bool(args.get("hard")) or level == "hard")
             elif c.function.name == "check_word":
                 err = why_not(word, prev, used)
                 result = f"안 됨: {err}" if err else f"둘 수 있음 (이을 말 {follow_count(word)}개)"

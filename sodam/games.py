@@ -38,8 +38,10 @@ def dueum(ch: str) -> str:
         return ch
     code = ord(ch) - 0xAC00
     cho, jung, jong = code // 588, (code % 588) // 28, code % 28
-    if cho == 5:  # ㄹ
-        cho = 11 if jung in (2, 6, 7, 12, 17, 20) else 2
+    if cho == 5:  # ㄹ: 랴려례료류리 → 야여예요유이 (제11항) · 라래로뢰루르 → 나내노뇌누느 (제12항). 레·러·뤼 등은 그대로
+        cho = 11 if jung in (2, 6, 7, 12, 17, 20) else 2 if jung in (0, 1, 8, 11, 13, 18) else None
+        if cho is None:
+            return ch
     elif cho == 2 and jung in (6, 12, 17, 20):  # ㄴ + ㅕㅛㅠㅣ
         cho = 11
     else:
@@ -88,6 +90,8 @@ class Game:
 
     async def _run_timer(self, seconds: float, fn) -> None:
         await asyncio.sleep(seconds)
+        if self._timer is asyncio.current_task():
+            self._timer = None                    # 울린 뒤엔 cancel_timer 가 끊지 못함 (탈락 안내가 사라지던 것)
         if self.finished:
             return
         try:
@@ -204,8 +208,6 @@ class WordChain(Game):
         return random.choice([w for w in self.STARTERS if pick_next(w, {w})] or self.STARTERS)
 
     async def begin(self) -> None:
-        if not _WORDS:
-            await asyncio.to_thread(load_words)
         self.last, self.stale = self.first_word(), ""
         self.used = {self.last}
         self._said, self.thinking = 0.0, False
@@ -223,6 +225,18 @@ class WordChain(Game):
 
     async def _timeout(self) -> None:
         await self.finish(f"⏰ 시간 초과! 제가 이겼어요 😎 (총 {len(self.used)}단어)")
+
+    async def hint(self, msg: Message) -> bool:
+        """첫 글자가 틀린 사전 낱말: 사람마다 한 판에 한 번만 알려줌 (그 뒤론 평범한 채팅으로 — '수육'을 쳤는데 아무 반응이 없던 것)."""
+        hinted = self.__dict__.setdefault("hinted", set())
+        if msg.from_user.id in hinted:
+            return False
+        hinted.add(msg.from_user.id)
+        try:
+            await msg.reply_text(f"🔗 지금은 '{self.last}' → '{self._starts_text()}'(으)로 시작하는 낱말이어야 해요!")
+        except TelegramError:
+            pass
+        return True
 
     async def react(self, msg: Message, kind: str) -> bool:
         try:
@@ -245,7 +259,9 @@ class WordChain(Game):
         if getattr(self, "thinking", False):          # 소담이 차례(생각 중)에 들어온 답은 늦은 답
             return "late" if is_word(word) and word[0] in starts_for(self.last) | starts_for(self.stale) else "no"
         if word[0] not in starts_for(self.last):
-            return "late" if self.stale and word[0] in starts_for(self.stale) and is_word(word) else "no"
+            if self.stale and word[0] in starts_for(self.stale) and is_word(word):
+                return "late"
+            return "wrong" if is_word(word) else "no"   # 사전 낱말인데 첫 글자가 틀림 (게임 답일 가능성 큼)
         if word in self.used:
             return "used"
         return None if is_word(word) else "unknown"
@@ -255,6 +271,8 @@ class WordChain(Game):
         why = self.check(word)
         if why == "no":
             return False
+        if why == "wrong":
+            return await self.hint(msg)
         if why:
             return await self.react(msg, why)
         from . import wordbot   # 늦게 import (wordbot → games)
@@ -276,10 +294,13 @@ class WordChain(Game):
             return True
         self.used.add(nxt)
         self.stale, self.last = word, nxt
+        self.set_timer(self.TURN_SECONDS, self._timeout)     # 전송이 실패해도 게임이 멈추지 않게 먼저
         await self.pace()
-        await self.say(f"✅ {who} {esc(word)} → 🤖 <b>{nxt}</b>" + (f" {esc(line)}" if line else "")
-                       + f"\n'{self._starts_text()}'(으)로 이어주세요!")
-        self.set_timer(self.TURN_SECONDS, self._timeout)
+        try:
+            await self.say(f"✅ {who} {esc(word)} → 🤖 <b>{nxt}</b>" + (f" {esc(line)}" if line else "")
+                           + f"\n'{self._starts_text()}'(으)로 이어주세요!")
+        except TelegramError as e:
+            log.warning("wordchain send failed: %s", e)
         return True
 
 
@@ -292,8 +313,6 @@ class WordChainTurn(WordChain):
     TURN_START, TURN_MIN = 20, 8
 
     async def begin(self) -> None:
-        if not _WORDS:
-            await asyncio.to_thread(load_words)
         self.last, self.stale, self.used, self._said = self.first_word(), "", set(), 0.0
         self.used.add(self.last)
         self.players: list[tuple[int, str]] = []
@@ -327,7 +346,6 @@ class WordChainTurn(WordChain):
                 await query.answer("시작한 사람이나 관리자만 바로 시작할 수 있어요.", show_alert=True)
                 return
             await query.answer()
-            self.cancel_timer()
             await self._start()
             return
         if any(uid == user.id for uid, _ in self.players):
@@ -350,6 +368,7 @@ class WordChainTurn(WordChain):
         if not self.joining:
             return
         self.joining = False
+        self.cancel_timer()                  # 바로 시작이면 참가 타이머를 끔 (타이머 자신이 부른 거면 아무 일 없음)
         if len(self.players) < self.MIN_PLAYERS:
             await self.finish(f"🙅 참가자가 {self.MIN_PLAYERS}명보다 적어서 취소했어요.")
             return
@@ -363,10 +382,13 @@ class WordChainTurn(WordChain):
     async def _announce(self, head: str = "") -> None:
         uid, name = self.players[0]
         t = self._turn_seconds()
+        self.set_timer(t, self._turn_timeout)                  # 전송이 실패해도 게임이 멈추지 않게 먼저
         await self.pace()
-        await self.say(f"{head}👉 {mention(uid, name)} 차례! <b>{self.last}</b> → '{self._starts_text()}'(으)로 ({t}초) "
-                       f"· 남은 {len(self.players)}명")
-        self.set_timer(t, self._turn_timeout)
+        try:
+            await self.say(f"{head}👉 {mention(uid, name)} 차례! <b>{self.last}</b> → '{self._starts_text()}'(으)로 ({t}초) "
+                           f"· 남은 {len(self.players)}명")
+        except TelegramError as e:
+            log.warning("wordchain turn send failed: %s", e)
 
     async def _turn_timeout(self) -> None:
         uid, name = self.players.pop(0)
@@ -393,6 +415,8 @@ class WordChainTurn(WordChain):
         why = self.check(word)
         if why == "no":
             return False
+        if why == "wrong":
+            return await self.hint(msg)
         if why:
             return await self.react(msg, why)       # 시간 안에 다시 치면 됨
         self.used.add(word)
@@ -429,6 +453,8 @@ class GameManager:
         cls = GAMES.get(" ".join(key.split())) or GAMES.get(key.split()[0] if key.split() else "")
         if not cls:
             return f"게임 종류: {GAME_LIST}"
+        if issubclass(cls, WordChain) and not _WORDS:   # 등록 전에 (읽는 동안 온 말이 반쯤 만든 게임에 닿지 않게)
+            await asyncio.to_thread(load_words)
         if self.is_active(chat_id):
             return f"이미 {self.active[chat_id].title} 진행 중이에요. 끝나면 새로 시작할 수 있어요."
         game = cls(self, bot, chat_id, starter_id)
@@ -436,7 +462,7 @@ class GameManager:
             self.active[chat_id] = game
         try:
             await game.begin()
-        except (GameSetupError, OpenAIError, BudgetExceeded, TelegramError) as e:
+        except Exception as e:   # 어떤 오류든 반쯤 만든 게임이 방을 막지 않게
             log.warning("game setup failed: %r", e)
             game.finished = True
             self.active.pop(chat_id, None)
