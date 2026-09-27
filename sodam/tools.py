@@ -806,8 +806,10 @@ TOOLS: list[Tool] = [
     Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_greet),
-    Tool("start_game", "방에서 봇과 하는 끝말잇기를 시작한다. 포인트 게임(홀짝·바카라 등)은 도구가 아니라 멤버가 직접 ! 명령으로 한다.",
-         {"game": {"type": "string", "enum": ["끝말잇기"]}},
+    Tool("start_game", "방에서 끝말잇기를 시작한다. '끝말잇기' = 아무나 먼저 치는 사람이 이어가며 봇과 대결, "
+         "'끝말잇기 차례' = 참가 버튼으로 모여 차례대로·못 이으면 탈락·마지막 1명 우승 (여럿이 대결·이벤트). "
+         "포인트 게임(홀짝·바카라 등)은 도구가 아니라 멤버가 직접 ! 명령으로 한다.",
+         {"game": {"type": "string", "enum": ["끝말잇기", "끝말잇기 차례"]}},
          ["game"], t_start_game, setting="games_enabled"),
     Tool("points_ranking", "게임 포인트 랭킹을 조회한다.", {}, [], t_points_ranking),
     Tool("search_knowledge", "관리자가 등록한 방 자료(규칙·공지·상품·가격·운영 안내 문서)에서 관련 내용을 찾는다. "

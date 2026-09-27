@@ -723,6 +723,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _unmute_button(svc, bot, q, parts)
     elif prefix == "cas":
         await _cas_button(svc, bot, q, parts)
+    elif prefix == "wc":
+        await svc.games.on_callback(q, parts)
     else:
         await q.answer()
 

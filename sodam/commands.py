@@ -292,11 +292,11 @@ async def c_points(ctx: CmdCtx) -> None:
 
 async def c_game(ctx: CmdCtx) -> None:
     if not ctx.args:
-        await ctx.reply(f"🔗 말 게임: {GAME_LIST} (<code>.게임 끝말잇기</code>)\n\n"
+        await ctx.reply(f"🔗 말 게임: {GAME_LIST} (<code>.게임 끝말잇기</code> · <code>.게임 끝말잇기 차례</code>)\n\n"
                         "🎰 <b>포인트 게임</b>: 홀짝·슬롯·바카라·블랙잭·그래프·경마…\n"
                         "<code>!가입</code> 후 <code>!도움</code> 으로 전체 목록")
         return
-    await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, ctx.args[0])))
+    await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, " ".join(ctx.args[:2]))))
 
 
 async def c_stop_game(ctx: CmdCtx) -> None:

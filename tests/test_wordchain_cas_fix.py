@@ -9,7 +9,7 @@ from fake_llm import Room, reply, tool_call
 from fakes import FakeBot, FakeJobQueue, FakeQuery, fake_user, make_db, make_svc, runner
 from test_sanction_multi import A, BOSS, room
 
-from sodam import handlers, memory
+from sodam import games, handlers, memory
 from sodam.cas import ALLOW_KEY
 
 test, run_all = runner()
@@ -34,10 +34,10 @@ async def reply_to_ai_during_game_goes_to_game_and_ai_gets_hint():
     await memory.record_turn(r.db, Room.CHAT, BOSS.id, "call", "안녕", "안녕하세요", 555)
     ai_msg = SimpleNamespace(message_id=555, from_user=r.bot_user(), text="안녕하세요", caption=None)
     chats = len(r.llm.of("chat"))
-    word = game.last[-1] + "가"
-    m = await r.say(A, word, reply_to=ai_msg)                       # AI 답에 답장으로 단 단어
-    assert len(r.llm.of("chat")) == chats and r.llm.of("json"), "게임이 받음 (AI 가 대신 진행 안 함)"
-    assert m.replies and "사전에 없는" in m.replies[-1], m.replies
+    word = next(w for ch in games.starts_for(game.last) for w in games._COMMON.get(ch, []) if w not in game.used)
+    await r.say(A, word, reply_to=ai_msg)                           # AI 답에 답장으로 단 단어
+    assert len(r.llm.of("chat")) == chats, "게임이 받음 (AI 가 대신 진행 안 함)"
+    assert any(f"{word} →" in c[2] for c in r.bot.named("send_message")), "사전으로 바로 판정·봇이 이음"
     r.llm.script = [reply("단어를 쳐주세요")]
     await r.say(A, "소담아 이거 어떻게 해")
     user = r.llm.of("chat")[-1]["messages"][-1]["content"]

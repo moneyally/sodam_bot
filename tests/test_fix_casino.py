@@ -15,6 +15,7 @@ from sodam import casino, db as dbmod
 from sodam.casino import basic, core, multi
 from sodam.casino import cards as C
 from sodam.db import DB
+from sodam import games
 from sodam.games import WordChain
 
 test, run_all = runner()
@@ -158,13 +159,15 @@ async def wordchain_points_go_through_ledger():
     svc = await make_svc(db)
     chat, u = -100777, fake_user(777, "끝말러")
 
-    async def judge(system, user, **kw):
-        return {"valid": True, "next": ""}                             # 봇이 못 이음 → 1 + 5점
-    svc.llm = SimpleNamespace(json=judge)
+    games.load_words()
     bot = K.Bot()
     g = WordChain(svc.games, bot, chat, u.id)
-    g.last, g.used, g.busy = "기차", {"기차"}, False
-    assert await g.on_text(FakeMsg(chat, u, "차표"), "차표")
+    g.last, g.used, g.stale, g._said = "기차", {"기차"}, "", 0.0
+    orig, games.pick_next = games.pick_next, lambda *a: None          # 봇이 못 이음 → 1 + 5점
+    try:
+        assert await g.on_text(FakeMsg(chat, u, "차표"), "차표")
+    finally:
+        games.pick_next = orig
     assert await core.balance(db, chat, u.id) == 6
     assert await reasons(db, chat, u.id) == ["game:끝말잇기", "game:끝말잇기"]
 

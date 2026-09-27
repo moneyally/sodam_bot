@@ -78,6 +78,12 @@ class FakeBot:
     async def send_video(self, chat_id, video, caption=None, **kw):
         return await self._send_media("send_video", chat_id, video, caption, **kw)
 
+    async def edit_message_text(self, text, chat_id=None, message_id=None, **kw):
+        self.calls.append(("edit_text", chat_id, text, kw))
+
+    async def set_message_reaction(self, chat_id, message_id, reaction=None, **kw):
+        self.calls.append(("reaction", chat_id, message_id, reaction))
+
     async def edit_message_caption(self, chat_id=None, message_id=None, caption=None, **kw):
         self.calls.append(("edit_caption", chat_id, message_id, caption))
 
@@ -325,6 +331,7 @@ def runner():
     return test, run_all
 
 
-from sodam import handlers as _handlers  # noqa: E402
+from sodam import games as _games, handlers as _handlers  # noqa: E402
 
+_games.GAP_SECONDS = 0        # 게임 글 간격도 기다리지 않음
 _handlers.BURST_SECONDS = 0   # 테스트는 연달아 말해도 기다리지 않음 (연속 전송 합치기는 test_burst 가 따로 켬)
