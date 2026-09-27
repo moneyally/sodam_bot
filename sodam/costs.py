@@ -60,8 +60,8 @@ USD = "usd_micro"
 ROOM_USD = "room_usd_micro"
 DEFAULT_USD_BUDGET = 8.0          # .env DAILY_USD_BUDGET (0 = 달러 예산 끔)
 PLAN_KEY = "ai_usd_plan"          # chat_state: 오너가 정한 방 하루 요금제(센트). 방 설정이 아니라서 방 관리자는 못 바꿈
-PLAN_CENTS = (50, 150, 300, 500)
-DEFAULT_PLAN_CENTS = 150          # 요금제를 안 정한 방·1:1 = 하루 $1.50
+PLAN_CENTS = (50, 150, 300, 500, 1000)
+DEFAULT_PLAN_CENTS = 1000         # 요금제를 안 정한 방·1:1 = 하루 $10 (사용자 결정 2026-09-27: 막지 말고 넉넉히)
 PCT_KEY = "ai_room_budget_pct"    # 방 관리자 설정: 요금제의 몇 %까지 쓸지 (기본=상한 100 → 줄이기만 가능)
 
 register_setting(PCT_KEY, 100, "방 하루 AI 사용 한도(%)", range_=(10, 100))

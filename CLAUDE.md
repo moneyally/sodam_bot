@@ -47,7 +47,7 @@
 - 단톡방 답 길이: 요청 맨 끝(tail)에 '1~3문장, 목록·제안 문장 없이' 를 매번 붙인다 (실측: 평균 ~110자).
 - 라이브 점검: `python tools/ai_live.py` (실제 OpenAI, 가짜 텔레그램) · 오프라인: `python tools/ai_dryrun.py`.
 - AI 제재(경고·뮤트·밴)는 **항상 확인 버튼** (`tools._ask_sanction` → `handlers._confirm_action`), 한 번 답변에 1회만. 대화 속 숨은 지시로 제재 안 되게.
-- 방 AI 토큰 한도 `ai_room_daily_tokens` 는 기본값=상한(60만)이라 방 관리자는 줄이기만 가능. 0=무제한 없음.
+- 방 AI 토큰 한도 `ai_room_daily_tokens` 는 기본값=상한(300만, 2026-09-27 상향)이라 방 관리자는 줄이기만 가능. 0=무제한 없음.
   달러 한도(오너 요금제 × 방 관리자 %)도 같은 방식 — 아래 'AI 비용·작업 기록'.
 - 재시작 때 쌓인 업데이트는 버리지 않음(`drop_pending_updates=False`, 입장 놓침 방지). 5분 넘은 메시지엔 AI 답 생략(`util.is_stale`).
 - `.말투 X` 한 단어 = 본인 말투. 태그·답장·설명이 붙으면 AI 가 대상 판단(`set_member_style` 관리자 전용).

@@ -10,6 +10,7 @@ from harness import HQuery
 from test_fix_billing_ai import cfg
 
 from sodam import costs, menu
+from sodam.ai_settings import ROOM_TOKENS_MAX
 from sodam.llm import LLM, ROOM_TOKENS, BudgetExceeded
 from sodam.settings import coerce
 
@@ -125,7 +126,8 @@ async def cached_heavy_day_not_blocked_by_tokens_unless_env_set():
 async def room_usd_quota_blocks_that_room_only():
     db, llm = await setup()
     day = llm._today()
-    await db.bump(day, CHAT, costs.ROOM_USD, 1_499_999)            # 기본 요금제 $1.50
+    await db.set_state(CHAT, costs.PLAN_KEY, 150)                  # $1.50 요금제
+    await db.bump(day, CHAT, costs.ROOM_USD, 1_499_999)
     assert await blocked(llm, CHAT) is None
     await db.bump(day, CHAT, costs.ROOM_USD, 1)
     assert await blocked(llm, CHAT) == "room_usd"
@@ -141,7 +143,7 @@ async def room_usd_quota_blocks_that_room_only():
 @test
 async def room_token_cap_still_works():
     db, llm = await setup()
-    await db.bump(llm._today(), CHAT, ROOM_TOKENS, 600_000)
+    await db.bump(llm._today(), CHAT, ROOM_TOKENS, ROOM_TOKENS_MAX)
     assert await blocked(llm, CHAT) == "room_tokens"
 
 
@@ -150,7 +152,7 @@ async def owner_dm_has_no_room_usd_cap_but_others_do():
     db, llm = await setup()                                        # cfg owner_ids = {1}
     day = llm._today()
     for uid in (1, 55):
-        await db.bump(day, uid, costs.ROOM_USD, 5_000_000)
+        await db.bump(day, uid, costs.ROOM_USD, costs.DEFAULT_PLAN_CENTS * 10_000)   # 기본 요금제만큼
     assert await blocked(llm, 1) is None
     assert await blocked(llm, 55) == "room_usd"
     await db.add_owner(55)                                         # /owner 로 등록된 오너도
@@ -235,6 +237,7 @@ async def owner_overview_shows_usd_and_top_rooms():
     svc.llm = SimpleNamespace(usd_budget=8.0, token_budget=0)
     day = LLM(svc.cfg, db)._today()
     await db.bump(day, 0, costs.USD, 4_000_000)
+    await db.set_state(CHAT, costs.PLAN_KEY, 150)
     await db.bump(day, CHAT, costs.ROOM_USD, 1_200_000)
     q = await press(svc, bot, 7, "m:al")
     text = q.edits[0][0]

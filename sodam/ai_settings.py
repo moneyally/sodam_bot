@@ -11,7 +11,7 @@ register_setting("ai_chime_in", False, "AI 먼저 끼어들기")             # �
 register_setting("ai_chime_gap_min", 120, "끼어들기 최소 간격(분)", range_=(30, 1440))
 register_setting("ai_chime_daily", 4, "끼어들기 하루 최대", range_=(1, 20))
 # 방 하루 토큰 한도: 기본값이 상한이라 방 관리자는 줄이기만 가능 (0=무제한·큰 값으로 전체 예산을 못 씀). llm 도 저장값을 상한으로 자름
-ROOM_TOKENS_MAX = 600_000
+ROOM_TOKENS_MAX = 3_000_000
 register_setting("ai_room_daily_tokens", ROOM_TOKENS_MAX, "방 하루 AI 토큰 한도", range_=(10_000, ROOM_TOKENS_MAX))
 # 방 관리자가 바꿀 수 있는 비용 관련 설정의 상한 (웹검색은 호출마다 요금, 분당 호출은 폭주 방지)
 register_setting("web_search_daily", 30, "하루 웹검색 한도", range_=(0, 100))
