@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import persist
 from .util import RateLimiter
 
 if TYPE_CHECKING:
@@ -88,6 +89,13 @@ class Services:
     menu_limiter: RateLimiter = field(default_factory=RateLimiter)
     panel_msgs: dict[int, int] = field(default_factory=dict)  # user_id → 지금 살아있는 메뉴 메시지 (옛 메뉴 버튼 정리용)
 
+    def __post_init__(self) -> None:
+        # 글자 입력 대기는 DB 에도 (재시작 뒤 다음 말이 그 입력으로 가게, sodam/persist.py)
+        if self.db is not None and not isinstance(self.inputs, persist.InputStore):
+            store = persist.InputStore(self.db)
+            dict.update(store, self.inputs)
+            self.inputs = store
+
     async def paid_features(self, chat_id: int) -> bool:
         """구독(또는 체험) 중인 방인지. 결제 기능이 꺼져 있으면 항상 True.
         유료 기능: AI(무료 한도 초과분)·게임·예약공지·자료 등록·스포츠 알림·일일 리포트.
@@ -100,4 +108,6 @@ class Services:
             del self.pending[key]
         key = secrets.token_hex(4)
         self.pending[key] = action
+        if self.db is not None:
+            persist.save_pending(self.db, key, action)   # 재시작 뒤 눌러도 카드가 살아 있게 (handlers._confirm_action)
         return key

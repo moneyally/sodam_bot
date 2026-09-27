@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
+from .. import persist
 from ..db import now, register_schema
 from ..settings import register_setting
 from ..util import esc, mention, user_name
@@ -166,6 +167,9 @@ async def recover_open(db) -> int:
                 c.execute("UPDATE members SET points=points+? WHERE chat_id=? AND user_id=?", (amount, cid, uid))
                 c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
                           (cid, uid, amount, "refund:restart", ts))
+                # 방에 '봇이 다시 시작돼서 게임을 끝냈어요' (persist.announce_ended, 강제 종료로 알림을 못 남긴 경우)
+                c.execute("INSERT OR IGNORE INTO live_games(chat_id, kind, title, ts) VALUES(?, 'casino', '포인트 게임', ?)",
+                          (cid, ts))
                 n += 1
         c.execute("DELETE FROM casino_open")
         return n
@@ -320,21 +324,24 @@ def rng(n: int) -> int:
 
 
 # ── 잠깐 보이는 답장 ──────────────────────────────────────
-async def _delete_later(bot, chat_id: int, message_id: int, secs: float) -> None:
+async def _delete_later(bot, chat_id: int, message_id: int, secs: float, db=None) -> None:
     try:
+        if db is not None:                      # 재시작돼도 지우게 DB 에도 (sodam/persist.py sweep)
+            await persist.remember_delete(db, bot, chat_id, message_id, secs)
         await temp_sleep(secs)
-        await bot.delete_message(chat_id, message_id)
+        await persist.delete_now(db, bot, chat_id, message_id)
     except asyncio.CancelledError:
         raise
-    except Exception as e:                      # 이미 지워짐·권한 없음·봇 종료: 그냥 남김
+    except Exception as e:                      # 이미 지워짐·권한 없음·DB 닫힘: 그냥 남김
         log.debug("temp delete failed: %r", e)
 
 
-def delete_later(bot, chat_id: int, message_id: int | None, secs: float = TEMP_SECS) -> None:
-    """secs 초 뒤 그 메시지를 지운다 (job_queue 없이 asyncio 태스크, 봇이 꺼지면 그냥 남음)."""
+def delete_later(bot, chat_id: int, message_id: int | None, secs: float = TEMP_SECS, db=None) -> None:
+    """secs 초 뒤 그 메시지를 지운다 (asyncio 태스크 + DB 기록: 봇이 꺼지면 다음 실행의 persist.sweep 이 지움)."""
     if message_id is None:
         return
-    task = asyncio.create_task(_delete_later(bot, chat_id, message_id, secs))
+    db = db if db is not None else persist.db_of(bot)
+    task = asyncio.create_task(_delete_later(bot, chat_id, message_id, secs, db))
     _TEMP.add(task)
     task.add_done_callback(_TEMP.discard)
 
@@ -342,7 +349,7 @@ def delete_later(bot, chat_id: int, message_id: int | None, secs: float = TEMP_S
 async def temp_reply(ctx: Ctx, text: str, secs: float = TEMP_SECS):
     """방에 쌓이지 않는 답장: 보내고 secs 초 뒤 삭제 (🎫 참가 확인·'이미 걸었어요' 같은 안내)."""
     sent = await ctx.reply(text)
-    delete_later(ctx.bot, ctx.chat_id, getattr(sent, "message_id", None), secs)
+    delete_later(ctx.bot, ctx.chat_id, getattr(sent, "message_id", None), secs, ctx.svc.db)
     return sent
 
 

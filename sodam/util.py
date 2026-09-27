@@ -144,14 +144,23 @@ _BG: set = set()
 
 
 def post_temp(bot, chat_id: int, text: str, seconds: int = 120) -> None:
-    """방에 안내를 올리고 seconds 뒤 지운다 (백그라운드, 실패는 무시)."""
+    """방에 안내를 올리고 seconds 뒤 지운다 (백그라운드, 실패는 무시).
+    지울 글은 DB 에도 적어 그 사이 재시작돼도 지운다 (sodam/persist.py, 봇에 bind 된 DB)."""
+    from . import persist   # 늦게 import (persist → db → util)
+
     async def run():
         try:
             sent = await bot.send_message(chat_id, text, parse_mode="HTML")
-            await asyncio.sleep(seconds)
-            await bot.delete_message(chat_id, sent.message_id)
         except TelegramError:
-            pass
+            return
+        db = persist.db_of(bot)
+        if db is not None:
+            try:
+                await persist.remember_delete(db, bot, chat_id, sent.message_id, seconds)
+            except Exception:
+                pass
+        await asyncio.sleep(seconds)
+        await persist.delete_now(db, bot, chat_id, sent.message_id)
     task = asyncio.create_task(run())
     _BG.add(task)
     task.add_done_callback(_BG.discard)

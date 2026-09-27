@@ -682,6 +682,8 @@ async def handle_input(svc: Services, bot: Bot, msg: Message) -> bool:
     ok, result = await add(c, msg)
     if not ok:  # 형식 오류: 입력 대기는 유지하고 다시 받기
         p.expires = now + 300
+        if hasattr(svc.inputs, "save"):   # DB 에도 새 기한 (sodam/persist.py InputStore)
+            svc.inputs.save(user.id)
         await msg.reply_text(result + "\n다시 보내주거나 <code>취소</code>", parse_mode="HTML")
         return True
     svc.inputs.pop(user.id, None)

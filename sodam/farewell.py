@@ -15,12 +15,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from . import raid
+from . import persist, raid
 from .greet import _render_buttons, button_rows as _greet_rows
 from .settings import register_setting
 from .util import esc, send_retry, user_name
@@ -99,27 +100,19 @@ class _Room:
         self.task: asyncio.Task | None = None
 
 
-_rooms: dict[tuple, _Room] = {}      # (DB 경로, 방) → 상태
-_claims: dict[tuple, float] = {}     # (DB 경로, 방, 사람) → 처음 본 시각
+_rooms: dict[tuple, _Room] = {}      # (DB 경로, 방) → 상태 (WINDOW 초 합치기. 정상 종료 땐 flush_all 이 보냄)
 
 
-def _claim(svc: Services, chat_id: int, user_id: int) -> bool:
-    now = time.time()
-    if len(_claims) > 5000:
-        for k in [k for k, t in _claims.items() if now - t > CLAIM_SECONDS]:
-            del _claims[k]
-    key = (svc.db.path, chat_id, user_id)
-    if now - _claims.get(key, 0) < CLAIM_SECONDS:
-        return False
-    _claims[key] = now
-    return True
+async def _claim(svc: Services, chat_id: int, user_id: int) -> bool:
+    """DB 차지 (persist.claims): 재시작 직후 같은 나감이 다시 와도(못 끝낸 업데이트 재전송) 인사 1번."""
+    return await persist.claim(svc.db, f"farewell:{chat_id}:{user_id}", CLAIM_SECONDS)
 
 
 async def on_leave(context, chat_id: int, user, by=None, *, kicked: bool = False) -> None:
     """handlers 가 나감을 볼 때마다 (서비스 메시지·멤버 상태 변경). 실패해도 나감 처리는 계속."""
     try:
         svc = context.bot_data["svc"]
-        if not user or user.is_bot or not _claim(svc, chat_id, user.id):
+        if not user or user.is_bot or not await _claim(svc, chat_id, user.id):
             return
         if kicked or not by or by.id != user.id:
             return   # 관리자·자동 관리가 내보냄
@@ -176,6 +169,22 @@ async def flush(context, chat_id: int) -> None:
         log.warning("farewell send failed in %s: %s", chat_id, e)
         return
     secs = s["farewell_delete_after"]
-    if secs and context.job_queue:
-        from .handlers import _delete_job   # send_temp 와 같은 지연 삭제 (순환 import 라 여기서)
-        context.job_queue.run_once(_delete_job, secs, data=(chat_id, sent.message_id))
+    if secs and getattr(context, "job_queue", None):
+        from .handlers import delete_after   # send_temp 와 같은 지연 삭제 (DB 에도 → 재시작해도 지움, 순환 import 라 여기서)
+        await delete_after(context, chat_id, sent.message_id, secs)
+    elif secs:                                # 종료 중 보낸 인사 (persist.flush_on_stop): DB 에만 → 다음 실행의 sweep 이 지움
+        await persist.remember_delete(svc.db, bot, chat_id, sent.message_id, secs)
+
+
+async def flush_all(svc: Services, bot, bot_data: dict) -> None:
+    """정상 종료(배포) 때: 합치려고 기다리던 퇴장 인사를 지금 보냄 (안 그러면 재시작으로 사라짐)."""
+    ctx = SimpleNamespace(bot_data=bot_data, bot=bot, job_queue=None)
+    for (path, chat_id), room in list(_rooms.items()):
+        if path != svc.db.path or not room.people:
+            continue
+        if room.task and not room.task.done():
+            room.task.cancel()
+        try:
+            await flush(ctx, chat_id)
+        except Exception:
+            log.exception("farewell flush on stop failed in %s", chat_id)

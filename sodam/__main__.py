@@ -23,7 +23,7 @@ from .llm import LLM
 from .moderation import Moderator
 from .mtproto import MTProto
 from .permissions import Permissions
-from . import casino, namehist
+from . import casino, namehist, persist
 from .ratelimit import ChatRateLimiter
 from .services import Services
 from .sports import Sports
@@ -172,6 +172,8 @@ def build_app(cfg: Config, db: DB) -> Application:
         svc: Services = app.bot_data["svc"]
         if cfg.bot_role != "main":          # ! 게임을 맡는 프로세스만 (메인·딜러 분리 때 메인이 딜러의 판을 환불하지 않게)
             await casino.startup(svc)       # kill -9·컨테이너 회수로 정산 못 한 베팅 환불 (폴링 시작 전)
+        # 재시작 전 상태 복구: 메뉴 입력·예약공지 마법사·기억 정리 예약, 끝내지 못한 게임 방에 안내 (sodam/persist.py)
+        await persist.restore(svc, app.bot)
         code = await svc.perms.prepare_claim_code()
         if code:
             # 서버 화면(터미널)을 볼 수 있는 사람 = 서버 주인만 알 수 있는 1회용 코드
@@ -195,6 +197,8 @@ def build_app(cfg: Config, db: DB) -> Application:
         hb = heartbeat_path(cfg)
         write_heartbeat(hb)
         jq.run_repeating(job_heartbeat, interval=HEARTBEAT_SEC, first=HEARTBEAT_SEC, data=hb, name="heartbeat")
+        # 재시작으로 타이머가 사라진 임시 안내 지우기 등 (메인·딜러 봇 모두 — 자기가 보낸 글만)
+        jq.run_repeating(persist.job_sweep, interval=30, first=15, name="persist_sweep")
 
         # 시작 알림은 폴링 시작 뒤 (네트워크가 느려도 시작이 멈추지 않게)
         async def _started(_ctx) -> None:
@@ -203,6 +207,9 @@ def build_app(cfg: Config, db: DB) -> Application:
 
     async def post_stop(app: Application) -> None:
         # post_shutdown 때는 봇 연결이 이미 닫혀 있어서 여기서 보냄
+        svc: Services | None = app.bot_data.get("svc")
+        if svc:   # 몇 초 모아 보내던 입장·퇴장 인사 (배포 재시작으로 사라지지 않게)
+            await persist.flush_on_stop(svc, app.bot, app.bot_data)
         await notify_owner(app, f"⏹ {esc(cfg.bot_name)} 정상 종료{esc(vtag)}")
 
     async def post_shutdown(app: Application) -> None:

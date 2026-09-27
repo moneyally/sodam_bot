@@ -13,6 +13,7 @@ from .config import Config
 from .db import DB, register_schema
 
 log = logging.getLogger(__name__)
+CLAIM_FAIL_KEY = "owner_claim_fail"   # counters(날짜, 사람 ID): /owner 코드 틀린 횟수
 ADMIN_TTL = 300            # 메모리·DB 캐시 유효 시간
 ADMIN_STALE = 86400        # 이보다 오래된 방은 '내 그룹' 목록 후보에 다시 넣어 새로 확인
 
@@ -88,7 +89,7 @@ class Permissions:
             self._owners = set(self.cfg.owner_ids) | await self.db.owner_ids()
         return self._owners
 
-    CLAIM_MAX_PER_USER = 5
+    CLAIM_MAX_PER_USER = 5   # 1인 (하루, 재시작해도)
     CLAIM_MAX_TOTAL = 20
 
     async def prepare_claim_code(self) -> str | None:
@@ -104,9 +105,13 @@ class Permissions:
         if not self.claim_code:
             return False
         fails = self._claim_fails
-        if fails.get(user_id, 0) >= self.CLAIM_MAX_PER_USER:
+        # 1인 한도는 DB(오늘 카운터)에도 → 재시작(=새 코드)마다 5번씩 다시 시도하지 못하게
+        day = time.strftime("%Y-%m-%d")
+        if fails.get(user_id, 0) >= self.CLAIM_MAX_PER_USER or \
+                await self.db.counter(day, user_id, CLAIM_FAIL_KEY) >= self.CLAIM_MAX_PER_USER:
             return False
         if not secrets.compare_digest(code.strip(), self.claim_code):
+            await self.db.bump(day, user_id, CLAIM_FAIL_KEY)
             fails[user_id] = fails.get(user_id, 0) + 1
             if sum(fails.values()) >= self.CLAIM_MAX_TOTAL:
                 self.claim_code = None

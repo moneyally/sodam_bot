@@ -64,7 +64,15 @@ CREATE TABLE IF NOT EXISTS ai_turns (
     bot_msg_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_ai_turns ON ai_turns(chat_id, user_id, id);
-""", migrate={"member_memory": "plain", "ai_turns": "plain", "memory_state": "composite", "room_memory": "composite"})
+CREATE TABLE IF NOT EXISTS memory_queue (      -- 예약된 기억 정리 (재시작으로 _extract_later 가 취소돼도 resume 이 다시)
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    ts      INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
+""", migrate={"member_memory": "plain", "ai_turns": "plain", "memory_state": "composite", "room_memory": "composite",
+              "memory_queue": "composite"})
+QUEUE_MAX_AGE = 3 * 86400    # 이보다 오래된 예약은 버림 (_candidate_messages 도 3일만 봄)
 
 MAX_FACTS = 12
 FACT_CHARS = 60
@@ -323,19 +331,47 @@ def observe(svc: Services, chat_id: int, user_id: int, text: str) -> bool:
     return True
 
 
-async def _extract_later(svc: Services, chat_id: int, user_id: int) -> None:
+async def _extract_later(svc: Services, chat_id: int, user_id: int, queued: bool = False) -> None:
     key = (chat_id, user_id)
     try:
+        if not queued:   # DB 에도 예약 → 기다리는 사이 재시작(배포)돼도 resume 이 다시 (취소되면 줄이 남음)
+            await svc.db._write("INSERT OR IGNORE INTO memory_queue(chat_id, user_id, ts) VALUES(?,?,?)",
+                                (chat_id, user_id, _now()))
         row = await svc.db._one("SELECT last_ts FROM memory_state WHERE chat_id=? AND user_id=?", (chat_id, user_id))
         wait = EXTRACT_DELAY
         if row:
             wait = max(wait, row["last_ts"] + EXTRACT_MIN_GAP - _now())
         await asyncio.sleep(wait)
         await extract(svc, chat_id, user_id)
+        await _unqueue(svc, chat_id, user_id)
+    except asyncio.CancelledError:
+        raise              # 종료: 예약 줄은 남겨 다음 실행이 이어서
     except Exception:
         log.exception("memory extract failed")
+        await _unqueue(svc, chat_id, user_id)   # 같은 실패를 매번 되풀이하지 않게
     finally:
         state(svc).scheduled.discard(key)
+
+
+async def _unqueue(svc: Services, chat_id: int, user_id: int) -> None:
+    try:
+        await svc.db._write("DELETE FROM memory_queue WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    except Exception as e:
+        log.debug("memory unqueue failed: %r", e)
+
+
+async def resume(svc: Services) -> int:
+    """봇 시작 때: 지난 실행에서 기다리다 끊긴 기억 정리 예약을 다시 (sodam/persist.restore). 다시 건 수."""
+    await svc.db._write("DELETE FROM memory_queue WHERE ts < ?", (_now() - QUEUE_MAX_AGE,))
+    st, n = state(svc), 0
+    for r in await svc.db._all("SELECT chat_id, user_id FROM memory_queue"):
+        key = (r["chat_id"], r["user_id"])
+        if key in st.scheduled:
+            continue
+        st.scheduled.add(key)
+        if spawn(svc, _extract_later(svc, *key, queued=True)):
+            n += 1
+    return n
 
 
 # ── 방 흐름 메모 ───────────────────────────────────────────

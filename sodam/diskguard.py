@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 LOW_MB = 500
 EMERGENCY_DAYS = 30
 ALERT_GAP = 6 * 3600
+ALERT_KEY = "disk_alert_at"   # chat_state(0, …): 마지막 알림 시각
 _last_alert = 0.0
 
 
@@ -41,8 +42,17 @@ async def check(svc: Services, bot, free: int | None = None) -> bool:
     except Exception as e:   # 정리 자체가 막힐 만큼 가득 찬 경우
         log.warning("긴급 정리 실패: %s", e)
         note = "정리도 못 할 만큼 가득 찼어요." if disk_full(e) else f"정리 실패: {e}"
+    if not _last_alert:   # 재시작 뒤 첫 확인: 지난 알림 시각 (감시가 자주 재시작해도 6시간 1번)
+        try:
+            _last_alert = float(await svc.db.get_state(0, ALERT_KEY, 0) or 0)
+        except Exception:
+            pass
     if time.time() - _last_alert >= ALERT_GAP:
         _last_alert = time.time()
+        try:
+            await svc.db.set_state(0, ALERT_KEY, int(_last_alert))
+        except Exception as e:   # 가득 차서 못 적어도 알림은 보냄
+            log.info("disk alert time not saved: %s", e)
         await svc.mod.report(bot, f"💾 서버 디스크 여유 공간이 {free}MB 남았어요 (기준 {LOW_MB}MB). {note}\n"
                                   "서버의 오래된 로그·백업을 지우거나 디스크를 늘려주세요.")
     return True

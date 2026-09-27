@@ -37,6 +37,7 @@ VIEWS_MAX_IDS = 100
 PAGE = 200                  # channels.getParticipants 한 번에 (텔레그램 최대)
 PAGE_GAP = 0.5              # 쪽 사이 쉼
 RESOLVE_PER_HOUR = 60       # contacts.resolveUsername 시간당 상한 (조회는 누구나 할 수 있어서)
+RATE_KEY = "mtproto_rate"      # chat_state(0, …): FloodWait 끝 시각·지난 1시간 호출 시각
 NOT_FOUND_TTL = 86400       # 없는 @아이디는 하루 다시 안 물어봄
 RESTART_GAP = 30            # [🔄 다시 연결] 연타 방지 (봇 로그인 반복은 FloodWait 을 부름)
 _sleep = asyncio.sleep      # 테스트가 바꿔 끼움
@@ -159,6 +160,7 @@ class MTProto:
     async def start(self) -> None:
         if not self.enabled:
             return
+        await self.load_rate()
         await self._start_bot()
         await self._start_user()
 
@@ -237,6 +239,32 @@ class MTProto:
         self._task = asyncio.create_task(run())
         return True
 
+    # ── 시간당 상한·FloodWait 기록 (재시작해도 이어서: 재시작마다 상한이 비면 텔레그램이 더 긴 FloodWait 을 줌) ─
+    async def load_rate(self) -> None:
+        try:
+            st = await self.db.get_state(0, RATE_KEY) or {}
+        except Exception as e:
+            log.info("mtproto rate not loaded: %s", e)
+            return
+        cut = time.time() - 3600
+        for h in (self.bot, self.user):
+            h.flood_until = max(h.flood_until, float((st.get("flood") or {}).get(h.name, 0)))
+        if not self.call_log:     # 시작 때 한 번 (이미 센 게 있으면 그대로)
+            self.call_log.extend(sorted(float(t) for t in st.get("calls", ()) if t > cut))
+        if not self.resolve_log:
+            self.resolve_log.extend(sorted(float(t) for t in st.get("resolve", ()) if t > cut))
+
+    async def save_rate(self) -> None:
+        cut = time.time() - 3600
+        await self.db.set_state(0, RATE_KEY, {"flood": {h.name: h.flood_until for h in (self.bot, self.user)
+                                                        if h.flood_until > time.time()},
+                                              "calls": [t for t in self.call_log if t > cut],
+                                              "resolve": [t for t in self.resolve_log if t > cut]})
+
+    def _saved(self) -> None:
+        from . import persist
+        persist.spawn(self.save_rate())
+
     # ── 공통 호출: 간격 · FloodWait · 오류 ────────────────────
     async def _run(self, h: Helper, fn: Callable[[Any], Awaitable[Any]]):
         async with h.lock:
@@ -257,6 +285,7 @@ class MTProto:
                     if secs > MAX_FLOOD_SLEEP or attempt:
                         h.flood_until = time.time() + secs
                         h.fail("FloodWait 포기", f"{secs}초")
+                        self._saved()
                         return None
                     log.info("mtproto %s FloodWait %d초 기다림", h.name, secs)
                     await _sleep(secs)
@@ -267,6 +296,7 @@ class MTProto:
     # ── ① 봇: 참가자 ─────────────────────────────────────────
     def _count_call(self) -> None:
         self.call_log.append(time.time())
+        self._saved()
 
     def calls_last_hour(self) -> int:
         """① 봇 세션이 지난 1시간 동안 텔레그램에 보낸 요청 수 (참가자 쪽수·아이디 조회) — 순찰의 시간당 상한용."""

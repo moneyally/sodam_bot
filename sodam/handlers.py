@@ -23,8 +23,8 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
-               subscription, vision)
+from . import (accountage, addressee, anomaly, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
+               stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
 from .db import disk_full
@@ -49,10 +49,19 @@ def _svc(context: ContextTypes.DEFAULT_TYPE) -> Services:
 
 async def _delete_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id, message_id = context.job.data
-    try:
-        await context.bot.delete_message(chat_id, message_id)
-    except TelegramError:
-        pass
+    svc = context.bot_data.get("svc") if isinstance(context.bot_data, dict) else None
+    await persist.delete_now(svc.db if svc else None, context.bot, chat_id, message_id)
+
+
+async def delete_after(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, seconds: float) -> None:
+    """seconds 뒤 지움: job_queue 로 제때 + DB(temp_msgs)에도 적어 그 사이 재시작돼도 persist.sweep 이 지움."""
+    svc = context.bot_data.get("svc") if isinstance(context.bot_data, dict) else None
+    if svc is not None:
+        try:
+            await persist.remember_delete(svc.db, context.bot, chat_id, message_id, seconds)
+        except Exception as e:   # 기록 실패(디스크 가득 참 등)여도 지우기는 예약
+            log.warning("temp message not recorded: %s", e)
+    context.job_queue.run_once(_delete_job, seconds, data=(chat_id, message_id))
 
 
 BURST_SECONDS = 1.5      # 같은 사람이 이 안에 연달아 보낸 말은 한 번에 답 (마지막 메시지에, 앞의 말도 함께 읽고)
@@ -78,7 +87,7 @@ async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str,
     except TelegramError as e:
         log.warning("notice send failed: %s", e)
         return
-    context.job_queue.run_once(_delete_job, seconds, data=(chat_id, sent.message_id))
+    await delete_after(context, chat_id, sent.message_id, seconds)
 
 
 _LEADING_MENTIONS = re.compile(r"^(?:@\w{3,32}[\s,]*)+")
@@ -861,7 +870,8 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     """경고·뮤트·밴 확인 버튼 (tools._ask_sanction). y = 실행, p = 실행 + 방에 안내(오너 1:1 요청), n = 취소.
     대상이 여러 명이면 한 번에 처리하고 사람마다 결과를 보여 준다."""
     key, yn = (parts + ["", ""])[:2]
-    action = svc.pending.get(key)
+    # 재시작(배포) 뒤엔 메모리에 없음 → DB 에서 (sodam/persist.py, 카드 유효시간은 그대로)
+    action = svc.pending.get(key) or (await persist.load_pending(svc.db, key) if key else None)
     presser = q.from_user.id
     if not action or action.expires < time.time():
         svc.pending.pop(key, None)
@@ -888,7 +898,11 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         await pressed("거절(차단 권한 없음)")
         await q.answer(no_right_text(), show_alert=True)
         return
-    svc.pending.pop(key, None)
+    # 한 번만 실행: 메모리에서 꺼냈거나 DB 줄을 지운 쪽만 (재시작 뒤 두 번 빨리 누르면 둘 다 DB 에서 읽음)
+    mine = svc.pending.pop(key, None) is not None
+    if not (await persist.take_pending(svc.db, key) or mine):
+        await q.answer("이미 처리된 요청이에요.")
+        return
     await q.answer()
     if yn not in ("y", "p"):
         await pressed("취소")

@@ -9,17 +9,20 @@ drafts 키는 (ui_chat_id, user_id) → 1:1 에선 (uid, uid) 라서 1:1 메시�
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
+from . import persist
+from .db import register_schema
 from .settings import parse_hhmm
 from .util import esc
 
@@ -201,10 +204,50 @@ class Draft:
 CLOSE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 닫기", callback_data="an:x")]])
 
 
+register_schema("""
+CREATE TABLE IF NOT EXISTS announce_drafts (
+    ui_chat_id INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    chat_id    INTEGER NOT NULL,   -- 공지를 올릴 방 (그룹 전환 때 버림)
+    data       TEXT NOT NULL,
+    expires    REAL NOT NULL,
+    PRIMARY KEY (ui_chat_id, user_id)
+);
+""", migrate={"announce_drafts": "drop"})
+
+
 class Announcer:
     def __init__(self, svc: Services):
         self.svc = svc
-        self.drafts: dict[tuple[int, int], Draft] = {}
+        db = svc.db
+
+        async def write(key, d: Draft) -> None:
+            await db._write("INSERT OR REPLACE INTO announce_drafts(ui_chat_id, user_id, chat_id, data, expires) "
+                            "VALUES(?,?,?,?,?)", (*key, d.chat_id, json.dumps(asdict(d), ensure_ascii=False), d.expires))
+
+        async def drop(key) -> None:
+            await db._write("DELETE FROM announce_drafts WHERE ui_chat_id=? AND user_id=?", key)
+        # 만드는 중인 마법사도 DB 에 (배포 재시작 뒤 다음 말이 마법사로 이어지게). 넣기·빼기는 자동, 단계 진행은 save
+        self.drafts: dict[tuple[int, int], Draft] = persist.MirrorDict(write, drop) if db is not None else {}
+
+    async def restore(self) -> int:
+        """봇 시작 때: 기한 안 지난 마법사를 메모리로."""
+        rows = await self.svc.db._all("SELECT data FROM announce_drafts WHERE expires > ?", (time.time(),))
+        n = 0
+        for r in rows:
+            try:
+                d = Draft(**json.loads(r["data"]))
+            except (ValueError, TypeError) as e:
+                log.warning("announce draft unreadable: %r", e)
+                continue
+            dict.__setitem__(self.drafts, d.key, d)
+            n += 1
+        await self.svc.db._write("DELETE FROM announce_drafts WHERE expires <= ?", (time.time(),))
+        return n
+
+    def _saved(self, key) -> None:
+        if isinstance(self.drafts, persist.MirrorDict):
+            self.drafts.save(key)
 
     # ── 발송 ──────────────────────────────────────────────
     async def _rules(self, chat_id: int) -> str:
@@ -338,11 +381,18 @@ class Announcer:
         keep = f"\n(지금: {esc(draft.title) or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
                                     f"<b>1/4 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
+        self._saved(draft.key)
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
         """마법사 진행 중인 관리자의 메시지면 처리하고 True."""
-        if not msg.from_user:
-            return False
+        if not msg.from_user or (msg.chat_id, msg.from_user.id) not in self.drafts:
+            return False      # 대부분의 메시지: 메모리만 보고 끝 (DB 안 읽음)
+        try:
+            return await self._handle_message(bot, msg)
+        finally:
+            self._saved((msg.chat_id, msg.from_user.id))
+
+    async def _handle_message(self, bot: Bot, msg: Message) -> bool:
         draft = self._get(msg.chat_id, msg.from_user.id)
         if not draft or draft.step not in ("title", "body", "when"):
             return False
@@ -409,6 +459,15 @@ class Announcer:
         return True
 
     async def on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
+        token = (parts + [""])[0]
+        draft = next((d for d in self.drafts.values() if d.token == token), None)
+        try:
+            await self._on_callback(bot, query, parts)
+        finally:
+            if draft is not None:
+                self._saved(draft.key)
+
+    async def _on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
         token, action = (parts + ["", ""])[:2]
         if token == "x":  # 1:1 미리보기의 [🗑 닫기]
             if not query.message or query.message.chat_id != query.from_user.id:

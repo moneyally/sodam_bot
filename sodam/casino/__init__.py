@@ -131,7 +131,22 @@ async def startup(svc) -> int:
     return await recover_open(svc.db) + await recover_stale(svc.db)   # 옛 버전이 남긴 멀티 판 표까지
 
 
+def live_rooms() -> set[int]:
+    """지금 판(카드 핸드·같이 하는 게임)이 열려 있는 방."""
+    from .cards import HANDS
+    from .multi import _ROUNDS
+    return ({cid for (_, cid, _), h in HANDS.items() if not h.done}
+            | {cid for (cid, _), r in _ROUNDS.items() if r.phase != "done"})
+
+
 async def shutdown(svc) -> None:
+    # 환불·정산 전에 방을 적어 둠 → 다시 켜질 때 '봇이 다시 시작돼서 게임을 끝냈어요' (sodam/persist.py)
+    try:
+        from .. import persist
+        for cid in live_rooms():
+            await persist.game_started(svc.db, cid, "casino", "포인트 게임")
+    except Exception:
+        log.exception("casino live rooms not recorded")
     for fn in SHUTDOWN_HOOKS:
         try:
             n = await fn(svc)

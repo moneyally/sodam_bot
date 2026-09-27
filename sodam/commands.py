@@ -1,7 +1,6 @@
 """명령어. `.명령어` 와 `/command` 둘 다 받는다. 한글/영어 별칭 지원."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,7 +9,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
-from . import fedban, free, knowledge, menu, namehist, stats, subscription
+from . import fedban, free, knowledge, menu, namehist, persist, stats, subscription
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .security import normalize_domain
@@ -88,20 +87,15 @@ async def _private_notice(ctx: CmdCtx, text: str, reply_markup=None, seconds: in
         sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except TelegramError:
         return
-    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, seconds)
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, seconds, ctx.svc.db)
 
 
-def _delete_later(bot, chat_id: int, message_id: int, seconds: int) -> None:
-    async def _later():
-        await asyncio.sleep(seconds)
-        try:
-            await bot.delete_message(chat_id, message_id)
-        except TelegramError:
-            pass
-
-    task = asyncio.create_task(_later())
-    _BACKGROUND.add(task)
-    task.add_done_callback(_BACKGROUND.discard)
+def _delete_later(bot, chat_id: int, message_id: int, seconds: int, db=None) -> None:
+    """seconds 뒤 지움 (DB 에도 적어 그 사이 재시작돼도 지움, sodam/persist.py)."""
+    task = persist.delete_later(bot, chat_id, message_id, seconds, db=db)
+    if task is not None:
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
 
 
 _BACKGROUND: set = set()
@@ -181,7 +175,7 @@ async def c_help(ctx: CmdCtx) -> None:
     admin = ctx.role >= Role.ADMIN or (in_dm and await is_any_admin(ctx.svc, ctx.bot, ctx.user.id))
     sent = await ctx.reply(help_text(ctx.svc.cfg.call_names[0], admin=admin, in_dm=in_dm))
     if admin and not in_dm:
-        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS)
+        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
 
 
 async def c_commands(ctx: CmdCtx) -> None:
@@ -211,7 +205,7 @@ async def c_commands(ctx: CmdCtx) -> None:
     except TelegramError:  # 봇과 1:1 을 시작 안 했으면 방에 잠깐 보여줌
         text = full + "\n\n(봇과 1:1 대화를 시작해두면 다음부턴 1:1 로 보내드려요)"
     sent = await ctx.reply(text)
-    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS)
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
 
 
 async def c_rules(ctx: CmdCtx) -> None:

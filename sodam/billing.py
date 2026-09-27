@@ -34,6 +34,7 @@ CURSOR_KEY = "billing_cursor_ms"   # chat_state(chat_id=0): 마지막으로 본 
 CURSOR_OVERLAP = 10 * 60  # 확정이 늦게 된 거래를 놓치지 않게 커서보다 10분 앞부터 다시 조회 (중복은 tx UNIQUE 로 걸러짐)
 FIRST_LOOKBACK = LATE_GRACE  # 커서도 청구서도 없을 때(첫 실행) 되돌아볼 기간
 REUSE_LEFT = 5 * 60       # 청구서 다시 누름: 남은 시간이 이보다 짧으면 새로 (곧 끝날 청구서로 보내 '늦은 입금'이 되지 않게)
+STREAK_KEY = "billing_fail_streak"
 FAIL_ALERT = 3            # TronGrid 조회가 연속 이만큼 실패하면 오너에게 한 번 알림
 
 
@@ -60,8 +61,15 @@ class Billing:
         self._lock = asyncio.Lock()
         self._inv_lock = asyncio.Lock()  # 청구서 만들기: 연타·동시 생성이 같은 금액·청구서 두 장을 만들지 않게
         self._last_scan = 0.0      # 마지막 성공 조회 (monotonic)
-        self.fail_streak = 0       # TronGrid 연속 실패 횟수
+        self.fail_streak = 0       # TronGrid 연속 실패 횟수 (DB chat_state 0/STREAK_KEY 에도 → 장애 중 재시작해도 복구 알림)
+        self._streak_loaded = False
         self._alert: str | None = None  # "down"/"up" — run_check 가 한 번 꺼내서 보고
+
+    async def _save_streak(self) -> None:
+        try:
+            await self.db.set_state(0, STREAK_KEY, self.fail_streak or None)
+        except Exception as e:   # 기록 실패는 알림만 못 이어갈 뿐
+            log.warning("billing streak not saved: %s", e)
 
     def take_alert(self) -> str | None:
         """TronGrid 장애('down', 연속 FAIL_ALERT 번 실패 시 1번)·복구('up') 알림을 한 번만 꺼낸다."""
@@ -176,16 +184,22 @@ class Billing:
         elif not pending:  # 첫 실행(커서 없음)·청구서 없음 → 최근 FIRST_LOOKBACK 만
             starts.append((now - FIRST_LOOKBACK) * 1000)
         since_ms = min(starts)
+        if not self._streak_loaded:   # 재시작 전 연속 실패 수 ('장애' 알림 뒤 재시작돼도 '복구' 알림이 가게)
+            self._streak_loaded = True
+            self.fail_streak = max(self.fail_streak, int(await self.db.get_state(0, STREAK_KEY, 0) or 0))
         try:
             transfers = await self.fetch_transfers(since_ms)
         except Exception:
             self.fail_streak += 1
             if self.fail_streak == FAIL_ALERT:
                 self._alert = "down"
+            await self._save_streak()
             raise
         if self.fail_streak >= FAIL_ALERT:
             self._alert = "up"
-        self.fail_streak = 0
+        if self.fail_streak:
+            self.fail_streak = 0
+            await self._save_streak()
         self._last_scan = time.monotonic()
 
         paid, unmatched = [], []

@@ -19,6 +19,7 @@ from openai import OpenAIError
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
+from . import persist
 from .casino.core import credit
 from .llm import BudgetExceeded
 from .settings import register_setting
@@ -120,6 +121,7 @@ class Game:
         self.cancel_timer()
         if self.mgr.active.get(self.chat_id) is self:
             del self.mgr.active[self.chat_id]
+            await self.mgr.unmark(self.chat_id)
         self.mgr.remember_end(self, text or "")
         if text:
             try:
@@ -531,7 +533,19 @@ class GameManager:
             game.finished = True
             self.active.pop(chat_id, None)
             return "게임 준비가 잘 안 됐어요. 잠시 후 다시 해주세요 🙏"
+        if not cls.instant and self.active.get(chat_id) is game:
+            key = next((k for k, c in GAMES.items() if c is cls), cls.title)
+            try:   # 재시작으로 게임이 사라지면 다시 켜질 때 방에 알림 (sodam/persist.py)
+                await persist.game_started(self.svc.db, chat_id, "word", key)
+            except Exception as e:
+                log.warning("live game not recorded: %r", e)
         return f"{cls.title} 시작했어요!"
+
+    async def unmark(self, chat_id: int) -> None:
+        try:
+            await persist.game_ended(self.svc.db, chat_id, "word")
+        except Exception as e:
+            log.warning("live game not cleared: %r", e)
 
     async def stop(self, chat_id: int) -> bool:
         game = self.active.get(chat_id)
