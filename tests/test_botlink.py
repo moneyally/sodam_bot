@@ -180,17 +180,21 @@ async def command_needs_admin_interact_trusted_and_valid_form():
     res = await ask(r, A, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})], role=Role.MEMBER)
     assert "사용할 수 없음" in res[0], "멤버는 도구 자체가 없음"
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
-    assert "꺼져" in res[0], res
-    await r.db.set_setting(Room.CHAT, "botlink_mode", "interact")
+    assert "연동 켜기" in res[0], res                                    # 꺼진 방 = 켜기 카드 (명령은 안 감)
+    on = [c for c in r.bot.named("send_message") if "켤까요" in c[2]][-1][3]["reply_markup"].inline_keyboard[0][0].callback_data
+    assert (await press_room(r, A, on)).answers and (await r.db.get_settings(Room.CHAT))["botlink_mode"] == "observe", "멤버는 못 켬"
+    await press_room(r, BOSS, on)
+    assert (await r.db.get_settings(Room.CHAT))["botlink_mode"] == "interact"
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
-    assert "믿는 봇" in res[0], "기록만 봇에겐 못 보냄"
+    assert "확인 버튼" in res[0] and (await botlink.get_bot(r.db, Room.CHAT, DICE.id))["status"] == "seen", \
+        "본 적만 있는 봇 = 카드 (누르기 전엔 믿는 봇 아님)"
     await botlink.set_status(r.db, Room.CHAT, DICE.id, "trusted")
     for bad in ("dice", "/dice@x /ban", "/dice\n/ban all", "/dice @someone", "/dice https://evil.xyz", "/d" + "x" * 40,
                 "/dice t.me/+abc", "/bet " + "1" * 70):
         res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": bad})])
         assert "형식" in res[0], (bad, res)
     assert botlink.build("/Dice@other_bot 100", "dice_bot") == ("/dice", "/Dice@dice_bot 100"), "받는 봇은 항상 그 봇"
-    assert not room_sends(r)
+    assert not [c for c in r.bot.named("send_message") if "@dice_bot" in c[2] and "보낼까요" not in c[2]], "명령은 한 번도 안 감"
 
 
 @test
@@ -355,13 +359,18 @@ async def panel_screens_and_permissions():
 
 
 @test
-async def never_seen_any_bot_returns_setup_steps_not_refusal():
-    """실제 사례: 음악봇 신청을 시켰더니 '여기선 못 해요'로 끝남 (다른 봇 글을 한 번도 못 받은 방) → 켜는 순서를 돌려줌."""
+async def off_room_gets_enable_card_and_seen_bot_trusted_on_press():
+    """실제 사례: 음악봇 신청을 시켰더니 '못 해요'로 끝남 (두 방, 연동 꺼짐) → 한 번 누르면 켜지는 카드, 본 봇은 보내기 카드에서 바로 믿음."""
     r = await blroom("off")
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "멜론", "command": "/play 밤편지"})])
-    assert "BotFather" in res[0] and "명령까지" in res[0] and "믿는 봇" in res[0], res
-    await r.db.set_setting(Room.CHAT, "botlink_mode", "observe")
-    await bot_says(r, DICE, "안녕")                              # 봇을 본 뒤엔 원래 이유로
+    assert "연동 켜기" in res[0], res
+    on = [c for c in r.bot.named("send_message") if "켤까요" in c[2]][-1][3]["reply_markup"].inline_keyboard[0][0].callback_data
+    await press_room(r, BOSS, on)
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "멜론", "command": "/play 밤편지"})])
+    assert "BotFather" in res[0], "켰지만 아직 본 봇 없음 = 켜는 순서 안내"
+    await bot_says(r, DICE, "🎲 = 3")
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
-    assert "BotFather" not in res[0] and "꺼져" in res[0], res
-    assert not room_sends(r)
+    assert "확인 버튼" in res[0], res
+    await press_room(r, BOSS, card_buttons(r)[0])
+    assert (await botlink.get_bot(r.db, Room.CHAT, DICE.id))["status"] == "trusted"
+    assert any(c[2] == "/dice@dice_bot" for c in r.bot.named("send_message")), "눌렀으니 보냄"

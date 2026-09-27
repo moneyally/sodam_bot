@@ -279,7 +279,19 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
     if raw and query and " " not in raw:
         raw = f"{raw} {query}"
     want = intent or botskills.guess_intent(raw.split(" ")[0])
-    row, cands = await botskills.pick_bot(ctx.svc.db, ctx.chat_id, str(a.get("bot") or ""), want)
+    svc = ctx.svc
+    if await botlink.active(svc, ctx.chat_id, ("interact",)) is None and await svc.paid_features(ctx.chat_id):
+        # 연동이 꺼진 방 (실제 사례: 두 방에서 '못 해요'로 끝남) → 요청한 관리자에게 한 번 누르면 켜지는 카드
+        tok = await menu.lasting_token(svc, ctx.caller.id, ctx.chat_id, "kbl_on", None, 1800)
+        await ctx.bot.send_message(
+            ctx.chat_id, "🤝 이 방은 다른 봇 연동이 꺼져 있어요. 켤까요?\n"
+                         f"(켠 뒤 그 봇이 방에 한 번 말하면 알아봐요 · 요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🤖 연동 켜기", callback_data=f"m:k:{tok}")]]))
+        ctx.botlink_sent = True
+        return ("이 방은 다른 봇 연동이 꺼져 있어서 [🤖 연동 켜기] 버튼을 방에 보냈음. 짧게 안내: 버튼 누르고, 그 봇으로 곡을 한 번 "
+                "신청해 그 봇이 방에 말하게 한 뒤 다시 시키면 됨. 아직 명령은 안 보냈으니 '보냈다'고 하지 말 것.")
+    row, cands = await botskills.pick_bot(svc.db, ctx.chat_id, str(a.get("bot") or ""), want)
     if not row and not cands:   # 다른 봇 글을 한 번도 못 받음 = 아직 연동 전 → '못 한다' 대신 켜는 법을 그대로 안내
         return SETUP_GUIDE
     if not row:
@@ -288,7 +300,8 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
             sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, r["bot_id"], want) if want != "other" else None
             labels.append(f"{_bot_label(r)}({r['name'] or ''}" + (f", {sk['command']}" if sk else "") + ")")
         return "어느 봇인지 특정하지 못함 — 관리자에게 어느 봇인지 물어볼 것. 후보: " + ", ".join(labels)
-    reason = await botlink.refuse_reason(ctx.svc, ctx.chat_id, row)
+    trust = row["status"] == "seen"   # 본 적만 있는 봇: 관리자가 확인 카드를 누르면 그때 믿는 봇이 됨 (단계 하나 줄임)
+    reason = await botlink.refuse_reason(ctx.svc, ctx.chat_id, {**dict(row), "status": "trusted"} if trust else row)
     if reason:
         return reason
     if intent and not raw:
@@ -307,8 +320,8 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         return ("명령 형식이 안 맞음: '/' 로 시작하는 명령 하나와 짧은 인자만 (예: /dice, /bet 100). 링크·@·줄바꿈 안 됨 "
                 f"(재생·검색만 {botlink.MAX_ARG_WIDE}자·유튜브 링크 https://youtu.be/… · https://www.youtube.com/watch?v=… 허용).")
     head, text = built
-    if not await botlink.approved(ctx.svc.db, ctx.chat_id, row["bot_id"], head):
-        spec = {"bot_id": row["bot_id"], "head": head, "text": text, "wide": wide}
+    if trust or not await botlink.approved(ctx.svc.db, ctx.chat_id, row["bot_id"], head):
+        spec = {"bot_id": row["bot_id"], "head": head, "text": text, "wide": wide, "trust": trust}
         ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "kbl_send", spec, 1800)
         no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "kbl_no", None, 1800)
         await ctx.bot.send_message(
@@ -339,6 +352,10 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
 async def t_kbl_send(c: PanelCtx, spec) -> Screen:
     """확인 카드 [✅ 보내기] — 요청한 관리자만(토큰), 누를 때 관리자·모드·믿는 봇·한도 다시 확인."""
     row = await botlink.get_bot(c.svc.db, c.cid, to_int(str(spec.get("bot_id"))) or 0)
+    if row and spec.get("trust") and row["status"] == "seen" and await botlink.active(c.svc, c.cid, ("interact",)):
+        await botlink.set_status(c.svc.db, c.cid, row["bot_id"], "trusted")    # 누른 관리자 = 이 봇을 믿음 (무시한 봇은 안 바뀜)
+        await c.svc.db.audit(c.cid, c.uid, row["bot_id"], "botlink_status", "trusted (명령 카드)")
+        row = await botlink.get_bot(c.svc.db, c.cid, row["bot_id"])
     reason = await botlink.refuse_reason(c.svc, c.cid, row)
     built = botlink.build(str(spec.get("text", "")), row["username"], wide=bool(spec.get("wide"))) \
         if row and not reason else None
@@ -353,6 +370,17 @@ async def t_kbl_send(c: PanelCtx, spec) -> Screen:
         return Screen("🤝 보내지 못했어요 (텔레그램 오류).", None, toast="실패", alert=True)
     return Screen(f"🤝 {esc(_bot_label(row))} 에게 <code>{esc(text)}</code> 보냈어요. "
                   f"(<code>{esc(head)}</code> 는 다음부터 바로 보내요)", None, toast="보냈어요")
+
+
+async def t_kbl_on(c: PanelCtx, _) -> Screen:
+    """[🤖 연동 켜기] — 요청한 관리자만(토큰), 누를 때 관리자 권한·이용 기간 다시 확인."""
+    if not await c.svc.paid_features(c.cid):
+        return Screen("🤝 이용 기간이 아닌 방이라 켤 수 없어요.", None, toast="이용 기간 아님", alert=True)
+    if (await c.svc.db.get_settings(c.cid))["botlink_mode"] != "interact":
+        await c.svc.db.set_setting(c.cid, "botlink_mode", "interact")
+        await c.svc.db.audit(c.cid, c.uid, None, "setting", "botlink_mode=interact (방 카드)")
+    return Screen("🤝 다른 봇 연동을 켰어요 (🤖 명령까지). 이제 그 봇이 방에 한 번 말하면 알아봐요 — "
+                  "곡을 한 번 신청한 뒤 다시 시켜 주세요.", None, toast="켰어요")
 
 
 async def t_kbl_no(c: PanelCtx, _) -> Screen:
@@ -378,6 +406,7 @@ tools.register_tool(tools.Tool(
     [], t_command, Role.ADMIN, where="room"))
 menu.register_token_action("kbl_send", t_kbl_send, fresh=True)
 menu.register_token_action("kbl_no", t_kbl_no)
+menu.register_token_action("kbl_on", t_kbl_on, fresh=True)
 menu.register_hub(HubItem(39, "blk", "🤝 다른 봇 연동"))
 menu.register_screen("blk", s_blk)
 menu.register_route("blkb", Route(s_bot, ADMIN))
