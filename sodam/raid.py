@@ -35,7 +35,8 @@ register_setting("raid_action", "captcha", "방어 모드 중 새 입장자",
                  choices={"captcha": "captcha", "캡차": "captcha", "kick": "kick", "내보내기": "kick"},
                  choice_labels={"captcha": "캡차 받게", "kick": "바로 내보내기"})
 
-STATE = "raid"   # chat_state: {"until": 끝나는 시각, "notice": 방 안내 메시지 ID, "kicked": 내보낸 수}
+STATE = "raid"   # chat_state: {"until": 끝나는 시각, "notice": 방 안내 메시지 ID, "since": 시작 시각}
+KICK_REASON = "대량 입장 방어"
 _joins: dict[int, deque] = {}
 _starting: set[int] = set()
 
@@ -80,14 +81,11 @@ async def on_member_join(svc: Services, bot, chat_id: int, user) -> bool:
     if s["raid_action"] != "kick" or not await active(svc, chat_id) or await joinreq.passed(svc, chat_id, user.id):
         return False   # 가입 신청 1:1 확인을 통과한 사람은 내보내지 않음
     try:
-        await svc.mod.kick(bot, chat_id, user.id, None, "대량 입장 방어")
+        await svc.mod.kick(bot, chat_id, user.id, None, KICK_REASON)
     except TelegramError as e:
         log.warning("raid kick failed in %s: %s", chat_id, e)
         return False
-    st = await svc.db.get_state(chat_id, STATE)
-    if st:
-        await svc.db.set_state(chat_id, STATE, {**st, "kicked": st.get("kicked", 0) + 1})
-    return True
+    return True   # 내보낸 수는 끝날 때 관리 기록으로 셈 (동시 입장에도 정확, stop)
 
 
 hooks.add_member_join_hook(on_member_join)
@@ -112,7 +110,7 @@ async def start(svc: Services, bot, chat_id: int, minutes: int, *, joined: int =
         notice = (await bot.send_message(chat_id, room_text(minutes, action), parse_mode="HTML")).message_id
     except TelegramError as e:
         log.warning("raid notice failed in %s: %s", chat_id, e)
-    await svc.db.set_state(chat_id, STATE, {"until": end, "notice": notice})
+    await svc.db.set_state(chat_id, STATE, {"until": end, "notice": notice, "since": int(time.time()) - 1})
     why = f"{seconds}초에 {joined}명 입장" if actor_id is None else "관리자가 켬"
     await svc.db.log_mod(chat_id, actor_id, None, "raid", f"{human_minutes(minutes)} / {why}")
     if actor_id is None:
@@ -134,7 +132,9 @@ async def stop(svc: Services, bot, chat_id: int, actor_id: int | None = None) ->
     await _delete_notice(bot, chat_id, st)
     await svc.db.set_state(chat_id, STATE, None)
     _joins.pop(chat_id, None)
-    kicked = st.get("kicked", 0)
+    row = await svc.db._one("SELECT COUNT(*) AS n FROM mod_log WHERE chat_id=? AND action='kick' AND detail=? AND ts>=?",
+                            (chat_id, KICK_REASON, st.get("since", st.get("until", 0))))
+    kicked = row["n"]
     await svc.db.log_mod(chat_id, actor_id, None, "raid_off",
                          ("관리자가 끔" if actor_id else "시간 끝남") + (f" / {kicked}명 내보냄" if kicked else ""))
     if kicked:

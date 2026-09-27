@@ -244,11 +244,11 @@ class DB:
             worker.daemon = True
         self.conn = await pending
         self.conn.row_factory = aiosqlite.Row
-        await self.conn.execute("PRAGMA journal_mode=WAL")
-        await self.conn.execute("PRAGMA busy_timeout=5000")  # 딜러 봇과 같은 DB 를 쓸 때 잠깐 잠겨도 기다림
+        await self._all("PRAGMA journal_mode=WAL")            # 결과 행을 돌려주는 PRAGMA 는 _all (아래 prune 주석)
+        await self._all("PRAGMA busy_timeout=5000")  # 딜러 봇과 같은 DB 를 쓸 때 잠깐 잠겨도 기다림
         # sqlite.org/pragma.html: WAL 에선 NORMAL 도 DB 가 깨지지 않음 (정전 때 마지막 커밋 몇 개만 잃을 수 있음) → 쓰기가 빠름
         await self.conn.execute("PRAGMA synchronous=NORMAL")
-        await self.conn.execute(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
+        await self._all(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)
@@ -511,8 +511,10 @@ class DB:
             c.execute("DELETE FROM requests WHERE ts<?", (cut,))
             c.execute("DELETE FROM counters WHERE day<?", (cut_day,))
         await self.atomic(run)
-        await self.conn.execute("PRAGMA optimize")                  # 통계 갱신 (sqlite.org: 하루 한 번 권장)
-        await self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # WAL 파일을 비워 디스크 확보
+        # 결과 행을 돌려주는 PRAGMA 는 _all 로 끝까지 읽는다: 안 읽고 두면 문장이 '진행 중'으로 남아
+        # 다음 atomic() 의 SAVEPOINT 가 전부 실패함 ('cannot open savepoint - SQL statements in progress')
+        await self._all("PRAGMA optimize")                  # 통계 갱신 (sqlite.org: 하루 한 번 권장)
+        await self._all("PRAGMA wal_checkpoint(TRUNCATE)")  # WAL 파일을 비워 디스크 확보
 
     # ── 봇 요청 기록 ──────────────────────────────────────
     async def log_request(self, chat_id: int, user_id: int, text: str) -> None:

@@ -111,14 +111,18 @@ async def on_callback(svc: Services, bot, q, parts: list[str]) -> None:
         await _decline(svc, bot, chat_id, uid, f"가입 확인 {MAX_ATTEMPTS}회 실패")
         await q.answer()
         return await _edit(q, "❌ 확인에 실패해서 신청이 거절됐어요. 잠시 뒤 다시 신청해 주세요.")
+    # 먼저 '통과'로 차지한다 (정답을 두 번 눌러도 승인·기록은 한 번, 두 번째는 아래 '이미 끝난 확인')
+    claimed = await svc.db.atomic(lambda c: c.execute(
+        "UPDATE join_requests SET passed=1, expires=? WHERE chat_id=? AND user_id=? AND passed=0",
+        (int(time.time()) + PASS_KEEP, chat_id, uid)).rowcount)
+    if not claimed:
+        return await q.answer("이미 끝난 확인이에요.")
     try:
         await bot.approve_chat_join_request(chat_id, uid)
     except TelegramError as e:   # 관리자가 이미 처리했거나 신청을 취소함
         await svc.db._write("DELETE FROM join_requests WHERE chat_id=? AND user_id=?", (chat_id, uid))
         await q.answer()
         return await _edit(q, f"이 신청은 이미 처리됐어요. ({esc(e.message[:80])})")
-    await svc.db._write("UPDATE join_requests SET passed=1, expires=? WHERE chat_id=? AND user_id=?",
-                        (int(time.time()) + PASS_KEEP, chat_id, uid))
     await svc.db.log_mod(chat_id, None, uid, "join_pass", "가입 신청 1:1 확인")
     await q.answer("확인됐어요!")
     await _edit(q, "✅ 확인됐어요! 방에 들어갔어요. 환영합니다 🙌")

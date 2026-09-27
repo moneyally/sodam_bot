@@ -466,7 +466,8 @@ async def on_group_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not text:
         return
     try:
-        if await svc.perms.role(bot, msg.chat_id, msg.from_user.id) >= Role.ADMIN:
+        if await svc.perms.role(bot, msg.chat_id, msg.from_user.id) >= Role.ADMIN \
+                or await free.is_free(svc.db, msg.chat_id, msg.from_user.id):   # 자유 멤버는 자동 통제 없음
             return
         if not await svc.perms.bot_can_moderate(bot, msg.chat_id):
             return
