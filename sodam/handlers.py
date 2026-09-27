@@ -671,7 +671,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     elif (recent := svc.games.status(chat_id)) != "진행 중인 게임 없음":   # 방금 끝난 게임 ('고장났어?' 에 이유 설명·다시 시작)
         hints = [*hints, "게임 단서: " + recent + " (필요하면 game_control 로 다시 시작)"]
     image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진 (고화질로 읽고, 고쳐 달라면 원본으로)
-    ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image)
+    ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image, reply_msg_id=reply_ref(msg)[0])
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
                                  request=request or "(사진만 보냄)", mode=via, hints=hints,

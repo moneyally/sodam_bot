@@ -48,6 +48,7 @@ class ToolCtx:
     tainted: bool = False     # 이번 답변에서 다른 방 기록(멤버가 쓴 글)을 읽음 → 이후 읽기 도구만 (execute)
     quiet: bool = False       # 봇이 이미 방에 올림(게임 시작 등) → AI 답은 보내지 않음
     image: Attached | None = None  # 요청(또는 답장한 메시지)에 붙은 사진 → make_image(mode=edit) 원본
+    reply_msg_id: int | None = None  # 요청이 답장한 메시지 ID (handlers.reply_ref) → 사건 재현 기준 (AI 가 고르지 않음)
 
 
 @dataclass

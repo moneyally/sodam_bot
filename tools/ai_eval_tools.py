@@ -73,6 +73,18 @@ CASES = [
     (L.JUNHO, "소담아 어제 누가 정기모임 얘기했었지? 찾아줘", {"search_chat", "read_chat"}, SANCTION),
 ]
 
+# ── 🎞️ 사건 재현 · 🔬 설정 시뮬레이터 (sodam/replay.py) — 이 블록만 추가 ──────────
+# 시뮬레이션 요청에 실제 설정 변경(change_setting)을 하면 실패 (미리 보기만 해야 함)
+NO_CHANGE = SANCTION | {"change_setting"}
+CASES += [
+    (L.BOSS, "소담아 아까 11시쯤 박준호랑 이수진 싸운 거 무슨 일이었는지 정리해줘", {"build_incident_case"}, SANCTION),
+    (L.BOSS, "소담아 링크 차단 켜면 오늘 몇 개나 걸렸을까?", {"simulate_setting_change"}, NO_CHANGE),
+    (L.BOSS, "소담아 금지어에 '먹튀' 넣으면 어제부터 몇 명이 걸렸겠어?", {"simulate_setting_change"}, NO_CHANGE),
+    (L.BOSS, "소담아 도배 기준 엄격으로 바꾸면 누가 걸렸을지 미리 보여줘", {"simulate_setting_change"}, NO_CHANGE),
+    (L.BOSS, "소담아 신입 링크 금지를 72시간으로 늘리면 영향 얼마나 있어?", {"simulate_setting_change"}, NO_CHANGE),
+]
+# ── (사건 재현·시뮬레이터 블록 끝) ──────────────────────────────────────
+
 
 async def run_case(i: int, who, text, want, forbid) -> bool:
     r = await L.room({"captcha_enabled": False})
