@@ -30,9 +30,13 @@ class Backup:
         self.dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(self.cfg.tz).strftime("%Y%m%d-%H%M%S")
         raw = self.dir / f"sodam-{stamp}.db"
-        await self.db.backup_to(str(raw))
+        gz = raw.with_name(raw.name + ".gz")
         try:
+            await self.db.backup_to(str(raw))
             gz = await asyncio.to_thread(self._verify_and_compress, raw)
+        except BaseException:
+            gz.unlink(missing_ok=True)   # 디스크 가득 참 등으로 중간에 실패하면 반쯤 쓴 파일이 공간을 먹지 않게
+            raise
         finally:
             raw.unlink(missing_ok=True)
         await asyncio.to_thread(self._prune)

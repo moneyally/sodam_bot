@@ -88,13 +88,15 @@ async def credit(db, chat_id: int, user_id: int, amount: int, reason: str) -> in
     """포인트 지급. 새 잔액."""
     if amount <= 0:
         return await balance(db, chat_id, user_id)
-    await db.conn.execute(
-        "INSERT INTO members(chat_id, user_id, points, last_seen) VALUES(?, ?, ?, ?) "
-        "ON CONFLICT(chat_id, user_id) DO UPDATE SET points=points+excluded.points",
-        (chat_id, user_id, amount, now()))
-    await db.conn.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
-                          (chat_id, user_id, amount, reason[:40], now()))
-    await db.conn.commit()
+    ts = now()
+
+    def run(c) -> None:   # 잔액과 원장을 함께 (한쪽만 저장되지 않게, db.atomic)
+        c.execute("INSERT INTO members(chat_id, user_id, points, last_seen) VALUES(?, ?, ?, ?) "
+                  "ON CONFLICT(chat_id, user_id) DO UPDATE SET points=points+excluded.points",
+                  (chat_id, user_id, amount, ts))
+        c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
+                  (chat_id, user_id, amount, reason[:40], ts))
+    await db.atomic(run)
     return await balance(db, chat_id, user_id)
 
 
@@ -102,14 +104,16 @@ async def debit(db, chat_id: int, user_id: int, amount: int, reason: str) -> boo
     """잔액이 충분할 때만 차감 (한 문장이라 동시 베팅에도 음수 불가). 성공하면 True."""
     if amount <= 0:
         return False
-    cur = await db.conn.execute("UPDATE members SET points=points-? WHERE chat_id=? AND user_id=? AND points>=?",
-                                (amount, chat_id, user_id, amount))
-    if cur.rowcount != 1:
-        return False
-    await db.conn.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
-                          (chat_id, user_id, -amount, reason[:40], now()))
-    await db.conn.commit()
-    return True
+    ts = now()
+
+    def run(c) -> bool:   # 차감과 원장을 함께 (차감만 되고 기록이 빠지지 않게, db.atomic)
+        if c.execute("UPDATE members SET points=points-? WHERE chat_id=? AND user_id=? AND points>=?",
+                     (amount, chat_id, user_id, amount)).rowcount != 1:
+            return False
+        c.execute("INSERT INTO casino_ledger(chat_id, user_id, delta, reason, ts) VALUES(?,?,?,?,?)",
+                  (chat_id, user_id, -amount, reason[:40], ts))
+        return True
+    return await db.atomic(run)
 
 
 # ── 베팅 금액 ─────────────────────────────────────────────

@@ -1,8 +1,9 @@
 """SQLite 저장소. 모든 SQL은 이 파일에만 둔다 (나중에 Postgres로 옮기기 쉽게)."""
 import json
+import sqlite3
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import aiosqlite
 
@@ -181,7 +182,13 @@ CREATE TABLE IF NOT EXISTS mod_log (
     detail    TEXT,
     ts        INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_mod_log_chat_ts ON mod_log(chat_id, ts);
 """
+
+
+KEEP_DAYS = 90             # 대화·요청 기록 보관 (일)
+COUNTER_KEEP_DAYS = 400    # 일일 카운터 보관 (일)
+WAL_LIMIT = 64 * 1024 * 1024
 
 
 def now() -> int:
@@ -207,6 +214,14 @@ EXTRA_MIGRATE: dict[str, str] = {}
 SETTINGS_TTL = 30.0   # 초. 메인·딜러 봇이 DB 를 같이 쓰면 상대가 바꾼 설정을 이 안에 반영
 
 
+T = TypeVar("T")
+
+
+def disk_full(e: BaseException) -> bool:
+    """SQLite 가 '디스크(또는 DB 최대 크기) 가득 참'으로 쓰기를 못 한 오류인지."""
+    return isinstance(e, sqlite3.OperationalError) and "full" in str(e).lower()
+
+
 class DB:
     def __init__(self, path: str):
         self.path = path
@@ -226,6 +241,9 @@ class DB:
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.execute("PRAGMA busy_timeout=5000")  # 딜러 봇과 같은 DB 를 쓸 때 잠깐 잠겨도 기다림
+        # sqlite.org/pragma.html: WAL 에선 NORMAL 도 DB 가 깨지지 않음 (정전 때 마지막 커밋 몇 개만 잃을 수 있음) → 쓰기가 빠름
+        await self.conn.execute("PRAGMA synchronous=NORMAL")
+        await self.conn.execute(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)
@@ -262,6 +280,26 @@ class DB:
     async def _one(self, sql: str, params: tuple = ()) -> aiosqlite.Row | None:
         rows = await self._all(sql, params)
         return rows[0] if rows else None
+
+    async def atomic(self, fn: Callable[[sqlite3.Connection], T]) -> T:
+        """여러 문장을 DB 스레드에서 연달아 실행: 전부 반영하거나, 하나라도 실패하면 이 문장들만 되돌린다.
+        연결을 코루틴들이 같이 쓰기 때문에, 두 문장 사이에 다른 코루틴의 commit 이 끼어 반쯤 된 변경
+        (예: 포인트는 빠졌는데 원장 기록 없음)이 저장되는 걸 막는다. fn 안에서는 c.execute 만 (await 없음)."""
+        def run(c: sqlite3.Connection) -> T:
+            c.execute("SAVEPOINT atomic")
+            try:
+                out = fn(c)
+            except BaseException:
+                try:
+                    c.execute("ROLLBACK TO atomic")   # 이 문장들만 되돌림 (다른 코루틴의 쓰기는 그대로)
+                    c.execute("RELEASE atomic")
+                except sqlite3.Error:                 # 디스크 가득 참 등으로 SQLite 가 트랜잭션을 이미 되돌림
+                    pass
+                raise
+            c.execute("RELEASE atomic")
+            c.commit()
+            return out
+        return await self.conn._execute(run, self.conn._conn)
 
     async def _write(self, sql: str, params: tuple = ()) -> int:
         cur = await self.conn.execute(sql, params)
@@ -436,6 +474,18 @@ class DB:
 
     async def prune_messages(self, older_than: int) -> None:
         await self._write("DELETE FROM messages WHERE ts<?", (older_than,))
+
+    async def prune(self, now_ts: int, days: int = KEEP_DAYS) -> None:
+        """계속 쌓이는 기록 정리 (매일 새벽, 디스크가 모자라면 더 짧게). 결제·포인트 원장·이름 기록·관리 기록은 남긴다."""
+        cut = now_ts - days * 86400
+        cut_day = time.strftime("%Y-%m-%d", time.localtime(now_ts - COUNTER_KEEP_DAYS * 86400))
+        def run(c: sqlite3.Connection) -> None:
+            c.execute("DELETE FROM messages WHERE ts<?", (cut,))
+            c.execute("DELETE FROM requests WHERE ts<?", (cut,))
+            c.execute("DELETE FROM counters WHERE day<?", (cut_day,))
+        await self.atomic(run)
+        await self.conn.execute("PRAGMA optimize")                  # 통계 갱신 (sqlite.org: 하루 한 번 권장)
+        await self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # WAL 파일을 비워 디스크 확보
 
     # ── 봇 요청 기록 ──────────────────────────────────────
     async def log_request(self, chat_id: int, user_id: int, text: str) -> None:
@@ -617,14 +667,16 @@ class DB:
     # ── 지식 베이스 ───────────────────────────────────────
     async def add_knowledge(self, chat_id: int, title: str, source: str, added_by: int,
                             chunks: list[str]) -> int:
-        doc_id = await self._write(
-            "INSERT INTO knowledge_docs(chat_id, title, source, added_by, chars, ts) VALUES(?, ?, ?, ?, ?, ?)",
-            (chat_id, title[:100], source[:100], added_by, sum(len(c) for c in chunks), now()))
-        await self.conn.executemany(
-            "INSERT INTO knowledge_chunks(doc_id, chat_id, idx, content) VALUES(?, ?, ?, ?)",
-            [(doc_id, chat_id, i, c) for i, c in enumerate(chunks)])
-        await self.conn.commit()
-        return doc_id
+        ts = now()
+
+        def run(c: sqlite3.Connection) -> int:   # 문서와 조각을 한 번에 (조각 없는 문서가 남지 않게)
+            doc_id = c.execute(
+                "INSERT INTO knowledge_docs(chat_id, title, source, added_by, chars, ts) VALUES(?, ?, ?, ?, ?, ?)",
+                (chat_id, title[:100], source[:100], added_by, sum(len(x) for x in chunks), ts)).lastrowid
+            c.executemany("INSERT INTO knowledge_chunks(doc_id, chat_id, idx, content) VALUES(?, ?, ?, ?)",
+                          [(doc_id, chat_id, i, x) for i, x in enumerate(chunks)])
+            return doc_id
+        return await self.atomic(run)
 
     async def knowledge_docs(self, chat_id: int) -> list[aiosqlite.Row]:
         return await self._all(
@@ -635,11 +687,12 @@ class DB:
         return row["n"]
 
     async def delete_knowledge(self, chat_id: int, doc_id: int) -> bool:
-        cur = await self.conn.execute("DELETE FROM knowledge_docs WHERE chat_id=? AND id=?", (chat_id, doc_id))
-        if cur.rowcount:
-            await self.conn.execute("DELETE FROM knowledge_chunks WHERE doc_id=?", (doc_id,))
-        await self.conn.commit()
-        return cur.rowcount > 0
+        def run(c: sqlite3.Connection) -> bool:
+            if not c.execute("DELETE FROM knowledge_docs WHERE chat_id=? AND id=?", (chat_id, doc_id)).rowcount:
+                return False
+            c.execute("DELETE FROM knowledge_chunks WHERE doc_id=?", (doc_id,))
+            return True
+        return await self.atomic(run)
 
     async def knowledge_candidates(self, chat_id: int, terms: list[str], limit: int = 300) -> list[aiosqlite.Row]:
         """검색어 중 하나라도 들어간 조각 (이 방 + 공통). 점수는 knowledge.py 에서 매긴다."""
@@ -714,23 +767,24 @@ class DB:
                      "chat_state", "captcha", "counters"]           # chat_id 가 PK 일부
         plain = ["messages", "requests", "warnings", "invoices", "payments", "schedules",
                  "knowledge_docs", "knowledge_chunks", "mod_log"]
-        for t in single:
-            if await self._one(f"SELECT 1 FROM {t} WHERE chat_id=?", (old,)):
-                await self.conn.execute(f"DELETE FROM {t} WHERE chat_id=?", (new,))
-            await self.conn.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
-        for t in composite:
-            await self.conn.execute(f"UPDATE OR IGNORE {t} SET chat_id=? WHERE chat_id=?", (new, old))
-            await self.conn.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
-        for t in plain:
-            await self.conn.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
-        for t, kind in EXTRA_MIGRATE.items():
-            if kind == "composite":
-                await self.conn.execute(f"UPDATE OR IGNORE {t} SET chat_id=? WHERE chat_id=?", (new, old))
-            if kind in ("composite", "drop"):
-                await self.conn.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
-            elif kind == "plain":
-                await self.conn.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
-        await self.conn.commit()
+        def run(c: sqlite3.Connection) -> None:   # 전부 옮기거나 하나도 안 옮기거나
+            for t in single:
+                if c.execute(f"SELECT 1 FROM {t} WHERE chat_id=?", (old,)).fetchone():
+                    c.execute(f"DELETE FROM {t} WHERE chat_id=?", (new,))
+                c.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+            for t in composite:
+                c.execute(f"UPDATE OR IGNORE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+                c.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
+            for t in plain:
+                c.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+            for t, kind in EXTRA_MIGRATE.items():
+                if kind == "composite":
+                    c.execute(f"UPDATE OR IGNORE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+                if kind in ("composite", "drop"):
+                    c.execute(f"DELETE FROM {t} WHERE chat_id=?", (old,))
+                elif kind == "plain":
+                    c.execute(f"UPDATE {t} SET chat_id=? WHERE chat_id=?", (new, old))
+        await self.atomic(run)
         self._settings_cache.pop(old, None)
         self._settings_cache.pop(new, None)
 
@@ -749,21 +803,13 @@ class DB:
         """청구서 결제 처리 + 구독 연장을 한 번에. 연결을 같이 쓰는 다른 코루틴의 commit 이 두 문장 사이에 끼면
         '결제됨인데 연장 안 됨'이 남을 수 있어서, DB 스레드에서 두 문장을 연달아 실행한다.
         이미 처리·취소된 청구서면 None, 성공하면 새 만료 시각."""
-        def run(c) -> bool:
-            c.execute("SAVEPOINT pay")
-            try:
-                ok = c.execute("UPDATE invoices SET status='paid', tx_id=? WHERE id=? AND status='pending'",
-                               (tx_id, invoice_id)).rowcount > 0
-                if ok:
-                    c.execute(self._EXTEND_SQL, (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
-            except BaseException:
-                c.execute("ROLLBACK TO pay")   # 이 두 문장만 되돌림 (다른 코루틴의 쓰기는 건드리지 않음)
-                raise
-            finally:
-                c.execute("RELEASE pay")
-            c.commit()
+        def run(c: sqlite3.Connection) -> bool:
+            ok = c.execute("UPDATE invoices SET status='paid', tx_id=? WHERE id=? AND status='pending'",
+                           (tx_id, invoice_id)).rowcount > 0
+            if ok:
+                c.execute(self._EXTEND_SQL, (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
             return ok
-        if not await self.conn._execute(run, self.conn._conn):
+        if not await self.atomic(run):
             return None
         return (await self.get_subscription(chat_id))["paid_until"]
 

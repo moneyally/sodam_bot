@@ -46,12 +46,13 @@ _last: dict[int, float] = {}
 async def record(db, chat_id: int, game: str, value: str) -> None:
     """결과 한 판 기록 + 오래된 것 정리. 실패해도 게임엔 영향 없게 호출하는 쪽에서 await 만."""
     try:
-        await db.conn.execute("INSERT INTO casino_results(chat_id, game, value, ts) VALUES(?,?,?,?)",
-                              (chat_id, game, value, int(time.time())))
-        await db.conn.execute(
-            "DELETE FROM casino_results WHERE chat_id=? AND game=? AND id <= (SELECT id FROM casino_results "
-            "WHERE chat_id=? AND game=? ORDER BY id DESC LIMIT 1 OFFSET ?)", (chat_id, game, chat_id, game, KEEP))
-        await db.conn.commit()
+        ts = int(time.time())
+
+        def run(c) -> None:
+            c.execute("INSERT INTO casino_results(chat_id, game, value, ts) VALUES(?,?,?,?)", (chat_id, game, value, ts))
+            c.execute("DELETE FROM casino_results WHERE chat_id=? AND game=? AND id <= (SELECT id FROM casino_results "
+                      "WHERE chat_id=? AND game=? ORDER BY id DESC LIMIT 1 OFFSET ?)", (chat_id, game, chat_id, game, KEEP))
+        await db.atomic(run)
     except Exception:
         log.exception("result record failed %s %s", chat_id, game)
 

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 import time
 from datetime import datetime
 from datetime import time as dtime
@@ -22,9 +23,10 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, casino, commands, free, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
+from . import (accountage, addressee, casino, commands, diskguard, free, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
                subscription, vision)
 from .agent import run_agent
+from .db import disk_full
 from .panels import members as members_panel
 from .commands import CmdCtx
 from .llm import BudgetExceeded, out_of_credit
@@ -370,10 +372,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     seen: set = context.bot_data["chats"]
     if chat_id not in seen:
-        await svc.db.ensure_chat(chat_id, msg.chat.title)
+        await _record(svc.db.ensure_chat(chat_id, msg.chat.title))
         seen.add(chat_id)
-    await svc.db.upsert_user(user)
-    await svc.db.touch_member(chat_id, user.id)
+    await _record(svc.db.upsert_user(user))
+    await _record(svc.db.touch_member(chat_id, user.id))
 
     text = msg.text or msg.caption or ""
     try:
@@ -383,7 +385,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         role = Role.MEMBER
     scan = security.scan(text)
     if text:
-        await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg))
+        await _record(svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg)))
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
     exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음
@@ -819,7 +821,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     scan = security.scan(text)
-    await svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg))
+    await _record(svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg)))
     await ai_reply(context, msg, role, text, scan)
 
 
@@ -952,7 +954,25 @@ async def job_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def job_prune(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _svc(context).db.prune_messages(int(time.time()) - 90 * 86400)
+    await _svc(context).db.prune(int(time.time()))
+
+
+async def job_disk(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """1시간마다: 디스크 여유 공간이 모자라면 정리·오너 알림 (sodam/diskguard.py)."""
+    try:
+        await diskguard.check(_svc(context), context.bot)
+    except Exception:
+        log.exception("disk check failed")
+
+
+async def _record(coro) -> None:
+    """대화·멤버 기록. 디스크가 가득 차서 못 써도 관리(스팸 삭제·제재)·명령·AI 는 계속 (diskguard 가 오너에게 알림)."""
+    try:
+        await coro
+    except sqlite3.OperationalError as e:
+        if not disk_full(e):
+            raise
+        log.warning("기록 못 함 (디스크 가득 참): %s", e)
 
 
 BOT_MENU = [
@@ -1035,5 +1055,6 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_daily(job_daily_report, time=dtime(23, 50, tzinfo=tz), name="daily_report")
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")
+    jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
     jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)

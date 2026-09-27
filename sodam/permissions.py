@@ -1,6 +1,7 @@
 """권한 판단. AI가 아니라 여기 코드만 권한을 결정한다."""
 import logging
 import secrets
+import sqlite3
 import time
 from enum import IntEnum
 
@@ -200,16 +201,18 @@ class Permissions:
 
     async def _store_admins(self, chat_id: int, ids: set[int], ts: int,
                             rights: dict[int, tuple[bool, bool]] | None = None) -> None:
-        conn = self.db.conn
-        await conn.execute("DELETE FROM chat_admins WHERE chat_id=?", (chat_id,))
-        await conn.executemany("INSERT OR IGNORE INTO chat_admins(chat_id, user_id) VALUES(?, ?)",
-                               [(chat_id, uid) for uid in ids])
-        await conn.execute("DELETE FROM chat_admin_rights WHERE chat_id=?", (chat_id,))
-        await conn.executemany("INSERT OR IGNORE INTO chat_admin_rights VALUES(?, ?, ?, ?)",
-                               [(chat_id, uid, int(r[0]), int(r[1])) for uid, r in (rights or {}).items()])
-        await conn.execute("INSERT INTO chat_admins_fetched(chat_id, ts) VALUES(?, ?) "
-                           "ON CONFLICT(chat_id) DO UPDATE SET ts=excluded.ts", (chat_id, ts))
-        await conn.commit()
+        def run(c) -> None:   # 지우고 다시 넣기를 한 번에 (지운 것만 저장돼 관리자 목록이 비지 않게)
+            c.execute("DELETE FROM chat_admins WHERE chat_id=?", (chat_id,))
+            c.executemany("INSERT OR IGNORE INTO chat_admins(chat_id, user_id) VALUES(?, ?)", [(chat_id, u) for u in ids])
+            c.execute("DELETE FROM chat_admin_rights WHERE chat_id=?", (chat_id,))
+            c.executemany("INSERT OR IGNORE INTO chat_admin_rights VALUES(?, ?, ?, ?)",
+                          [(chat_id, u, int(r[0]), int(r[1])) for u, r in (rights or {}).items()])
+            c.execute("INSERT INTO chat_admins_fetched(chat_id, ts) VALUES(?, ?) "
+                      "ON CONFLICT(chat_id) DO UPDATE SET ts=excluded.ts", (chat_id, ts))
+        try:
+            await self.db.atomic(run)
+        except sqlite3.Error as e:   # 저장 못 해도 메모리 캐시로 동작 (디스크 가득 참 등)
+            log.warning("관리자 목록 저장 실패: chat %s: %s", chat_id, e)
 
     def forget(self, chat_id: int) -> None:
         """관리자 변경·결제 판단 등: 다음 확인은 메모리·DB 캐시 모두 건너뛰고 텔레그램에 묻는다."""
