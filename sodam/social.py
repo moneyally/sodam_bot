@@ -30,7 +30,7 @@ from . import commands, memory
 from .agent import run_agent
 from .llm import BudgetExceeded
 from .permissions import Role
-from .security import filter_output, nonce, scan, wrap
+from .security import NO_PREVIEW, filter_output, nonce, scan, wrap
 from .tools import ToolCtx
 from .util import esc, is_stale, josa, user_name
 
@@ -270,7 +270,7 @@ async def _chime_now(svc: Services, bot, msg, text: str, kind: str) -> bool:
     usernames = {r["username"].lower() for r in await db.member_names(chat_id) if r["username"]}
     out = filter_output(answer, max_chars=min(s["reply_max_chars"], 300), allowed_usernames=usernames)
     try:
-        sent = await msg.reply_text(esc(out), parse_mode="HTML")
+        sent = await msg.reply_text(esc(out), parse_mode="HTML", link_preview_options=NO_PREVIEW)
     except TelegramError as e:
         log.info("chime send failed: %s", e)
         return False

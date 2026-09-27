@@ -638,7 +638,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         body = " ".join(mention(uid, name) for uid, name in dict(ctx.mentions).items()) + " " + body
     # 기다리는 동안 원본이 지워져도 답은 가게 (1:1 은 원래대로 인용 없이)
     reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if chat_id < 0 else None
-    sent = await msg.reply_text(body, parse_mode="HTML", reply_parameters=reply)
+    sent = await msg.reply_text(body, parse_mode="HTML", reply_parameters=reply, link_preview_options=security.NO_PREVIEW)
     await svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True)
     await memory.record_turn(svc.db, chat_id, user.id, via, request, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
@@ -747,18 +747,22 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         return
     allowed = (presser in await svc.perms.owners() if action.from_dm   # 1:1 카드는 오너만
                else await svc.perms.is_admin(bot, action.chat_id, presser))
+    pressed = lambda what: svc.db.log_mod(action.chat_id, presser, action.target_id, f"press_{action.kind}", what)  # noqa: E731
     if not allowed:
         log.info("sanction button refused (not admin): chat %s user %s", action.chat_id, presser)
+        await pressed("거절(관리자 아님)")
         await q.answer("관리자만 누를 수 있어요.", show_alert=True)
         return
     # 실행은 누른 사람에게 텔레그램 '사용자 차단' 권한이 있어야 (취소는 관리자 누구나)
     if yn in ("y", "p") and not await may(svc.perms, bot, action.chat_id, presser):
         log.info("sanction button refused (no right): chat %s user %s", action.chat_id, presser)
+        await pressed("거절(차단 권한 없음)")
         await q.answer(no_right_text(), show_alert=True)
         return
     svc.pending.pop(key, None)
     await q.answer()
     if yn not in ("y", "p"):
+        await pressed("취소")
         await q.edit_message_text("취소했어요.")
         return
     by, lines, done = esc(user_name(q.from_user)), [], []

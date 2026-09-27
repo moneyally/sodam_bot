@@ -7,6 +7,8 @@ import secrets
 import unicodedata
 from dataclasses import dataclass
 
+from telegram import LinkPreviewOptions
+
 _ZERO_WIDTH = re.compile("[​-‏⁠-⁤﻿­]")
 
 # (패턴, 가중치, 이름). 합계 3 이상이면 차단, 1~2면 AI 판별로 넘긴다.
@@ -95,7 +97,10 @@ def wrap(tag: str, body: str, n: str, **attrs: str) -> str:
 
 
 # ── 출력 필터 ─────────────────────────────────────────────
-_URL = re.compile(r"(https?://\S+|www\.\S+|\b(t|telegram)\.me/\S+|\btg://\S+)", re.I)
+# 'evil.xyz/?d=비밀'·'비밀.evil.lol' 처럼 주소만 써도 텔레그램이 링크로 만들고 미리보기를 불러 정보가 샐 수 있어 도메인 모양은 전부
+_URL = re.compile(r"(https?://\S+|www\.\S+|\btg://\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,63}\b(?:[/?#]\S*)?)",
+                  re.I | re.A)
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)  # AI 답엔 링크 미리보기 안 띄움 (누르지 않아도 주소를 불러오는 통로)
 _MENTION = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{3,31})")
 WALLETS = [
     re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b"),          # TRON
