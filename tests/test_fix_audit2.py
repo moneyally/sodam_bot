@@ -169,6 +169,38 @@ async def command_center_checks_rooms_concurrently():
     assert took < 1.0, f"방 40개에 {took:.2f}초 (하나씩이면 2초+)"
 
 
+
+@test
+async def home_menu_does_not_ask_telegram_about_kicked_rooms_every_time():
+    """메인 메뉴(/start·⬅️ 처음으로)가 📥 버튼을 보일지 정하려고 '내 그룹'을 찾는데, 봇이 강퇴된 방은 관리자 목록 조회가
+    Forbidden 으로 실패해 기록이 안 남아 누를 때마다(누구든) 그 방들을 텔레그램에 다시 물었음 (방 10개면 10번).
+    이제 강퇴·없는 방은 '관리자 없음'으로 기억 (봇이 다시 들어오면 on_my_chat_member 가 forget)."""
+    from telegram.error import Forbidden
+    db = await make_db()
+    svc = await make_svc(db)
+    svc.perms = Permissions(svc.cfg, db)
+    bot = FakeBot()
+    calls = []
+
+    async def admins(chat_id):
+        calls.append(chat_id)
+        raise Forbidden("Forbidden: bot was kicked from the supergroup chat")
+    bot.get_chat_administrators = admins
+    for i in range(10):
+        await db.ensure_chat(-1003000000000 - i, f"옛 방 {i}")
+    await menu.main_menu(svc, bot, 20)
+    first = len(calls)
+    await menu.main_menu(svc, bot, 20)
+    await menu.main_menu(svc, bot, 21)
+    assert first == 10 and len(calls) == first, (first, len(calls))
+    assert not await svc.perms.is_admin(bot, -1003000000000, 20)
+
+    async def back(chat_id):                                    # 봇이 다시 초대됨 → 바로 새 목록
+        return [SimpleNamespace(user=SimpleNamespace(id=20), status="administrator")]
+    bot.get_chat_administrators = back
+    assert await svc.perms.is_admin(bot, -1003000000000, 20)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(asyncio.run(run_all()))
