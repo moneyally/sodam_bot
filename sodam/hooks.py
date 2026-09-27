@@ -9,11 +9,18 @@ MEMBER_LEFT_HOOKS: list = []
 # 새 멤버 입장 검사 (관리 권한 있는 방, 관리자 아닌 사람, CAS 다음·캡차 전): async hook(svc, bot, chat_id, user) -> bool
 # True 를 돌려주면 그 사람은 막은 것(밴·보류 등) → 캡차·인사·입장 기록을 하지 않는다
 MEMBER_JOIN_HOOKS: list = []
+# 수정된 그룹 메시지 (관리자·자유 멤버 제외, 관리 권한 없는 방 포함, 백그라운드): async hook(svc, bot, msg, role)
+GROUP_EDIT_HOOKS: list = []
 
 
 def add_group_message_hook(fn) -> None:
     if fn not in GROUP_MESSAGE_HOOKS:
         GROUP_MESSAGE_HOOKS.append(fn)
+
+
+def add_group_edit_hook(fn) -> None:
+    if fn not in GROUP_EDIT_HOOKS:
+        GROUP_EDIT_HOOKS.append(fn)
 
 
 def add_member_left_hook(fn) -> None:
