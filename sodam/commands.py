@@ -481,7 +481,13 @@ async def c_settings(ctx: CmdCtx) -> None:
     lines = ["⚙️ <b>방 설정</b> (바꾸기: <code>.설정변경 키 값</code>)"]
     for key in DEFAULTS:
         lines.append(f"<code>{key}</code> {esc(LABELS.get(key, ''))}: {esc(render(key, s[key]))}")
-    await ctx.reply("\n".join(lines))
+    chunk: list[str] = []   # 설정이 늘어 한 메시지(4096자)를 넘으면 나눠 보냄
+    for line in lines:
+        if chunk and sum(len(x) + 1 for x in chunk) + len(line) > 4000:
+            await ctx.reply("\n".join(chunk))
+            chunk = []
+        chunk.append(line)
+    await ctx.reply("\n".join(chunk))
 
 
 async def c_set(ctx: CmdCtx) -> None:

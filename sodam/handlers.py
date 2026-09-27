@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
+from . import (accountage, addressee, anomaly, casino, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
                subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
@@ -345,6 +345,7 @@ async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         svc = _svc(context)
         hooks.member_left(svc, msg.chat_id, msg.left_chat_member.id)
         await members_panel.mark(svc.db, msg.chat_id, msg.left_chat_member.id, left=True)
+        await farewell.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)   # 👋 스스로 나간 사람만
 
 
 async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -378,6 +379,8 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
         hooks.member_left(svc, cmu.chat.id, new.user.id)
         await members_panel.mark(svc.db, cmu.chat.id, new.user.id, left=True)
+        await farewell.on_leave(context, cmu.chat.id, new.user, getattr(cmu, "from_user", None),  # cancel 전에 (캡차 대기 확인)
+                                kicked=new.status == ChatMemberStatus.BANNED)
         await svc.captcha.cancel(context.bot, cmu.chat.id, new.user.id)
 
 
