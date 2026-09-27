@@ -177,6 +177,24 @@
   예약 공지·가장 바쁜 3칸, 원인은 '추정'. 오너 1:1 `owner_room_insight(room, kind)` (tainted).
 - 사람별 링크 '삭제' 기록은 아직 없음(moderation 은 방 단위 counters rep_link 만) → 링크는 '링크 들어간 글' 수(삭제 여부 무관).
   mod_log `link_del`(대상=사람)을 남기면 insight 가 자동으로 '링크 지움'으로 셈.
+## 🧭 이상징후 자동 감지 (`anomaly.py`, `panels/anomaly.py`, tests/test_anomaly.py · 뮤테이션 20개)
+- **알림·제안만, 자동 제재 없음, AI 비용 0.** 설정 anomaly_mode off/notify(**기본 notify**, 모든 방 — raid·CAS 처럼 관리 기능) ·
+  anomaly_level 민감/보통(기본)/둔감 · anomaly_harden_hours 1/3(기본)/6. 허브 🧭(m:anm).
+- 방마다 10분 창을 메모리(방당 500개 상한)에서 셈, DB 엔 보낸 알림만(anomaly_alerts). 신호: 입장 몰림(N명↑ + 7일 10분 평균의 k배↑) ·
+  비슷한 이름(글자만 남긴 이름 / @아이디 끝 숫자·_ 뗀 앞부분) · 같은 링크(도메인·t.me 초대 단위, 2명↑, 허용 도메인 제외) ·
+  새 계정 비율(accountage, 5명↑일 때만) · 신규 멤버(30분) 메시지 몰림(3명↑). 점수 합 ≥ 50 이면 알림 (몰림·링크·신규 도배는 아주 크면 혼자,
+  이름·새 계정은 보조). 쿨다운 30분·하루 5번을 `db.atomic` 한 번으로 차지. 관리자·봇관리자·자유 멤버 제외.
+- 링크·반복 규칙에 **지워진 메시지는 그룹 메시지 훅이 안 불림**(handlers 가 훅 전에 끝냄) → 평가 때 messages 표(관리 검사 전에 기록됨)를
+  읽어 셈 + '뜨거운' 방(입장 3↑·링크 2↑·신규 메시지)은 60초마다 다시 평가. 평가는 방마다 5초에 1번 → 메시지당 O(1), 대부분 DB 조회 없음.
+- 대량 입장 방어(raid) 중이면 입장 신호(몰림·이름·새 계정)는 점수에서 빼고 '방어 중' 한 줄만 (raid 가 이미 알림). raid 가 kick 하면 훅이 멈춰 안 셈.
+- 알림 = '사용자 차단' 권한(`may`) 있는 TG 관리자 1:1 (막힘은 건너뜀) + [🔍 상세 보기][🛡️ 보안 강화][🙈 무시] (m:anmx, 누를 때마다 권한 재확인,
+  처리는 `status IS NULL` 한 문장으로 한 번만). 상세 = 사람(mention, esc)·링크(도메인만 `evil[.]xyz` 로 안 눌리게)·분 단위 시간대.
+  무시 = mod_log anomaly_ignore (🗂️ 관리 기록에 보임).
+- 보안 강화 = N시간 raid 방어 모드(이미 켜져 있으면 끝 시각만 늦춤) + newbie_link_hours 24↑ + forward_filter off→newbie.
+  원래 값·끝 시각은 chat_state anomaly_harden → 되돌림은 그 방 다음 메시지·입장 / 🧭 화면 / 프로세스 타이머 / `anomaly.tick` (재시작해도 됨).
+  그 사이 관리자가 직접 바꾼 설정은 안 건드림. 🔓 지금 끄기(m:anmu) 는 우리가 켠 raid 도 끔.
+- **남은 1줄 패치(handlers.py, 이 작업에선 못 고침)**: `job_tick` 의 jobs 에 `("anomaly", lambda bot: anomaly.tick(svc, bot)),`
+  — 없으면 아무 일도 없는 조용한 방은 다음 메시지·입장 때 되돌아감 (raid 방어 모드 자체는 raid.tick 이 제시간에 끔).
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서

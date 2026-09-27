@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
+from . import (accountage, addressee, anomaly, casino, commands, diskguard, free, gametime, hooks, joinreq, memory, menu, namehist, raid, reports, rules, security, social, stats,
                subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from .agent import run_agent
@@ -978,6 +978,7 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = _svc(context)
     jobs = [("captcha", svc.captcha.expire), ("announce", svc.announcer.run_due),
             ("raid", lambda bot: raid.tick(svc, bot)),  # 끝난 대량 입장 방어 모드 해제
+            ("anomaly", lambda bot: anomaly.tick(svc, bot)),  # 이상징후 '보안 강화' 시간 끝나면 설정 되돌림
             ("joinreq", lambda bot: joinreq.expire(svc, bot))]  # 시간 지난 가입 신청 거절
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
