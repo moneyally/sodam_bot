@@ -295,6 +295,13 @@
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
   들어가는 곳: 그룹 허브 맨 위(설정 안 한 방은 한 줄 안내 — `menu.s_hub` 를 감싸서 route "g" 재등록), 🧩 기능, 봇 추가한 사람 1:1(subscription.DM_EXTRA_ROWS).
 
+## Codex 2차 (tests/test_agent_session.py·test_card_approvals.py·test_ai_instructions.py)
+- 도구 결과 4000자 넘으면 `util.clip_mid`(앞 2600·뒤 1200). 실행 중 같은 사람이 또 부르면 그 실행에 '(이어서 보낸 말)'로 넣음(답 1번,
+  속도 한도엔 셈·하루 무료 횟수는 안 셈, 사진은 따로). `cards.py`: 모든 AI 확인 카드 결과를 한 줄로(ai_card_log) → 1시간 안 결과가 `<card_results>` 로 AI 에,
+  카드당 첫 누름만 처리. '✅ + 오늘은 확인 생략'(ai_approvals, 한국시간 자정까지)은 schedule_task·alert_rule·bot_command 만 — **제재는 NEVER 목록으로 절대 안 됨**.
+- 📝 AI 방 안내(`ai_instructions`): 운영자 전체(300자) → 방(500자) 층, 스타일 뒤 세 번째 system(첫 system 불변), 인젝션·링크·지갑 거절, AI 도구 set_room_instructions(카드).
+- 실측(2026-09-28): 39/39, $0.0141/요청 (프롬프트 바뀐 첫 실행이라 캐시 적중 낮음).
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
