@@ -41,7 +41,7 @@ async def room(settings=None) -> Room:
     await r.open(admins=(BOSS.id,), settings=settings)
     cfg = load_config()
     r.svc.cfg = r.svc.cfg.__class__(**{**r.svc.cfg.__dict__, "openai_api_key": cfg.openai_api_key,
-                                       "model": cfg.model, "guard_model": cfg.guard_model,
+                                       "model": cfg.model, "guard_model": cfg.guard_model, "member_model": cfg.member_model,
                                        "reasoning_effort": cfg.reasoning_effort})
     r.svc.llm = LLM(r.svc.cfg, r.db)
     r.svc.mod.cfg = r.svc.cfg

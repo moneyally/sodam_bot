@@ -29,7 +29,7 @@ from .services import PendingAction, Services
 from .settings import DEFAULTS, LABELS, RANGES, coerce, render
 from .sports import SPORTS_KO, SportsError
 from .styles import STYLES, resolve_style
-from .util import display_name, esc, fmt_time, human_minutes, mention, period_since
+from .util import display_name, esc, fmt_time, human_minutes, mention, period_since, user_name
 
 log = logging.getLogger(__name__)
 
@@ -326,7 +326,8 @@ async def t_set_my_style(ctx: ToolCtx, a: dict) -> str:
     if not style:
         return "없는 말투."
     await ctx.svc.db.set_member_style(ctx.chat_id, ctx.caller.id, style)
-    return f"이 사람의 말투를 '{STYLES[style].label}'(으)로 바꿈. 다음 답변부터 적용."
+    return (f"요청한 {user_name(ctx.caller)} 본인에게 쓸 말투만 '{STYLES[style].label}'(으)로 바꿈 (다음 답변부터). "
+            "다른 사람·방 전체 말투는 바뀌지 않았음 — 그걸 부탁했다면 관리자만 바꿀 수 있다고 사실대로 말할 것.")
 
 
 async def t_set_member_style(ctx: ToolCtx, a: dict) -> str:
@@ -806,7 +807,7 @@ TOOLS: list[Tool] = [
          ["key", "value"], t_save_my_note),
     Tool("forget_my_memory", "말한 사람 본인에 대해 소담이 기억하는 내용을 지운다. '내 기억 지워줘', '그건 잊어줘' 같은 요청에 사용.",
          {"what": {"type": "string", "description": "지울 기억의 핵심 단어. 비우면 전부 지움"}}, [], t_forget_my_memory),
-    Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다.",
+    Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다. 다른 사람(이름·태그·답장)이나 방 전체 말투를 바꿔 달라는 요청엔 쓰지 않는다.",
          {"style": {"type": "string", "enum": [s.label for s in STYLES.values()]}}, ["style"], t_set_my_style),
     Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},

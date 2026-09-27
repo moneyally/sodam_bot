@@ -122,7 +122,8 @@ async def run_case(i: int, c: Case) -> dict:
     await r.open(admins=(BOSS.id,), settings={"captcha_enabled": False})
     cfg = load_config()
     r.svc.cfg = r.svc.cfg.__class__(**{**r.svc.cfg.__dict__, "openai_api_key": cfg.openai_api_key, "model": cfg.model,
-                                       "guard_model": cfg.guard_model, "reasoning_effort": cfg.reasoning_effort})
+                                       "guard_model": cfg.guard_model, "member_model": cfg.member_model,
+                                       "reasoning_effort": cfg.reasoning_effort})
     r.svc.llm = LLM(r.svc.cfg, r.db)
     await r.db.ensure_chat(Room.CHAT, c.title_room)
     now = int(time.time())

@@ -38,10 +38,12 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
     schemas = [t.schema() for t in tools]
     allowed = {t.name for t in tools}
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
+    # 일반 멤버(잡담·질문·그림·검색)는 싼 모델로 (설정 OPENAI_MEMBER_MODEL). 관리자·오너(제재·예약·설정)는 기본 모델
+    model = (svc.cfg.member_model or None) if role_label == "member" else None
 
     for _ in range(MAX_STEPS):
         msg = await svc.llm.chat(messages, tools=schemas or None, max_tokens=MAX_TOKENS, purpose=purpose,
-                                 chat_id=ctx.chat_id)
+                                 chat_id=ctx.chat_id, model=model)
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
         if not calls:
             return msg.content or ""

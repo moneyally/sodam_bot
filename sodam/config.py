@@ -41,6 +41,7 @@ class Config:
     # 구독 결제 (PAY_ADDRESS 가 비어 있으면 결제 기능 꺼짐 = 모든 방 무료)
     pay_address: str = ""
     sub_price_usdt: str = "30"
+    member_model: str = ""       # 일반 멤버 요청에 쓸 모델 (비우면 기본 모델) — 비용: mini 는 약 1/3
     sub_days: int = 30
     trial_days: int = 3
     free_ai_per_day: int = 10
@@ -73,6 +74,7 @@ def load_config() -> Config:
         call_names=tuple(sorted(names, key=len, reverse=True)),
         model=os.getenv("OPENAI_MODEL", "gpt-5.4").strip(),
         guard_model=os.getenv("OPENAI_GUARD_MODEL", "gpt-5.4-mini").strip(),
+        member_model=os.getenv("OPENAI_MEMBER_MODEL", "").strip(),
         reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "").strip(),
         daily_token_budget=int(os.getenv("DAILY_TOKEN_BUDGET", "2000000")),
         db_path=os.getenv("DB_PATH", "data/sodam.db"),
