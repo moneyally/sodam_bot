@@ -53,6 +53,9 @@ class Config:
     # 켜면 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀)
     agent_think: str = "off"
     agent_think_effort: str = "low"
+    # MTProto 도우미 (sodam/mtproto.py, 선택): my.telegram.org 에서 받은 API ID/HASH. 비우면 꺼짐
+    mtproto_api_id: int = 0
+    mtproto_api_hash: str = ""
 
 
 def load_config() -> Config:
@@ -103,7 +106,15 @@ def load_config() -> Config:
         bot_role=_role(os.getenv("BOT_ROLE", "")),
         agent_think=_choice("AGENT_THINK", "off", ("off", "auto", "always")),
         agent_think_effort=_choice("AGENT_THINK_EFFORT", "low", ("low", "medium", "high")),
+        mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
+        mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
     )
+
+
+def _int0(raw: str) -> int:
+    """선택 기능의 숫자 설정: 잘못 적어도 봇은 켜지고 그 기능만 꺼짐."""
+    raw = raw.strip()
+    return int(raw) if raw.isdecimal() else 0
 
 
 def _choice(key: str, default: str, allowed: tuple[str, ...]) -> str:

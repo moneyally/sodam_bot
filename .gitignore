@@ -9,3 +9,4 @@ __pycache__/
 /backups/
 /VERSION
 sodam-migrate-*.enc
+*.session

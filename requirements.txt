@@ -6,3 +6,4 @@ httpx>=0.27
 tzdata>=2024.1
 pypdf>=4.0
 pillow>=10  # 게임 그림장 이미지
+telethon>=1.45,<2  # MTProto 도우미 (sodam/mtproto.py, 선택 기능 — MTPROTO_API_ID/HASH 없으면 안 씀)

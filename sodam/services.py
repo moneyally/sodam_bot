@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .greet import Greeter
     from .llm import LLM
     from .moderation import Moderator
+    from .mtproto import MTProto
     from .permissions import Permissions
     from .sports import Sports
 
@@ -80,6 +81,7 @@ class Services:
     greeter: Greeter = None
     captcha: Captcha = None
     announcer: Announcer = None
+    mtproto: MTProto | None = None   # MTProto 도우미 (sodam/mtproto.py). MTPROTO_API_ID/HASH 없으면 None
     pending: dict[str, PendingAction] = field(default_factory=dict)
     inputs: dict[int, PendingInput] = field(default_factory=dict)      # user_id → 메뉴 글자 입력 대기
     menu_tokens: dict[str, MenuToken] = field(default_factory=dict)

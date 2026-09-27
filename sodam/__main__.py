@@ -21,6 +21,7 @@ from .games import GameManager
 from .greet import Greeter
 from .llm import LLM
 from .moderation import Moderator
+from .mtproto import MTProto
 from .permissions import Permissions
 from . import casino, namehist
 from .ratelimit import ChatRateLimiter
@@ -44,6 +45,8 @@ def build_services(cfg: Config, db: DB) -> Services:
     svc.greeter = Greeter(svc)
     svc.captcha = Captcha(svc)
     svc.announcer = Announcer(svc)
+    if cfg.mtproto_api_id and cfg.mtproto_api_hash and cfg.bot_role != "dealer":
+        svc.mtproto = MTProto(cfg, db)
     perms.on_admins = lambda bot, chat_id, admins: namehist.record_admins(svc, bot, chat_id, admins)
     return svc
 
@@ -186,6 +189,8 @@ def build_app(cfg: Config, db: DB) -> Application:
                 logging.warning("TRONGRID_API_KEY 가 없어요. 입금 확인이 느리거나 막힐 수 있어요 (trongrid.io 무료 발급)")
         else:
             logging.info("구독 결제 꺼짐 (PAY_ADDRESS 없음) → 모든 방 무료")
+        if svc.mtproto:
+            svc.mtproto.start_background()   # 로그인은 뒤에서, 실패해도 봇은 계속 (오너 🔧 헬퍼 화면에 오류)
         jq = app.job_queue
         hb = heartbeat_path(cfg)
         write_heartbeat(hb)
@@ -204,6 +209,8 @@ def build_app(cfg: Config, db: DB) -> Application:
         svc: Services | None = app.bot_data.get("svc")
         if svc:
             await casino.shutdown(svc)  # 진행 중인 블랙잭·하이로우·그래프 판 환불 (DB 닫기 전)
+            if svc.mtproto:
+                await svc.mtproto.stop()
             await svc.sports.close()
             await svc.cas.close()
             await svc.billing.close()
