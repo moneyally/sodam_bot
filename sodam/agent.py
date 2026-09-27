@@ -11,13 +11,15 @@ from .permissions import Role
 from .prompt import build_messages
 from .security import nonce, wrap
 from .tools import READ_ONLY, ToolCtx, available, execute
+from .util import clip_mid
 
 log = logging.getLogger(__name__)
 
 # Codex CLI 처럼 모델이 도구를 그만 부를 때까지 돌되, 라운드·요금 상한은 둔다 (넘으면 도구 없이 마무리 답)
 MAX_STEPS = 8          # 도구 호출 라운드 최대 횟수
 RUN_USD_CAP = 0.05     # 한 실행(도구 안 AI 포함, agentlog.Run.usd_micro)이 이만큼 쓰면 더는 도구 라운드 안 함
-MAX_TOKENS = 1500      # 추론 모델은 생각 토큰도 여기 포함됨
+TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
+MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
 # 먼저 끼어들 때는 방 자료만 볼 수 있게 (웹검색·제재·게임 같은 도구는 숨김 → 비용·오작동 방지)
 CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
@@ -172,7 +174,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             except Exception:   # 기록용 요약이 답을 막으면 안 됨
                 log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
-                             "content": wrap("tool_result", result[:4000], nonce())})
+                             "content": wrap("tool_result", clip_mid(result, TOOL_RESULT_CHARS), nonce())})
 
     # 도구 라운드·요금 상한을 다 쓰면 도구 없이 마무리 답변만 받는다
     return (await call("none")).content or ""

@@ -71,6 +71,15 @@ _DURATION = re.compile(r"^(\d+)\s*(m|min|분|h|시간|d|일|w|주)?$", re.I)
 _UNIT_MIN = {"m": 1, "min": 1, "분": 1, "h": 60, "시간": 60, "d": 1440, "일": 1440, "w": 10080, "주": 10080}
 
 
+def clip_mid(text: str, limit: int) -> str:
+    """limit 자를 넘으면 앞 65%·뒤 30% 를 남기고 가운데를 '…(중간 N자 생략)…' 으로 (Codex TruncationPolicy).
+    도구 결과 끝의 합계·마지막 줄이 조용히 잘려 나가지 않게."""
+    if len(text) <= limit:
+        return text
+    head, tail = limit * 13 // 20, limit * 3 // 10
+    return f"{text[:head]}\n…(중간 {len(text) - head - tail}자 생략)…\n{text[len(text) - tail:]}"
+
+
 MAX_DURATION_MIN = 366 * 1440  # 이보다 길면 None (timedelta OverflowError·텔레그램 한도 방지)
 
 
