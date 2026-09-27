@@ -6,7 +6,7 @@
 
 비용 절감 (OpenAI 프롬프트 캐시):
   캐시는 '앞부분이 글자 하나까지 똑같은' 요청끼리만 적용된다 (1024토큰 이상일 때).
-  그래서 순서를 [도구 목록][고정 규칙] → [말투(사람마다 다름)] → [시각·대화·요청(매번 다름)] 로 둔다.
+  그래서 순서를 [도구 목록][고정 규칙] → [말투(사람마다 다름)] → [방 안내(방마다, ai_instructions)] → [시각·대화·요청(매번 다름)] 로 둔다.
   고정 규칙 안에는 시각·이름·말투 같은 바뀌는 값을 절대 넣지 않는다.
 """
 import json
@@ -171,7 +171,9 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    user_memory: list[str] | None = None, room_memory: str = "",
                    past_turns: list[str] | None = None, mode: str = "call",
                    hints: list[str] | None = None, images: list[dict] | None = None,
-                   in_dm: bool = False, card_results: list[str] | None = None) -> list[dict]:
+                   in_dm: bool = False, card_results: list[str] | None = None,
+                   instructions: str = "") -> list[dict]:
+    """instructions = ai_instructions.block (관리자가 정한 방 안내). 있으면 말투 뒤 세 번째 system — 앞 두 개(캐시)는 그대로."""
     n = nonce()
     now = korean_now(datetime.now(tz))
     speaker = json.dumps(
@@ -210,6 +212,7 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
     return [
         {"role": "system", "content": static_system(bot_name)},   # 모든 요청이 똑같음 → 캐시 적중
         {"role": "system", "content": style_block(style_key)},     # 말투별로 6가지
+        *([{"role": "system", "content": instructions}] if instructions else []),   # 방마다 (운영자 → 방 관리자 안내)
         {"role": "user", "content": [{"type": "text", "text": "\n\n".join(parts)}, *images] if images
          else "\n\n".join(parts)},                               # 매번 다름 (맨 뒤). 사진은 고화질 조각으로
     ]
