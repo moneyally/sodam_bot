@@ -352,3 +352,16 @@ async def panel_screens_and_permissions():
     await dm(BOSS, f"m:blks:{Room.CHAT}:{DICE.id}:i")
     assert not await r.db._all("SELECT * FROM botlink_msgs") and \
         [x["action"] for x in await r.db._all("SELECT action FROM mod_log WHERE action='botlink_status'")] == ["botlink_status"] * 2
+
+
+@test
+async def never_seen_any_bot_returns_setup_steps_not_refusal():
+    """실제 사례: 음악봇 신청을 시켰더니 '여기선 못 해요'로 끝남 (다른 봇 글을 한 번도 못 받은 방) → 켜는 순서를 돌려줌."""
+    r = await blroom("off")
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "멜론", "command": "/play 밤편지"})])
+    assert "BotFather" in res[0] and "명령까지" in res[0] and "믿는 봇" in res[0], res
+    await r.db.set_setting(Room.CHAT, "botlink_mode", "observe")
+    await bot_says(r, DICE, "안녕")                              # 봇을 본 뒤엔 원래 이유로
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
+    assert "BotFather" not in res[0] and "꺼져" in res[0], res
+    assert not room_sends(r)
