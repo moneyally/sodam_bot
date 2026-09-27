@@ -46,6 +46,7 @@ SKILLS = {
                      "요약을 쓴다. 기록에 없는 내용을 지어내지 않고, 연락처·링크·지갑주소는 적지 않는다. 10줄 이내."),
     "search": Skill("🔎 웹 검색 소식", "검색할 주제 (예: 오늘 비트코인 시세 뉴스)"),
     "stats": Skill("📊 방 통계·랭킹", "(비워도 됨) 오늘 채팅 통계와 수다 랭킹"),
+    "joins": Skill("📈 입장·퇴장 통계", "(비워도 됨) 지난번 실행 이후(최대 31일) 들어오고 나간 사람 수"),
     "write": Skill("✍️ 글쓰기", "쓸 글 (예: 오늘의 명언 한 줄과 응원 한마디)",
                    "지금 할 일: 관리자가 예약해 둔 <task> 대로 방에 올릴 짧은 글을 쓴다. 10줄 이내, 지어낸 사실·수치는 쓰지 않는다."),
 }
@@ -69,6 +70,8 @@ async def run_skill(svc: Services, row) -> str:
     if row["skill"] == "stats":
         return html.unescape(await stats.summary_text(svc.db, cid, tz, "오늘") + "\n"   # 보낼 때 한 번만 escape
                              + await stats.ranking_text(svc.db, cid, tz, "오늘", 5))
+    if row["skill"] == "joins":
+        return await joins_text(svc, cid, row["last_sent"])
     if row["skill"] == "search":
         day = datetime.now(tz).strftime("%Y-%m-%d")
         if await svc.db.bump(day, cid, "web_search") > (await svc.db.get_settings(cid))["web_search_daily"]:
@@ -84,6 +87,18 @@ async def run_skill(svc: Services, row) -> str:
         data = "\n".join(lines)[-SUMMARY_MAX_CHARS:]
         return await _ai(svc, cid, skill, text, data)
     return await _ai(svc, cid, skill, text)
+
+
+async def joins_text(svc: Services, cid: int, last_sent: int | None) -> str:
+    """AI 없이 코드로: 지난번 실행(없으면 7일) 이후 입장·퇴장·순증. 퇴장은 사람마다 마지막 퇴장만 남아 있어 대략."""
+    now = int(datetime.now(svc.cfg.tz).timestamp())
+    since = max(last_sent or now - 7 * 86400, now - 31 * 86400)
+    joined = await svc.db.joined_count(cid, since, now + 1)
+    left = (await svc.db._one("SELECT COUNT(*) AS n FROM member_left WHERE chat_id=? AND ts>=?", (cid, since)))["n"]
+    days = max(1, round((now - since) / 86400))
+    head = datetime.fromtimestamp(since, svc.cfg.tz).strftime("%m/%d %H:%M")
+    return (f"{head} 이후 ({days}일)\n입장 {joined}명 · 퇴장 {left}명 · 순증 {joined - left:+d}명\n"
+            f"하루 평균 입장 {joined / days:.1f}명")
 
 
 async def fire(svc: Services, bot: Bot, row) -> bool:

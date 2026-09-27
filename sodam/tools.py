@@ -711,7 +711,7 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         return f"시간 해석 실패: {e}. 이 형식으로 다시: 매일 09:00 / 반복 2시간 / 30분 뒤 / 내일 09:00 / 09-28 21:00"
     action, skill = str(a.get("action", "")), str(a.get("skill", "")) or None
     if action not in cron.ACTIONS or (action == "ai" and skill not in cron.SKILLS):
-        return "action 은 remind / post / ai, ai 면 skill 은 summary / search / stats / write 중 하나."
+        return "action 은 remind / post / ai, ai 면 skill 은 " + " / ".join(cron.SKILLS) + " 중 하나."
     if action == "ai" and when[0] == "interval" and when[2] < 60:
         return "AI 작업은 1시간 이상 간격으로만 반복할 수 있음."
     if len(await ctx.svc.db.schedules(ctx.chat_id)) >= MAX_PER_CHAT:
@@ -851,8 +851,8 @@ TOOLS: list[Tool] = [
     Tool("schedule_task", "알람·공지·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘'(요청한 사람을 부름) → remind, "
          "'매일 아침 9시 방에 인사 올려'(정해진 글) → post, "
          "'매일 밤 10시에 오늘 대화 요약해서 올려' → ai+summary, '매일 아침 8시 비트코인 뉴스' → ai+search, "
-         "'매일 자정 수다 랭킹' → ai+stats, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
-         {"when": {"type": "string", "description": "매일 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM"},
+         "'매일 자정 수다 랭킹' → ai+stats, '매주 월요일 10시 지난주 신규 가입 통계' → ai+joins, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
+         {"when": {"type": "string", "description": "매일 HH:MM / 매주 월 HH:MM (여러 요일: 매주 월,수,금 HH:MM) / 평일 HH:MM / 주말 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM (자정은 00:00)"},
           "action": {"type": "string", "enum": list(cron.ACTIONS)},
           "skill": {"type": "string", "enum": list(cron.SKILLS), "description": "action=ai 일 때만"},
           "text": {"type": "string", "description": "remind: 그 시각에 방에 그대로 올라갈 알림 내용 자체 (예: '회의 시간이에요', '치킨 도착!'), "

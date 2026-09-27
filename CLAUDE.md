@@ -92,6 +92,8 @@
 - 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
   (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
+- 예약 시각: 매일 HH:MM · 매주 월,수 HH:MM · 평일/주말 HH:MM (kind weekly, at_time '월수 10:00', `announce.is_due` 가 요일 확인) ·
+  반복 N분 · N분 뒤 · 오늘/내일/MM-DD HH:MM. AI 스킬 joins = 입장·퇴장 통계(AI 없음, 지난 실행 이후·최대 31일).
 - 방에 올리는 확인 카드(schedule_task·alert_rule)는 `menu.lasting_token` 으로 DB(menu_tokens)에도 저장 — 봇 재시작(배포) 뒤에도 30분 유효
   (실제 사례: OTC 방 예약 카드 → 1분 뒤 배포 재시작 → [✅ 예약] 만료). 예약 deliver room/me(만든 관리자 1:1), action post=정해진 글.
 - menu 토큰: 다른 사람이 누르면 '요청한 사람만' 으로 거절하고 토큰은 남김 (방에 뜬 카드를 남이 눌러 무효화 못 하게).

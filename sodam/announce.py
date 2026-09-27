@@ -52,22 +52,31 @@ def extract_media(msg: Message) -> tuple[str | None, str | None]:
 
 
 _WHEN_DAILY = re.compile(r"^(?:매일|daily)?\s*(\d{1,2}:\d{2})$", re.I)
+DAYS = "월화수목금토일"                  # datetime.weekday() 순서
+_WHEN_WEEKLY = re.compile(r"^(?:매주\s*((?:[월화수목금토일](?:요일)?[,·\s]*)+)|(평일|주말))\s*(\d{1,2}:\d{2})$")
 _WHEN_EVERY = re.compile(r"^(?:반복|매|every)\s*(\d+)\s*(분|m|min|시간|h)?(?:\s*마다)?$", re.I)
 
 
 def parse_when(text: str) -> tuple[str, str | None, int | None]:
-    """'매일 09:00' → ('daily','09:00',None) / '반복 120' '반복 2시간' → ('interval',None,120)"""
-    t = text.strip()
+    """'매일 09:00' → ('daily','09:00',None) / '반복 120' '반복 2시간' → ('interval',None,120)
+    '매주 월 10:00' '매주 월,수,금 10:00' '매주 월요일 10:00' '평일 09:00' '주말 11:00' → ('weekly','월수금 10:00',None)"""
+    t = " ".join(text.split())
     m = _WHEN_DAILY.match(t)
     if m:
         return "daily", parse_hhmm(m.group(1)), None
+    m = _WHEN_WEEKLY.match(t)
+    if m:
+        days = {"평일": "월화수목금", "주말": "토일"}.get(m.group(2) or "") or "".join(
+            d for d in DAYS if d in (m.group(1) or "").replace("요일", ""))
+        return "weekly", f"{days} {parse_hhmm(m.group(3))}", None
     m = _WHEN_EVERY.match(t)
     if m:
         minutes = int(m.group(1)) * (60 if (m.group(2) or "").lower() in ("시간", "h") else 1)
         if not MIN_INTERVAL <= minutes <= MAX_INTERVAL:
             raise ValueError(f"반복 간격은 {MIN_INTERVAL}분 ~ {MAX_INTERVAL // 1440}일 사이로 해주세요")
         return "interval", None, minutes
-    raise ValueError("형식: <code>매일 09:00</code> 또는 <code>반복 120</code> (분) / <code>반복 3시간</code>")
+    raise ValueError("형식: <code>매일 09:00</code> · <code>매주 월 10:00</code> · <code>평일 09:00</code> · "
+                     "<code>반복 120</code> (분) / <code>반복 3시간</code>")
 
 
 _WHEN_AFTER = re.compile(r"^(\d+)\s*(분|시간)\s*(?:뒤|후)(?:에)?$")
@@ -111,6 +120,10 @@ def describe_when(kind: str, at_time: str | None, interval_min: int | None) -> s
         return f"{at_time} 한 번"
     if kind == "daily":
         return f"매일 {at_time}"
+    if kind == "weekly":
+        days, hhmm = (at_time or " ").split(" ", 1)
+        label = {"월화수목금": "평일", "토일": "주말", DAYS: "매일"}.get(days) or "매주 " + "·".join(days)
+        return f"{label} {hhmm}"
     if interval_min and interval_min % 60 == 0:
         return f"{interval_min // 60}시간마다"
     return f"{interval_min}분마다"
@@ -121,9 +134,12 @@ def is_due(row, now_ts: int, tz) -> bool:
         return False
     if row["kind"] == "once":
         return row["last_sent"] is None and 0 <= now_ts - (row["at_ts"] or 0) < ONCE_GRACE
-    if row["kind"] == "daily":
-        hh, mm = map(int, row["at_time"].split(":"))
+    if row["kind"] in ("daily", "weekly"):
+        days, _, hhmm = row["at_time"].rpartition(" ")          # weekly: '월수금 10:00' · daily: '10:00'
+        hh, mm = map(int, hhmm.split(":"))
         now = datetime.fromtimestamp(now_ts, tz)
+        if days and DAYS[now.weekday()] not in days:
+            return False
         sched = int(now.replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp())
         if not 0 <= now_ts - sched < DAILY_GRACE:
             return False
