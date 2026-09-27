@@ -411,6 +411,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _record(svc.db.ensure_chat(chat_id, msg.chat.title))
         seen.add(chat_id)
     await _record(svc.db.upsert_user(user))
+    reply_msg, reply_user = reply_ref(msg)
+    if reply_user:   # 답장받은 사람 이름도 (말 안 한 사람·봇이라도 '↩이름' 이 보이게)
+        await _record(svc.db.upsert_user(msg.reply_to_message.from_user))
     await _record(svc.db.touch_member(chat_id, user.id))
 
     text = msg.text or msg.caption or ""
@@ -421,7 +424,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         role = Role.MEMBER
     scan = security.scan(text)
     if text:
-        await _record(svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg)))
+        await _record(svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg),
+                                         reply_to_msg_id=reply_msg, reply_to_user=reply_user))
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
     exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음
@@ -690,7 +694,9 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     # 기다리는 동안 원본이 지워져도 답은 가게 (1:1 은 원래대로 인용 없이)
     reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if chat_id < 0 else None
     sent = await msg.reply_text(body, parse_mode="HTML", reply_parameters=reply, link_preview_options=security.NO_PREVIEW)
-    await svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True)
+    await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,   # 누구에게 한 답인지
+                                     reply_to_msg_id=msg.message_id if reply else None,
+                                     reply_to_user=user.id if reply else None))
     await memory.record_turn(svc.db, chat_id, user.id, via, request, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
 
@@ -936,7 +942,9 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     scan = security.scan(text)
-    await _record(svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg)))
+    reply_msg, reply_user = reply_ref(msg)
+    await _record(svc.db.log_message(msg.chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg),
+                                     reply_to_msg_id=reply_msg, reply_to_user=reply_user))
     await ai_reply(context, msg, role, text, scan)
 
 
@@ -1115,6 +1123,17 @@ async def job_disk(context: ContextTypes.DEFAULT_TYPE) -> None:
         await diskguard.check(_svc(context), context.bot)
     except Exception:
         log.exception("disk check failed")
+
+
+def reply_ref(msg) -> tuple[int | None, int | None]:
+    """(답장한 메시지 ID, 답장받은 사람 ID). 답장 아님·포럼 토픽 첫 글(모든 글이 거기에 답장으로 옴)이면 (None, None).
+    채널·익명 관리자 글에 답장하면 사람은 모름 → (메시지 ID, None)."""
+    r = getattr(msg, "reply_to_message", None)
+    if r is None or getattr(r, "forum_topic_created", None) or (
+            getattr(msg, "is_topic_message", False) and r.message_id == getattr(msg, "message_thread_id", None)):
+        return None, None
+    who = getattr(r, "from_user", None) if getattr(r, "sender_chat", None) is None else None
+    return getattr(r, "message_id", None), (who.id if who else None)
 
 
 async def _record(coro) -> None:

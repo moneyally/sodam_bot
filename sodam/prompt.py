@@ -106,7 +106,27 @@ def _line(row, tz, bot_id: int, bot_name: str, today: str = "") -> str:
         name = row["first_name"] or (row["username"] and "@" + row["username"]) or "?"
         who = f"{name}({row['user_id']})"
     text = row["text"].replace("\n", " ")
-    return f"[{ts}] {who}: {text[:300]}"
+    return f"[{ts}] {who}{reply_mark(row, bot_id, bot_name)}: {text[:300]}"
+
+
+def _col(row, key: str):
+    """DB Row·dict 둘 다, 컬럼이 없으면 None (예전 조회 결과·테스트용 dict)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def reply_mark(row, bot_id: int | None = None, bot_name: str = "봇") -> str:
+    """답장이면 ' ↩이름' (누가 누구에게 답했는지). 이름은 db.recent_messages 의 JOIN 값. 글 인용은 안 함 (토큰 절약)."""
+    to = _col(row, "reply_to_user")
+    if not to:
+        return ""
+    if to == bot_id:
+        name = bot_name
+    else:
+        name = _col(row, "reply_first") or (_col(row, "reply_username") and "@" + _col(row, "reply_username")) or str(to)
+    return " ↩" + name.replace("\n", " ")[:20]
 
 
 MODE_NOTE = {
