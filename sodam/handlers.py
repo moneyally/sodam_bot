@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
+from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent
@@ -952,8 +952,14 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         await q.answer("이미 처리된 요청이에요.")
         return
     await q.answer()
+    # AI 맥락용 결과 한 줄 (cards.record): 카드가 뜬 대화 = 오너 1:1 요청이면 오너 1:1, 아니면 그 방
+    label = {"warn": "경고", "mute": f"뮤트 {human_minutes(action.minutes)}", "ban": "내보내기"}[action.kind]
+    names = ", ".join(name for _, name in action.targets)[:60]
+    card_chat = action.requested_by if action.from_dm else action.chat_id
     if yn not in ("y", "p"):
         await pressed("취소")
+        await cards.record(svc, card_chat, action.requested_by, action.kind,
+                           f"❌ {label} 취소 — {names} (누른 사람: {user_name(q.from_user)})")
         await q.edit_message_text("취소했어요.")
         return
     by, lines, done = esc(user_name(q.from_user)), [], []
@@ -976,10 +982,14 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
             log.warning("sanction %s failed: chat %s user %s: %s", action.kind, action.chat_id, uid, e)
             lines.append(f"❌ {who}님 실패: {esc(e.message)} (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)")
     await q.edit_message_text("\n".join(lines) + f"\n(처리: {by})", parse_mode="HTML")
+    failed = len(action.targets) - len(done)
+    await cards.record(svc, card_chat, action.requested_by, action.kind,
+                       (f"✅ {label} 실행됨 — {len(done)}명" if done else f"⚠️ {label} 실행 안 됨") + f" — {names}"
+                       + (f" (못 한 사람 {failed}명)" if done and failed else "") + f" (처리: {user_name(q.from_user)})")
     if yn == "p" and done:   # 오너 1:1 요청: 방에도 짧게 안내 (정해진 문구 + 사유만, AI 문장 아님)
-        label = {"warn": "경고", "mute": f"{human_minutes(action.minutes)} 채팅 금지", "ban": "내보내기"}[action.kind]
+        notice = {"warn": "경고", "mute": f"{human_minutes(action.minutes)} 채팅 금지", "ban": "내보내기"}[action.kind]
         try:
-            await bot.send_message(action.chat_id, f"📢 관리자 조치: {', '.join(done)}님 {label}\n사유: {esc(action.reason)}",
+            await bot.send_message(action.chat_id, f"📢 관리자 조치: {', '.join(done)}님 {notice}\n사유: {esc(action.reason)}",
                                    parse_mode="HTML")
         except TelegramError as e:
             log.warning("sanction notice failed in %s: %s", action.chat_id, e)

@@ -16,7 +16,7 @@ import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .. import botlink, botskills, menu, tools
+from .. import botlink, botskills, cards, menu, tools
 from ..menu import ADMIN, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
 from ..settings import register_setting
@@ -360,26 +360,35 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
                                      (ctx.chat_id, ctx.caller.id, int(time.time()) - 600))
         if mine["n"] >= MEMBER_PER_10MIN:
             return f"멤버 신청은 10분에 {MEMBER_PER_10MIN}곡까지. 잠시 뒤에 다시 신청하라고 짧게 안내."
+    skipped = False
     if trust or not await botlink.approved(ctx.svc.db, ctx.chat_id, row["bot_id"], head):
-        spec = {"bot_id": row["bot_id"], "head": head, "text": text, "wide": wide, "trust": trust}
-        ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "kbl_send", spec, 1800)
-        no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "kbl_no", None, 1800)
-        await ctx.bot.send_message(
-            ctx.chat_id, f"🤝 <b>{esc(_bot_label(row))}</b> 에게 이 명령을 보낼까요?\n<code>{esc(text)}</code>\n"
-                         f"(이 봇의 <code>{esc(head)}</code> 는 처음이라 확인해요 · 다음부턴 바로 보내요 · "
-                         f"요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ 보내기", callback_data=f"m:k:{ok}"),
-                InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))
-        ctx.botlink_sent = getattr(ctx, "botlink_sent", 0) + 1
-        return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 보내진다고 짧게 안내할 것. 아직 안 보냈으니 '보냈다'고 하지 말 것."
+        if not await cards.skip_card(svc, ctx.bot, ctx.chat_id, ctx.caller.id, "bot_command"):
+            spec = {"bot_id": row["bot_id"], "head": head, "text": text, "wide": wide, "trust": trust}
+            kb = await cards.card(svc, ctx.caller.id, ctx.chat_id, "bot_command", "kbl_send", "kbl_no", spec,
+                                  ok_label="✅ 보내기")
+            await ctx.bot.send_message(
+                ctx.chat_id, f"🤝 <b>{esc(_bot_label(row))}</b> 에게 이 명령을 보낼까요?\n<code>{esc(text)}</code>\n"
+                             f"(이 봇의 <code>{esc(head)}</code> 는 처음이라 확인해요 · 다음부턴 바로 보내요 · "
+                             f"요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
+                parse_mode="HTML", reply_markup=kb)
+            ctx.botlink_sent = getattr(ctx, "botlink_sent", 0) + 1
+            return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 보내진다고 짧게 안내할 것. 아직 안 보냈으니 '보냈다'고 하지 말 것."
+        skipped = True   # 오늘은 확인 생략 (요청한 관리자가 카드에서 켬) → 카드를 누른 것처럼 믿음·허락 후 바로 보냄
     busy = botlink.reserve(ctx.svc, ctx.chat_id, row["bot_id"])
     if busy:
         return busy
+    if skipped:
+        if trust:
+            await botlink.set_status(svc.db, ctx.chat_id, row["bot_id"], "trusted")
+            await svc.db.audit(ctx.chat_id, ctx.caller.id, row["bot_id"], "botlink_status", "trusted (확인 생략)")
+        await botlink.approve(svc.db, ctx.chat_id, row["bot_id"], head, ctx.caller.id)
     ctx.botlink_sent = getattr(ctx, "botlink_sent", 0) + 1
     mid = await botlink.send(ctx.svc, ctx.bot, ctx.chat_id, row, text, ctx.caller.id)
     if mid is None:
         return "보내지 못함 (텔레그램 오류). 잠시 뒤 다시."
+    if skipped:
+        await cards.pressed(svc, ctx.chat_id, ctx.caller.id, "bot_command", None,
+                            f"✅ {_bot_label(row)} 에 {text} 보냄 · 확인 생략", done=False)
     got = await botlink.wait_reply(ctx.svc, ctx.chat_id, mid, bot_id=row["bot_id"])
     if got is None:
         return (f"'{text}' 보냈음. {botlink.WAIT_SECONDS:g}초 안에 그 봇의 결과 글은 아직 없음 (늦게라도 그 봇 답은 방에 그대로 보임). "
@@ -390,7 +399,10 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
 
 
 async def t_kbl_send(c: PanelCtx, spec) -> Screen:
-    """확인 카드 [✅ 보내기] — 요청한 관리자만(토큰), 누를 때 관리자·모드·믿는 봇·한도 다시 확인."""
+    """확인 카드 [✅ 보내기] / [✅ + 오늘은 확인 생략] — 요청한 관리자만(토큰), 카드당 한 번,
+    누를 때 관리자·모드·믿는 봇·한도 다시 확인."""
+    if not await cards.claim(c.svc, spec, "day" if spec.get("day") else "ok"):
+        return Screen(None, toast=cards.ALREADY)
     row = await botlink.get_bot(c.svc.db, c.cid, to_int(str(spec.get("bot_id"))) or 0)
     if row and spec.get("trust") and row["status"] == "seen" and await botlink.active(c.svc, c.cid, ("interact",)):
         await botlink.set_status(c.svc.db, c.cid, row["bot_id"], "trusted")    # 누른 관리자 = 이 봇을 믿음 (무시한 봇은 안 바뀜)
@@ -399,7 +411,9 @@ async def t_kbl_send(c: PanelCtx, spec) -> Screen:
     reason = await botlink.refuse_reason(c.svc, c.cid, row)
     built = botlink.build(str(spec.get("text", "")), row["username"], wide=bool(spec.get("wide"))) \
         if row and not reason else None
+    label = f"다른 봇 명령 {str(spec.get('text', ''))[:40]}"
     if reason or not built:
+        await cards.pressed(c.svc, c.cid, c.uid, "bot_command", spec, f"⚠️ {label} 안 보냄", done=False)
         return Screen(f"🤝 보내지 않았어요. {esc(reason or '명령 형식 오류')}", None, toast="보내지 않았어요", alert=True)
     busy = botlink.reserve(c.svc, c.cid, row["bot_id"])
     if busy:
@@ -407,9 +421,11 @@ async def t_kbl_send(c: PanelCtx, spec) -> Screen:
     head, text = built
     await botlink.approve(c.svc.db, c.cid, row["bot_id"], head, c.uid)
     if await botlink.send(c.svc, c.bot, c.cid, row, text, c.uid) is None:
+        await cards.pressed(c.svc, c.cid, c.uid, "bot_command", spec, f"⚠️ {label} 못 보냄 (텔레그램 오류)", done=False)
         return Screen("🤝 보내지 못했어요 (텔레그램 오류).", None, toast="실패", alert=True)
+    await cards.pressed(c.svc, c.cid, c.uid, "bot_command", spec, f"✅ {_bot_label(row)} 에 {text} 보냄", done=True)
     return Screen(f"🤝 {esc(_bot_label(row))} 에게 <code>{esc(text)}</code> 보냈어요. "
-                  f"(<code>{esc(head)}</code> 는 다음부터 바로 보내요)", None, toast="보냈어요")
+                  f"(<code>{esc(head)}</code> 는 다음부터 바로 보내요)" + cards.day_note(spec), None, toast="보냈어요")
 
 
 async def t_kbl_on(c: PanelCtx, _) -> Screen:
@@ -419,11 +435,15 @@ async def t_kbl_on(c: PanelCtx, _) -> Screen:
     if (await c.svc.db.get_settings(c.cid))["botlink_mode"] != "interact":
         await c.svc.db.set_setting(c.cid, "botlink_mode", "interact")
         await c.svc.db.audit(c.cid, c.uid, None, "setting", "botlink_mode=interact (방 카드)")
+    await cards.pressed(c.svc, c.cid, c.uid, "bot_command", None, "✅ 다른 봇 연동 켬 (🤖 명령까지)", done=False)
     return Screen("🤝 다른 봇 연동을 켰어요 (🤖 명령까지). 이제 그 봇이 방에 한 번 말하면 알아봐요 — "
                   "곡을 한 번 신청한 뒤 다시 시켜 주세요.", None, toast="켰어요")
 
 
-async def t_kbl_no(c: PanelCtx, _) -> Screen:
+async def t_kbl_no(c: PanelCtx, spec) -> Screen:
+    if not await cards.claim(c.svc, spec, "no"):
+        return Screen(None, toast=cards.ALREADY)
+    await cards.pressed(c.svc, c.cid, c.uid, "bot_command", spec, "❌ 다른 봇 명령 취소 (안 보냄)", done=False)
     return Screen("🤝 보내지 않았어요.", None)
 
 
@@ -446,6 +466,7 @@ tools.register_tool(tools.Tool(
      "command": {"type": "string", "description": "명령을 직접 줄 때만: 그 봇이 가진 영문 '/명령 인자' (예: /remove 2). 지어내지 말 것"}},
     [], t_command, Role.MEMBER, where="room"))
 menu.register_token_action("kbl_send", t_kbl_send, fresh=True)
+menu.register_token_action("kbl_send" + cards.DAY, t_kbl_send, fresh=True)
 menu.register_token_action("kbl_no", t_kbl_no)
 menu.register_token_action("kbl_on", t_kbl_on, fresh=True)
 menu.register_hub(HubItem(39, "blk", "🤝 다른 봇 연동"))

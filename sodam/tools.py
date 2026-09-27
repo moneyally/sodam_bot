@@ -22,7 +22,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from . import cron, gametime, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
+from . import cards, cron, gametime, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
 from .llm import BudgetExceeded
 from .vision import Attached
 from .permissions import Role, may
@@ -818,15 +818,21 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         action = "remind"
     spec = {"when": when, "action": action, "skill": skill if action == "ai" else None, "text": text, "title": title,
             "deliver": deliver}
-    ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_save", spec, 1800)
-    no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "cron_no", None, 1800)
+    if await cards.skip_card(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller.id, "schedule_task"):   # 오늘은 확인 생략
+        from .panels.announce import cron_line, save_cron   # 늦게 import (panels → tools 순환 방지)
+        ok, out = await save_cron(ctx.svc, ctx.chat_id, ctx.caller.id, spec)
+        await cards.pressed(ctx.svc, ctx.chat_id, ctx.caller.id, "schedule_task", spec,
+                            cron_line(ok, spec, out) + " · 확인 생략", done=False)
+        return (f"요청한 관리자가 오늘은 확인 생략을 켜 둬서 카드 없이 바로 처리함: {_plain(out)}. 짧게 안내할 것."
+                if ok else f"예약 못 함: {_plain(out)}")
     what = cron.ACTIONS[action] + (f" · {cron.SKILLS[skill].label}" if action == "ai" else "")
+    kb = await cards.card(ctx.svc, ctx.caller.id, ctx.chat_id, "schedule_task", "cron_save", "cron_no", spec,
+                          ok_label="✅ 예약")
     await ctx.bot.send_message(
         ctx.chat_id, f"⏰ 이렇게 예약할까요?\n언제: <b>{describe_when(*when[:3])}</b>\n종류: {what}\n"
                      f"내용: {esc(text) or '(없음)'}\n보낼 곳: {'요청한 분 1:1' if deliver == 'me' else '이 방'}\n"
                      f"(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ 예약", callback_data=f"m:k:{ok}"),
-                                                              InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))
+        parse_mode="HTML", reply_markup=kb)
     return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 저장된다고 짧게 안내할 것. 아직 저장된 게 아니니 '했다'고 말하지 말 것."
 
 
@@ -846,14 +852,20 @@ async def t_alert_rule(ctx: ToolCtx, a: dict) -> str:
         return f"못 만듦: {err}"
     if len(await rules.room_rules(ctx.svc.db, ctx.chat_id)) >= rules.MAX_RULES:
         return f"이 방 규칙이 이미 {rules.MAX_RULES}개라 더 못 만듦. 1:1 메뉴 🔔 알림 규칙에서 정리하라고 안내."
-    ok = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_save", spec, 1800)
-    no = await menu.lasting_token(ctx.svc, ctx.caller.id, ctx.chat_id, "rule_no", None, 1800)
+    if await cards.skip_card(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller.id, "alert_rule"):   # 오늘은 확인 생략
+        from .panels.rules import _create, rule_line   # 늦게 import (panels → tools 순환 방지)
+        ok, out = await _create(menu.PanelCtx(ctx.svc, ctx.bot, ctx.caller.id, ctx.chat_id, []), spec)
+        await cards.pressed(ctx.svc, ctx.chat_id, ctx.caller.id, "alert_rule", spec, rule_line(ok, out) + " · 확인 생략",
+                            done=False)
+        return (f"요청한 관리자가 오늘은 확인 생략을 켜 둬서 카드 없이 바로 처리함: {out}. 짧게 안내할 것."
+                if ok else f"못 만듦: {out}")
+    kb = await cards.card(ctx.svc, ctx.caller.id, ctx.chat_id, "alert_rule", "rule_save", "rule_no", spec,
+                          ok_label="✅ 만들기")
     await ctx.bot.send_message(
         ctx.chat_id, f"🔔 이 알림 규칙을 만들까요?\n<b>{esc(await rules.describe(ctx.svc, spec))}</b>\n"
                      f"{await rules.preview_text(ctx.svc, ctx.chat_id, {**spec, 'created_by': ctx.caller.id})}\n"
                      f"(쿨다운 {spec['cooldown']}분 · 요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ 만들기", callback_data=f"m:k:{ok}"),
-                                                              InlineKeyboardButton("❌ 취소", callback_data=f"m:k:{no}")]]))
+        parse_mode="HTML", reply_markup=kb)
     return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 만들어진다고 짧게 안내할 것. 아직 만든 게 아니니 '했다'고 말하지 말 것."
 
 

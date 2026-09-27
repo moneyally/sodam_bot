@@ -17,7 +17,7 @@ from datetime import datetime
 
 from telegram.error import TelegramError
 
-from .. import cron, menu
+from .. import cards, cron, menu
 from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
 from ..util import esc
@@ -207,18 +207,37 @@ def _input(action: str, skill: str | None):
     return handle
 
 
-async def t_cron_save(c: PanelCtx, spec) -> Screen:
-    """말로 한 예약의 확인 카드 [✅ 예약] (토큰 = 요청한 관리자만)."""
-    if len(await c.svc.db.schedules(c.cid)) >= MAX_PER_CHAT:
-        return Screen(f"예약은 방마다 {MAX_PER_CHAT}개까지예요. 관리자 1:1 메뉴 🗓️ 에서 정리해 주세요.", None)
-    [sid] = await cron.create(c.svc, [c.cid], uid=c.uid, when=tuple(spec["when"]), action=spec["action"],
+async def save_cron(svc, cid: int, uid: int, spec: dict) -> tuple[bool, str]:
+    """말로 한 예약 저장 (확인 카드 [✅ 예약] · 오늘은 확인 생략). (성공?, 안내 HTML)."""
+    if len(await svc.db.schedules(cid)) >= MAX_PER_CHAT:
+        return False, f"예약은 방마다 {MAX_PER_CHAT}개까지예요. 관리자 1:1 메뉴 🗓️ 에서 정리해 주세요."
+    [sid] = await cron.create(svc, [cid], uid=uid, when=tuple(spec["when"]), action=spec["action"],
                               skill=spec["skill"], text=spec["text"], title=spec["title"],
                               deliver=spec.get("deliver", "room"))
-    return Screen(f"✅ 예약했어요 (#{sid} · {describe_when(*spec['when'][:3])} · {esc(spec['text'][:60])})\n"
-                  "끄기·삭제는 관리자 1:1 메뉴 🗓️ 예약공지에서", None, toast="예약했어요")
+    return True, f"✅ 예약했어요 (#{sid} · {describe_when(*spec['when'][:3])} · {esc(spec['text'][:60])})"
 
 
-async def t_cron_no(c: PanelCtx, _) -> Screen:
+def cron_line(ok: bool, spec: dict, html: str) -> str:
+    """AI 맥락용 결과 한 줄 (HTML 없이)."""
+    when = describe_when(*spec["when"][:3])
+    return f"✅ 예약 저장됨: {when} {spec['text'][:40]}" if ok else f"⚠️ 예약 못 함: {html[:60]}"
+
+
+async def t_cron_save(c: PanelCtx, spec) -> Screen:
+    """말로 한 예약의 확인 카드 [✅ 예약] / [✅ + 오늘은 확인 생략] (토큰 = 요청한 관리자만, 카드당 한 번)."""
+    if not await cards.claim(c.svc, spec, "day" if spec.get("day") else "ok"):
+        return Screen(None, toast=cards.ALREADY)
+    ok, text = await save_cron(c.svc, c.cid, c.uid, spec)
+    await cards.pressed(c.svc, c.cid, c.uid, "schedule_task", spec, cron_line(ok, spec, text), done=ok)
+    if not ok:
+        return Screen(text, None)
+    return Screen(text + "\n끄기·삭제는 관리자 1:1 메뉴 🗓️ 예약공지에서" + cards.day_note(spec), None, toast="예약했어요")
+
+
+async def t_cron_no(c: PanelCtx, spec) -> Screen:
+    if not await cards.claim(c.svc, spec, "no"):
+        return Screen(None, toast=cards.ALREADY)
+    await cards.pressed(c.svc, c.cid, c.uid, "schedule_task", spec, "❌ 예약 취소 (저장 안 함)", done=False)
     return Screen("예약하지 않았어요.", None)
 
 
@@ -263,6 +282,7 @@ menu.register_token_action("del_sc", t_delete, fresh=True)
 menu.register_screen("scs", s_skills)
 menu.register_route("scx", Route(r_copy))
 menu.register_token_action("cron_save", t_cron_save, fresh=True)
+menu.register_token_action("cron_save" + cards.DAY, t_cron_save, fresh=True)
 menu.register_token_action("cron_no", t_cron_no)
 WHEN_HELP = ("\n\n<b>언제</b>: <code>매일 09:00</code> · <code>반복 2시간</code> · <code>30분 뒤</code> · "
              "<code>내일 09:00</code> · <code>09-28 21:00</code>")

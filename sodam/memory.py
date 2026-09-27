@@ -602,7 +602,7 @@ async def recent_turns(db, chat_id: int, user_id: int, since: int, limit: int = 
 async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict, history: list) -> dict:
     """build_messages 에 넘길 user_memory / room_memory / past_turns. 실패해도 빈 값."""
     tz = svc.cfg.tz
-    out: dict = {"user_memory": [], "room_memory": "", "past_turns": []}
+    out: dict = {"user_memory": [], "room_memory": "", "past_turns": [], "card_results": []}
     if settings.get("ai_memory", True):
         out["user_memory"] = [f"{fact_line(r)} ({datetime.fromtimestamp(r['ts'], tz).strftime('%m/%d')})"
                               for r in await get_facts(svc.db, chat_id, user_id)]
@@ -615,6 +615,8 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
         f"[{datetime.fromtimestamp(t['ts'], tz).strftime('%m/%d %H:%M')}] 상대: {t['request'][:200]} → "
         f"{svc.cfg.bot_name}: {t['answer'][:200]}"
         for t in turns if t["ts"] < oldest][-3:]
+    from . import cards   # 늦게 import (cards → db 만, 순환 없음)
+    out["card_results"] = await cards.recent_lines(svc, chat_id)   # 확인 카드를 누른 결과 ('아까 뮤트 됐어?')
     return out
 
 

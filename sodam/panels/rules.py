@@ -12,7 +12,7 @@ AI 에게 말로('누가 입금 얘기하면 알려줘') 만들면 방에 확인
 """
 from __future__ import annotations
 
-from .. import menu, rules
+from .. import cards, menu, rules
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, fmt_time, to_int
 
@@ -172,13 +172,24 @@ async def i_quiet(c: PanelCtx, msg) -> tuple[bool, str]:
 
 
 async def t_save(c: PanelCtx, spec) -> Screen:
-    """말로 만든 규칙의 확인 카드 [✅ 만들기] (토큰 = 요청한 관리자만)."""
+    """말로 만든 규칙의 확인 카드 [✅ 만들기] / [✅ + 오늘은 확인 생략] (토큰 = 요청한 관리자만, 카드당 한 번)."""
+    if not await cards.claim(c.svc, spec, "day" if spec.get("day") else "ok"):
+        return Screen(None, toast=cards.ALREADY)
     ok, text = await _create(c, spec)
-    return Screen(text + ("\n끄기·삭제는 관리자 1:1 메뉴 🔔 알림 규칙에서" if ok else ""), None,
+    await cards.pressed(c.svc, c.cid, c.uid, "alert_rule", spec, rule_line(ok, text), done=ok)
+    return Screen(text + ("\n끄기·삭제는 관리자 1:1 메뉴 🔔 알림 규칙에서" + cards.day_note(spec) if ok else ""), None,
                   toast="만들었어요" if ok else text, alert=not ok)
 
 
-async def t_no(c: PanelCtx, _) -> Screen:
+def rule_line(ok: bool, text: str) -> str:
+    """AI 맥락용 결과 한 줄."""
+    return ("✅ 알림 규칙 " + text.removeprefix("✅ 규칙 ").split(" 을 ")[0] + " 만듦") if ok else f"⚠️ 알림 규칙 못 만듦: {text[:60]}"
+
+
+async def t_no(c: PanelCtx, spec) -> Screen:
+    if not await cards.claim(c.svc, spec, "no"):
+        return Screen(None, toast=cards.ALREADY)
+    await cards.pressed(c.svc, c.cid, c.uid, "alert_rule", spec, "❌ 알림 규칙 취소 (안 만듦)", done=False)
     return Screen("규칙을 만들지 않았어요.", None)
 
 
@@ -190,6 +201,7 @@ menu.register_route("rlp", Route(r_pause, fresh=True))
 for _code, _fn in (("rla", r_join), ("rlt", r_toggle), ("rlx", r_action), ("rlc", r_cooldown), ("rld", r_delete)):
     menu.register_route(_code, Route(_fn))
 menu.register_token_action("rule_save", t_save, fresh=True)
+menu.register_token_action("rule_save" + cards.DAY, t_save, fresh=True)
 menu.register_token_action("rule_no", t_no)
 for _kind, _prompt, _fn in (
         ("rlk", "🔑 알려드릴 <b>낱말</b>을 보내주세요. 예: <code>입금</code>\n신규 입장자만: <code>입금 | 신규</code>", i_keyword),
