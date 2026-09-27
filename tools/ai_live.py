@@ -177,20 +177,42 @@ async def scene9():
 async def scene10():
     print("\n🎬 10. 방 전체 인사 (새로 온 사람 없음) / 새로 온 사람 있음 (캡차 없는 방)")
     r = await room({"captcha_enabled": False})
+    # 원래 있던 멤버는 한 달 전 입장으로 (room() 은 방금 입장으로 넣어서 '방금 들어옴' 단서가 붙어 신입처럼 보였음)
+    await r.db._write("UPDATE members SET joined_at=?", (int(time.time()) - 30 * 86400,))
     await say(r, JUNHO, "오늘 다들 고생 많으셨어요")
     out = await say(r, BOSS, "소담아 방사람들한테 인사드려")
     sent = " ".join(out)
     check("기존 멤버들에겐 '환영' 없이 안부", bool(out) and "환영" not in sent and "오신 걸" not in sent)
-    newbie = fake_user(55, "새내기", "newbie")
-    from sodam import handlers
+    # 새로 온 사람: 입장 인사가 켜진 방은 자동 인사가 먼저 멘션해 환영하고, 10분 안의 AI 인사 요청은 중복으로 봄
+    # (CLAUDE.md '자동 입장 인사 뒤 10분 안의 AI 인사 요청은 중복'). 예전 점검은 가짜 인사기(FakeGreeter)가 '인사했다'고만
+    # 하고 실제로는 아무것도 안 보내서 항상 실패 → 진짜 Greeter 로 자동 인사까지 보내고 '멘션 환영 1번'을 본다.
     from types import SimpleNamespace as NS
+
+    from sodam import greet, handlers
+    greet.WAIT_SECONDS = 0
+    r.svc.greeter = greet.Greeter(r.svc)
+    newbie = fake_user(55, "새내기", "newbie")
+    before = len(r.bot.calls)
     m = r.msg(newbie, "")
     m.new_chat_members = (newbie,)
     await handlers.on_join(NS(message=m), r.ctx)
-    await asyncio.sleep(0)
+    await asyncio.gather(*r.svc.greeter._tasks.values())
+    auto = " ".join(c[2] for c in r.bot.calls[before:] if c[0] == "send_message" and c[1] == Room.CHAT)
+    print(f"  💬 소담(자동 입장 인사): {re.sub(r'<[^>]+>', '', auto)}")
     out = await say(r, BOSS, "소담아 새로 오신 분 인사드려")
     sent = " ".join(out)
-    check("새로 온 사람은 멘션해서 환영", "tg://user?id=55" in sent)
+    check("새로 온 사람은 멘션해서 환영 (자동 인사)", "tg://user?id=55" in auto + sent)
+    check("환영 멘션은 한 번만 (AI 가 또 환영하지 않음)", (auto + sent).count("tg://user?id=55") == 1)
+    # 입장 인사가 꺼진 방: AI 가 greet_members 로 새로 온 사람을 멘션해 환영
+    r = await room({"captcha_enabled": False, "greet_enabled": False})
+    await r.db._write("UPDATE members SET joined_at=?", (int(time.time()) - 30 * 86400,))
+    newbie = fake_user(56, "새식구", "newbie2")
+    m = r.msg(newbie, "")
+    m.new_chat_members = (newbie,)
+    await handlers.on_join(NS(message=m), r.ctx)
+    out = await say(r, BOSS, "소담아 새로 오신 분 인사드려")
+    sent = " ".join(out)
+    check("새로 온 사람은 멘션해서 환영 (입장 인사 꺼진 방, AI)", "tg://user?id=56" in sent)
 
 
 async def scene11():

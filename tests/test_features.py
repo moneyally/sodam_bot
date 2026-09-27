@@ -532,7 +532,7 @@ async def help_and_settings_fit_in_one_message():
     db = await make_db()
     svc = await make_svc(db, admins={1})
     owner = fake_user(1, "오너")
-    for text in (".도움말", ".settings 전체"):  # .settings 는 1:1 버튼 패널, '전체'는 글 목록
+    for text in (".도움말", ".명령어", ".settings 전체"):  # .settings 는 1:1 버튼 패널, '전체'는 글 목록
         cmd, args, argstr = commands.parse(text, "sodambot")
         msg = FakeMsg(CHAT, owner, text)
         await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, owner, Role.OWNER, args, argstr), cmd)

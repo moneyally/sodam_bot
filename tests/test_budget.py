@@ -71,7 +71,7 @@ async def usd_recorded_globally_and_per_room():
 @test
 async def unknown_model_counted_at_main_price():
     db, llm = await setup()
-    await llm._record(usage(0, 0, 1000), CHAT, "image", "gpt-image-9")   # 이미지 모델: 요금표 없음
+    await llm._record(usage(0, 0, 1000), CHAT, "chat", "gpt-9")          # 대화 모델: 요금표 없음 → 기본 모델 값
     assert await db.counter(llm._today(), 0, costs.USD) == costs.usd_micro("gpt-5.4", 0, 0, 1000) == 15_000
     assert costs.usd_micro("모름", 0, 0, 1000, "모름2") == 15_000       # 기본 모델도 모르면 가장 비싼 요금
     assert costs.usd_micro("gpt-5.4", 0, 0, 0) == 0

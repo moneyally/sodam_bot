@@ -159,16 +159,16 @@ async def trial_reminders_last_day_only():
 async def help_new_features_admin_dm_korean_first():
     db = await make_db()
     svc = await make_svc(db, admins={1})
-    cmd, args, argstr = commands.parse(".도움말", "sodambot")
+    cmd, args, argstr = commands.parse(".명령어", "sodambot")   # 명령어 전체 (예전 .도움말, 지금 .도움말 = 말 예시)
     bot = FakeBot()
-    member = FakeMsg(CHAT, ALICE, ".도움말")
+    member = FakeMsg(CHAT, ALICE, ".명령어")
     await commands.dispatch(CmdCtx(svc, bot, member, CHAT, ALICE, Role.MEMBER, args, argstr), cmd)
     text = member.replies[0]
     for want in ("소담아 이거 뭐야", "그려줘", "!도움", "!그림장", "!룰렛"):
         assert want in text, want
 
     admin = fake_user(1, "방장")
-    msg = FakeMsg(CHAT, admin, ".도움말")
+    msg = FakeMsg(CHAT, admin, ".명령어")
     await commands.dispatch(CmdCtx(svc, bot, msg, CHAT, admin, Role.ADMIN, args, argstr), cmd)
     room_text = msg.replies[0]
     assert room_text.count("\n") < 5 and "1:1" in room_text, room_text     # 방엔 짧게

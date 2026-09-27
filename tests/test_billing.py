@@ -316,9 +316,9 @@ async def subscribe_command_in_group_hides_details():
     assert "관리 중인 방이 없" in msg.replies[0]
 
     # 방의 일반 멤버 도움말엔 .구독 이 안 보임, 관리자에겐 보임
-    hcmd, hargs, hargstr = commands.parse(".도움말", "sodambot")
+    hcmd, hargs, hargstr = commands.parse(".명령어", "sodambot")
     for role, visible in ((Role.MEMBER, False), (Role.ADMIN, True)):
-        msg = FakeMsg(CHAT, member, ".도움말")
+        msg = FakeMsg(CHAT, member, ".명령어")
         await commands.dispatch(CmdCtx(svc, bot, msg, CHAT, member, role, hargs, hargstr), hcmd)
         assert (".구독" in msg.replies[0]) is visible, role
 

@@ -126,8 +126,66 @@ def feature_lines(call: str, *, in_dm: bool = False) -> list[str]:
 
 HELP_ROOM_SECONDS = 120  # 방 관리자 도움말은 방에 잠깐만
 
+# '.도움말' = 명령어보다 먼저 "소담에게 이렇게 말해보세요" (말로 하는 게 기본, 명령어 전체는 .명령어)
+# (묶음, 예시들). 예시는 실제 도구로 되는 말만 (tools.py · panels/roomrule.py)
+EXAMPLES_MEMBER: list[tuple[str, list[str]]] = [
+    ("💬 대화", ["부가세 신고 언제까지야?", "이거 뭐야 (사진에 답장)", "고양이 그림 그려줘"]),
+    ("📊 분석", ["오늘 방 분위기 어때?"]),
+    ("📚 자료", ["우리 방 규칙 알려줘"]),
+    ("🔎 검색", ["지난주에 USDT 얘기한 내용 찾아줘"]),
+    ("🎮 게임", ["끝말잇기 시작"]),
+]
+EXAMPLES_ADMIN: list[tuple[str, list[str]]] = [
+    ("👮 관리", ["철수 최근 경고 내역 보여줘"]),
+    ("📚 자료 저장", ["광고는 관리자에게 먼저 말하기, 방 규칙으로 기억해"]),
+    ("🕐 예약", ["매일 9시에 하루 요약해줘", "매주 월 10:00 신규 가입 통계"]),
+    ("🔔 알림", ["홍길동 들어오면 알려줘"]),
+]
+
+
+def example_lines(call: str, *, admin: bool, in_dm: bool = False) -> list[str]:
+    """역할별 말 예시 (멤버 = 멤버 예시만, 관리자 = + 관리자 예시). 예시는 그룹방 기준(호출어 붙임)."""
+    def say(s: str) -> str:
+        text, _, note = s.partition(" (")      # '이거 뭐야 (사진에 답장)' → 괄호는 코드 밖 설명
+        return f"<code>{esc(call + ' ' + text)}</code>" + (f" ({esc(note)}" if note else "")
+
+    def block(items):
+        return [f"{label} · " + " / ".join(say(s) for s in says) for label, says in items]
+    lines = ["🤖 <b>소담에게 이렇게 말해보세요</b>",
+             "그룹방에선 <code>" + esc(call) + "</code> 로 부르거나 소담 답에 답장"
+             + (" · 여기(1:1)에선 그냥 말하면 돼요" if in_dm else ""),
+             *block(EXAMPLES_MEMBER)]
+    if admin:
+        lines += ["", "<b>관리자</b>", *block(EXAMPLES_ADMIN)]
+    return lines
+
+
+def help_text(call: str, *, admin: bool, in_dm: bool = False) -> str:
+    return "\n".join(example_lines(call, admin=admin, in_dm=in_dm)
+                     + ["", "📋 명령어 전체 <code>.명령어</code> · 🎰 포인트 게임 <code>!도움</code>"])
+
+
+async def is_any_admin(svc: Services, bot: Bot, uid: int) -> bool:
+    """1:1 에서 관리자 예시를 보여줄지: 오너이거나 소담이 있는 방 하나라도 관리자."""
+    if uid in await svc.perms.owners():
+        return True
+    try:
+        return bool(await menu.admin_groups(svc, bot, uid))
+    except TelegramError:
+        return False
+
 
 async def c_help(ctx: CmdCtx) -> None:
+    """말 예시 먼저 (짧게). 방 관리자에겐 관리자 예시까지 — 방엔 잠깐만 보였다 지움."""
+    in_dm = ctx.chat_id > 0
+    admin = ctx.role >= Role.ADMIN or (in_dm and await is_any_admin(ctx.svc, ctx.bot, ctx.user.id))
+    sent = await ctx.reply(help_text(ctx.svc.cfg.call_names[0], admin=admin, in_dm=in_dm))
+    if admin and not in_dm:
+        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS)
+
+
+async def c_commands(ctx: CmdCtx) -> None:
+    """명령어 전체 목록 (예전 .도움말)."""
     groups: dict[str, list[str]] = {}
     in_dm = ctx.chat_id > 0
     for cmd in COMMANDS:
@@ -1041,7 +1099,8 @@ async def c_report(ctx: CmdCtx) -> None:
 
 
 COMMANDS: list[Cmd] = [
-    Cmd(("도움말", "help", "명령어", "start"), c_help, help="명령어 목록", dm_ok=True),
+    Cmd(("도움말", "help", "start", "사용법"), c_help, help="소담에게 말하는 법 (예시)", dm_ok=True),
+    Cmd(("명령어", "commands", "명령어목록"), c_commands, help="명령어 전체 목록", dm_ok=True),
     Cmd(("내아이디", "id", "myid"), c_myid, help="내 텔레그램 숫자 ID (방에선 방 ID도)", dm_ok=True),
     Cmd(("규칙", "rules"), c_rules, help="방 규칙 보기"),
     Cmd(("내정보", "me", "정보", "info"), c_me, usage="[@user]", help="활동 정보"),
