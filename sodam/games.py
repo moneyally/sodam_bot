@@ -9,6 +9,7 @@ import asyncio
 import gzip
 import logging
 import random
+import re
 import secrets
 import time
 from pathlib import Path
@@ -119,6 +120,7 @@ class Game:
         self.cancel_timer()
         if self.mgr.active.get(self.chat_id) is self:
             del self.mgr.active[self.chat_id]
+        self.mgr.remember_end(self, text or "")
         if text:
             try:
                 await self.say(text + self.scoreboard())
@@ -136,6 +138,10 @@ class Game:
 
     async def on_callback(self, query: CallbackQuery, parts: list[str]) -> None:
         await query.answer()
+
+    def status(self) -> str:
+        """AI·명령용 지금 상태 (한 줄~두 줄)."""
+        return f"{self.title} 진행 중"
 
     def ai_hint(self) -> str:
         """게임 중 AI 에게 주는 단서: 진행은 게임이 하니 AI 는 끼어들지 않게."""
@@ -257,9 +263,19 @@ class WordChain(Game):
             await asyncio.sleep(wait)
         self._said = time.monotonic()
 
+    RULES = "한글 명사 2~12자만 (숫자·영어·띄어쓰기·이모지가 섞이면 답으로 안 셈), 표준국어대사전에 있는 낱말, 두음법칙 OK, 나온 말은 다시 못 씀"
+
+    def status(self) -> str:
+        return (f"{self.title} 진행 중 · 마지막 낱말 '{self.last}' → 다음은 '{self._starts_text()}'(으)로 시작 · "
+                f"나온 낱말 {len(self.used)}개 · {self.TURN_SECONDS}초 안에 아무도 못 이으면 소담이 승 · 규칙: {self.RULES}")
+
     def check(self, word: str) -> str | None:
         """이을 수 있으면 None, 아니면 반응 종류. 'no' = 끝말잇기 답이 아님 (평범한 채팅)."""
         if not is_hangul_word(word) or not 2 <= len(word) <= 12:
+            # 첫 글자는 맞는데 숫자·영어가 섞인 한 덩어리 ('죄인러브3') = 답하려던 것 → 🤔 (조용히 무시하면 '고장' 같아 보임)
+            if (not getattr(self, "thinking", False) and 2 <= len(word) <= 12 and not any(c.isspace() for c in word)
+                    and word[0] in starts_for(self.last) and not is_hangul_word(word)):
+                return "unknown"
             return "no"
         if getattr(self, "thinking", False):          # 소담이 차례(생각 중~소담이 말이 방에 뜰 때까지)에 들어온 답은 늦은 답
             return "late" if is_word(word) and word[0] in starts_for(self.last) | self._stale_starts() else "no"
@@ -336,6 +352,13 @@ class WordChainTurn(WordChain):
         names = ", ".join(esc(n) for _, n in self.players) or "(아직 없음)"
         return (f"🔗 <b>끝말잇기 (차례·탈락)</b> 참가 받아요! {self.JOIN_SECONDS}초 뒤 시작 · {self.MIN_PLAYERS}~{self.MAX_PLAYERS}명\n"
                 f"차례에 못 이으면 탈락, 마지막 1명이 우승이에요.\n🙋 {len(self.players)}명: {names}")
+
+    def status(self) -> str:
+        if self.joining:
+            return f"{self.title}: 참가 모집 중 ({len(self.players)}명) — [🙋 참가] 버튼"
+        cur = self.players[0][1] if self.players else "?"
+        return (f"{self.title} 진행 중 · 지금 {cur} 차례 · 마지막 '{self.last}' → '{self._starts_text()}' · "
+                f"남은 {len(self.players)}명 · 규칙: {self.RULES}")
 
     def ai_hint(self) -> str:
         if self.joining:
@@ -452,10 +475,34 @@ GAMES: dict[str, type[Game]] = {
 GAME_LIST = "끝말잇기 (아무나 먼저) · 끝말잇기 차례 (참가·탈락)"
 
 
+RECENT_SECS = 600   # 끝난 게임을 AI 가 기억하는 시간 ('고장났어?' → 왜 끝났는지 설명)
+
+
 class GameManager:
     def __init__(self, svc: Services):
         self.svc = svc
         self.active: dict[int, Game] = {}
+        self.recent: dict[int, tuple[float, str, str]] = {}   # 방 → (끝난 시각, 게임 종류 키, 요약)
+
+    def remember_end(self, game: Game, text: str) -> None:
+        why = re.sub(r"<[^>]+>", "", text).split("\n")[0][:80] or "끝남"
+        last = getattr(game, "last", "")
+        used = len(getattr(game, "used", ()))
+        key = next((k for k, c in GAMES.items() if c is type(game)), game.title)
+        self.recent[game.chat_id] = (time.monotonic(), key,
+                                     f"{game.title} 끝남: {why}" + (f" · 마지막 낱말 '{last}' · 나온 낱말 {used}개" if last else ""))
+        if len(self.recent) > 1000:
+            self.recent.clear()
+
+    def status(self, chat_id: int) -> str:
+        """AI 도구·단서용: 진행 중이면 상태, 10분 안에 끝났으면 왜 끝났는지, 아니면 없음."""
+        game = self.active.get(chat_id)
+        if game and not game.finished:
+            return game.status()
+        t, _, summary = self.recent.get(chat_id, (0.0, "", ""))
+        if time.monotonic() - t < RECENT_SECS:
+            return f"진행 중인 게임 없음. {int((time.monotonic() - t) // 60)}분 전 {summary} · 끝말잇기 규칙: {WordChain.RULES}"
+        return "진행 중인 게임 없음"
 
     def is_active(self, chat_id: int) -> bool:
         game = self.active.get(chat_id)
