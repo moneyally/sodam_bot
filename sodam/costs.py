@@ -14,8 +14,15 @@ from .settings import register_setting
 PRICES: dict[str, tuple[float, float, float]] = {
     "gpt-5.4": (2.50, 0.25, 15.00),
     "gpt-5.4-mini": (0.75, 0.075, 4.50),
+    # 이미지 모델 (OpenAI 모델 문서 2026-09-27 확인, 두 모델 같은 값): 글 입력 $5 · 캐시 $1.25, 사진 입력 $8 · 캐시 $2,
+    # 이미지 출력 $30 (글 출력은 없음). 이미지 요금은 장당이 아니라 토큰. llm.image → _record 는 usage.input_tokens(글+사진 합계)·
+    # 캐시·출력(total-input) 만 넘겨서 글/사진 입력을 못 나눈다 → 입력은 더 비싼 '사진 입력' 값으로 (보수적, 글 프롬프트
+    # 수백 토큰 × $3/1M 차이라 과다 청구는 1장에 $0.001 안쪽). 장당 토큰 수는 모델이 정함 (예: 출력 1,056토큰이면 ≈ $0.032).
+    "gpt-image-2.5-flare": (8.00, 2.00, 30.00),
+    "gpt-image-2.5-sunburst": (8.00, 2.00, 30.00),
 }
-WEB_SEARCH_PER_CALL = 0.01        # 웹 검색 도구 1번 ($10 / 1천 번)
+IMAGE_PREFIX = "gpt-image"
+WEB_SEARCH_PER_CALL = 0.01       # 웹 검색 도구 1번 ($10 / 1천 번)
 
 
 def price_of(model: str) -> tuple[float, float, float] | None:
@@ -68,12 +75,17 @@ register_setting(PCT_KEY, 100, "방 하루 AI 사용 한도(%)", range_=(10, 100
 
 
 def usd_micro(model: str, inp: int, cached: int, out: int, fallback: str = "") -> int:
-    """정수 마이크로달러(올림). 요금표에 없는 모델(이미지 등)은 기본 모델 요금, 그것도 없으면 가장 비싼 요금 (보수적으로)."""
+    """정수 마이크로달러(올림). 요금표에 없는 모델은 기본 모델 요금, 그것도 없으면 가장 비싼 요금 (보수적으로).
+    이미지 모델은 PRICES 에 토큰 요금으로 있음. 요금표에 없는 gpt-image-* 는 아는 이미지 요금 중 가장 비싼 값
+    (.env 로 다른 이미지 모델을 쓰면 PRICES 에 추가할 것)."""
     usd = token_cost(model, inp, cached, out)
+    if usd is None and model.startswith(IMAGE_PREFIX):   # 요금표에 없는 새 이미지 모델 → 아는 이미지 요금 중 가장 비싼 값
+        usd = max(token_cost(m, inp, cached, out) or 0.0 for m in PRICES if m.startswith(IMAGE_PREFIX))
     if usd is None and fallback:
         usd = token_cost(fallback, inp, cached, out)
     if usd is None:
-        usd = max(token_cost(m, inp, cached, out) or 0.0 for m in PRICES)
+        # 대화 모델 중 가장 비싼 값 (이미지 출력 $30 은 대화 모델에 쓰면 2배 과다라 뺌)
+        usd = max(token_cost(m, inp, cached, out) or 0.0 for m in PRICES if not m.startswith(IMAGE_PREFIX))
     return math.ceil(round(usd * MICRO, 6)) if usd > 0 else 0   # round: 부동소수 오차로 1 더 올림 방지
 
 

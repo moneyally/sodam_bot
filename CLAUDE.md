@@ -77,6 +77,19 @@
   방 요약은 그날 처음 필요할 때 1번 만들어 digest_cache(JSON)에 → 받는 사람 수·재시작과 무관하게 AI 는 방마다 하루 1번 (만드는 중 죽으면 그날은 안 만듦).
   1:1 막힘(Forbidden) → digest_log status=forbidden, 그 사람이 등록한 방에 금액 없는 안내 + [▶️ 1:1 열기](?start=cfg_<방>) 방마다 7일 1번.
   이용 중인 방만, 대화는 nonce 태그 안 데이터·flagged 제외.
+- **기억 vs 자료** (tests/test_fix_memory_help.py): 👤 멤버 기억(member_memory·notes, 본인 얘기) · 🏠 방 흐름 메모(room_memory) ·
+  📚 자료(knowledge_docs: 규칙·공지·가격·FAQ) · 📜 기록(mod_log·messages). 방 규칙 같은 문장은 기억 정리 프롬프트 + `memory.is_room_rule`
+  (방·모임·멤버 말 + 해야·금지·가격 말, 광고 전 허락)로 기억에서 버림. 관리자가 말로 규칙 저장 = AI 도구 `save_room_rule`
+  (`panels/roomrule.py`, ADMIN·room, 이용 기간·지시문 검사) → 방에 확인 카드(lasting_token kbr_save, 요청자만) → knowledge.add_document.
+  바로 저장 안 하는 이유: 자료는 AI 가 모든 멤버에게 사실처럼 전하는 곳이라 숨은 지시·오해가 조용히 규칙이 되면 안 됨.
+- `.도움말`/`/help`/❓ 메뉴 = "소담에게 이렇게 말해보세요" 예시(`commands.EXAMPLES_MEMBER/ADMIN`, 관리자 = 방 역할 또는 1:1 에선
+  어느 방이든 관리자·오너). 명령어 전체는 `.명령어` · 메뉴 [📋 명령어 전체](m:helpc). 메뉴 화면은 `panels/help.py` 가 m:help 를 덮어씀.
+- 알려진 버그(menu.py, 패치 필요): `menu.on_callback` 이 1:1 이 아닌 곳의 버튼을 전부 거절 → 방에 뜬 확인 카드(schedule_task·
+  alert_rule·save_room_rule 의 `m:k:`)를 방에서 누르면 '1:1 채팅에서 열어주세요'. 테스트는 1:1 로 눌러서 못 잡았음.
+- 봇 종료: `memory.shutdown` 이 `casino.SHUTDOWN_HOOKS`(post_shutdown, DB 닫기 전)에 걸려 기억 정리·끼어들기 뒷작업을 취소·대기
+  ('Task was destroyed … _extract_later' 경고 없앰), 그 뒤 spawn 은 안 만듦.
+- 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
+  인사했다고만 하고 안 보내서였음 → 진짜 Greeter 로. 인사 꺼진 방은 AI 가 greet_members 로 멘션.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
 
 ## 제재·AI 도구 권한
@@ -156,6 +169,8 @@
   가장 비싼 요금)을 counters `usd_micro`(chat_id=0 전체)·`room_usd_micro`(방·1:1) 에 셈. 한 번의 `db.atomic` 으로 모든 카운터를 같이.
   `DAILY_USD_BUDGET`(기본 8, 0=끔) 넘으면 BudgetExceeded("usd"). 토큰 예산은 `.env` 에 `DAILY_TOKEN_BUDGET` 을 **적은 경우만** (캐시 입력도
   전액으로 세서 2M 토큰(=실제 $1~3)에 막히던 것). 웹 검색은 호출당 $0.01 을 extra_micro 로.
+  이미지(gpt-image-2.5-flare/sunburst, OpenAI 문서 2026-09-27): 토큰 요금 입력 $8(사진 입력 값, 글 $5 와 못 나눠서 보수적)·캐시 $2·출력 $30.
+  모르는 gpt-image-* = 이미지 최고값, 모르는 대화 모델 = 기본 모델 → 대화 모델 최고값.
 - 방 하루 한도 = 오너 요금제(chat_state `ai_usd_plan` 센트, $0.5/1.5/3/5, 기본 $1.50 — 방 설정이 아니라서 `.설정변경`·AI 도구로 못 바꿈)
   × 방 관리자 `ai_room_budget_pct`(10~100%, 기본=상한 100 → 줄이기만, 저장값도 잘라 씀). 오너 1:1 은 방 달러 한도 없음. 토큰 한도(60만)도 그대로.
 - AI 작업 기록(`agentlog.py`, 표 agent_runs, 14일): run_agent 1번 = 1줄 (요청 200자·방식·도구 호출(이름+인자 요약, 비밀값 모양 가림)+결과 120자·
