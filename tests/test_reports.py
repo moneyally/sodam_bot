@@ -180,6 +180,7 @@ def digest_calls(svc):
 
 @test
 async def digest_runs_at_set_hour_once_per_day_paid_rooms_only():
+    """받는 사람 = 방을 등록한 대표님(ADMIN). 다른 관리자(ADMIN2)는 '받기'를 켜지 않으면 안 받음 (tests/test_digest_people.py)."""
     db, svc, bot = await digest_world()
     h = hour_now()
     for cid in (A, B):
@@ -191,7 +192,7 @@ async def digest_runs_at_set_hour_once_per_day_paid_rooms_only():
     calls = digest_calls(svc)
     assert len(calls) == 1 and calls[0]["chat_id"] == A and calls[0]["model"] == svc.cfg.guard_model, calls
     got = dms(bot, ADMIN.id, "하루 요약")
-    assert len(got) == 1 and "업자방1" in got[0][2] and len(dms(bot, ADMIN2.id, "하루 요약")) == 1
+    assert len(got) == 1 and "업자방1" in got[0][2] and not dms(bot, ADMIN2.id, "하루 요약")
     assert not dms(bot, BOT.id)
     # 같은 날 또 돌아도, 재시작(새 Services·같은 DB)해도 다시 안 보냄
     assert await reports.run_digests(svc, bot) == 0
@@ -200,14 +201,15 @@ async def digest_runs_at_set_hour_once_per_day_paid_rooms_only():
     assert await reports.run_digests(svc2, bot) == 0
     assert len(digest_calls(svc)) == 1 and len(dms(bot, ADMIN.id, "하루 요약")) == 1
     # 끔(-1) 이면 안 보냄
-    await db._write("DELETE FROM counters WHERE key=?", (reports.DIGEST_SENT,))
+    await db._write("DELETE FROM digest_log")
+    await db._write("DELETE FROM digest_cache")
     await db.set_setting(A, "digest_hour", reports.DIGEST_OFF)
     assert await reports.run_digests(svc, bot) == 0
 
 
 @test
 async def owner_gets_one_combined_digest_admins_get_their_room():
-    """오너가 여러 방 관리자면 방마다 한 통씩 오던 것 (21시에 12통) → 한 통 묶음. 방 관리자는 그대로 자기 방 요약."""
+    """오너가 여러 방 관리자면 방마다 한 통씩 오던 것 (21시에 12통) → 한 통 묶음. '받기'를 켠 관리자는 자기 방 요약."""
     now = int(time.time())
     C = -1006660000003
     db, svc, bot, ctx = await billing_world({A: (now + 2 * 86400, None), C: (now + 2 * 86400, None)})
@@ -219,15 +221,18 @@ async def owner_gets_one_combined_digest_admins_get_their_room():
             await db.log_message(cid, (ALICE, BOB)[i % 2].id, 100 + i, f"대화{i}")
         await db.set_setting(cid, "digest_hour", hour_now())
     svc.perms.owner_ids = {ADMIN.id}                       # ADMIN = 오너 (두 방 관리자), ADMIN2 = 일반 관리자
+    await reports.set_pref(db, ADMIN2.id, A, enabled=1)    # ADMIN2 는 A 방만 받기 켬
     assert await reports.run_digests(svc, bot) == 2
     owner = dms(bot, ADMIN.id)
     assert len(owner) == 1, owner
     t = owner[0][2]
     assert "내 방들 하루 요약" in t and "(2개 방)" in t and "업자방1" in t and "업자방3" in t, t
     assert "A방 화제" in t and "C방 화제" in t and "욕설 다툼" in t and "답 못 받은 질문 1개" in t, t
-    assert len(dms(bot, ADMIN2.id, "하루 요약")) == 2          # 일반 관리자는 방마다 자기 방 요약
+    vice = dms(bot, ADMIN2.id, "하루 요약")
+    assert len(vice) == 1 and "업자방1" in vice[0][2] and "업자방3" not in vice[0][2], vice
     assert not dms(bot, ADMIN.id, "📌 <b>오늘 주요 화제</b>")
     assert await reports.run_digests(svc, bot) == 0 and len(dms(bot, ADMIN.id)) == 1
+    assert len(digest_calls(svc)) == 2                     # 받는 사람이 둘이어도 방마다 AI 1번
 
 
 @test
@@ -286,7 +291,7 @@ async def report_screen_admin_only_and_digest_preset():
     assert not q2.edits and q2.answers[0][1] is True, q2.answers
     q3 = FakeQuery(ADMIN.id, ADMIN, f"m:n:{A}:digest_hour:-1")
     await menu.on_callback(svc, bot, q3, q3.data.split(":")[1:])
-    assert (await db.get_settings(A))["digest_hour"] == -1 and "지금: <b>끔</b>" in q3.edits[-1]
+    assert (await db.get_settings(A))["digest_hour"] == -1 and "방 기본 시각: <b>끔" in q3.edits[-1]
 
 
 if __name__ == "__main__":
