@@ -897,16 +897,18 @@ class DB:
         return await self._all("SELECT * FROM invoices WHERE status='pending' AND expires>?", (expires_after,))
 
     async def pending_amounts(self, expires_after: int) -> set[int]:
-        """새 청구서가 피해야 할 금액. 취소한 청구서도 유효시간(+여유) 동안은 그 금액으로 입금이 올 수 있어서 포함."""
+        """새 청구서가 피해야 할 금액. 취소·결제된 청구서도 유효시간(+여유) 동안은 그 금액으로 입금(취소 뒤 입금·
+        두 번 보내기)이 올 수 있어서 포함 → 다른 방 청구서에 잘못 맞지 않고 '확인 필요'로 오너에게 감."""
         return {r["amount_units"] for r in await self._all(
-            "SELECT amount_units FROM invoices WHERE status IN ('pending', 'cancelled') AND expires>?", (expires_after,))}
+            "SELECT amount_units FROM invoices WHERE status IN ('pending', 'cancelled', 'paid') AND expires>?",
+            (expires_after,))}
 
     async def pay_invoice(self, invoice_id: int, tx_id: str, chat_id: int, seconds: int, now_ts: int) -> int | None:
         """청구서 결제 처리 + 구독 연장을 한 번에. 연결을 같이 쓰는 다른 코루틴의 commit 이 두 문장 사이에 끼면
         '결제됨인데 연장 안 됨'이 남을 수 있어서, DB 스레드에서 두 문장을 연달아 실행한다.
         이미 처리·취소된 청구서면 None, 성공하면 새 만료 시각."""
         def run(c: sqlite3.Connection) -> bool:
-            ok = c.execute("UPDATE invoices SET status='paid', tx_id=? WHERE id=? AND status='pending'",
+            ok = c.execute("UPDATE invoices SET status='paid', tx_id=? WHERE id=? AND status IN ('pending', 'expired')",
                            (tx_id, invoice_id)).rowcount > 0
             if ok:
                 c.execute(self._EXTEND_SQL, (chat_id, now_ts + seconds, now_ts, now_ts, seconds, now_ts))
@@ -915,9 +917,11 @@ class DB:
             return None
         return (await self.get_subscription(chat_id))["paid_until"]
 
-    async def payment_invoice_id(self, tx_id: str) -> int | None:
-        row = await self._one("SELECT invoice_id FROM payments WHERE tx_id=?", (tx_id,))
-        return row["invoice_id"] if row else None
+    async def unapplied_payments(self) -> list[aiosqlite.Row]:
+        """청구서와 맞춰 기록됐는데 결제 처리 전에 멈춘 입금 (청구서 열 + pay_tx·from_addr). 취소된 청구서는 이미 오너에게 보고됨."""
+        return await self._all(
+            "SELECT i.*, p.tx_id AS pay_tx, p.from_addr FROM payments p JOIN invoices i ON i.id=p.invoice_id "
+            "WHERE i.status IN ('pending', 'expired')")
 
     async def mark_invoice_paid(self, invoice_id: int, tx_id: str) -> bool:
         cur = await self.conn.execute(
