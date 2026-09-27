@@ -182,13 +182,15 @@ async def main_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineK
     rows = [[InlineKeyboardButton("➕ 내 그룹에 소담 추가하기", url=add_to_group_url(bot.username))],
             [B("⚙️ 내 그룹 관리", "m:groups")]]
     owner = user_id in await svc.perms.owners()
-    extra = [B(label, f"m:{code}") for _, code, label, need in sorted(MAIN_ITEMS) if need != OWNER or owner]
+    admin = owner or (any(n == ADMIN for *_, n in MAIN_ITEMS) and bool(await admin_groups(svc, bot, user_id)))
+    extra = [B(label, f"m:{code}") for _, code, label, need in sorted(MAIN_ITEMS)
+             if need == PUBLIC or (need == ADMIN and admin) or (need == OWNER and owner)]
     rows += _chunks(extra, 2)
     rows.append([B("🪪 내 ID", "m:id"), B("❓ 도움말", "m:help")])
     return text, InlineKeyboardMarkup(rows)
 
 
-# 메인 메뉴에 붙는 버튼 (order, 코드, 글자, PUBLIC|OWNER). 패널 모듈이 추가한다
+# 메인 메뉴에 붙는 버튼 (order, 코드, 글자, PUBLIC|ADMIN(어느 방이든 지금 관리자)|OWNER). 패널 모듈이 추가한다
 MAIN_ITEMS: list[tuple[int, str, str, int]] = []
 
 

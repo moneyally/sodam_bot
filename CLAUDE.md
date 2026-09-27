@@ -84,8 +84,6 @@
   바로 저장 안 하는 이유: 자료는 AI 가 모든 멤버에게 사실처럼 전하는 곳이라 숨은 지시·오해가 조용히 규칙이 되면 안 됨.
 - `.도움말`/`/help`/❓ 메뉴 = "소담에게 이렇게 말해보세요" 예시(`commands.EXAMPLES_MEMBER/ADMIN`, 관리자 = 방 역할 또는 1:1 에선
   어느 방이든 관리자·오너). 명령어 전체는 `.명령어` · 메뉴 [📋 명령어 전체](m:helpc). 메뉴 화면은 `panels/help.py` 가 m:help 를 덮어씀.
-- 알려진 버그(menu.py, 패치 필요): `menu.on_callback` 이 1:1 이 아닌 곳의 버튼을 전부 거절 → 방에 뜬 확인 카드(schedule_task·
-  alert_rule·save_room_rule 의 `m:k:`)를 방에서 누르면 '1:1 채팅에서 열어주세요'. 테스트는 1:1 로 눌러서 못 잡았음.
 - 봇 종료: `memory.shutdown` 이 `casino.SHUTDOWN_HOOKS`(post_shutdown, DB 닫기 전)에 걸려 기억 정리·끼어들기 뒷작업을 취소·대기
   ('Task was destroyed … _extract_later' 경고 없앰), 그 뒤 spawn 은 안 만듦.
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
@@ -211,8 +209,27 @@
 - 보안 강화 = N시간 raid 방어 모드(이미 켜져 있으면 끝 시각만 늦춤) + newbie_link_hours 24↑ + forward_filter off→newbie.
   원래 값·끝 시각은 chat_state anomaly_harden → 되돌림은 그 방 다음 메시지·입장 / 🧭 화면 / 프로세스 타이머 / `anomaly.tick` (재시작해도 됨).
   그 사이 관리자가 직접 바꾼 설정은 안 건드림. 🔓 지금 끄기(m:anmu) 는 우리가 켠 raid 도 끔.
-- **남은 1줄 패치(handlers.py, 이 작업에선 못 고침)**: `job_tick` 의 jobs 에 `("anomaly", lambda bot: anomaly.tick(svc, bot)),`
-  — 없으면 아무 일도 없는 조용한 방은 다음 메시지·입장 때 되돌아감 (raid 방어 모드 자체는 raid.tick 이 제시간에 끔).
+- `handlers.job_tick` 이 `anomaly.tick` 을 부름 → 조용한 방도 보안 강화가 제시간에 되돌아감.
+
+## 📥 운영 인박스 · 🧭 오너 운영센터 · 💸 비용 예측 (`opsdesk.py`, `panels/opsdesk.py`, tests/test_opsdesk.py)
+- 기록된 사실만 코드로 모음 (AI 호출 없음, 사람 점수·우선순위 없음). 📥 = 방마다 아직 손 안 댄 일: 봇 권한 없음·AI 한도 80%↑(%만)·
+  이용 기간 끝남/3일 안·안 누른 방 확인 카드·확인 전 이상징후/사기 의심 알림·예약 실패/자동 꺼짐(ops_events, cron·announce 가 기록)·
+  하루 요약 1:1 막힘. [숨기기] = 사람마다 ops_hidden (키에 날짜·ID → 새 일은 다시 보임).
+- 메인 📥(m:ib) 는 **어느 방이든 지금 TG 관리자·오너에게만 보임** (menu.register_main need=ADMIN — 멤버에겐 빈 화면이라 숨김).
+  그룹 허브 📥(m:ibr) TG 관리자 · 🧭 운영센터(m:opc) · 💸 비용 예측(m:opf) 오너 · 방 관리자 허브 💸(m:fcr) = 자기 방 한도 %만.
+- AI 도구: ops_inbox · owner_command_center(오너 1:1) · cost_forecast(금액은 오너 1:1 만). 전부 read_only.
+
+## 🛡️ 스팸 방패 (AI) (`spamshield.py`, `panels/spamshield.py`, tests/test_spamshield.py · 뮤테이션 20개)
+- **선택 기능, 방마다 기본 꺼짐.** 모드 off / 👁️ 기록만(shadow) / 🔔 관리자 알림. **자동 삭제·제재 없음** (사용자 결정: 대화 막는 건 제외).
+  실험 근거 `tools/spam_lab/RESULTS.md` (알림 등급: 실제 멤버 0/75 오탐 · 합성 스팸 73%). 자동 조치 단계(act)는 실제 👍/👎 데이터 모인 뒤에.
+- 대상 = 신규 입장자(X일, 기본 3)의 처음 N개(기본 5) 메시지. 입장 기록 없으면 봇이 7일 이상 기록한 방에서 처음 말한 게 X일 안일 때만.
+  관리자·자유 멤버·봇·✅ 괜찮음 표시한 사람 제외. 계정 나이는 안 씀 (정상 계정 46% 가 '최근').
+- 판정: AI(v3, mini) 사기 점수 ≥0.8, 또는 강한 신호(지갑·초대링크·운영진 사칭·수익+DM·이름 사칭 / 다른 방 **다른 계정** 같은 링크·지갑·글 /
+  수정 함정: 고쳐서 링크 넣기) + 사기 ≥0.2. 광고 점수는 알림 기준 아님(업자방은 광고 허용). 사람당 1번만 알림.
+- 알림 = '사용자 차단' 권한 관리자 1:1, [🗑 지우기][🔇 뮤트 1일][🚫 밴][✅ 괜찮음] (누를 때 권한 재확인, DB 로 한 번만, 텔레그램 실패면 다시 누를 수 있음).
+  spamshield_verdicts 에 점수·결과·👍/👎 (90일) → 실제 오탐률 측정용. 수정 메시지는 hooks.GROUP_EDIT_HOOKS.
+- 주의: 링크 필터가 먼저 지운 글은 여기 안 옴(기본값이면 신규 링크 24시간 차단) · 🕵️ 사기 의심 검사도 켜면 알림 2통 가능 ·
+  여러 방 겹침 지문(48시간)은 기능이 꺼진 방에서도 모음.
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서

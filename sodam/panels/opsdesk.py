@@ -15,7 +15,7 @@ import time
 from functools import wraps
 
 from .. import costs, menu, opsdesk
-from ..menu import OWNER, PUBLIC, TG_ADMIN, B, HubItem, PanelCtx, Route, Screen
+from ..menu import ADMIN, OWNER, PUBLIC, TG_ADMIN, B, HubItem, PanelCtx, Route, Screen
 from ..subscription import chat_title
 from ..util import esc, to_int
 
@@ -207,7 +207,7 @@ async def s_room_forecast(c: PanelCtx) -> Screen:
 
 
 # ── 등록 ──────────────────────────────────────────────────
-menu.register_main(15, "ib", "📥 처리할 일", PUBLIC)
+menu.register_main(15, "ib", "📥 처리할 일", ADMIN)   # 관리하는 방이 없는 사람에겐 빈 화면이라 숨김
 menu.register_main(91, "opc", "🧭 운영센터", OWNER)
 menu.register_main(93, "opf", "💸 비용 예측", OWNER)
 menu.register_route("ib", Route(s_inbox, PUBLIC, scoped=False))
