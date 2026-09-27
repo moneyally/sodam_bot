@@ -569,9 +569,10 @@ async def r_token(c: PanelCtx) -> Screen:
     t = c.svc.menu_tokens.get(c.arg(0)) or await _stored_token(c.svc, c.arg(0))   # 재시작 뒤엔 DB 에서
     if t and t.user_id != c.uid and t.expires >= time.time():   # 방에 뜬 카드를 남이 눌러도 토큰은 그대로 (주인이 누를 수 있게)
         return Screen(None, toast="요청한 사람만 누를 수 있어요.", alert=True)
-    c.svc.menu_tokens.pop(c.arg(0), None)  # 1회용: 꺼내면서 지움
-    await c.svc.db._write("DELETE FROM menu_tokens WHERE tok=?", (c.arg(0),))
-    if not t or t.expires < time.time() or t.action not in TOKEN_ACTIONS:
+    # 1회용: 메모리에서 꺼냈거나 DB 줄을 지운 쪽만 실행 (재시작 뒤 두 번 빨리 누르면 둘 다 SELECT 로 찾아 두 번 실행됐음)
+    mine = c.svc.menu_tokens.pop(c.arg(0), None) is not None
+    gone = await c.svc.db.atomic(lambda cn: cn.execute("DELETE FROM menu_tokens WHERE tok=?", (c.arg(0),)).rowcount)
+    if not t or not (mine or gone) or t.expires < time.time() or t.action not in TOKEN_ACTIONS:
         return EXPIRED
     fn, fresh = TOKEN_ACTIONS[t.action]
     if not await _allowed(c.svc, c.bot, t.chat_id, c.uid, TOKEN_NEED.get(t.action, ADMIN), fresh):

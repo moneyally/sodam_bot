@@ -22,18 +22,23 @@ CREATE TABLE IF NOT EXISTS free_members (
 
 
 async def is_free(db: DB, chat_id: int, user_id: int) -> bool:
-    return bool(await db._one("SELECT 1 FROM free_members WHERE chat_id=? AND user_id=?", (chat_id, user_id)))
+    """메시지마다 여러 곳(관리 검사·훅들)이 물어서 방마다 목록을 캐시 (add/remove 가 지움)."""
+    async def load():
+        return frozenset(r["user_id"] for r in await db._all("SELECT user_id FROM free_members WHERE chat_id=?", (chat_id,)))
+    return user_id in await db.cached(("free_members", chat_id), load)
 
 
 async def add(db: DB, chat_id: int, user_id: int, by_id: int) -> None:
     await db._write("INSERT OR REPLACE INTO free_members(chat_id, user_id, by_id, ts) VALUES(?, ?, ?, ?)",
                     (chat_id, user_id, by_id, int(time.time())))
+    db.uncache(("free_members", chat_id))
 
 
 async def remove(db: DB, chat_id: int, user_id: int) -> bool:
     if not await is_free(db, chat_id, user_id):
         return False
     await db._write("DELETE FROM free_members WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    db.uncache(("free_members", chat_id))
     return True
 
 

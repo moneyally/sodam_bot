@@ -388,6 +388,22 @@ GROUP_MESSAGE_HOOKS = hooks.GROUP_MESSAGE_HOOKS
 hooks.add_group_message_hook(social.on_group_message)  # AI 기억 정리·끼어들기 (sodam/social.py)
 
 
+TOUCH_SECONDS = 60   # 같은 사람의 이름·마지막 활동(last_seen) 기록 간격 (이름이 바뀌면 바로)
+_touched: dict[tuple, tuple[float, tuple]] = {}
+
+
+def _stale(db, chat_id: int, user) -> bool:
+    """이 사람 기록을 지금 써야 하는지 (처음·이름 바뀜·TOUCH_SECONDS 지남). True 면 쓴 것으로 표시."""
+    key, sig, t = (db.path, chat_id, user.id), (user.username, user.first_name, user.last_name), time.monotonic()
+    hit = _touched.get(key)
+    if hit and hit[1] == sig and t - hit[0] < TOUCH_SECONDS:
+        return False
+    if len(_touched) > 100_000:
+        _touched.clear()
+    _touched[key] = (t, sig)
+    return True
+
+
 async def _run_hook(hook, svc: Services, bot, msg: Message, role: Role) -> None:
     try:
         await hook(svc, bot, msg, role)
@@ -433,11 +449,14 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if chat_id not in seen:
         await _record(svc.db.ensure_chat(chat_id, msg.chat.title))
         seen.add(chat_id)
-    await _record(svc.db.upsert_user(user))
     reply_msg, reply_user = reply_ref(msg)
-    if reply_user:   # 답장받은 사람 이름도 (말 안 한 사람·봇이라도 '↩이름' 이 보이게)
-        await _record(svc.db.upsert_user(msg.reply_to_message.from_user))
-    await _record(svc.db.touch_member(chat_id, user.id))
+    # 이름·마지막 활동은 바뀌었거나 TOUCH_SECONDS 지났을 때만 (메시지마다 쓰기 2번 + commit 이던 것).
+    # upsert_user 는 commit 을 안 해서 둘 중 하나라도 쓰면 touch_member(commit) 까지 같이
+    if _stale(svc.db, chat_id, user) | bool(reply_user and _stale(svc.db, 0, msg.reply_to_message.from_user)):
+        await _record(svc.db.upsert_user(user))
+        if reply_user:   # 답장받은 사람 이름도 (말 안 한 사람·봇이라도 '↩이름' 이 보이게)
+            await _record(svc.db.upsert_user(msg.reply_to_message.from_user))
+        await _record(svc.db.touch_member(chat_id, user.id))
 
     text = msg.text or msg.caption or ""
     try:
@@ -638,11 +657,12 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
     burst = _BURSTS.setdefault(key, [])
     burst.append((msg.message_id, request))
     await asyncio.sleep(BURST_SECONDS)
-    if _BURSTS.get(key) is not burst or burst[-1][0] != msg.message_id:
-        return                                   # 더 늦게 온 말이 한꺼번에 답함
+    # 가장 늦게 보낸 말(메시지 ID)이 한꺼번에 답함 — 처리 순서(동시 처리)는 보낸 순서와 다를 수 있어서 ID 로
+    if _BURSTS.get(key) is not burst or max(burst)[0] != msg.message_id:
+        return
     del _BURSTS[key]
     if len(burst) > 1:
-        request = "\n".join(r for _, r in burst if r)
+        request = "\n".join(r for _, r in sorted(burst) if r)
         scan = security.scan(request)
 
     limiter: RateLimiter = context.bot_data["limiter"]

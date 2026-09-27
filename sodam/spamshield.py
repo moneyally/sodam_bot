@@ -278,8 +278,16 @@ async def _room_first_ts(db, chat_id: int) -> int | None:
     return val
 
 
+NEWCOMER_TTL = 600        # 판단을 기억하는 시간 (다시 입장하면 db.touch_member 가 바로 지움) → 메시지마다 멤버·첫 글 조회 안 함
+
+
 async def newcomer_since(svc, chat_id: int, user_id: int, s: dict, now: int) -> int | None:
     """신규 입장자면 기준 시각(입장 또는 처음 본 때), 아니면 None. (머리말 '대상' 참고)"""
+    return await svc.db.cached(("newcomer", chat_id, user_id),
+                               lambda: _newcomer_since(svc, chat_id, user_id, s, now), NEWCOMER_TTL)
+
+
+async def _newcomer_since(svc, chat_id: int, user_id: int, s: dict, now: int) -> int | None:
     days = int(s.get("spamshield_days") or 3)
     member = await svc.db.get_member(chat_id, user_id)
     joined = member["joined_at"] if member else None

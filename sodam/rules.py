@@ -97,13 +97,21 @@ async def add(svc: Services, chat_id: int, uid: int, spec: dict) -> int:
         (chat_id, uid, spec["trig"], str(spec.get("arg", ""))[:KEYWORD_MAX * 2], spec.get("who", "all"),
          spec["action"], str(spec.get("text", ""))[:300], max(1, min(int(spec.get("cooldown") or 10), 1440)),
          int(time.time())))
+    forget(svc.db, chat_id)
     await svc.db.log_mod(chat_id, uid, None, "setting", f"알림 규칙 #{rid} {spec['trig']}:{spec.get('arg', '')}")
     return rid
 
 
 async def room_rules(db, chat_id: int, enabled_only: bool = False) -> list:
-    return await db._all("SELECT * FROM alert_rules WHERE chat_id=?" + (" AND enabled=1" if enabled_only else "")
-                         + " ORDER BY id", (chat_id,))
+    async def load():
+        return await db._all("SELECT * FROM alert_rules WHERE chat_id=?" + (" AND enabled=1" if enabled_only else "")
+                             + " ORDER BY id", (chat_id,))
+    # 켜진 규칙은 메시지·입장마다 읽음 → 캐시 (규칙을 바꾸는 곳은 forget). 울린 시각·횟수는 _claim 이 DB 에서 봄
+    return await db.cached(("alert_rules", chat_id), load) if enabled_only else await load()
+
+
+def forget(db, chat_id: int) -> None:
+    db.uncache(("alert_rules", chat_id))
 
 
 async def _claim(db, rid: int, now: int, day: str) -> bool:
@@ -127,6 +135,7 @@ async def fire(svc: Services, bot: Bot, r, what: str, msg_id: int | None = None)
         return False
     if not await svc.perms.is_admin(bot, cid, creator):          # 권한은 울릴 때 다시 확인
         await svc.db._write("UPDATE alert_rules SET enabled=0 WHERE id=?", (r["id"],))
+        forget(svc.db, cid)
         return False
     now = int(time.time())
     if not await _claim(svc.db, r["id"], now, datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")):

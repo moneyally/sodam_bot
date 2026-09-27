@@ -2,7 +2,9 @@
 
 - 4명의 역할(오너 / 텔레그램 관리자 / .봇관리자 / 일반 멤버)로 /start·그룹 허브에서 시작해 보이는 m: 버튼을 BFS 로 전부 누른다.
 - 검사: 예외 없음 · q.answer 정확히 1번 · callback_data 64바이트 이하 · 모르는 라우트 없음 · URL 버튼 https/tg 만 ·
-  텔레그램 HTML 규칙(허용 태그·짝 맞춤·4096자) · 버튼 글자 비어있지 않음.
+  텔레그램 HTML 규칙(허용 태그·짝 맞춤·4096자) · 버튼 글자 비어있지 않음 ·
+  막다른 버튼(⬅️ 가 화면 대신 팝업만 / 그 사람에게 보여 준 이 방·방 없는 버튼이 '권한 없음'으로 거절).
+- 1:1 알림처럼 메뉴 밖으로 보내는 버튼은 시드가 add_buttons(실제 키보드) → 역할마다 시작점으로 누른다.
 - 권한 퍼징: 관리자가 본 방 단위 버튼을 멤버가 그대로 눌러도 전부 거절되는지, TG_ADMIN 전용을 봇관리자가 눌러도 거절되는지.
 - render_markdown() 은 사람이 읽는 화면 모음(docs/SCREENS.md) 을 만든다.
 
@@ -169,12 +171,19 @@ async def make_world():
     for uid in PERSONAS:
         await db.upsert_user(fake_user(uid, PERSONAS[uid]))
         await db.touch_member(CHAT, uid)
+    EXTRA_STARTS.clear()
     for fn in SEEDERS:  # 패널 모듈이 자기 데이터(예약공지·자료 등)를 넣을 수 있게
         await fn(svc)
     return db, svc, FakeBot()
 
 
 SEEDERS: list = []
+# 메뉴 밖(1:1 알림·하루 요약 등)으로 보내는 버튼: 시드가 add_buttons(실제 알림의 키보드)로 넣으면 시작점으로 누른다
+EXTRA_STARTS: list[str] = []
+
+
+def add_buttons(kb) -> None:
+    EXTRA_STARTS.extend(b.callback_data for b in _buttons(kb) if (b.callback_data or "").startswith("m:"))
 
 
 def _buttons(kb):
@@ -210,6 +219,8 @@ async def press(svc, bot, uid, data) -> HQuery:
 async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
     who = PERSONAS[uid]
     seen: set[str] = set()
+    shown: dict[str, str] = {}   # 화면에 보인 버튼 → 글자
+    dead: dict[str, str] = {}    # 눌렀더니 화면 없이 경고 팝업만 → 팝업 글
     queue = deque(starts)
     while queue and rep.presses < MAX_PRESSES:
         data = queue.popleft()
@@ -237,15 +248,33 @@ async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
                 if len(re.sub(r"<[^>]+>", "", cap)) > 1024:
                     rep.issues.append(f"[{who}] {data}: 캡션 1024자 초과")
                 screens.append((f"[{c[0][5:]}] " + cap, c[4].get("reply_markup")))
+        if not screens and q.answers and q.answers[0][1]:
+            dead[data] = toast or ""
         for text, kb in screens:
             _check_screen(rep, who, data, text, kb)
             rep.shots.append(Shot(uid, data, text, kb, toast))
             for b in _buttons(kb):
                 cd = b.callback_data
+                if cd and cd.startswith("m:"):
+                    shown.setdefault(cd, b.text or "")
                 if cd and cd.startswith("m:") and cd not in seen:
                     if len(cd.split(":")) > 2 and menu.CID_RE.fullmatch(cd.split(":")[2] or "x"):
                         rep.scoped_seen.setdefault(cd, who)
                     queue.append(cd)
+    # 막다른 버튼: 보여 준 버튼을 그 사람이 눌렀는데 화면 없이 팝업만 (⬅️ 되돌아가기 전부 · 이 방/방 없는 버튼의 '권한 없음')
+    for cd, why in dead.items():
+        label = shown.get(cd)
+        if label is None:           # 시작점(1:1 알림 버튼)으로만 누른 것
+            continue
+        parts = cd.split(":")
+        here = len(parts) < 3 or not menu.CID_RE.fullmatch(parts[2]) or int(parts[2]) == CHAT
+        if label.startswith("⬅️"):
+            rep.issues.append(f"[{who}] {cd}: ⬅️ 버튼이 화면으로 안 돌아감 ({why})")
+        elif here and DENIED.search(why):
+            rep.issues.append(f"[{who}] {cd}: 보여 준 버튼 [{label}] 인데 누르면 거절 ({why})")
+
+
+DENIED = re.compile(r"관리자만|오너만|권한")
 
 
 def load_seeders() -> None:
@@ -261,7 +290,7 @@ async def crawl() -> tuple[Report, object, object]:
     rep = Report()
     for uid in (OWNER, TG, BOTADM, MEMBER):  # 역할마다 새 세상 (앞 역할이 지운 목록을 다음 역할이 못 보는 일 없게)
         db, svc, bot = await make_world()
-        await crawl_as(svc, bot, uid, rep, ["m:home", "m:groups", f"m:g:{CHAT}"])
+        await crawl_as(svc, bot, uid, rep, ["m:home", "m:groups", f"m:g:{CHAT}", *EXTRA_STARTS])
     if rep.presses >= MAX_PRESSES:
         rep.issues.append(f"[하네스] 버튼을 {MAX_PRESSES}번 눌러서 중간에 멈춤 — MAX_PRESSES 를 늘리거나 시드 데이터를 줄일 것")
     db, svc, bot = await make_world()
