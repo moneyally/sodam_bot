@@ -65,7 +65,7 @@ def invoice_text(svc: Services, inv, title: str) -> str:
         f"유효 시간: {_date(inv['expires'], svc.cfg.tz)} 까지\n\n"
         "⚠️ 다른 네트워크(ERC20·BEP20)나 다른 금액으로 보내면 자동 확인이 안 돼요.\n"
         "⚠️ 거래소에서 보낼 땐 출금 수수료를 뺀 금액이 아니라 <b>위 금액이 그대로 도착</b>해야 해요.\n"
-        "보낸 뒤 [✅ 입금했어요] 를 누르세요. 자동으로도 1분마다 확인해요 (트론 확정까지 1~3분)."
+        "보낸 뒤 [✅ 입금했어요] 를 누르세요. 자동으로도 30초마다 확인해요 (트론 확정까지 1~3분)."
     )
 
 
@@ -126,7 +126,8 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         await q.answer("이미 결제가 확인됐어요 ✅", show_alert=True)
         return
     if inv["status"] in ("cancelled", "expired"):
-        await q.answer("끝난 청구서예요. 새로 결제하려면 .구독 을 다시 눌러주세요.", show_alert=True)
+        await q.answer("끝난 청구서예요. 이미 보내셨다면 다시 보내지 마세요 — 운영자가 확인해서 처리해드려요. "
+                       "아직 안 보냈으면 .구독 을 다시 눌러 새 청구서로.", show_alert=True)
         return
 
     if action == "cancel":
@@ -145,7 +146,10 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         await q.answer("확인 중…")
         await run_check(svc, bot)
         inv = await svc.db.get_invoice(inv["id"])
-        if inv["status"] != "paid":
+        if inv["status"] == "expired":
+            await bot.send_message(q.from_user.id, "청구서 시간이 지났어요. 이미 보내셨다면 다시 보내지 마세요 — "
+                                                   "운영자에게 확인 요청이 가서 직접 처리해드려요.")
+        elif inv["status"] != "paid":
             await bot.send_message(q.from_user.id, "아직 입금이 확인되지 않았어요. 트론 네트워크 확정까지 1~3분 걸려요. "
                                                    "자동으로 계속 확인하고, 확인되면 바로 알려드릴게요.")
         return
