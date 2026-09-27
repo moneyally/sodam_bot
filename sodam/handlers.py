@@ -507,9 +507,13 @@ async def on_group_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not text:
         return
     try:
-        if await svc.perms.role(bot, msg.chat_id, msg.from_user.id) >= Role.ADMIN \
-                or await free.is_free(svc.db, msg.chat_id, msg.from_user.id):   # 자유 멤버는 자동 통제 없음
+        role = await svc.perms.role(bot, msg.chat_id, msg.from_user.id)
+        if role >= Role.ADMIN or await free.is_free(svc.db, msg.chat_id, msg.from_user.id):   # 자유 멤버는 자동 통제 없음
             return
+        for hook in hooks.GROUP_EDIT_HOOKS:   # 수정 함정 검사 등 (sodam/spamshield.py) — 백그라운드, 실패해도 계속
+            task = asyncio.create_task(_run_hook(hook, svc, bot, msg, role))
+            context.bot_data.setdefault("tasks", set()).add(task)
+            task.add_done_callback(context.bot_data["tasks"].discard)
         if not await svc.perms.bot_can_moderate(bot, msg.chat_id):
             return
         notice = await svc.mod.check_edited(bot, msg, text)
