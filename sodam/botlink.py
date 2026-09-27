@@ -10,6 +10,7 @@
 - 👀 observe: 다른 봇 글을 botlink_msgs 에 기록(7일) → AI 읽기 도구 other_bot_results (봇 글 = 데이터, ctx.tainted).
   🎮 믿는 봇이 사람 글에 단 답장(게임 결과)은 장시간 게임 알림(gametime)의 게임 활동으로도 셈.
 - 🤖 interact: 관리자 AI 도구 bot_command 로 믿는 봇에게 '/명령@그봇 인자' 한 줄 (처음 쓰는 봇·명령은 방에 확인 카드).
+  intent(play·skip…)+query 면 🎓 봇 명령 프로필(sodam/botskills.py)에서 그 봇의 명령을 골라 씀.
 - 소담은 봇 글에 절대 자동으로 반응하지 않는다: handlers.on_group_message 가 봇 글은 맨 앞에서 hooks.BOT_MESSAGE_HOOKS
   (이 파일)만 부르고 끝냄 → 관리·명령·게임·AI·끼어들기·태그 알림·알림 규칙 전부 안 탐. 보내는 건 사람(관리자) 요청으로만,
   봇 글을 읽은 답변(tainted)에선 못 보내고, 답변 한 번에 1번, 방 분당/하루 한도, 방·봇 쌍 분당 주고받기 한도, 연속 깊이 한도.
@@ -98,7 +99,23 @@ CREATE TABLE IF NOT EXISTS botlink_sent (
     by_user INTEGER NOT NULL,
     ts      INTEGER NOT NULL
 );
-""", migrate={"botlink_bots": "composite", "botlink_msgs": "drop", "botlink_cmds": "composite", "botlink_sent": "plain"})
+-- 🎓 봇 명령 프로필 (sodam/botskills.py): 명령·인자 모양·어디서 알았나(preset|manual|seen|helper)·하는 일(intent)
+CREATE TABLE IF NOT EXISTS botlink_skills (
+    chat_id   INTEGER NOT NULL,
+    bot_id    INTEGER NOT NULL,
+    command   TEXT NOT NULL,
+    args_hint TEXT NOT NULL DEFAULT '',
+    source    TEXT NOT NULL,
+    intent    TEXT NOT NULL DEFAULT 'other',
+    updated   INTEGER NOT NULL,
+    count     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, bot_id, command)
+);
+""", migrate={"botlink_bots": "composite", "botlink_msgs": "drop", "botlink_cmds": "composite", "botlink_sent": "plain",
+              "botlink_skills": "composite"})
+
+# 다른 봇 글을 기록한 뒤 불림 (sodam/botskills.py 명령 배우기): async fn(svc, bot, msg, status, now). 방에 보내지 말 것.
+SEEN_HOOKS: list = []
 
 
 @dataclass
@@ -221,6 +238,11 @@ async def on_bot_message(svc: Services, bot: Bot, msg) -> None:
                 st.replies.pop(next(iter(st.replies)))
     if to_user and status == "trusted" and s["gt_enabled"]:     # 🎮 믿는 게임봇의 결과 = 그 사람의 게임 활동
         await gametime.record(svc.db, cid, to_user, s["gt_gap"], ts)
+    for fn in SEEN_HOOKS:
+        try:
+            await fn(svc, bot, msg, status, now)
+        except Exception:
+            log.exception("botlink seen hook %s failed", getattr(fn, "__name__", fn))
 
 
 async def on_bot_edit(svc: Services, bot: Bot, msg) -> None:
@@ -279,9 +301,10 @@ async def recent(db, chat_id: int, bot_id: int | None = None, limit: int = 10, s
 async def set_status(db, chat_id: int, bot_id: int, status: str) -> None:
     def work(c):
         c.execute("UPDATE botlink_bots SET status=? WHERE chat_id=? AND bot_id=?", (status, chat_id, bot_id))
-        if status == "ignored":   # 무시 = 기록도 지움, 허용 명령도 지움
+        if status == "ignored":   # 무시 = 기록도 지움, 허용 명령·배운 명령도 지움
             c.execute("DELETE FROM botlink_msgs WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
             c.execute("DELETE FROM botlink_cmds WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
+            c.execute("DELETE FROM botlink_skills WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
         elif status == "seen":    # 믿음 해제 = 허용 명령도 지움
             c.execute("DELETE FROM botlink_cmds WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
     await db.atomic(work)
@@ -303,18 +326,27 @@ async def approved(db, chat_id: int, bot_id: int, head: str) -> bool:
 
 
 # ── 보내기 ────────────────────────────────────────────────
-CMD_RE = re.compile(r"/([A-Za-z0-9_]{1,32})(?:@\w{1,64})?(?: (.{1,64}))?")
+MAX_ARG = 64           # 보통 인자
+MAX_ARG_WIDE = 100     # 재생·검색(play/search): '가수 - 곡 (feat. 누구) 라이브' 같은 곡명이 64자를 넘고, 유튜브 주소만 43자라
+                       # 곡명+주소가 들어가게. 여전히 한 줄·링크는 유튜브 두 모양만.
+CMD_RE = re.compile(r"/([A-Za-z0-9_]{1,32})(?:@\w{1,64})?(?: (.{1,%d}))?" % MAX_ARG_WIDE)
 BAD_ARG = re.compile(r"[@/<>\\`]|https?:|t\.me", re.I)
+# 재생·검색에서만 허용하는 링크: https://youtu.be/<11자> · https://www.youtube.com/watch?v=<11자> (다른 쿼리·도메인 X)
+YT_LINK = re.compile(r"(?<!\S)https://(?:youtu\.be/|www\.youtube\.com/watch\?v=)[A-Za-z0-9_-]{11}(?!\S)")
 
 
-def build(raw: str, username: str) -> tuple[str, str] | None:
-    """AI·관리자가 준 명령 → ('/머리', '/머리@그봇 인자'). 한 줄 · '/' 명령 하나 · 인자 64자 · 멘션·링크·다른 명령 없음."""
+def build(raw: str, username: str, wide: bool = False) -> tuple[str, str] | None:
+    """AI·관리자가 준 명령 → ('/머리', '/머리@그봇 인자'). 한 줄 · '/' 명령 하나 · 인자 64자 · 멘션·링크·다른 명령 없음.
+    wide(재생·검색) = 인자 100자 + 유튜브 링크(YT_LINK)만 허용."""
     raw = " ".join(str(raw).split())
     m = CMD_RE.fullmatch(raw)
     if not m or not username:
         return None
     args = m.group(2) or ""
-    if BAD_ARG.search(args) or scan(args).blocked:
+    if len(args) > (MAX_ARG_WIDE if wide else MAX_ARG):
+        return None
+    rest = YT_LINK.sub(" ", args) if wide else args
+    if BAD_ARG.search(rest) or scan(rest).blocked:
         return None
     return "/" + m.group(1).lower(), f"/{m.group(1)}@{username}" + (f" {args}" if args else "")
 

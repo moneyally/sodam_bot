@@ -1,4 +1,5 @@
-"""하네스 데이터: 🤝 다른 봇 연동 — 명령까지 모드 + 봇 3개(믿음·기록만·무시) + HTML 특수문자·링크가 든 봇 글·허용 명령."""
+"""하네스 데이터: 🤝 다른 봇 연동 — 명령까지 모드 + 봇 3개(믿음·기록만·무시) + HTML 특수문자·링크가 든 봇 글·허용 명령
++ 🎓 배운 명령(📌직접·👀본 것·🔧헬퍼, 설명에 & · 긴 명령 이름) → ✏️/🗑/묶음 버튼까지 누름."""
 import time
 
 import harness
@@ -21,6 +22,12 @@ async def seed(svc):
                         (cid, bid, 9100 + i, now - 60 * i, text, to_user))
     await db._write("INSERT INTO botlink_cmds(chat_id, bot_id, command, added_by, ts) VALUES(?, 770001, '/dice', ?, ?)",
                     (cid, harness.TG, now))
+
+    for bid, cmd, hint, source, intent in [
+            (770001, "/dice", "", "preset", "dice"), (770001, "/bet", "{금액 & 배수}", "manual", "bet"),
+            (770001, "/" + "x" * 32, "{…}", "seen", "other"), (770002, "/play", "노래 재생 & 신청", "helper", "play")]:
+        await db._write("INSERT INTO botlink_skills(chat_id, bot_id, command, args_hint, source, intent, updated, count) "
+                        "VALUES(?,?,?,?,?,?,?,1)", (cid, bid, cmd, hint, source, intent, now))
 
 
 harness.SEEDERS.append(seed)
