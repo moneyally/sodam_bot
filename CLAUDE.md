@@ -89,9 +89,14 @@
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
   인사했다고만 하고 안 보내서였음 → 진짜 Greeter 로. 인사 꺼진 방은 AI 가 greet_members 로 멘션.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
-- 생각하는 에이전트(`AGENT_THINK` off 기본/auto/always, tests/test_agent_think.py): auto = 코드 규칙(`agent.wants_thinking`: 이유·분석 질문,
-  일이 둘 이상 이어진 요청, '걔' 같은 지시어)만 Responses API(추론+도구 동시, `llm.think`, 암호화 추론을 라운드 사이 전달)로.
-  400 이면 그 실행은 예전 방식. **아직 실제 호출로 검증 안 함** — 켜기 전에 `ai_eval_tools.py` 를 off/auto 로 한 번씩 (39개, 약 $1~2, 사용자 승인 필요).
+- **Codex식 에이전트 루프** (openai/codex 분석 반영, tests/test_agent_think.py·test_agent_codex.py): `AGENT_THINK` 기본 **auto** =
+  오너·관리자 요청(call/follow)은 전부 + 멤버는 `wants_thinking` 규칙에 걸릴 때만 Responses API(추론 low + 도구, `llm.think`, 암호화 추론
+  이어 넣기, verbosity low). 멤버 잡담·끼어들기는 chat.completions. MAX_STEPS 8 + 실행당 $0.05 상한(RUN_USD_CAP), 부드러운 실패엔
+  `tools.retry_hint`(다른 인자·도구로 한 번 더), 권한·보안·제재·한도·카드 결과엔 안 붙임. 프롬프트 '끝까지 해결·지어내지 않기'.
+  실측(2026-09-28, 39문제): 끔 38/39 $0.0094/요청 → auto 38/39 $0.0122 (+30%). 37번 '보고 괜찮으면 바꿔줘' 는 같은 답변에서
+  simulate 뒤 change_setting 을 코드가 보류(ctx.simulated)해서 설정은 안 바뀌고 '바꿔'를 물음 (평가표엔 도구 시도로 ❌ 남음).
+- 선택지 버튼(`panels/askchoice.py` ask_choice, Codex request_user_input): 2~4개 버튼, 요청자만·10분·한 번만, 누르면 그 선택으로 이어서 실행.
+- 기억 품질(tests/test_memory_quality.py): 명시/추정 태그('(추정)' 표시), 정정은 replaces 로 덮어씀, 쓰인 횟수로 남기고 60일 안 쓰면 만료, add_facts 는 db.atomic.
 - 보내기 전 검사(`agent._CLAIM`, tests/test_agent_verify.py): 한 실행에서 도구를 하나도 안 불렀는데 '뮤트했어요·등록 완료' 같은 답이면
   system 검사 문구로 **한 번만** 다시 물음 (Claude Code stop hook 방식, 추가 호출은 이 경우만).
 - **AI 키로 하는 테스트(ai_live·ai_eval_*)는 사용자 허락 없이 돌리지 않는다** (사용자 결정 2026-09-28: 비용). 오프라인 가짜 LLM 으로.

@@ -603,6 +603,7 @@ def sim_text(r: SimResult, tz) -> tuple[str, bool]:
 
 
 async def t_simulate(ctx: ToolCtx, a: dict) -> str:
+    ctx.simulated = True   # 이 답변에선 설정을 바로 안 바꿈 — 결과를 보여주고 관리자가 다음 말로 정함 (tools.t_change_setting)
     if ctx.chat_id > 0:
         return "1:1 채팅이라 방 기록이 없음."
     change = str(a.get("change") or "")

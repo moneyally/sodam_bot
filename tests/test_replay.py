@@ -342,3 +342,14 @@ async def replay_matches_moderation_decisions():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(run_all())
+
+
+@test
+async def simulate_then_change_in_same_answer_is_held():
+    """실제 평가 실패(37번): '보고 괜찮으면 바꿔줘' 에 미리보기 결과도 안 보여주고 같은 답변에서 바로 바꿈 → 이 답변에선 보류."""
+    db, svc, bot, now = await sim_world(link_filter=False)
+    _, ctx = await sim(svc, bot, {"change": "link_filter", "value": "on"})
+    res = await tools.execute("change_setting", '{"key": "link_filter", "value": "on"}', ctx)
+    assert "아직 안 바꿈" in res and tools.RETRY_HINT not in res and not (await db.get_settings(Room.CHAT))["link_filter"], res
+    fresh = ToolCtx(svc, bot, Room.CHAT, fake_user(BOSS.id, "방장"), Role.ADMIN, await db.get_settings(Room.CHAT))
+    assert "설정 변경" in await tools.execute("change_setting", '{"key": "link_filter", "value": "on"}', fresh)

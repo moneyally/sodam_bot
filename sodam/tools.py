@@ -753,6 +753,9 @@ async def t_ban(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
+    if getattr(ctx, "simulated", False):   # 실제 평가 실패: '보고 괜찮으면 바꿔줘' 에 결과도 안 보여주고 바로 바꿈
+        return ("아직 안 바꿈: 이 답변에서 방금 미리 돌려봤으니, 결과를 관리자에게 먼저 보여주고 "
+                "'바꿔'라고 하면 그때 바꾼다고 안내할 것.")
     key, value = str(a.get("key", "")), str(a.get("value", ""))
     try:
         parsed = coerce(key, value)
