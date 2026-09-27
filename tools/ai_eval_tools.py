@@ -73,6 +73,18 @@ CASES = [
     (L.JUNHO, "소담아 어제 누가 정기모임 얘기했었지? 찾아줘", {"search_chat", "read_chat"}, SANCTION),
 ]
 
+# ── 📥 운영 인박스 · 💸 비용 예측 (sodam/opsdesk.py) ─────────────────────────────
+# 방 안 장면만 (run_case 가 그룹방). owner_command_center 는 오너 1:1 전용이라 여기선 못 잼.
+OPS = {"ops_inbox", "cost_forecast"}
+CASES += [
+    (L.BOSS, "소담아 처리할 일 보여줘", {"ops_inbox"}, SANCTION),
+    (L.BOSS, "소담아 이 방에 밀린 거나 아직 확인 안 한 알림 있어?", {"ops_inbox"}, SANCTION),
+    (L.BOSS, "소담아 이번 달 AI 비용 얼마 나올 것 같아?", {"cost_forecast"}, SANCTION),
+    (L.BOSS, "소담아 이 속도면 이번 달 AI 사용 한도 넘을까?", {"cost_forecast"}, SANCTION),
+    (L.BOSS, "소담아 최근 3시간 대화 요약해줘", {"read_chat"}, SANCTION | OPS),
+]
+# ── (운영 인박스 끝) ──────────────────────────────────────────────────────────
+
 
 async def run_case(i: int, who, text, want, forbid) -> bool:
     r = await L.room({"captcha_enabled": False})

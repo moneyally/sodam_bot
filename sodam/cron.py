@@ -108,6 +108,7 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
         if not creator or not await svc.perms.is_admin(bot, cid, creator):
             await svc.db.set_schedule_enabled(cid, row["id"], False)
             log.info("cron #%s off: creator %s no longer admin", row["id"], creator)
+            await _ops_fail(svc, row, "creator")
             return False
         title = esc(row["title"]) if row["title"] else ""
         to_me = row["deliver"] == "me"   # 만든 관리자 1:1 로 (방엔 안 올림)
@@ -130,11 +131,20 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
         return True
     except BudgetExceeded:
         log.info("cron #%s skipped: AI budget", row["id"])
+        await _ops_fail(svc, row, "budget")
     except TelegramError as e:
         log.warning("cron #%s send failed: %s", row["id"], e)
+        await _ops_fail(svc, row, "send", e.message)
     except Exception:
         log.exception("cron #%s failed", row["id"])
+        await _ops_fail(svc, row, "error")
     return False
+
+
+async def _ops_fail(svc: Services, row, why: str, detail: str = "") -> None:
+    """📥 운영 인박스용 기록 (sodam/opsdesk.py, 예전엔 로그에만 남아 관리자가 몰랐음). 기록 실패는 opsdesk 가 삼킴."""
+    from . import opsdesk   # 늦게 import (opsdesk → tools → cron 순환 방지)
+    await opsdesk.schedule_failed(svc, row, why, detail)
 
 
 def describe(row) -> str:
