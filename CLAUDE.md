@@ -280,6 +280,9 @@
 - 감시: `tools/supervise.sh` (죽으면 5초 뒤·하트비트 3분 멈추면 재시작, flock 으로 하나만). 세션 시작 훅(~/.claude/settings.json)이 켬.
 - 감시 자체를 바꿔 다시 켤 땐 `pkill -f` 에 명령줄 글자를 쓰지 말 것 (그 명령을 실행한 셸도 같이 죽음). PID 로 kill → 훅 명령으로 다시 켬.
 - 컨테이너가 회수되면 안에서는 못 살림 → Routine '소담 봇 생존 확인'(매시 49분)이 세션을 깨워 훅이 다시 켬. 최대 약 1시간 공백.
+- **VPS 이사**: `deploy/migrate_from_container.md` (install.sh·systemd·update.sh·backup.sh). 이사 뒤엔 컨테이너에서 봇을 켜지 말 것
+  (같은 토큰 두 곳 = 409 Conflict + DB 갈라짐). 컨테이너 → VPS ssh(22)는 막혀 있음 → 배포는 GitHub main 푸시 → 서버 `sodam-update`
+  (또는 `sodam-autoupdate.timer`), 테스트 통과해야 재시작·시작 로그 없으면 자동 되돌림. 딜러 봇 하트비트는 `data/heartbeat-dealer`.
 
 ## 실행 환경 메모 (윈도우 + Claude 데스크톱 앱)
 - Claude 앱은 AppData 를 `…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…` 로 가상화함 → 앱 내부에서 설치한 python/git 경로가 앱 밖 터미널에선 다름.

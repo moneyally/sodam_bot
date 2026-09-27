@@ -152,56 +152,94 @@ def systemd_unit_fields():
     assert kv["StandardOutput"] == "journal"
 
 
-def _fake_repo(tests_pass: bool) -> tuple[Path, Path]:
-    """update.sh 를 돌릴 가짜 저장소 (원격 → 클론). 재시작은 가짜 systemctl 이 로그에 기록."""
+_GIT = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]  # 테스트용 저장소는 서명 없이
+
+
+def _fake_repo(tests_pass: bool, new_commit: bool = True) -> tuple[Path, Path]:
+    """update.sh 를 돌릴 가짜 저장소 (원격 → 클론 → 원격에 새 커밋). 재시작은 가짜 systemctl 이 로그에 기록,
+    가짜 journalctl 은 base/start_ok 가 있을 때만 '시작! (버전 <클론 HEAD>' 를 냄."""
     base = _tmp()
     origin = base / "origin"
     (origin / "tests").mkdir(parents=True)
     (origin / "deploy").mkdir()
     (origin / "requirements.txt").write_text("")
-    (origin / "tests" / "run_all.py").write_text(f"import sys; sys.exit({0 if tests_pass else 1})\n")
+    (origin / "tests" / "run_all.py").write_text("import sys; sys.exit(0)\n")
     shutil.copy(ROOT / "deploy" / "update.sh", origin / "deploy" / "update.sh")
-    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]  # 테스트용 저장소는 서명 없이 (환경 서명 설정에 안 묶이게)
-    subprocess.run(git + ["init", "-q", str(origin)], check=True)
-    subprocess.run(git + ["-C", str(origin), "add", "-A"], check=True)
-    subprocess.run(git + ["-C", str(origin), "commit", "-qm", "init"], check=True)
+    subprocess.run(_GIT + ["init", "-q", "-b", "main", str(origin)], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "init"], check=True)
     clone = base / "clone"
     subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    if new_commit:
+        (origin / "tests" / "run_all.py").write_text(f"import sys; sys.exit({0 if tests_pass else 1})\n")
+        (origin / "NEW").write_text("new\n")
+        subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+        subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "new"], check=True)
     log = base / "systemctl.log"
-    fake = base / "systemctl"
-    fake.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\n")
-    fake.chmod(0o755)
+    for name, body in (("systemctl", f'echo "$@" >> {log}'),
+                       ("journalctl", f'[ -f {base}/start_ok ] && echo "소담 (@t) 시작! (버전 $(git -C {clone} rev-parse --short HEAD)) 모델=x"; true')):
+        (base / name).write_text(f"#!/bin/sh\n{body}\n")
+        (base / name).chmod(0o755)
     return clone, log
 
 
 def _run_update(clone: Path, log: Path) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PY": PY, "SYSTEMCTL": str(log.parent / "systemctl"), "PIP_NO_INDEX": "1"}
+    base = log.parent
+    env = {**os.environ, "PY": PY, "SYSTEMCTL": str(base / "systemctl"), "JOURNALCTL": str(base / "journalctl"),
+           "RUN_AS": "", "START_WAIT": "1", "LOCK": str(base / "update.lock"), "TMPDIR": str(base), "PIP_NO_INDEX": "1"}
     return subprocess.run(["bash", str(clone / "deploy" / "update.sh")], env=env, capture_output=True, text=True,
                           timeout=120)
+
+
+def _head(clone: Path) -> str:
+    return subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
 
 
 @test
 def update_sh_stops_when_tests_fail():
     clone, log = _fake_repo(tests_pass=False)
+    before = _head(clone)
     r = _run_update(clone, log)
     assert r.returncode != 0, r.stdout + r.stderr
     assert not log.exists() or "restart" not in log.read_text(), log.read_text()
+    assert _head(clone) == before, "테스트 실패인데 코드가 바뀜"
 
 
 @test
 def update_sh_stops_when_pull_fails():
     clone, log = _fake_repo(tests_pass=True)
-    shutil.rmtree(clone.parent / "origin")          # 원격 없음 → git pull 실패
+    shutil.rmtree(clone.parent / "origin")          # 원격 없음 → git fetch 실패
     r = _run_update(clone, log)
     assert r.returncode != 0 and not log.exists(), r.stdout + r.stderr
 
 
 @test
+def update_sh_noop_without_new_commit():
+    clone, log = _fake_repo(tests_pass=True, new_commit=False)
+    r = _run_update(clone, log)
+    assert r.returncode == 0 and not log.exists(), r.stdout + r.stderr
+
+
+@test
 def update_sh_restarts_when_tests_pass():
     clone, log = _fake_repo(tests_pass=True)
+    (log.parent / "start_ok").write_text("")
     r = _run_update(clone, log)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "restart sodam" in log.read_text()
+    short = subprocess.run(["git", "-C", str(clone), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout
+    assert (clone / "VERSION").read_text() == short
+    assert "new" in subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%s"], capture_output=True, text=True).stdout
+
+
+@test
+def update_sh_rolls_back_when_start_line_missing():
+    clone, log = _fake_repo(tests_pass=True)
+    before = _head(clone)
+    r = _run_update(clone, log)                     # start_ok 없음 → '시작! (버전' 안 뜸
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert _head(clone) == before, "시작 실패인데 이전 커밋으로 안 돌아감"
+    assert log.read_text().count("restart sodam") == 2, log.read_text()   # 새 버전 1번 + 되돌린 버전 1번
 
 
 # ── 4. 복원 검증 ─────────────────────────────────────────

@@ -2,9 +2,9 @@
 Description=Sodam heartbeat check every minute
 
 [Timer]
-# 시작 직후엔 heartbeat 가 아직 없을 수 있어서 3분 뒤부터
 OnBootSec=3min
 OnUnitActiveSec=1min
+AccuracySec=10s
 
 [Install]
 WantedBy=timers.target

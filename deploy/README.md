@@ -1,40 +1,36 @@
-# 서버 배포 (systemd)
+# 서버 배포 (Ubuntu 24.04 + systemd)
 
-## 0. 옛 서버 봇부터 끄기 (필수)
-- 같은 봇 토큰으로 polling 을 두 곳에서 하면 텔레그램이 `409 Conflict` 를 내고 둘 다 업데이트를 놓친다.
-  **새 서버를 켜기 전에 옛 서버(PC·클라우드 세션 포함) 봇을 먼저 끈다.**
-- SQLite(`data/sodam.db`)는 네트워크 공유(NFS·SMB·동기화 폴더)로 두 서버가 같이 쓸 수 없다(잠금 깨짐 → DB 손상).
-  옮길 땐: 옛 봇 정지 → 옛 서버에서 `.백업` 또는 `data/backups/` 최신 `.db.gz` 를 복사 → 새 서버에서 복원(아래) → 새 봇 시작.
+처음 옮기는 거라면 → **[migrate_from_container.md](migrate_from_container.md)** (단계별, 약 15분).
 
-## 1. 설치 (Ubuntu 예시)
+## 구성
+| 경로 | 내용 | 소유 |
+|---|---|---|
+| `/opt/sodam` | git 저장소 (코드), `.venv`, `.env`(640 root:sodam), `VERSION` | root (봇은 읽기만) |
+| `/opt/sodam/data` | `sodam.db`(WAL)·`heartbeat`·`heartbeat-dealer`·봇 자체 백업 `backups/` | sodam (700) |
+| `/opt/sodam/backups` | 매일 04:30 외부 백업 `sodam-*.db.gz`, 14일 | sodam (700) |
+
+| 파일 | 하는 일 |
+|---|---|
+| `install.sh` | 서버 준비 + 설치/갱신 + `.env`·DB·이사 꾸러미 가져오기 + 유닛 등록·시작 (여러 번 실행해도 안전) |
+| `sodam.service` / `sodam-dealer.service` | 메인 봇 / 딜러 봇(`.env.dealer` 있을 때만). `Restart=always`·`RestartSec=5`·SIGTERM 후 60초 정상 종료·샌드박스(`ProtectSystem=strict`, 쓰기는 data 만) |
+| `sodam-health.timer` → `healthcheck.sh` | 1분마다: 켜진 지 3분 넘은 봇의 하트비트가 180초 넘게 멈췄으면 그 봇만 재시작 (`tools/supervise.sh` 와 같은 규칙) |
+| `sodam-backup.timer` → `backup.sh` | `data/*.db` 온라인 백업(sqlite 백업 API, WAL 안전) + integrity_check + gzip, 14일 지난 것 삭제. rclone 예시 주석 |
+| `update.sh` (`sodam-update`) | fetch → 새 커밋을 임시 폴더에서 `tests/run_all.py` → 통과해야 ff 적용·`VERSION`·재시작 → 90초 안에 `시작! (버전 <커밋>` 없으면 이전 커밋으로 되돌림 |
+| `sodam-autoupdate.timer` | (선택, `install.sh --auto-update`) 10분마다 `update.sh --quiet` |
+| `export_bundle.sh` | 옛 서버에서: 봇 끈 뒤 `.env`+DB 를 암호화 꾸러미로 (`--telegram` 이면 오너 1:1 로 전송) |
+
+## 자주 쓰는 것
 ```bash
-sudo useradd -r -m -d /opt/sodam sodam                     # root 가 아닌 전용 사용자
-sudo -u sodam git clone https://github.com/<계정>/sodam_bot /opt/sodam/sodam_bot
-sudo -u sodam python3 -m venv /opt/sodam/venv
-sudo -u sodam /opt/sodam/venv/bin/pip install -r /opt/sodam/sodam_bot/requirements.txt
-sudo -u sodam cp .env /opt/sodam/sodam_bot/.env && sudo chmod 600 /opt/sodam/sodam_bot/.env
-# (DB 옮기는 경우) 복원: README.md '7. DB 백업' 의 복구 절차 → python tools/restore_check.py 로 먼저 검증
-sudo cp /opt/sodam/sodam_bot/deploy/sodam.service /opt/sodam/sodam_bot/deploy/sodam-health.* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now sodam sodam-health.timer
-journalctl -u sodam -f                                     # 로그 (journald)
+journalctl -u sodam -f            # 로그
+systemctl status sodam            # 상태
+sodam-update                      # 갱신 (테스트 통과해야 재시작, 실패하면 되돌림)
+systemctl start sodam-backup      # 지금 백업
+systemctl list-timers 'sodam*'    # 타이머 다음 실행 시각
 ```
-경로·사용자를 바꿨으면 `sodam.service` 의 `User`·`WorkingDirectory`·`ExecStart`, `sodam-health.service` 의 heartbeat 경로를 맞춘다.
 
-## 2. 갱신
-```bash
-sudo -u sodam /opt/sodam/sodam_bot/deploy/update.sh
-```
-`git pull --ff-only` → `pip install -r` → `tests/run_all.py` **통과해야만** `systemctl restart sodam`. 어느 단계든 실패하면 재시작 안 함.
-sodam 사용자가 재시작할 수 있게 sudoers 한 줄: `sodam ALL=(root) NOPASSWD: /usr/bin/systemctl restart sodam, /usr/bin/systemctl is-active --quiet sodam`
-
-## 3. 살아 있는지 확인 (헬스체크)
-- 프로세스가 죽으면: `Restart=always` + `RestartSec=5` 로 5초 뒤 자동 재시작.
-- 프로세스는 살아 있는데 멈춘(행) 경우: 봇이 30초마다 `data/heartbeat`(유닉스 시각) 를 갱신한다.
-  `sodam-health.timer` 가 1분마다 파일 수정 시각을 보고 **180초 넘게 안 바뀌면 `systemctl restart sodam`**.
-  수동 확인: `echo $(( $(date +%s) - $(stat -c %Y /opt/sodam/sodam_bot/data/heartbeat) ))초 전`
-- 대안: systemd `WatchdogSec=` 는 프로세스가 `sd_notify(WATCHDOG=1)` 를 보내야 해서 추가 코드(systemd 패키지)가 필요 → 지금은 timer 방식.
-- 봇 시작·정상 종료 시 오너(관리자 보고 대상)에게 `▶️ 소담 시작 (버전 abc1234)` / `⏹ 소담 정상 종료` 가 온다.
-  시작 알림만 오고 종료 알림 없이 다시 시작 알림이 오면 = 비정상 종료(죽음·강제 kill) 후 재시작.
-- 예상 못 한 예외는 `[오류] 예외종류: 내용` 으로 오너에게 (같은 종류 10분에 1번, 네트워크 일시 오류 제외).
-- TronGrid 조회가 3번 연속 실패하면 `[결제 확인 장애]`, 복구되면 `[결제 확인 복구]` 한 번씩.
+## 주의
+- 같은 봇 토큰은 **한 곳에서만** 켠다 (둘이면 `409 Conflict`, DB 도 갈라짐). 옮길 땐 옛 봇 먼저 끄기.
+- SQLite 는 네트워크 공유 폴더(NFS·SMB·동기화 폴더)에 두지 않는다 (잠금 깨짐 → DB 손상).
+- `.env` 의 `DB_PATH`·`BACKUP_DIR` 는 `data/` 아래 상대 경로여야 함 (서비스는 data 에만 쓸 수 있음). install.sh 가 검사.
+- 서버에서 코드를 직접 고치지 않는다 (갱신은 ff-only → 막힘). 고칠 건 GitHub 로.
+- 시작·정상 종료 때 오너에게 `▶️ 소담 시작 (버전 …)` / `⏹ 소담 정상 종료` 가 온다. 종료 알림 없이 시작 알림만 또 오면 = 비정상 종료 후 재시작.
