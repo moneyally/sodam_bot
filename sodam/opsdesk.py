@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import calendar
 import logging
 import re
@@ -56,6 +57,7 @@ SUB_WARN = 3 * DAY               # 이용 기간이 이 안에 끝나면
 EXPIRED_SHOW = 7 * DAY           # 끝난 지 이 안이면 '끝남'
 SPIKE_X, SPIKE_MSGS, SPIKE_JOINS = 3, 30, 10   # 24시간이 지난 7일 하루 평균의 3배↑ 이고 최소 이만큼
 KEY_RE = re.compile(r"^[a-z]\d{1,19}$")
+PARALLEL = 8                     # 방마다 봇 권한을 텔레그램에 물음(10분 캐시) → 방이 많아도 버튼 응답 제한(약 15초) 안에
 
 SCHED_WHY = {"creator": "만든 관리자가 더는 관리자가 아니라 자동으로 꺼짐", "send": "보내기 실패 (텔레그램)",
              "budget": "AI 하루 한도로 건너뜀", "error": "실행 중 오류", "missed": "봇이 꺼져 있던 사이 시각을 놓쳐 꺼짐"}
@@ -236,14 +238,25 @@ def ordered(items: list[Item]) -> list[Item]:
 
 async def inbox(svc, bot, uid: int, rooms: list[tuple[int, str]]) -> list[Item]:
     """여러 방(부르는 쪽이 TG 관리자 확인)의 보이는(숨기지 않은) 처리할 일, 정렬됨."""
-    items: list[Item] = []
-    for cid, _ in rooms:
+    async def one(cid: int) -> list[Item]:
         try:
-            items += await room_items(svc, bot, cid, uid)
+            return await room_items(svc, bot, cid, uid)
         except Exception:   # 한 방이 실패해도 다른 방은 보여줌
             log.exception("ops inbox failed for %s", cid)
+            return []
+    items = [it for got in await _each([c for c, _ in rooms], one) for it in got]
     hid = await hidden(svc.db, uid, [c for c, _ in rooms])
     return ordered([i for i in items if (i.chat_id, i.key) not in hid])
+
+
+async def _each(items: list, fn) -> list:
+    """방마다 fn 을 동시에 (최대 PARALLEL, 순서 그대로)."""
+    sem = asyncio.Semaphore(PARALLEL)
+
+    async def run(x):
+        async with sem:
+            return await fn(x)
+    return list(await asyncio.gather(*(run(x) for x in items)))
 
 
 async def tg_admin_rooms(svc, bot, uid: int) -> list[tuple[int, str]]:
@@ -329,13 +342,14 @@ async def command_center(svc, bot, uid: int, now: int | None = None) -> tuple[li
     """모든 방 상태 + 합계 {rooms, usd, paid, trial, billing}. 오너만 부를 것."""
     now = now or int(time.time())
     rows = await svc.db._all("SELECT chat_id, title FROM chats WHERE chat_id<0 ORDER BY title, chat_id")
-    out = []
-    for r in rows:
+
+    async def one(r) -> RoomStatus:
         try:
-            out.append(await room_status(svc, bot, r["chat_id"], r["title"] or str(r["chat_id"]), uid, now))
+            return await room_status(svc, bot, r["chat_id"], r["title"] or str(r["chat_id"]), uid, now)
         except Exception:
             log.exception("command center failed for %s", r["chat_id"])
-            out.append(RoomStatus(r["chat_id"], r["title"] or str(r["chat_id"]), ["상태를 읽다가 오류가 났어요"]))
+            return RoomStatus(r["chat_id"], r["title"] or str(r["chat_id"]), ["상태를 읽다가 오류가 났어요"])
+    out = await _each(rows, one)
     totals = {"rooms": len(out), "usd": await svc.db.counter(_day(svc, now), 0, costs.USD),
               "paid": sum(1 for s in out if s.state == "paid"), "trial": sum(1 for s in out if s.state == "trial"),
               "billing": bool(svc.billing and svc.billing.enabled)}

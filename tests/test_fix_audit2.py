@@ -3,15 +3,17 @@
 각 테스트는 고친 줄을 되돌리면 FAIL 한다 (뮤테이션 검증).
 """
 import asyncio
+import time
 from types import SimpleNamespace
 
 from telegram.error import BadRequest
 
 from fake_llm import Room, reply, tool_call
-from fakes import FakeQuery, runner
+from fakes import FakeBot, FakeQuery, make_db, make_svc, runner
 from test_sanction_multi import A, B, BOSS, ask, room
 
-from sodam import db as dbmod, fedban, free, handlers, menu, rules, spamshield
+from sodam import db as dbmod, fedban, free, handlers, menu, opsdesk, rules, spamshield
+from sodam.permissions import Permissions
 
 test, run_all = runner()
 
@@ -140,6 +142,31 @@ async def scam_alert_double_tap_acts_once():
     r.bot.restrict_chat_member = orig
     await menu.on_callback(r.svc, r.bot, q, q.data.split(":")[1:])
     assert (await r.db._one("SELECT done FROM scam_alerts WHERE id=?", (aid2,)))["done"] == "m"
+
+
+
+@test
+async def command_center_checks_rooms_concurrently():
+    """🧭 운영센터: 방마다 봇 권한을 텔레그램에 묻는데(캐시 10분) 방을 하나씩 차례로 물어서, 방이 많으면 버튼 응답이
+    텔레그램 콜백 제한(약 15초)을 넘겨 화면이 안 떴음 (방 100개 × 0.1초). 이제 방들을 동시에 (최대 OPS_PARALLEL)."""
+    db = await make_db()
+    svc = await make_svc(db)
+    svc.perms = Permissions(svc.cfg, db)
+    bot = FakeBot()
+    orig = bot.get_chat_member
+
+    async def slow(chat_id, user_id):
+        await asyncio.sleep(0.05)
+        return await orig(chat_id, user_id)
+    bot.get_chat_member = slow
+    for i in range(40):
+        await db.ensure_chat(-1002000000000 - i, f"방 {i}")
+    t0 = time.monotonic()
+    statuses, tot = await opsdesk.command_center(svc, bot, 1)
+    took = time.monotonic() - t0
+    assert tot["rooms"] == 40 and len(statuses) == 40
+    assert [s.title for s in statuses] == sorted(s.title for s in statuses), "방 이름순 그대로"
+    assert took < 1.0, f"방 40개에 {took:.2f}초 (하나씩이면 2초+)"
 
 
 if __name__ == "__main__":
