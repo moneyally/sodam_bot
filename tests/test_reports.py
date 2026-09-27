@@ -107,6 +107,9 @@ async def link_lock_announce_deletions_counted():
     got = label_counts(await reports.activity(svc, chat, now - 86400, now + 1))
     assert got.get("링크·홍보 메시지 지움") == 1 and got.get("잠긴 종류·전달 메시지 지움") == 1 \
         and got.get("예약공지 올림") == 1, got
+    rows = await r.db._all("SELECT target_id, detail FROM mod_log WHERE chat_id=? AND action='link_del'", (chat,))
+    assert [(x["target_id"], x["detail"]) for x in rows] == [(ALICE.id, "evil.example")], rows   # 사람별 (타임라인용)
+    assert not any(x["action"] == "link_del" for x in await r.db.recent_mod_log(chat, 50)), "관리 기록 화면엔 안 보임"
 
 
 # ── 2. 체험 마지막 날 관리자 1:1 리포트 ────────────────────

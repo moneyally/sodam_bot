@@ -282,6 +282,8 @@ class Moderator:
             return None
         await self._delete(msg)
         await self._count(chat_id, "rep_link")
+        # 사람별 기록 (멤버 타임라인·상황 분석용). audit = 기록 실패해도 삭제 흐름은 계속. 관리 기록 화면엔 안 보임(NOT_AUDIT)
+        await self.db.audit(chat_id, None, user.id, "link_del", ",".join(d for d in domains if d)[:100] or "@아이디")
         if bad_link:
             why = "신규 입장 후 링크 제한 시간이에요" if newbie and not s["link_filter"] else "링크는 관리자만 올릴 수 있어요"
             return f"🔗 {mention(user.id, name)}님, {why}."
