@@ -56,7 +56,7 @@ class LLM:
             if await self.db.counter(self._today(), chat_id, ROOM_TOKENS) >= cap:
                 raise BudgetExceeded
 
-    async def _record(self, usage, chat_id: int | None = None) -> None:
+    async def _record(self, usage, chat_id: int | None = None, purpose: str = "misc") -> None:
         """토큰 사용량 기록. 캐시로 읽은 입력 토큰(할인됨)을 따로 세서 절감 효과를 볼 수 있게 한다."""
         if not usage:
             return
@@ -71,8 +71,10 @@ class LLM:
             await self.db.bump(day, 0, "tokens", total)
         if prompt:
             await self.db.bump(day, 0, "prompt_tokens", prompt)
+            await self.db.bump(day, 0, f"prompt:{purpose}", prompt)    # 기능별 → 캐시가 새는 곳 찾기 (.사용량)
         if cached:
             await self.db.bump(day, 0, "cached_tokens", cached)
+            await self.db.bump(day, 0, f"cached:{purpose}", cached)
 
     async def usage_today(self) -> dict[str, int]:
         day = self._today()
@@ -122,7 +124,7 @@ class LLM:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = await self.client.chat.completions.create(**kwargs)
-        await self._record(resp.usage, chat_id)
+        await self._record(resp.usage, chat_id, purpose)
         return resp.choices[0].message
 
     async def json(self, system: str, user: str, *, model: str | None = None,
@@ -150,7 +152,7 @@ class LLM:
                                                  image=(f"photo.{ext}", source.data, source.mime), **common)
         else:
             resp = await self.client.images.generate(model=self.cfg.image_model, **common)
-        await self._record(resp.usage, chat_id)
+        await self._record(resp.usage, chat_id, "image")
         return base64.b64decode(resp.data[0].b64_json)
 
     async def web_search(self, query: str, chat_id: int | None = None) -> str:
@@ -167,7 +169,7 @@ class LLM:
             input=query[:300],
             max_output_tokens=800,
         )
-        await self._record(resp.usage, chat_id)
+        await self._record(resp.usage, chat_id, "web_search")
         return (resp.output_text or "").strip()
 
     async def classify_injection(self, text: str, chat_id: int | None = None) -> tuple[bool, str]:

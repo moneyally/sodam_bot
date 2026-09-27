@@ -226,8 +226,8 @@ async def cache_usage_accounting():
     assert "prompt_cache_retention" not in LLM(cfg(db.path), db)._cache("x")
     usage = SimpleNamespace(total_tokens=3000, prompt_tokens=2800,
                             prompt_tokens_details=SimpleNamespace(cached_tokens=2048))
-    await llm._record(usage)
-    await llm._record(SimpleNamespace(total_tokens=500, prompt_tokens=400, prompt_tokens_details=None))
+    await llm._record(usage, purpose="agent:member")
+    await llm._record(SimpleNamespace(total_tokens=500, prompt_tokens=400, prompt_tokens_details=None), purpose="memory")
     assert await llm.usage_today() == {"tokens": 3500, "prompt_tokens": 3200, "cached_tokens": 2048}
 
     svc = await make_svc(db, admins={1})
@@ -236,6 +236,7 @@ async def cache_usage_accounting():
     msg = FakeMsg(CHAT, fake_user(1, "관리자"), ".사용량")
     await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, msg.from_user, Role.OWNER, args, argstr), cmd)
     assert "2,048" in msg.replies[0] and "64%" in msg.replies[0]       # 전체 토큰·캐시는 오너만 (방 관리자는 그 방만)
+    assert "agent:member 752 (73% 적중)" in msg.replies[0] and "memory 400 (0% 적중)" in msg.replies[0], msg.replies[0]
 
 
 if __name__ == "__main__":

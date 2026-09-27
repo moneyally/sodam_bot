@@ -109,6 +109,9 @@
   코드가 why_not 으로 다시 검사('안 됨' 돌려주고 재선택), 6초 넘거나 실패하면 code_move(난이도대로). 생각 중(thinking) 들어온 답은 🙈.
   🧩 기능 화면: wc_ai(AI 선수 끄면 비용 0)·wc_level 쉬움/보통/어려움(어려움 = 이을 말 가장 적은 흔한 말 먼저).
   참고 설계: On9 Word Chain(텔레그램, 참가·차례·탈락). 테스트는 fakes.py 가 GAP_SECONDS=0.
+- 프롬프트 캐시: prompt_cache_key=sodam:<purpose>, 보관 기본 24h(gpt-5.4·mini 실제 호출로 적중 확인, 추가 요금 없음). 1024 토큰 미만 요청은
+  캐시 안 됨(끝말잇기 한 수 등). 기능별 적중은 counters prompt:<purpose>/cached:<purpose> → 오너 `.사용량` 에 '캐시 안 된 입력이 많은 기능'.
+  실측(대화 10번): agent 65~71% — 나머지는 매번 바뀌는 대화 기록·요청이라 구조상 한계.
 - 하루 1번 봇에게 관리 권한 없는 방을 오너에게 알림 (job_rights). 하트비트는 텔레그램 get_webhook_info 성공 때만 기록.
 
 - 네트워크 재전송(`util.send_retry`): 방에 보이는 글은 연결 자체가 실패한 경우만(확실히 안 보내짐) 다시, 응답만 끊긴 경우는

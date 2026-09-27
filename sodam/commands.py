@@ -887,6 +887,15 @@ async def c_usage(ctx: CmdCtx) -> None:
         lines += [f"🌐 오늘 전체 AI 토큰: {u['tokens']:,} / {budget:,} ({u['tokens'] * 100 // max(budget, 1)}%)",
                   f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)",
                   "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요."]
+        day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+        rows = await ctx.svc.db._all("SELECT key, n FROM counters WHERE day=? AND chat_id=0 AND "
+                                     "(key LIKE 'prompt:%' OR key LIKE 'cached:%')", (day,))
+        got = {r["key"]: r["n"] for r in rows}
+        miss = sorted(((got[k] - got.get("cached:" + k[7:], 0), k[7:], got[k]) for k in got if k.startswith("prompt:")),
+                      reverse=True)[:5]
+        if miss:
+            lines.append("캐시 안 된 입력이 많은 기능: " + " · ".join(
+                f"{p} {m:,} ({(t - m) * 100 // max(t, 1)}% 적중)" for m, p, t in miss))
     await ctx.reply("\n".join(lines))
 
 
