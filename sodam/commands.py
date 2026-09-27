@@ -701,7 +701,7 @@ async def c_cas(ctx: CmdCtx) -> None:
         await ctx.reply(f"🔎 {esc(name)}: " + ("⚠️ CAS 스팸 DB에 등록된 계정이에요." if banned else "등록 기록 없음 (또는 조회 실패)"))
         return
     s = await ctx.svc.db.get_settings(ctx.chat_id)
-    await ctx.reply(f"🛡️ <b>CAS 스팸DB 차단</b>: {render('cas_enabled', s['cas_enabled'])}\n"
+    await ctx.reply(f"🛡️ <b>스팸 명단(CAS·lols) 차단</b>: {render('cas_enabled', s['cas_enabled'])}\n"
                     "입장 시, 그리고 봇이 처음 보는 멤버가 말할 때 조회해서 등록된 스팸 계정이면 밴해요.\n"
                     "<code>.스팸차단 켜기|끄기</code> · <code>.스팸차단 확인 @user|ID</code>")
 
@@ -1085,7 +1085,7 @@ COMMANDS: list[Cmd] = [
         help="제목·사진/영상 포함 예약·반복 공지", group="관리자"),
     Cmd(("캡차", "captcha"), c_captcha, Role.ADMIN, usage="[켜기|끄기|시간 N|실패 킥|밴|뮤트]", help="입장 캡차 설정", group="관리자"),
     Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자", right="restrict"),
-    Cmd(("스팸차단", "cas"), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="CAS 스팸DB 차단", group="관리자"),
+    Cmd(("스팸차단", "cas"), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="스팸 명단(CAS·lols) 차단", group="관리자"),
     Cmd(("관리기록", "modlog"), c_modlog, Role.ADMIN, help="최근 제재·설정 기록", group="관리자"),
     Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰 (방 관리자는 이 방만)", group="관리자", dm_ok=True),
     # 권한은 함수 안에서 판단: 방에선 관리자만, 1:1 에선 누구나(본인이 관리자인 방만 보여줌)

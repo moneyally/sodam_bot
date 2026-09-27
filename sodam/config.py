@@ -33,6 +33,7 @@ class Config:
     backup_time: str = "05:00"
     backup_send_to_log: bool = False
     cas_api: str = "https://api.cas.chat/check"
+    lols_api: str = "https://api.lols.bot/account"   # 빈 값이면 lols 조회 안 함
     cache_retention: str = ""  # '', 'in_memory', '24h'
     image_model: str = "gpt-image-2.5-flare"         # 새 이미지 (빠름)
     image_edit_model: str = "gpt-image-2.5-sunburst"  # 사진 고치기 (원본 유지가 정확)
@@ -86,6 +87,7 @@ def load_config() -> Config:
         image_quality=os.getenv("OPENAI_IMAGE_QUALITY", "").strip() or "medium",
         backup_send_to_log=os.getenv("BACKUP_SEND_TO_LOG", "").strip().lower() in ("1", "true", "yes", "on"),
         cas_api=os.getenv("CAS_API", "").strip() or "https://api.cas.chat/check",
+        lols_api=os.getenv("LOLS_API", "https://api.lols.bot/account").strip(),
         cache_retention=_retention(os.getenv("OPENAI_CACHE_RETENTION", "")),
         pay_address=_pay_address(os.getenv("PAY_ADDRESS", "")),
         sub_price_usdt=_price(os.getenv("SUB_PRICE_USDT", "30")),

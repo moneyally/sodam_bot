@@ -29,6 +29,15 @@ BUTTONS = 6
 MAX_ATTEMPTS = 3
 
 
+def puzzle(prefix: str) -> tuple[str, int, list[list[InlineKeyboardButton]]]:
+    """그림 버튼 6개 문제: (정답 이름, 정답 번호, 버튼 줄). 버튼 데이터 = f"{prefix}:{번호}" (방 캡차·가입 신청 공용)."""
+    picks = random.sample(CHOICES, BUTTONS)
+    answer = random.randrange(BUTTONS)
+    rows = [[InlineKeyboardButton(emoji, callback_data=f"{prefix}:{i}")
+             for i, (emoji, _) in enumerate(picks[r:r + 3], start=r)] for r in range(0, BUTTONS, 3)]
+    return picks[answer][1], answer, rows
+
+
 class Captcha:
     def __init__(self, svc: Services):
         self.svc = svc
@@ -51,14 +60,11 @@ class Captcha:
                     bot, f"⚠️ 방 {chat_id}: 캡차를 걸지 못했어요 — 봇에게 관리자 권한 중 <b>'사용자 차단(Ban users)'</b>을 "
                          f"켜주세요. 그 전까지는 캡차 없이 입장 인사만 해요.\n({e})")
             return False
-        picks = random.sample(CHOICES, BUTTONS)
-        answer = random.randrange(BUTTONS)
-        rows = [[InlineKeyboardButton(emoji, callback_data=f"cap:{user.id}:{i}")
-                 for i, (emoji, _) in enumerate(picks[r:r + 3], start=r)] for r in range(0, BUTTONS, 3)]
+        label, answer, rows = puzzle(f"cap:{user.id}")
         rows.append([InlineKeyboardButton("✅ 관리자 승인", callback_data=f"cap:{user.id}:ok"),
                      InlineKeyboardButton("🚫 내보내기", callback_data=f"cap:{user.id}:no")])
         text = (f"{mention(user.id, user_name(user))} 대표님 환영합니다! 🤖 스팸 방지 확인이에요.\n"
-                f"<b>{minutes}분 안에</b> 아래에서 <b>{picks[answer][1]}</b> 버튼을 눌러주세요. "
+                f"<b>{minutes}분 안에</b> 아래에서 <b>{label}</b> 버튼을 눌러주세요. "
                 "누르기 전까지는 채팅이 제한돼요.")
         try:
             sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))

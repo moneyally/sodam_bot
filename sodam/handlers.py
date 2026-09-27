@@ -4,7 +4,7 @@
   기록 → (일반 멤버) CAS·사칭·도배·금지어·링크 검사 → 예약공지 마법사 → 명령어 → 봇 호출이면 AI, 아니면 게임
 
 입장 흐름 (입장 메시지 / 멤버 상태 변경 둘 중 먼저 온 것 1번만):
-  CAS 스팸DB → 관리자 사칭 → 캡차 (통과하면 인사) → 인사
+  스팸 명단(CAS·lols) → 관리자 사칭 → 캡차 (통과하면 인사) → 인사
 """
 import asyncio
 import json
@@ -19,10 +19,10 @@ from telegram import (Bot, BotCommand, ChatMember, InlineKeyboardButton, InlineK
                       ReplyParameters, Update, User)
 from telegram.constants import ChatAction, ChatMemberStatus, ChatType
 from telegram.error import NetworkError, TelegramError, TimedOut
-from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
+from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (addressee, casino, commands, free, hooks, memory, menu, namehist, raid, reports, security, social, stats,
+from . import (accountage, addressee, casino, commands, free, hooks, joinreq, memory, menu, namehist, raid, reports, security, social, stats,
                subscription, vision)
 from .agent import run_agent
 from .panels import members as members_panel
@@ -168,8 +168,11 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     if notice:
         await send_temp(context, chat_id, notice, 300)
         return
-    # 대량 입장 방어 모드 중엔 캡차 설정과 상관없이 캡차 (sodam/raid.py)
-    if (s["captcha_enabled"] or await raid.active(svc, chat_id)) and await svc.captcha.start(bot, chat_id, user):
+    # 대량 입장 방어 중(sodam/raid.py)·최근 만든 계정(sodam/accountage.py)은 캡차 설정과 상관없이 캡차.
+    # 가입 신청 1:1 확인을 통과하고 들어온 사람(sodam/joinreq.py)은 이미 확인했으니 생략
+    if not await joinreq.passed(svc, chat_id, user.id) and (s["captcha_enabled"] or await raid.active(svc, chat_id)
+            or (s["recent_account_captcha"] and accountage.is_recent(user.id))) \
+            and await svc.captcha.start(bot, chat_id, user):
         return  # 인사·입장 기록은 캡차 통과 후
     await svc.db.log_join(chat_id, user.id, user_name(user), user.username)
     if s["greet_enabled"]:
@@ -179,11 +182,11 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
 async def _cas_ban(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User) -> None:
     svc = _svc(context)
     try:
-        await svc.mod.ban(context.bot, chat_id, user.id, None, "CAS 스팸DB 등록 계정")
+        await svc.mod.ban(context.bot, chat_id, user.id, None, "CAS·lols 스팸 명단 등록 계정")
     except TelegramError as e:
         log.warning("CAS ban failed: %s", e)
         return
-    await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 CAS 스팸DB에 등록된 계정이라 차단했어요.", 120)
+    await send_temp(context, chat_id, f"🛡️ {esc(user_name(user))}님은 스팸 계정 명단(CAS·lols)에 등록된 계정이라 차단했어요.", 120)
     await svc.mod.report(context.bot, f"[CAS] chat {chat_id} / {esc(user_name(user))}({user.id}) 밴")
 
 
@@ -195,6 +198,14 @@ async def _cas_background(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user
             await _cas_ban(context, chat_id, user)
     except Exception:
         log.exception("CAS background check failed")
+
+
+async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """가입 신청 → 1:1 그림 버튼 확인 (sodam/joinreq.py)."""
+    try:
+        await joinreq.on_request(_svc(context), context.bot, update.chat_join_request)
+    except Exception:
+        log.exception("join request failed")
 
 
 async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -648,6 +659,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _confirm_action(svc, bot, q, parts)
     elif prefix == "cs":
         await casino.on_callback(svc, bot, q, parts)
+    elif prefix == "jr":
+        await joinreq.on_callback(svc, bot, q, parts)
     elif prefix == "um":
         await _unmute_button(svc, bot, q, parts)
     else:
@@ -839,7 +852,8 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     """30초마다: 캡차 시간 초과 처리, 예약공지 발송, 대기 중인 결제 확인."""
     svc = _svc(context)
     jobs = [("captcha", svc.captcha.expire), ("announce", svc.announcer.run_due),
-            ("raid", lambda bot: raid.tick(svc, bot))]  # 끝난 대량 입장 방어 모드 해제
+            ("raid", lambda bot: raid.tick(svc, bot)),  # 끝난 대량 입장 방어 모드 해제
+            ("joinreq", lambda bot: joinreq.expire(svc, bot))]  # 시간 지난 가입 신청 거절
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
     for name, fn in jobs:
@@ -1009,6 +1023,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE, on_private))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatJoinRequestHandler(on_join_request))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
 

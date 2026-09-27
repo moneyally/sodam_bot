@@ -12,7 +12,7 @@ from datetime import datetime
 from .. import menu, raid
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..moderation import LOCK_KINDS
-from ..settings import CHOICE_LABELS
+from ..settings import choice_label
 from ..util import human_minutes
 from . import log as log_panel
 
@@ -23,6 +23,7 @@ menu.register_preset("forward_filter", [("off", "전달 허용"), ("newbie", "�
 menu.register_toggle("raid_guard", "raid")
 menu.register_preset("raid_count", [(v, f"{v}명") for v in ("5", "10", "20")], "raid")
 menu.register_preset("raid_seconds", [(v, f"{v}초") for v in ("30", "60", "120")], "raid")
+menu.register_preset("raid_action", [("captcha", "새 입장자 캡차"), ("kick", "새 입장자 바로 내보내기")], "raid")
 menu.register_preset("raid_minutes", [(v, f"방어 {human_minutes(int(v))}") for v in ("10", "30", "60")], "raid")
 log_panel.ACTIONS.setdefault("raid", "🚨 방어 모드")
 log_panel.ACTIONS.setdefault("raid_off", "✅ 방어 모드 끝")
@@ -35,7 +36,7 @@ async def s_locks(c: PanelCtx) -> Screen:
              "막아 둔 종류(🔒)를 관리자 말고 누가 올리면 바로 지워요. 안내는 한 사람에게 10분에 한 번만 해요.",
              "✅ 허용 · 🔒 막힘 — 누르면 바뀌어요.", "",
              "🔗 홍보 @아이디: 다른 채널·그룹·봇을 알리는 @아이디 (사람 태그는 안 막아요). 허락한 홍보가 있으면 ✅ 로 두세요.",
-             f"📨 전달(포워드) 메시지: <b>{CHOICE_LABELS[s['forward_filter']]}</b>",
+             f"📨 전달(포워드) 메시지: <b>{choice_label('forward_filter', s['forward_filter'])}</b>",
              f"('신규' = 들어온 지 {hours}시간 안 된 사람. 🛡️ 보안의 신규 입장자 링크 금지와 같은 기준)" if hours
              else "(🛡️ 보안에서 신규 입장자 링크 금지가 꺼져 있어서 '신규만 막기'는 아무도 안 막아요)"]
     btns = [B(("🔒 " if s[k] else "✅ ") + label, f"m:t:{c.cid}:{k}:{0 if s[k] else 1}") for k, label, _ in LOCK_KINDS]
@@ -53,11 +54,13 @@ async def s_raid(c: PanelCtx) -> Screen:
     lines = ["🚨 <b>대량 입장 방어</b>",
              f"{s['raid_seconds']}초 안에 {s['raid_count']}명 이상 들어오면 {human_minutes(s['raid_minutes'])} 동안 "
              "방어 모드를 켜요." if s["raid_guard"] else "자동 방어가 꺼져 있어요 (직접 켜기는 가능).",
-             "방어 모드 중엔 캡차 설정과 상관없이 새로 들어오는 사람 모두 스팸 확인 버튼(캡차)을 받아요. "
-             "자동으로 켜지면 관리자님들께 1:1 로 알려드려요.", "", now]
+             ("방어 모드 중엔 새로 들어오는 사람을 안내 없이 바로 내보내요 (다시 들어올 수는 있어요). 끝나면 몇 명 내보냈는지 알려드려요."
+              if s["raid_action"] == "kick" else
+              "방어 모드 중엔 캡차 설정과 상관없이 새로 들어오는 사람 모두 스팸 확인 버튼(캡차)을 받아요.")
+             + " 자동으로 켜지면 관리자님들께 1:1 로 알려드려요.", "", now]
     rows = [[B(("✅ " if s["raid_guard"] else "❌ ") + "자동 방어", f"m:t:{c.cid}:raid_guard:{0 if s['raid_guard'] else 1}")],
             menu._preset_row(s, c.cid, "raid_count"), menu._preset_row(s, c.cid, "raid_seconds"),
-            menu._preset_row(s, c.cid, "raid_minutes"),
+            menu._preset_row(s, c.cid, "raid_minutes"), menu._preset_row(s, c.cid, "raid_action"),
             [B("✅ 방어 모드 끄기", f"m:rdm:{c.cid}:0") if end else B("🚨 지금 방어 모드 켜기", f"m:rdm:{c.cid}:1")],
             menu._back(c.cid)]
     return Screen("\n".join(lines), menu._kb(rows))

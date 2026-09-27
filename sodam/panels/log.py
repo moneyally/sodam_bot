@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .. import menu
 from ..menu import B, HubItem, PanelCtx, Screen
-from ..settings import CHOICE_LABELS, CHOICES, LABELS
+from ..settings import CHOICES, LABELS, choice_label
 from ..styles import STYLES
 from ..util import display_name, esc, fmt_time, to_int
 
@@ -17,7 +17,7 @@ ACTIONS = {
     "captcha": "🧩 캡차 실패", "captcha_pass": "🧩 캡차 통과",
     "schedule": "🗓️ 예약공지 등록", "schedule_del": "🗓️ 예약공지 삭제",
     "knowledge_add": "📚 자료 추가", "knowledge_del": "📚 자료 삭제",
-    "sub_grant": "📅 이용 기간 부여", "rules": "📜 규칙", "bot_admin": "🛠️ 봇 관리자", "free": "🕊️ 자유 멤버",
+    "sub_grant": "📅 이용 기간 부여", "rules": "📜 규칙", "bot_admin": "🛠️ 봇 관리자", "free": "🕊️ 자유 멤버", "join_pass": "🚪 가입 확인 통과", "join_decline": "🚪 가입 신청 거절",
 }
 
 
@@ -27,7 +27,7 @@ def _value(key: str, raw: str) -> str:
     if key == "style" and raw in STYLES:
         return STYLES[raw].label
     if key in CHOICES:
-        return CHOICE_LABELS.get(raw, raw)
+        return choice_label(key, raw)
     return raw
 
 

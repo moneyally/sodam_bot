@@ -55,7 +55,8 @@ CANCEL = {"취소", "cancel", "/cancel"}
 
 # 화면별 켜기/끄기 설정
 FEATURE_TOGGLES = ["ai_enabled", "games_enabled", "sports_enabled", "daily_report"]
-JOIN_TOGGLES = ["greet_enabled", "captcha_enabled", "cas_enabled", "delete_join_message", "impersonation_guard"]
+JOIN_TOGGLES = ["greet_enabled", "captcha_enabled", "recent_account_captcha", "cas_enabled", "delete_join_message",
+                "impersonation_guard"]
 SEC_TOGGLES = ["link_filter", "injection_guard", "injection_warn"]
 TOGGLES = FEATURE_TOGGLES + JOIN_TOGGLES + SEC_TOGGLES
 
@@ -333,9 +334,11 @@ async def s_join(c: PanelCtx) -> Screen:
     s = await c.svc.db.get_settings(c.cid)
     text = ("🚪 <b>입장·인사</b>\n"
             f"캡차 제한시간: {s['captcha_minutes']}분 · 실패 시: {render('captcha_action', s['captcha_action'])}\n"
-            "캡차를 통과해야 채팅할 수 있고, 통과하면 인사해요.")
+            "캡차를 통과해야 채팅할 수 있고, 통과하면 인사해요.\n"
+            "'최근 만든 계정은 캡차'를 켜두면 입장 캡차가 꺼져 있어도 가입한 지 얼마 안 된 계정(사용자 ID 로 추정)은 캡차를 받아요.")
     rows = _toggle_rows(s, c.cid, JOIN_TOGGLES)
-    rows += [_preset_row(s, c.cid, "captcha_minutes"), _preset_row(s, c.cid, "captcha_action"), _back(c.cid)]
+    rows += [_preset_row(s, c.cid, "captcha_minutes"), _preset_row(s, c.cid, "captcha_action"),
+             *await _extras("j", c), _back(c.cid)]
     return Screen(text, _kb(rows))
 
 

@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 472개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 485개, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -57,7 +57,13 @@
 - 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
 - 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),
   홍보 @아이디 막기는 선택(기본 꺼짐, promo_mentions) — 켜면 채널·그룹(getChat 조회)·bot 아이디만 (사람 아이디는 조회 불가라 허용 — 말 안 한 멤버 태그 오탐 방지).
-- 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어(전원 캡차), 입장 검사 훅 `hooks.add_member_join_hook`.
+- 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
+  입장 검사 훅 `hooks.add_member_join_hook`.
+- 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).
+- 최근 계정(`accountage.py`): ID→가입일 추정(npm telegram-id-age MIT 데이터, 최장 비감소 부분수열 99점, 선형 보간). 오차 수개월이라
+  캡차 강제(recent_account_captcha, 기본 켬)에만 씀. 기준 데이터(2025-11)보다 큰 ID = 최근.
+- 가입 신청 1:1 확인(`joinreq.py`, join_verify 기본 꺼짐): 신청자에게 5분 안에 1:1 그림 버튼(captcha.puzzle) → 맞히면 승인·3회 틀림/시간초과 거절,
+  통과자는 1시간 안 입장 시 방 캡차·대량 입장 내보내기 생략. 1:1 불가면 관리자 수동 승인으로 둠. 봇에 '사용자 초대' 권한 필요.
 - 자유 멤버(`free.py`, `.free @user` / `.free해제` / `.free목록`, '사용자 차단' 권한 관리자만): 지정 시 채팅 금지·캡차 대기·경고 해제,
   이후 자동 통제(도배·링크·금지어·잠금·사칭·입장 캡차·CAS·공동 차단·사기 의심·봇 조작 경고) 제외. 관리자 권한은 아님.
 - 사기 의심 검사(`scamguard.py`, 🕵️ 메뉴): 선택(기본 꺼짐). 관리자 키워드·지갑주소·초대링크·신규 첫 메시지 → (선택) mini AI 확인 0.8 이상 →

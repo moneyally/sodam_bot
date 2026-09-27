@@ -38,7 +38,7 @@ def build_services(cfg: Config, db: DB) -> Services:
     perms = Permissions(cfg, db)
     svc = Services(cfg=cfg, db=db, perms=perms, mod=Moderator(cfg, db, perms),
                    llm=LLM(cfg, db), sports=Sports(cfg.sportsdb_key, db, cfg.tz),
-                   cas=Cas(cfg.cas_api), backup=Backup(cfg, db), billing=Billing(cfg, db))
+                   cas=Cas(cfg.cas_api, lols_api=cfg.lols_api or None), backup=Backup(cfg, db), billing=Billing(cfg, db))
     svc.games = GameManager(svc)
     svc.greeter = Greeter(svc)
     svc.captcha = Captcha(svc)

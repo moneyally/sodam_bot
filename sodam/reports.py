@@ -83,6 +83,9 @@ MOD_ITEMS = [
     Item(SECTIONS[1], "CAS 스팸 계정 차단", "명", lambda a, d: a == "ban" and d.startswith("CAS")),
     Item(SECTIONS[1], "공동 차단 명단 계정 차단", "명", lambda a, d: a == "ban" and d.startswith("공동 차단")),
     Item(SECTIONS[1], "대량 입장 방어 발동", "번", lambda a, d: a == "raid"),
+    Item(SECTIONS[1], "대량 입장 중 내보냄", "명", lambda a, d: a == "kick" and d == "대량 입장 방어"),
+    Item(SECTIONS[1], "가입 신청 1:1 확인 통과", "명", lambda a, d: a == "join_pass"),
+    Item(SECTIONS[1], "가입 신청 거절", "명", lambda a, d: a == "join_decline"),
 ]
 # counters 로 세는 항목: image ← tools.t_make_image, rep_link ← moderation._check_content,
 # rep_kind ← moderation._check_kind, rep_announce ← announce.Announcer.publish.

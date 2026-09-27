@@ -96,6 +96,16 @@ class FakeBot:
     async def unban_chat_member(self, chat_id, user_id, only_if_banned=False, **kw):
         self.calls.append(("unban", chat_id, user_id))
 
+    async def approve_chat_join_request(self, chat_id, user_id):
+        self.calls.append(("approve", chat_id, user_id))
+
+    async def decline_chat_join_request(self, chat_id, user_id):
+        self.calls.append(("decline", chat_id, user_id))
+
+    async def create_chat_invite_link(self, chat_id, **kw):
+        self.calls.append(("invite_link", chat_id, kw))
+        return SimpleNamespace(invite_link="https://t.me/+fakeJoinRequest")
+
     async def edit_message_reply_markup(self, chat_id=None, message_id=None, reply_markup=None, **kw):
         self.calls.append(("edit_markup", chat_id, message_id, reply_markup))
 
