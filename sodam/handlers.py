@@ -22,7 +22,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (addressee, casino, commands, hooks, memory, menu, namehist, raid, reports, security, social, stats,
+from . import (addressee, casino, commands, free, hooks, memory, menu, namehist, raid, reports, security, social, stats,
                subscription, vision)
 from .agent import run_agent
 from .panels import members as members_panel
@@ -152,7 +152,8 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
         return
-    if not await svc.perms.bot_can_moderate(bot, chat_id):  # 관리 권한 없는 방: 검사 없이 기록·인사만
+    # 관리 권한 없는 방·자유 멤버(sodam/free.py): 검사 없이 기록·인사만
+    if not await svc.perms.bot_can_moderate(bot, chat_id) or await free.is_free(svc.db, chat_id, user.id):
         await svc.db.log_join(chat_id, user.id, user_name(user), user.username)
         if s["greet_enabled"]:
             svc.greeter.queue(bot, chat_id, user.id, user_name(user))
@@ -374,7 +375,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked)
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
-    if role < Role.ADMIN and await svc.perms.bot_can_moderate(bot, chat_id):
+    exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음
+    if not exempt and await svc.perms.bot_can_moderate(bot, chat_id):
         s = await svc.db.get_settings(chat_id)
         cas_seen: set = context.bot_data["cas_seen"]
         if s["cas_enabled"] and (chat_id, user.id) not in cas_seen:  # 방마다 (밴은 그 방에서만 하니까)
@@ -562,7 +564,8 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         if blocked:
             await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
             text, kb = "🛡️ 그 요청은 들어드릴 수 없어요.", None
-            if s["injection_warn"] and role < Role.ADMIN and chat_id < 0:  # 경고·제재는 그룹방에서만 (1:1 은 양수 ID)
+            # 경고·제재는 그룹방에서만 (1:1 은 양수 ID), 자유 멤버는 경고 없이 거절만
+            if s["injection_warn"] and role < Role.ADMIN and chat_id < 0 and not await free.is_free(svc.db, chat_id, user.id):
                 warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
                                             f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
                 text, kb = text + "\n" + warned, unmute_kb(warned)

@@ -16,7 +16,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from . import hooks
+from . import free, hooks
 from .db import register_schema
 from .permissions import Role
 from .settings import register_setting
@@ -219,6 +219,8 @@ async def on_join(svc, bot, chat_id: int, user) -> bool:
 
 async def on_message(svc, bot, msg, role) -> None:
     if role >= Role.ADMIN or msg.chat_id > 0 or not msg.from_user or msg.from_user.is_bot:
+        return
+    if await free.is_free(svc.db, msg.chat_id, msg.from_user.id):   # 관리자가 믿고 풀어준 사람
         return
     await check(svc, bot, msg.chat_id, msg.from_user, spoke=True)
 

@@ -28,7 +28,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from . import db as dbmod
-from . import hooks
+from . import free, hooks
 from .permissions import Role
 from .security import WALLETS, nonce, normalize, wrap
 from .settings import register_setting
@@ -284,7 +284,7 @@ async def on_message(svc, bot, msg, role) -> None:
     s = await svc.db.get_settings(chat_id)
     if not s.get("scam_guard", False) or not await svc.paid_features(chat_id):
         return
-    if await is_trusted(svc.db, chat_id, user.id):
+    if await is_trusted(svc.db, chat_id, user.id) or await free.is_free(svc.db, chat_id, user.id):
         return
     words = await keywords(svc.db, chat_id) if s.get("scam_check_keywords", True) else []
     sig = signals(text, s, words)

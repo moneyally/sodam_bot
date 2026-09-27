@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
-from . import fedban, knowledge, menu, namehist, stats, subscription
+from . import fedban, free, knowledge, menu, namehist, stats, subscription
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .security import normalize_domain
@@ -464,6 +464,49 @@ async def c_warns(ctx: CmdCtx) -> None:
         lines = [f"⚠️ {esc(name)}님 경고 {len(rows)}회"]
         lines += [f"- {fmt_time(r['ts'], ctx.svc.cfg.tz)} {esc(r['reason'] or '')}" for r in rows]
         await ctx.reply("\n".join(lines))
+
+
+async def c_free(ctx: CmdCtx) -> None:
+    """자유 멤버 지정: 걸려 있던 채팅 금지·캡차 대기·경고를 풀고, 앞으로 자동 통제를 안 받게 (sodam/free.py)."""
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
+        await ctx.reply("관리자·봇은 원래 자동 통제를 받지 않아요.")
+        return
+    await free.add(ctx.svc.db, ctx.chat_id, uid, ctx.user.id)
+    await ctx.svc.db.clear_warnings(ctx.chat_id, uid)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "free", "지정")
+    note = ""
+    try:
+        await ctx.svc.mod.unmute(ctx.bot, ctx.chat_id, uid, ctx.user.id)
+    except TelegramError as e:
+        note = f"\n(채팅 금지는 못 풀었어요: {esc(e.message)} — 봇의 '사용자 차단' 권한을 확인해주세요)"
+    await ctx.reply(f"🕊️ {mention(uid, name)}님을 자유 멤버로 지정했어요. 걸려 있던 채팅 금지·경고를 풀었고, "
+                    "앞으로 도배·링크·금지어·잠금·캡차 같은 자동 통제를 받지 않아요. (관리자 권한은 아니에요)" + note)
+
+
+async def c_unfree(ctx: CmdCtx) -> None:
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if not await free.remove(ctx.svc.db, ctx.chat_id, uid):
+        await ctx.reply(f"{mention(uid, name)}님은 자유 멤버가 아니에요.")
+        return
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "free", "해제")
+    await ctx.reply(f"{mention(uid, name)}님 자유 멤버를 해제했어요. 이제 다시 자동 통제를 받아요.")
+
+
+async def c_freelist(ctx: CmdCtx) -> None:
+    rows = await free.members(ctx.svc.db, ctx.chat_id)
+    if not rows:
+        await ctx.reply("자유 멤버가 없어요. <code>.free @아이디</code> 로 지정해요.")
+        return
+    names = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
+             f"(<code>{r['user_id']}</code>)" for r in rows]
+    await ctx.reply("🕊️ <b>자유 멤버</b> (자동 통제 안 받음)\n" + "\n".join(names))
 
 
 async def c_resetwarns(ctx: CmdCtx) -> None:
@@ -1020,6 +1063,11 @@ COMMANDS: list[Cmd] = [
     Cmd(("경고초기화", "resetwarns"), c_resetwarns, Role.ADMIN, usage="@user", help="경고 전부 삭제", group="관리자", right="restrict"),
     Cmd(("뮤트", "mute"), c_mute, Role.ADMIN, usage="@user [30m|2h|1d] [사유]", help="채팅 금지", group="관리자", right="restrict"),
     Cmd(("뮤트해제", "unmute"), c_unmute, Role.ADMIN, usage="@user", help="채팅 금지 해제", group="관리자", right="restrict"),
+    Cmd(("free", "프리"), c_free, Role.ADMIN, usage="@user", help="자유 멤버: 제재 풀고 자동 통제 안 받게",
+        group="관리자", right="restrict"),
+    Cmd(("free해제", "unfree", "프리해제"), c_unfree, Role.ADMIN, usage="@user", help="자유 멤버 해제", group="관리자",
+        right="restrict"),
+    Cmd(("free목록", "freelist", "프리목록"), c_freelist, Role.ADMIN, help="자유 멤버 목록", group="관리자"),
     Cmd(("밴", "ban"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자", right="restrict"),
     Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자", right="restrict"),
     Cmd(("킥", "kick"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자", right="restrict"),
