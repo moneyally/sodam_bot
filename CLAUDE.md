@@ -11,7 +11,7 @@
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).
-- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 583개, 전부 통과 상태로 푸시됨).
+- 실행: `pip install -r requirements.txt` → `.env` 준비 → `python -m sodam`. 테스트: `python tests/run_all.py` (네트워크 없이 600개 이상, 전부 통과 상태로 푸시됨).
   클라우드 컨테이너에선 시스템 cryptography 가 깨져 있어서 venv 로: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt`.
 - 봇 계정: @sodam_ai_bot. 이름 "소담", 호출어 "소담아/소담이/소담".
 - 구조와 기능 설명은 `README.md` 참고. 주요 모듈:
@@ -70,6 +70,7 @@
   관리자 1:1 알림 + [지우기·밴·뮤트·괜찮음] 버튼 (권한 `may`). 자동 제재 없음, '가리고 확인' 모드만 삭제. 평가 `tools/ai_eval_scam.py`.
 - 활동 리포트·AI 하루 요약(`reports.py`, 📊 메뉴): 기록된 데이터로만 셈(mod_log·counters rep_*·ai_turns). 체험 마지막 날 관리자 1:1 리포트+결제 화면 1번,
   하루 요약은 이용 중인 방만 digest_hour(기본 21시)에 1번(counters digest_sent), 대화는 nonce 태그 안 데이터·flagged 제외.
+  오너는 방마다 받지 않고 한 통 묶음(방별 숫자·화제 2개·분쟁) — 오너가 여러 방 관리자라 21시에 12통 오던 것. 방 관리자는 자기 방 한 통씩.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
 
 ## 제재·AI 도구 권한

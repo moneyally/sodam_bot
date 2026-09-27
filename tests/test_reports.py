@@ -206,6 +206,39 @@ async def digest_runs_at_set_hour_once_per_day_paid_rooms_only():
 
 
 @test
+async def owner_gets_one_combined_digest_admins_get_their_room():
+    """오너가 여러 방 관리자면 방마다 한 통씩 오던 것 (21시에 12통) → 한 통 묶음. 방 관리자는 그대로 자기 방 요약."""
+    now = int(time.time())
+    C = -1006660000003
+    db, svc, bot, ctx = await billing_world({A: (now + 2 * 86400, None), C: (now + 2 * 86400, None)})
+    svc.llm = ScriptedLLM(json_script={"digest": [
+        {"topics": ["A방 화제"], "conflict": "갑돌과 을순 욕설 다툼", "unanswered": []},
+        {"topics": ["C방 화제"], "conflict": "", "unanswered": ["누구: 질문"]}]})
+    for cid in (A, C):
+        for i in range(15):
+            await db.log_message(cid, (ALICE, BOB)[i % 2].id, 100 + i, f"대화{i}")
+        await db.set_setting(cid, "digest_hour", hour_now())
+    svc.perms.owner_ids = {ADMIN.id}                       # ADMIN = 오너 (두 방 관리자), ADMIN2 = 일반 관리자
+    assert await reports.run_digests(svc, bot) == 2
+    owner = dms(bot, ADMIN.id)
+    assert len(owner) == 1, owner
+    t = owner[0][2]
+    assert "내 방들 하루 요약" in t and "(2개 방)" in t and "업자방1" in t and "업자방3" in t, t
+    assert "A방 화제" in t and "C방 화제" in t and "욕설 다툼" in t and "답 못 받은 질문 1개" in t, t
+    assert len(dms(bot, ADMIN2.id, "하루 요약")) == 2          # 일반 관리자는 방마다 자기 방 요약
+    assert not dms(bot, ADMIN.id, "📌 <b>오늘 주요 화제</b>")
+    assert await reports.run_digests(svc, bot) == 0 and len(dms(bot, ADMIN.id)) == 1
+
+
+@test
+async def owner_digest_splits_long_message():
+    parts = [f"🏠 <b>방{i}</b>\n" + "가" * 300 for i in range(30)]
+    chunks = reports._chunks("머리", parts)
+    assert len(chunks) > 1 and all(len(c) <= reports.TG_LIMIT for c in chunks)
+    assert sum(c.count("🏠") for c in chunks) == 30
+
+
+@test
 async def digest_quiet_day_skips_ai():
     db, svc, bot = await digest_world(lines_a=5)
     await db.set_setting(A, "digest_hour", hour_now())
