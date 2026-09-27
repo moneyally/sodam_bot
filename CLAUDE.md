@@ -111,7 +111,7 @@
   ask_/press_ 는 방 관리자 기록(.기록·🗂️)엔 안 보임(db.NOT_AUDIT), 기록 실패해도 버튼·카드 계속(db.audit), 거절 연타는 1줄.
 - 장시간 게임 알림(`gametime.py`, 🎮 메뉴, 기본 꺼짐): 멤버가 보낸 게임 명령(/ ! 🎲 또는 gt_cmds 목록) 시각으로 연속 세션
   (gt_gap 분 쉬면 새로) → 10분 job 이 gt_hours 넘은 세션 1번 알림(방 + 알릴 관리자 1:1). 조치 notify/button(뮤트 버튼)/auto(자동 뮤트,
-  관리자·자유 멤버 제외). 다른 게임봇 결과는 기본으론 안 보임 — Bot-to-Bot Communication Mode(2026-05, BotFather 설정 + 관리자 + Privacy Mode 꺼짐)를 켜면 볼 수 있음(아직 미구현, 켜면 봇 루프 방지 필요). AI 도구 game_alert(요청한 관리자가 받음), 📤 다른 방에 복사.
+  관리자·자유 멤버 제외). 다른 게임봇 결과는 🤝 다른 봇 연동(아래)을 켜면 믿는 봇이 멤버에게 단 답을 게임 시간으로 셈. AI 도구 game_alert(요청한 관리자가 받음), 📤 다른 방에 복사.
 - 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
   (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
@@ -236,6 +236,16 @@
   spamshield_verdicts 에 점수·결과·👍/👎 (90일) → 실제 오탐률 측정용. 수정 메시지는 hooks.GROUP_EDIT_HOOKS.
 - 주의: 링크 필터가 먼저 지운 글은 여기 안 옴(기본값이면 신규 링크 24시간 차단) · 🕵️ 사기 의심 검사도 켜면 알림 2통 가능 ·
   여러 방 겹침 지문(48시간)은 기능이 꺼진 방에서도 모음.
+
+## 🤝 다른 봇 연동 (`botlink.py`, `panels/botlink.py`, tests/test_botlink.py · 뮤테이션 30개)
+- Bot API 10.0(2026-05) Bot-to-Bot 모드: 켜는 곳은 @BotFather 미니앱뿐(API 없음). 한쪽 봇만 켜도 '/cmd@대상봇'·대상 봇 글에 단 답장은 감,
+  켠 봇이 관리자(또는 Privacy 꺼짐)면 다른 봇 글 전부. 다른 봇 **버튼 누르기는 불가**(사람만), 토큰·권한 가져오기 불가.
+- **봇 글은 handlers 맨 앞에서 BOT_MESSAGE_HOOKS(기록)로만** — 관리·명령·게임·AI·끼어들기·알림 규칙·스팸 방패 전부 안 탐, 1:1·딜러도 봇 거절,
+  messages/members 표에 안 넣음 (무한 주고받기 방지. 이 기능을 안 켜도 필요한 방어).
+- botlink_mode off(기본)/observe/interact. 봇은 말하면 자동 등록 → 관리자가 ✅ 믿음/👀 기록만/🙈 무시. 기록 7일.
+  제한: 방 분당 봇 글 30 · 명령 분당 3·하루 30 · 방·봇 쌍 분당 8 · 명령→답 연속 3번(60초).
+- AI 도구: other_bot_results(읽기, tainted) · bot_command(관리자·방·interact·믿는 봇만, '/cmd@봇 인자≤64자' 한 줄, 봇·명령 쌍 첫 사용은 확인 카드, 답 1번에 1번).
+- 켜는 법: 운영자가 BotFather 에서 @sodam_ai_bot Bot-to-Bot 켜기(1번) → 방마다 ⚙️ 🤝 에서 모드 → 게임봇이 말하면 ✅ 믿는 봇.
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
