@@ -1,7 +1,9 @@
-"""에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다."""
+"""에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다.
+실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
 import logging
 
-from . import memory
+from . import agentlog, memory
+from .llm import BudgetExceeded
 from .prompt import build_messages
 from .security import nonce, wrap
 from .tools import ToolCtx, available, execute
@@ -20,6 +22,23 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
                     images: list[dict] | None = None) -> str:
     """mode: call(이름 불러서) / follow(이어 말하기) / chime·morning(먼저 끼어들기).
     extras: memory.context_for 결과. None 이면 여기서 읽는다 (실패해도 기억 없이 진행)."""
+    run, token = agentlog.start(ctx.chat_id, getattr(ctx.caller, "id", None), mode, request)
+    status = "error"
+    try:
+        answer = await _run(ctx, run, style_key=style_key, notes=notes, history=history, reply_to=reply_to,
+                            request=request, mode=mode, extras=extras, hints=hints, images=images)
+        status = "answered" if answer.strip() else ("tool_only" if run.steps else "empty")
+        return answer
+    except BudgetExceeded:
+        status = "budget"
+        raise
+    finally:
+        await agentlog.finish(ctx.svc.db, run, token, status)   # 기록 실패는 안에서 삼킴
+
+
+async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, history: list,
+               reply_to: str | None, request: str, mode: str, extras: dict | None,
+               hints: list[str] | None, images: list[dict] | None) -> str:
     svc = ctx.svc
     role_label = {0: "member", 1: "admin", 2: "owner"}[int(ctx.role)]
     if extras is None:
@@ -38,6 +57,7 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
     schemas = [t.schema() for t in tools]
     allowed = {t.name for t in tools}
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
+    run.purpose = purpose
 
     for _ in range(MAX_STEPS):
         msg = await svc.llm.chat(messages, tools=schemas or None, max_tokens=MAX_TOKENS, purpose=purpose,
@@ -59,6 +79,10 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
                 result = await execute(c.function.name, c.function.arguments, ctx)
             log.info("도구 %s chat=%s user=%s 인자=%s → %s", c.function.name, ctx.chat_id, ctx.caller.id,
                      (c.function.arguments or "")[:200], result[:200].replace("\n", " "))
+            try:
+                run.step(c.function.name, c.function.arguments, result)
+            except Exception:   # 기록용 요약이 답을 막으면 안 됨
+                log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", result[:4000], nonce())})
 

@@ -1,6 +1,7 @@
 """하루 사용량·비용 점검 (운영자용, DB 읽기 전용): python tools/usage_report.py [--day 2026-09-27] [--db data/sodam.db]
 
-대화(메시지·방·사람) · AI(답변·호출·토큰·캐시·예산) · 비용(모델별 정확, 모델 기록 전은 범위) · 방별·기능별 토큰 · DB 크기.
+대화(메시지·방·사람) · AI(답변·호출·토큰·캐시·예산) · 비용(모델별 정확, 모델 기록 전은 범위, 하루 달러 예산) ·
+방별 요금(요금제 대비)·방별·기능별 토큰 · DB 크기.
 돌아가는 봇에 영향 없음 (SQLite mode=ro).
 """
 from __future__ import annotations
@@ -42,7 +43,11 @@ def report(db_path: Path, day: str) -> str:
     d0 = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=KST).timestamp())
     d1 = d0 + 86400
     main, mini = env("OPENAI_MODEL", "gpt-5.4"), env("OPENAI_GUARD_MODEL", "gpt-5.4-mini")
-    budget = int(env("DAILY_TOKEN_BUDGET", "2000000"))
+    budget = int(env("DAILY_TOKEN_BUDGET", "0") or 0)       # 적은 경우만 토큰 예산 (llm.LLM 과 같음)
+    try:
+        usd_budget = float(env("DAILY_USD_BUDGET", str(costs.DEFAULT_USD_BUDGET)))
+    except ValueError:
+        usd_budget = costs.DEFAULT_USD_BUDGET
     g = {r["key"]: r["n"] for r in c.execute("SELECT key, n FROM counters WHERE day=? AND chat_id=0", (day,))}
     title = {r["chat_id"]: r["title"] for r in c.execute("SELECT chat_id, title FROM chats")}
     name = lambda cid: title.get(cid) or ("1:1 " + str(cid) if cid > 0 else str(cid))   # noqa: E731
@@ -59,8 +64,9 @@ def report(db_path: Path, day: str) -> str:
     # AI
     turns = c.execute("SELECT COUNT(*) FROM ai_turns WHERE ts>=? AND ts<?", (d0, d1)).fetchone()[0]
     tot, pr, ca = g.get("tokens", 0), g.get("prompt_tokens", 0), g.get("cached_tokens", 0)
-    L += ["", f"🤖 AI 답변 {turns:,}번 · 토큰 {tot:,} / 하루 예산 {budget:,} ({tot * 100 // max(budget, 1)}%)"
-          + ("  ⛔ 예산 다 씀 → 자정까지 AI 멈춤" if tot >= budget else ""),
+    tok_line = (f" / 토큰 예산 {budget:,} ({tot * 100 // budget}%)"
+                + ("  ⛔ 예산 다 씀 → 자정까지 AI 멈춤" if tot >= budget else "")) if budget > 0 else ""
+    L += ["", f"🤖 AI 답변 {turns:,}번 · 토큰 {tot:,}{tok_line}",
           f"   입력 {pr:,} (캐시 {ca:,} = {ca * 100 // max(pr, 1)}%) · 출력 {max(0, tot - pr):,}"]
     imgs = c.execute("SELECT COALESCE(SUM(n),0) FROM counters WHERE day=? AND key='image'", (day,)).fetchone()[0]
     webs = g.get("web_search_calls") or c.execute(
@@ -93,6 +99,27 @@ def report(db_path: Path, day: str) -> str:
         L.append(f"   웹 검색 요금 {usd(webs * costs.WEB_SEARCH_PER_CALL)}")
     if imgs:
         L.append("   그림 요금은 이미지 모델 요금표가 없어 토큰에 포함 안 됨 (위 모델별에 이미지 모델이 있으면 참고)")
+
+    # 기록된 요금 (llm._record 가 센 마이크로달러: 하루 예산·방 한도가 보는 값)
+    spent = g.get(costs.USD, 0)
+    if spent or usd_budget > 0:
+        cap = int(usd_budget * costs.MICRO)
+        L.append(f"   기록된 요금 {costs.fmt_usd(spent, 3)}" + (
+            f" / 하루 예산 {costs.fmt_usd(cap)} ({spent * 100 // max(cap, 1)}%)"
+            + ("  ⛔ 예산 다 씀 → 자정까지 AI 멈춤" if spent >= cap else "") if usd_budget > 0 else " (달러 예산 꺼짐)"))
+
+    # 방별 요금 (2026-09-28 부터)
+    room_usd = c.execute("SELECT chat_id, n FROM counters WHERE day=? AND key=? ORDER BY n DESC LIMIT 12",
+                         (day, costs.ROOM_USD)).fetchall()
+    if room_usd:
+        plans = {r["chat_id"]: r["value"] for r in c.execute("SELECT chat_id, value FROM chat_state WHERE key=?",
+                                                               (costs.PLAN_KEY,))}
+        L += ["", "🏠 방별 AI 요금 (오늘 / 오너 요금제, 방 관리자가 %로 더 낮췄을 수 있음)"]
+        for r in room_usd:
+            plan = int(plans.get(r["chat_id"]) or costs.DEFAULT_PLAN_CENTS)
+            pct = r["n"] * 100 // max(plan * (costs.MICRO // 100), 1)
+            flag = " ⛔ 한도" if pct >= 100 else (" ⚠️ 한도 근접" if pct >= 80 else "")
+            L.append(f"   {name(r['chat_id'])[:18]:18s} {costs.fmt_usd(r['n'], 3):>8s} / {costs.plan_label(plan)} ({pct}%){flag}")
 
     # 방별 토큰
     L += ["", "🏠 방별 AI 토큰 (방 하루 한도 600,000)"]

@@ -19,10 +19,10 @@
   - `menu.py` 버튼 메뉴(1:1 전용): `ROUTES` 라우트 테이블 → `Screen` 반환, 권한 PUBLIC/ADMIN/TG_ADMIN/OWNER, 목표값 토글·프리셋 화이트리스트,
     1회용 토큰(`m:k:<tok>`, 긴 값·삭제 확인), 글자 입력 엔진(`svc.inputs`, `menu.handle_input`) · `commands.py` `.명령어`
   - `billing.py`/`subscription.py`/`tron.py` 구독 결제 · `captcha.py` `cas.py` `moderation.py` 방 관리
-  - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
+  - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `costs.py` 요금·예산·방 한도 · `agentlog.py` AI 작업 기록 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
   - `memory.py` 멤버 기억·방 흐름 요약·대화 기록 · `social.py` 이어 말하기·먼저 끼어들기 · `ai_settings.py` AI 설정 키
   - `casino/` 포인트 게임(! 명령, 설계 docs/GAMES.md): core 지갑·가입·채굴 · basic 주사위·슬롯·룰렛·사다리 · cards 바카라·블랙잭·하이로우 · multi 그래프·경마 · dealer 딜러 소담 대사
-  - `tagnotify.py` 태그·답장 알림 · `hooks.py` 확장 지점 · `panels/*.py` 버튼 화면(greet·tagnotify·owner·announce·ai·log·room)
+  - `tagnotify.py` 태그·답장 알림 · `hooks.py` 확장 지점 · `panels/*.py` 버튼 화면(greet·tagnotify·owner·announce·ai·log·room·agentlog)
 
 ## 중요한 결정 (바꾸지 말 것, 바꾸려면 사용자에게 확인)
 - **비밀값은 git 에 절대 올리지 않는다.** 저장소는 public. `.env` 와 `data/` 는 .gitignore.
@@ -48,6 +48,7 @@
 - 라이브 점검: `python tools/ai_live.py` (실제 OpenAI, 가짜 텔레그램) · 오프라인: `python tools/ai_dryrun.py`.
 - AI 제재(경고·뮤트·밴)는 **항상 확인 버튼** (`tools._ask_sanction` → `handlers._confirm_action`), 한 번 답변에 1회만. 대화 속 숨은 지시로 제재 안 되게.
 - 방 AI 토큰 한도 `ai_room_daily_tokens` 는 기본값=상한(60만)이라 방 관리자는 줄이기만 가능. 0=무제한 없음.
+  달러 한도(오너 요금제 × 방 관리자 %)도 같은 방식 — 아래 'AI 비용·작업 기록'.
 - 재시작 때 쌓인 업데이트는 버리지 않음(`drop_pending_updates=False`, 입장 놓침 방지). 5분 넘은 메시지엔 AI 답 생략(`util.is_stale`).
 - `.말투 X` 한 단어 = 본인 말투. 태그·답장·설명이 붙으면 AI 가 대상 판단(`set_member_style` 관리자 전용).
 - 결제 처리+연장은 `db.pay_invoice` 로 DB 스레드에서 한 번에 (공유 연결이라 중간 commit 끼어듦 방지).
@@ -144,6 +145,20 @@
 - 끝말잇기: on_text 가 예상 못 한 오류면 게임 종료(방이 '게임 중'으로 묶이지 않게) · stale = (지난 문제, 방금 사람 말) 로 늦은 답 🙈,
   thinking 은 소담이 말이 올라갈 때까지 · 차례 안내는 pace 뒤 그때 차례로(seq, 머리글 합침), 타이머는 안내 직전 ·
   차례 모드 버튼 `wc:j:<gid>`/`wc:go:<gid>` (지난 판 버튼 거절).
+
+## AI 비용·작업 기록 (관측, tests/test_budget.py · test_agentlog.py · 뮤테이션 17개)
+- 하루 예산은 **달러**: `llm._record` 가 요금(`costs.usd_micro`, 정수 마이크로달러, 요금표에 없는 모델은 기본 모델 요금 → 그것도 없으면
+  가장 비싼 요금)을 counters `usd_micro`(chat_id=0 전체)·`room_usd_micro`(방·1:1) 에 셈. 한 번의 `db.atomic` 으로 모든 카운터를 같이.
+  `DAILY_USD_BUDGET`(기본 8, 0=끔) 넘으면 BudgetExceeded("usd"). 토큰 예산은 `.env` 에 `DAILY_TOKEN_BUDGET` 을 **적은 경우만** (캐시 입력도
+  전액으로 세서 2M 토큰(=실제 $1~3)에 막히던 것). 웹 검색은 호출당 $0.01 을 extra_micro 로.
+- 방 하루 한도 = 오너 요금제(chat_state `ai_usd_plan` 센트, $0.5/1.5/3/5, 기본 $1.50 — 방 설정이 아니라서 `.설정변경`·AI 도구로 못 바꿈)
+  × 방 관리자 `ai_room_budget_pct`(10~100%, 기본=상한 100 → 줄이기만, 저장값도 잘라 씀). 오너 1:1 은 방 달러 한도 없음. 토큰 한도(60만)도 그대로.
+- AI 작업 기록(`agentlog.py`, 표 agent_runs, 14일): run_agent 1번 = 1줄 (요청 200자·방식·도구 호출(이름+인자 요약, 비밀값 모양 가림)+결과 120자·
+  answered/tool_only/empty/error/budget·토큰·요금). 토큰은 ContextVar `agentlog.current` 로 → 도구 안에서 부른 AI(웹검색 등)도 같은 실행에,
+  중첩 실행은 끝날 때 바깥에 더함. 기록 실패는 삼킴(답은 그대로). 정리는 넣을 때 한 시간에 한 번 같은 atomic 안에서.
+- 화면(`panels/agentlog.py`): 오너 메인 📒 AI 비용·기록(m:al 오늘 요금·예산 %·많이 쓴 곳 / alr·alv 모든 방 기록 / alp·alq·alqs 방 요금제).
+  방 관리자 그룹 허브 📒(m:alg·agv) = 자기 방 기록만, **금액은 안 보임**(한도의 %만), 한도 % 프리셋. 저장된 글은 전부 esc.
+- 오너 `.사용량`(commands.py)은 아직 토큰 기준 — 달러는 📒 화면·`tools/usage_report.py`(방별 요금 vs 요금제).
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
