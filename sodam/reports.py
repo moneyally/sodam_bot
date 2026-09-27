@@ -51,6 +51,7 @@ DIGEST_PRESETS = [("9", "09:00"), ("18", "18:00"), ("21", "21:00"), (str(DIGEST_
 register_setting("digest_hour", 21, "AI 하루 요약 방 기본 시각", range_=(DIGEST_OFF, 23),
                  render_fn=lambda v: "끔" if v == DIGEST_OFF else f"{int(v):02d}:00")
 
+LEGACY_SENT = "digest_sent"    # 예전(방 단위 발송) counters 표시 — 배포한 날 다시 보내지 않게만 본다
 DIGEST_WINDOW = 3          # 정한 시각부터 몇 시간 안에 보냄 (그 사이 재시작·지연돼도 그날 1번)
 DIGEST_MIN_LINES = 10      # 이보다 적으면 AI 없이 '조용한 하루'
 DIGEST_MAX_LINES = 400     # AI 에 넣는 최대 줄 수 (최근 것부터)
@@ -593,6 +594,8 @@ async def run_digests(svc: Services, bot, now: int | None = None) -> int:
         try:
             hour = int((await db.get_settings(chat_id)).get("digest_hour", DIGEST_OFF))
             if hour == DIGEST_OFF:                          # 방 전체 끔
+                continue
+            if await db.counter(day, chat_id, LEGACY_SENT):   # 예전 방식(방 단위)으로 오늘 이미 보냄 → 바꾼 날 두 번 안 가게
                 continue
             people = {p for p in {regs.get(chat_id), *owners, *opted.get(chat_id, ())} if p}
             people = {p for p in people if wants(p, chat_id, regs.get(chat_id), owners, glob, room_pref)}

@@ -106,6 +106,17 @@ async def registrant_gets_it_other_admins_only_when_opted_in():
 
 
 @test
+async def no_resend_on_deploy_day_when_old_version_already_sent():
+    """예전 버전(방 단위)이 오늘 이미 보낸 방은 새 버전 첫날 다시 안 보냄 (AI 도 안 부름)."""
+    db, svc, bot = await world()
+    day = datetime.now(TZ).strftime("%Y-%m-%d")
+    await db.bump(day, R1, reports.LEGACY_SENT)
+    await reports.run_digests(svc, bot)
+    assert {c["chat_id"] for c in ai_calls(svc)} == {R2}, ai_calls(svc)
+    assert "업자방1" not in " ".join(c[2] for c in dms(bot, BOSS.id))
+
+
+@test
 async def admin_opt_in_from_report_screen():
     db, svc, bot = await world()
     q = await press(svc, bot, VICE, f"m:rp:{R1}")
