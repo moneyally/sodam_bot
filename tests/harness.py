@@ -25,7 +25,7 @@ from sodam import menu
 CHAT = -1001234567890
 OWNER, TG, BOTADM, MEMBER = 7, 1, 30, 20
 PERSONAS = {OWNER: "오너", TG: "텔레그램 관리자", BOTADM: "봇관리자(.봇관리자)", MEMBER: "일반 멤버"}
-MAX_PRESSES = 2000   # 역할 전체 합계. 넘으면 문제로 보고 (뒤 역할이 덜 눌리는 걸 모르고 지나가지 않게)
+MAX_PRESSES = 3000   # 역할 전체 합계. 넘으면 문제로 보고 (뒤 역할이 덜 눌리는 걸 모르고 지나가지 않게)
 TG_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a", "tg-spoiler",
            "span", "blockquote", "tg-emoji"}
 KNOWN_PREFIXES = ("m:", "pay:", "an:", "cap:", "qz:", "act:")

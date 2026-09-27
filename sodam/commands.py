@@ -884,9 +884,13 @@ async def c_usage(ctx: CmdCtx) -> None:
         lines.append(f"🔋 오늘 이 방 AI 토큰: {used:,} / {cap:,} ({used * 100 // max(cap, 1)}%)")
     if ctx.role >= Role.OWNER:
         u = await ctx.svc.llm.usage_today()
-        budget = ctx.svc.cfg.daily_token_budget
+        from . import costs
         hit = u["cached_tokens"] * 100 // max(u["prompt_tokens"], 1)
-        lines += [f"🌐 오늘 전체 AI 토큰: {u['tokens']:,} / {budget:,} ({u['tokens'] * 100 // max(budget, 1)}%)",
+        spent, ub, tb = await ctx.svc.llm.usd_today(), ctx.svc.llm.usd_budget, ctx.svc.llm.token_budget
+        cap = int(ub * costs.MICRO)
+        lines += [f"💵 오늘 AI 요금: {costs.fmt_usd(spent)}" + (f" / {costs.fmt_usd(cap)} ({spent * 100 // max(cap, 1)}%)"
+                                                            if ub > 0 else ""),
+                  f"🌐 오늘 전체 AI 토큰: {u['tokens']:,}" + (f" / {tb:,} ({u['tokens'] * 100 // tb}%)" if tb else ""),
                   f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)",
                   "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요."]
         day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
