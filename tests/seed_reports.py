@@ -1,4 +1,5 @@
-"""하네스 데이터: 📊 활동 리포트 화면이 비어 있지 않게 (관리 기록·입장·그림 카운터). 방 이름의 HTML 특수문자는 harness 기본 제목이 이미 가짐."""
+"""하네스 데이터: 📊 활동 리포트 화면이 비어 있지 않게 (관리 기록·입장·그림 카운터). 방 이름의 HTML 특수문자는 harness 기본 제목이 이미 가짐.
+🧠 하루 요약: 등록한 대표님(harness.TG, ensure_trial) 이름에 HTML 특수문자 · 1:1 막힘 기록(⚠️ 줄) · 개인 시각 21시(⏰ 화면 ●)."""
 import time
 from datetime import datetime
 
@@ -15,6 +16,11 @@ async def seed(svc):
     await db.upsert_user(fake_user(880101, "새멤버 <b>"))
     await db.touch_member(harness.CHAT, 880101, joined=True)
     await db.bump(datetime.now(TZ).strftime("%Y-%m-%d"), harness.CHAT, "image", 2)
+    from sodam import reports
+    await db.upsert_user(fake_user(harness.TG, "김대표 <&>"))
+    await db._write("INSERT OR REPLACE INTO digest_log(user_id, day, rooms, status, ts) VALUES(?,?,?,?,?)",
+                    (harness.TG, "2026-01-01", str(harness.CHAT), "forbidden", now))
+    await reports.set_pref(db, harness.TG, reports.ALL_ROOMS, hour=21)
 
 
 harness.SEEDERS.append(seed)
