@@ -13,7 +13,7 @@ def _pcm(b: bytes) -> np.ndarray:
 
 
 def mix(chunks: list[bytes]) -> bytes:
-    """여러 사람 소리를 하나로 (평균, 잘림 방지)."""
+    """여러 사람 소리를 하나로 (더하고 넘치면 자름 — 평균은 여럿이 말하면 각자 작아져 음성 감지가 놓침)."""
     arrs = [_pcm(c) for c in chunks if c]
     if not arrs:
         return b""
@@ -21,7 +21,7 @@ def mix(chunks: list[bytes]) -> bytes:
     out = np.zeros(n, dtype=np.int32)
     for a in arrs:
         out[: len(a)] += a
-    return np.clip(out // len(arrs), -32768, 32767).astype("<i2").tobytes()
+    return np.clip(out, -32768, 32767).astype("<i2").tobytes()
 
 
 def down(pcm48: bytes) -> bytes:

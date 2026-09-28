@@ -40,6 +40,12 @@ units() {   # 켜 둔 봇들 (딜러는 .env.dealer 가 있고 켜 둔 경우만
 # 📞 음성 담당(sodam-voice): 본체가 뜬 뒤 따로 — 패키지·서비스 파일 설치·재시작. 실패해도 본체는 그대로 (되돌리지 않음).
 voice_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-voice.service" ] || return 0
+    # 음성 관련 파일이 안 바뀌었고 이미 돌고 있으면 그대로 (재시작 = 진행 중 통화가 끊김)
+    if $SYSTEMCTL is-active -q sodam-voice 2>/dev/null && [ -n "${PREV:-}" ] \
+        && g diff --quiet "$PREV" HEAD -- sodam/voice sodam/mtproto.py sodam/db.py sodam/config.py \
+               requirements-voice.txt deploy/sodam-voice.service; then
+        log "voice: 바뀐 것 없음 → 통화 유지"; return 0
+    fi
     "$PY" -m pip install -q --disable-pip-version-check -r "$APP_DIR/requirements-voice.txt" \
         || { log "voice: 패키지 설치 실패 (본체는 정상)"; return 0; }
     if ! cmp -s "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/sodam-voice.service"; then

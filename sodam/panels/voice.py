@@ -59,10 +59,16 @@ RESULT_TEXT = {
     "no_assistant": "📞 음성 도우미 계정이 아직 연결 안 됐어요 (운영자 설정 필요).",
     "no_worker": "📞 음성 담당이 지금 꺼져 있어요. 잠시 뒤 다시 불러 주세요.",
     "slow": "📞 음성채팅 입장이 오래 걸리고 있어요. 잠시 뒤 음성채팅을 확인해 주세요.",
+    "not_member": "📞 음성 도우미가 이 방에 없어요. 봇에 '초대 링크로 사용자 초대' 권한을 주고 다시 불러 주세요.",
+    "flood": "📞 텔레그램이 잠깐 쉬라고 해요. 몇 분 뒤 다시 불러 주세요.",
+    "bad_link": "📞 음성 도우미가 초대 링크로 못 들어왔어요. 도우미를 방에 직접 초대해 주세요.",
+    "join_request": "📞 가입 승인이 필요한 방이에요. 도우미의 가입 신청을 승인해 주세요.",
+    "too_many_chats": "📞 음성 도우미가 들어간 방이 너무 많아요. 운영자에게 알려 주세요.",
+    "basic_group": "🎙 이 방은 일반 그룹이라 자동으로 음성채팅을 못 켜요. 관리자님이 음성채팅을 먼저 켜 주시면 들어갈게요.",
     "no_peer": "📞 음성 도우미가 이 방을 아직 못 찾았어요. 도우미가 방에 있는지 [✅ 확인하기] 로 봐 주세요.",
 }
 END_REASON = {"idle": "조용해서", "time": "시간이 다 돼서", "bye": "인사하고", "admin": "관리자가 끊어서",
-              "closed": "음성채팅이 닫혀서", "restart": "서버가 다시 시작돼서", "logout": "도우미 연결이 해제돼서"}
+              "closed": "음성채팅이 닫혀서", "restart": "서버 업데이트로 잠깐 나왔어요 — 다시 불러 주세요", "kicked": "음성채팅에서 내보내져서", "logout": "도우미 연결이 해제돼서"}
 
 
 def _result_text(res: str) -> str:
@@ -109,8 +115,9 @@ async def precheck(svc, chat_id: int, uid: int, role: Role) -> str | None:
     return None
 
 
-async def _prepare_member(bot, chat_id: int, aid: int) -> str | None:
-    """어시스턴트가 방에 없으면 1회용 초대링크 (10분·1명). 막혀 있으면 풀어 봄. 음성채팅 관리 권한도 줘 봄."""
+async def _prepare_member(bot, chat_id: int, aid: int) -> dict | str | None:
+    """어시스턴트가 방에 없으면 들어갈 방법: 공개 방 = @아이디(초대 권한 불필요), 아니면 1회용 초대링크 (10분·1명).
+    막혀 있으면 풀어 봄. 돌려주는 값: {} = 이미 있음 · {username|link} = join 일감 · 'banned'/'no_invite_right'."""
     link = None
     try:
         m = await bot.get_chat_member(chat_id, aid)
@@ -125,12 +132,18 @@ async def _prepare_member(bot, chat_id: int, aid: int) -> str | None:
         status = "left"
     if status in ("left", "kicked"):
         try:
+            chat = await bot.get_chat(chat_id)
+            if getattr(chat, "username", None):
+                return {"username": chat.username}
+        except TelegramError:
+            pass
+        try:
             inv = await bot.create_chat_invite_link(chat_id, member_limit=1, expire_date=int(time.time()) + 600,
                                                     name="소담 음성")
             link = inv.invite_link
         except TelegramError:
             return "no_invite_right"
-    return link or ""
+    return {"link": link} if link else {}
 
 
 async def _promote(bot, chat_id: int, aid: int) -> None:
@@ -153,7 +166,7 @@ async def start_call(svc, bot, chat_id: int, uid: int) -> None:
         await bot.send_message(chat_id, text)
         return
     if prep:
-        jid = await store.add_job(db, chat_id, "join", {"link": prep}, uid)
+        jid = await store.add_job(db, chat_id, "join", prep, uid)
         if jid:
             st, res = await _wait(db, jid)
             if st != "done":
@@ -169,7 +182,16 @@ async def start_call(svc, bot, chat_id: int, uid: int) -> None:
         return                                   # 이미 시작하는 중 (연타)
     st, res = await _wait(db, jid)
     await store.mark_notified(db, "voice_jobs", jid)
+    if res == "no_voice_right" and await _is_basic_group(bot, chat_id):
+        res = "basic_group"                    # 일반 그룹은 관리자 추가(promote)가 안 돼서 자동으로 못 켬
     await bot.send_message(chat_id, _result_text(res))
+
+
+async def _is_basic_group(bot, chat_id: int) -> bool:
+    try:
+        return (await bot.get_chat(chat_id)).type == "group"
+    except TelegramError:
+        return False
 
 
 async def stop_call(svc, chat_id: int, uid: int) -> bool:
@@ -209,7 +231,7 @@ async def tick(svc, bot) -> None:
     for row in await store.ended_unnotified(db):
         if not await store.mark_notified(db, "voice_calls", row["id"]):
             continue
-        if row["reason"] == "restart" or not row["seconds"]:
+        if not row["seconds"] and row["reason"] != "restart":   # 재시작은 짧아도 알림 (다시 부르게)
             continue
         mins = max(1, round(row["seconds"] / 60))
         why = END_REASON.get(row["reason"] or "", "")
