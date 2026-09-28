@@ -399,5 +399,9 @@ async def channel_updates_record_names_but_never_post_notice():
     await namehist.record_admins(svc, bot, CH, [SimpleNamespace(user=user(6, "새이름", "x6"))])
     await namehist.record(db, user(6, "옛이름", "x6"))
     await namehist.record_admins(svc, bot, CH, [SimpleNamespace(user=user(6, "새이름2", "x6"))])
-    assert not notices(bot, CH), notices(bot, CH)
+    ch2 = SimpleNamespace(id=-1007777, type="channel", title="등록 안 된 채널")          # 채널 표에 없어도 채널이면
+    await namehist.record(db, user(8, "하나", None))
+    await handlers.on_any_update(SimpleNamespace(effective_chat=ch2, message_reaction=SimpleNamespace(
+        user=user(8, "둘", None))), ctx)
+    assert not notices(bot, CH) and not notices(bot, -1007777), bot.named("send_message")
     assert [h for h in await namehist.history(db, 5)], "기록은 남김"
