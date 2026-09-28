@@ -139,14 +139,16 @@ def rounded_mask(radius: int, ss: int = 4) -> Image.Image:
     return m.resize((S, S), Image.LANCZOS)
 
 
-def affine(angle_deg, sx, sy, dx, dy, pivot):
+def affine(angle_deg, sx, sy, dx, dy, pivot, shear=0.0):
+    """MASTER 좌표의 순방향 변환(기울임 → 크기·회전 → 이동 → 1024→512) 을 PIL 이 원하는 역행렬 계수로. shear = x 기울임(라디안)."""
     a = math.radians(angle_deg)
     cx, cy = pivot
     R = np.array([[math.cos(a) * sx, -math.sin(a) * sy, 0], [math.sin(a) * sx, math.cos(a) * sy, 0], [0, 0, 1]])
+    SH = np.array([[1, math.tan(shear), 0], [0, 1, 0], [0, 0, 1]])
     T1 = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
     T2 = np.array([[1, 0, cx + dx], [0, 1, cy + dy], [0, 0, 1]])
     out = np.array([[S / MASTER, 0, 0], [0, S / MASTER, 0], [0, 0, 1]])
-    inv = np.linalg.inv(out @ T2 @ R @ T1)
+    inv = np.linalg.inv(out @ T2 @ R @ SH @ T1)
     return tuple(inv[:2].reshape(-1))
 
 
@@ -204,10 +206,10 @@ def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
     frames, boxes = [], []
     for n in range(NF):
         t = n / FPS
-        ang, sx, sy, dx, dy = motion(t)
+        ang, sx, sy, dx, dy, shear = motion(t)
         if mode == "photo":                                  # never reveal the canvas edge
-            sx, sy = max(sx, 1.0), max(sy, 1.0)
-        frame = master.transform((S, S), Image.AFFINE, affine(ang, sx, sy, dx, dy, pivot), resample=Image.BICUBIC)
+            sx, sy = max(abs(sx), 1.0) * (1 if sx >= 0 else -1), max(abs(sy), 1.0) * (1 if sy >= 0 else -1)
+        frame = master.transform((S, S), Image.AFFINE, affine(ang, sx, sy, dx, dy, pivot, shear), resample=Image.BICUBIC)
         frame = unpremultiply(frame)
         if mask is not None:
             frame.putalpha(mask)

@@ -27,7 +27,9 @@ description: 텔레그램 "움프"(움직이는 프로필 사진·영상 아바�
 qc 경고(자막 겹침·잘림·밋밋/요란·하얗게 날아감)가 Result.warnings 로 오고, 도구는 경고면 안 보내고 한 번 고치게 한다.
 "글리치" = 잠깐 R/B 어긋남(glitch), "네온" = glow(color)·sweep — **전체 색조·채도 돌리기가 아님**(그게 "별로"의 원인).
 원본이 이미 그림이면 `stickerforge.looks_illustrated` 가 art(그림체) 를 건너뛴다. 명령줄: `tools/sticker_forge.py IMAGE SPEC out.mp4 --mp4`.
-아래 2~3 은 옛 부품 경로(spec 없이 부를 때 — 하트·눈·꽃잎 날리기는 아직 이쪽).
+하트·눈·꽃잎·색종이·돈비·방울은 이제 스티커 엔진 fx(hearts·snow·petals·confetti·money·bubbles)에도 있어 spec 경로로 같이 쓸 수 있다.
+학습(sticker_log product='ump' · sticker_recipes · `sticker_catalog(for_video=true)`) 과 없는 효과의 `wanted`(featreq) 는 스티커와 같다.
+아래 2~3 은 옛 부품 경로(spec 없이 부를 때).
 
 ## 2. ffmpeg 레시피 (sodam/avatar.py 가 기준 — 옛 부품 경로)
 ffmpeg 는 `imageio-ffmpeg` 정적 바이너리(`imageio_ffmpeg.get_ffmpeg_exe()`) → 시스템 ffmpeg 없어도 됨.

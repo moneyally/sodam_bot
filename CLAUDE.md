@@ -330,17 +330,25 @@
   붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → send_document (영상으로 보내면 재압축).
 - 원본이 이미 그림이면 `stickerforge.looks_illustrated`(평평한 면 + 굵은 선 + 적은 색) 가 art 를 건너뜀 (gpt-image 비용·시간 낭비 방지).
 - 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
+- 학습은 스티커와 같은 표(product='ump'): sticker_log/sticker_recipes, `sticker_catalog(for_video=true)`, 없는 효과는 `wanted` → featreq.
 
-## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, 스킬 `.claude/skills/telegram-sticker-forge/`, tests/test_sticker.py·test_sticker_upgrade.py)
-- 사용자가 준 telegram-sticker-forge 엔진(배경 빼기·움직임 14·효과 20·타이핑 자막) → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘.
-  AI 도구 `sticker_catalog(query, kind)`(읽기: 계열이 서로 다른 레시피 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings)`:
-  spec 은 `{recipe, seed}`(recipes.py 30개, vary 로 같은 계열 안 변주) 또는/그리고 motion·fx·caption·framing 직접, `sanitize` 가 이름·숫자·범위만
-  통과(rain/rise·font = 파일 경로라 막음). 검사표(규격 9항목) PASS **+ qc 경고 없음**이어야 전송 — 경고(자막 겹침·잘림·구멍·밋밋/요란·하얗게)면
-  안 보내고 고칠 방향과 함께 돌려줌(두 번째는 accept_warnings=true), 규격 실패면 효과 하나 덜고 한 번 더. 사람마다 하루 5개, 한 번에 하나(to_thread).
-- photo 모드 framing auto(에지 에너지 관심 영역·위쪽 가중 → 얼굴 안 잘림)/center/top/blur(흐린 배경 위에 전체). `engine.focus_window`.
-- 속도(4코어): 그리기 10.4→4.9초 — raw RGBA 한 파일(PNG 생략), 격자 캐시, unpremultiply 경계만, VP9 1차 패스 cpu-used 4, 사다리 건너뛰기.
-  명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]` 로 직접 만들어 미리보기(8장)·경고 확인.
-- 도구 설명은 아트 디렉터 프롬프트(①사진 읽기 ②catalog ③spec ④경고 고치기, 한국어 표현 매핑) — make_sticker+make_profile_video ≈ 1,280토큰(추정).
+## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, `stickerlearn.py`, 스킬 `.claude/skills/telegram-sticker-forge/`,
+## tests/test_sticker.py·test_sticker_upgrade.py·test_sticker_parts.py·test_sticker_learn.py)
+- 엔진(배경 빼기·**움직임 31**·**효과 42**·**자막 애니 20**) → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘 + 움프(forge_video).
+  부품 목록은 **코드가 진실**: `stickerforge.catalog()` 가 PRESETS/ANIMS 와 함수 인자·docstring 첫 줄에서 뽑음 (문서에 따로 안 적음).
+  새 부품 = motions.py/fx.py 에 함수 + PRESETS 한 줄(첫 줄 docstring 한국어), CLAMP/SPECIAL 범위, tests/test_sticker_parts.py 가 자동 검사
+  (첫 장 = 끝 다음 장, sanitize 통과, 규격 렌더). 모션은 6-튜플(angle, sx, sy, dx, dy, shear). 글 인자(text 8자)는 PIL 로만, points 는 512 좌표 4개까지.
+- AI 도구 `sticker_catalog(query, kind, for_video)`(읽기: 학습 레시피 → 계열이 다른 정적 후보 3 → 부품 전체) → `make_sticker(spec, icon,
+  accept_warnings, request, wanted)`: spec 은 `{recipe, seed}`(정적 36개 또는 이 방 학습 레시피 이름) 또는/그리고 motion·fx·caption·framing,
+  `sanitize` 가 이름·숫자·범위만 통과(rain/rise·font = 파일 경로라 막음). 검사표 PASS + qc 경고 없음이어야 전송(경고면 안 보내고 고칠 방향, 두 번째는
+  accept_warnings), 규격 실패면 효과 하나 덜고 한 번 더. 사람마다 하루 5개, 남의 사진 허용, 한 번에 하나(to_thread).
+- **실시간 학습 (`stickerlearn.py`, 데이터만 늘어남)**: sticker_log(방·사람·요청 200자·종류·spec·결과·msg_id·score) ← 👍❤️🔥 반응(hooks.REACTION_HOOKS,
+  handlers.on_any_update) · 우리 스티커에 '좋다/예쁘다/완벽' 답장 +1 · '별로/다른 느낌' -1 · 10분 안 재요청 -1 (AI 호출 없음).
+  +1 두 번 넘은 조합 → sticker_recipes(방마다 50, 90일 안 쓰면 삭제, 이름 = 요청 두 단어_계열). 카탈로그는 이 사람·이 방이 좋아한 조합 먼저,
+  별로였던 건 뒤, 최근 3번 계열은 미룸. 없는 효과는 가까운 조합 + `wanted` → featreq 접수(오너 💡) → **새 효과는 코드로만** (AI 가 실행 중 코드·ffmpeg 필터 생성 금지).
+- photo 모드 framing auto(에지 에너지 관심 영역·위쪽 가중)/center/top/blur. 속도(4코어): 그리기 10.4→4.9초 (raw RGBA, 격자 캐시, 경계만 unpremultiply,
+  VP9 1차 패스 cpu-used 4, 사다리 건너뛰기). 명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]`.
+- 도구 설명은 아트 디렉터 프롬프트(①사진 읽기 ②catalog ③spec ④경고 고치기, 한국어 표현 매핑). 카탈로그 본문은 도구 결과라 매 호출에 안 붙음.
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →

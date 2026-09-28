@@ -19,7 +19,15 @@ description: Turn any image plus a free-form request into a verified Telegram vi
 >   spec 에 `{"recipe": 이름, "seed": n}` 을 주면 sanitize 가 변주해 깔고 나머지 키로 덮음.
 > - **움프**: `stickerforge.forge_video(image, spec)` = 같은 프레임을 640×640 H.264 6초(3초 루프×2)·yuv420p·무음·faststart·2MB↓ 로.
 >   photo 모드·radius 0 권장(원형 프사). `panels/avatar.py` 의 `make_profile_video(spec=…)` 이 이 경로, spec 없으면 옛 부품 조합.
-> - 소담 AI 도구: `sticker_catalog(query, kind)`(읽기, 계열이 다른 레시피 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings)`
+> - **부품 목록은 코드가 진실** (2026-09-29 확장: 움직임 31·효과 42·자막 애니 20 — animate.css/Animista 프리셋, 인기 팩 연출(도장·말풍선·집중선·
+>   스피드라인·효과음 글자·반짝이 테두리·눈/꽃잎/색종이/돈비·레이저·땀·분노 마크), 밈(딥프라이·모자이크·스캔라인·스트로브·임팩트 프레임),
+>   자막(pop·drop·flip·spin·rise·slide·stamp·zoom·neon·wobble·jitter·rainbow·karaoke·pulse)). `stickerforge.catalog()` 가 PRESETS/ANIMS 와
+>   함수 인자·docstring 첫 줄에서 뽑으므로 아래 영어 카탈로그(references/)는 참고용, 소담에선 코드가 기준. 새 부품 규칙: 첫 장 = 끝 다음 장(주기는 루프의
+>   정수분의 1, 재시드는 프레임 번호를 NF 로 접기, 입자 회전은 정수 바퀴), CLAMP/SPECIAL 범위, 파일 경로 인자 금지(text 8자·points 4개는 PIL 로만),
+>   tests/test_sticker_parts.py 가 자동 검사. 모션은 6-튜플(…, shear).
+> - **실시간 학습** (`sodam/stickerlearn.py`): sticker_log ← 👍❤️🔥 반응·'좋다/별로' 답장·10분 안 재요청 → sticker_recipes(방 50개, 90일) →
+>   카탈로그가 좋아한 조합 먼저·별로 뒤·최근 계열 미룸. 없는 효과는 가까운 조합 + `wanted`(featreq). AI 는 새 코드·필터를 만들지 않는다.
+> - 소담 AI 도구: `sticker_catalog(query, kind, for_video)`(읽기, 학습 레시피 + 계열이 다른 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings, request, wanted)`
 >   (`sanitize`: 이름은 목록만, 값은 그 함수 인자 + 숫자·참거짓·숫자 목록, 범위 CLAMP/SPECIAL, **rain/rise·font 는 파일 경로라 막음**;
 >   검사표 PASS + 경고 없어야 전송, 경고면 안 보내고 돌려줌(두 번째는 accept_warnings), 규격 실패면 효과 하나 덜고 한 번 더).
 >   원본은 붙은·답장한 사진, 없으면 요청자 프사. 사람마다 하루 5개. 테스트 `python tests/run_all.py sticker sticker_upgrade`.

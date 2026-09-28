@@ -29,12 +29,23 @@ CLAMP = {                              # (최소, 최대) — 넘으면 잘라�
     "amp": (0, 12), "freq": (1, 12), "jumps": (1, 3), "height": (0, 420), "squash": (0, 0.3), "drops": (1, 2),
     "kick": (0, 40), "lunge": (0, 0.2), "strength": (0, 0.8), "width": (0, 12), "radius": (0, 30), "flare": (0, 0.35),
     "flicker": (0, 0.15), "bursts": (0, 5), "k": (1, 20), "bands": (1, 12), "shift": (0, 40), "split": (0, 6),
-    "spokes": (4, 24), "count": (1, 10), "size": (10, 120), "r0": (0, 300), "r1": (50, 400), "life": (0.05, 0.6),
+    "spokes": (4, 24), "count": (1, 120), "size": (10, 140), "r0": (0, 300), "r1": (50, 400), "life": (0.05, 0.6),
     "sway": (0, 20), "hold": (0.2, 0.7), "direction": (-1, 1), "tilt": (-4, 4), "shake_hz": (5, 30),
     "height_px": (20, 140), "alpha": (0, 0.8), "tau": (0.03, 0.4), "pulse": (0, 1), "phase": (0, 6.3),
+    # 추가 부품
+    "bounces": (1, 4), "beats": (1, 3), "wiggle": (0, 6), "turns": (1, 2), "depth": (0, 0.7), "drift": (0, 80), "waves": (1, 4),
+    "block": (4, 24), "gap": (2, 6), "dark": (0, 0.6), "rate": (1, 8), "spread": (10, 120), "flashes": (1, 4), "gain": (1, 1.8),
+    "dx": (-30, 30), "dy": (-30, 30), "blur": (2, 16), "opacity": (0, 0.8), "length": (60, 600), "angle": (-180, 180),
 }
+TEXT_KEYS = {"text": 8, "axis": 1}            # PIL 로만 그리는 짧은 글 (ffmpeg 인자·경로 아님). axis: x|y
+POINT_KEYS = {"points": 4}                    # [[x,y],...] 512 좌표
 SPECIAL = {"flashbang": {"amount": (0, 60)}, "glitch": {"amp": (0, 9)}, "punch": {"amount": (0, 0.12)},
-           "zoom": {"amount": (0, 0.12)}, "pan": {"amount": (0, 60)}, "scan": {"height": (20, 140)}}
+           "zoom": {"amount": (0, 0.12)}, "pan": {"amount": (0, 60)}, "scan": {"height": (20, 140)},
+           "kenburns": {"amount": (0, 0.2)}, "rubber_band": {"amount": (0, 0.4)}, "jello": {"amount": (0, 25)},
+           "heart_beat": {"amount": (0, 0.3)}, "tada": {"amount": (0, 0.2)}, "light_speed": {"amount": (0, 40)},
+           "deep_fry": {"amount": (0, 1.5)}, "swing": {"amp": (0, 30)}, "sway": {"amp": (0, 40)}, "head_shake": {"amp": (0, 24)},
+           "bounce_in": {"height": (40, 260)}, "hop": {"height": (40, 200)}, "slam": {"height": (200, 520)},
+           "wave": {"amp": (0, 16)}, "laser": {"length": (100, 600)}, "bolts": {"count": (1, 10)}}
 
 
 @dataclass
@@ -69,9 +80,19 @@ def _clean_params(kind: str, fn, raw: dict) -> dict:
         lo_hi = SPECIAL.get(kind, {}).get(k) or CLAMP.get(k)
         if isinstance(v, bool):
             out[k] = v
+        elif isinstance(v, str) and k in TEXT_KEYS:                # 짧은 글자 (PIL 에서만 그림)
+            v = " ".join(v.split())[:TEXT_KEYS[k]]
+            if k == "axis":
+                v = v if v in ("x", "y") else "y"
+            if v:
+                out[k] = v
+        elif k in POINT_KEYS and isinstance(v, (list, tuple)) and 1 <= len(v) <= POINT_KEYS[k] \
+                and all(isinstance(p, (list, tuple)) and len(p) == 2 and all(_num(x) for x in p) for p in v):
+            out[k] = [(int(min(max(p[0], 0), 512)), int(min(max(p[1], 0), 512))) for p in v]
         elif _num(v):
             out[k] = min(max(v, lo_hi[0]), lo_hi[1]) if lo_hi else v
-            if isinstance(v, int) and k in ("hits", "cycles", "jumps", "drops", "bursts", "count", "bands", "spokes"):
+            if isinstance(v, int) and k in ("hits", "cycles", "jumps", "drops", "bursts", "count", "bands", "spokes", "bounces",
+                                            "beats", "turns", "flashes", "block", "gap"):
                 out[k] = int(out[k])
         elif isinstance(v, (list, tuple)) and len(v) <= 12 and all(_num(x) for x in v):
             if k == "subset":
@@ -111,7 +132,7 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         return None, "keying 은 auto·white·black·color·glow·none"
     spec = {"mode": mode, "keying": {"mode": kmode, "tol": int(min(max(key.get("tol", 20), 5), 60))},
             "margin": float(min(max(raw.get("margin", 0.08), 0.04), 0.18)),
-            "radius": int(min(max(raw.get("radius", 56), 0), 256)), "seed": int(raw.get("seed", 1)) % 1000,
+            "radius": int(min(max(raw.get("radius", 56), 8), 256)),   # 스티커는 투명 픽셀이 있어야 함(alpha_range) → 모서리 최소 8 "seed": int(raw.get("seed", 1)) % 1000,
             "framing": raw.get("framing") if raw.get("framing") in ("auto", "center", "top", "blur") else "auto"}
     spec["motion"], spec["fx"] = [], []
     for item in (raw.get("motion") or [{"type": "idle"}])[:MAX_MOTIONS]:
@@ -134,12 +155,33 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         text = " ".join(str(cap["text"]).split())
         if len(text) > MAX_CAPTION:
             return None, f"글자는 {MAX_CAPTION}자까지 (2~7자가 가장 예쁨)"
-        anims = [a for a in (cap.get("anims") or ["bounce", "punch", "shine"])
-                 if a in ("bounce", "punch", "shine", "wave", "shake", "glow")][:3] or ["bounce", "punch", "shine"]
+        anims, seen_entr = [], False
+        for a in (cap.get("anims") or ["bounce", "punch", "shine"]):
+            if a in CAP.ANIMS and a not in anims and not (a in CAP.ENTRANCES and seen_entr):
+                anims.append(a); seen_entr |= a in CAP.ENTRANCES
+        anims = anims[:4] or ["bounce", "punch", "shine"]
         spec["caption"] = {"text": text, "palette": cap.get("palette") if cap.get("palette") in CAP.PALETTES else "gold",
                            "anims": anims, "position": "top" if cap.get("position") == "top" else "bottom",
                            "typing": bool(cap.get("typing", True))}
     return spec, None
+
+
+def catalog() -> dict:
+    """부품 목록을 코드에서 바로 (이름 → 한 줄 설명 + 조절 인자·기본값). 문서에 따로 적으면 엔진과 어긋나므로 여기서만 읽는다."""
+    from . import caption as CAP, fx as FX, motions as M
+
+    def entry(fn):
+        doc = (fn.__doc__ or "").strip().splitlines()[0] if fn.__doc__ else ""
+        params = {}
+        for name, p in inspect.signature(fn).parameters.items():
+            if name in ("frame", "t", "ctx", "_", "image", "k") or p.kind == p.VAR_KEYWORD or p.default is p.empty:
+                continue
+            params[name] = p.default
+        return {"doc": doc, "params": params}
+    motions = {n: entry({"breathe": M.idle, "float": M.float_}.get(n, f)) for n, f in M.PRESETS.items()}
+    motions["breathe"]["doc"] = "아주 잔잔한 숨쉬기 (잠·밤)."
+    fxs = {n: entry(f) for n, f in FX.PRESETS.items() if n not in BLOCKED_FX}
+    return {"motions": motions, "fx": fxs, "caption_anims": dict(CAP.ANIMS), "palettes": list(CAP.PALETTES)}
 
 
 _LOCK = asyncio.Semaphore(1)
@@ -208,7 +250,7 @@ def render_video(image: bytes, spec: dict) -> Result:
     """움프: 같은 엔진으로 그린 뒤 640×640 H.264 6초 (3초 루프 ×2). 알파는 검정 위에 평탄화.
     photo 모드가 자연스럽고(radius 0 권장), cutout 도 됨(배경 검정)."""
     from . import engine
-    spec = {**spec, "radius": spec.get("radius", 0) if spec["mode"] == "photo" else 0}
+    spec = {**spec, "radius": 0}                                     # 프사는 원형으로 잘리므로 모서리 없음
     tmp = tempfile.mkdtemp(prefix="sodam_ump_")
     try:
         src, used = _load(image, spec, tmp)

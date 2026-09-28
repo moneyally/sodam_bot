@@ -1125,6 +1125,9 @@ async def on_any_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await namehist.observe(_svc(context), context.bot, update)
     except Exception:
         log.exception("name observe failed")
+    mr = getattr(update, "message_reaction", None)
+    if mr is not None and hooks.REACTION_HOOKS:                       # 스티커 👍❤️🔥 학습 (sodam/stickerlearn.py)
+        await hooks.reaction(_svc(context), context.bot, mr)
 
 
 async def job_name_sweep(context: ContextTypes.DEFAULT_TYPE) -> None:

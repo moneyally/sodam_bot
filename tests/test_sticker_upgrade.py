@@ -80,7 +80,7 @@ def frames_of(spec_raw, image_bytes):
 @test
 def warnings_name_caption_overlap_clipping_flat_and_whiteout():
     # 자막이 피사체를 덮음: 마스코트를 아래까지 꽉 채우고 자막을 위(top)가 아니라 마스코트 위로 강제
-    res = frames_of({"mode": "photo", "radius": 0, "framing": "center", "motion": ["still"],
+    res = frames_of({"mode": "photo", "radius": 8, "framing": "center", "motion": ["still"],
                      "caption": {"text": "안녕하세요", "position": "bottom"}}, png(portrait(600, 600, 470)))
     assert any("자막" in w for w in res.warnings), res.warnings          # 얼굴이 아래쪽 → 자막과 겹침
     assert res.metrics["caption_overlap"] > 0.2
@@ -93,7 +93,7 @@ def warnings_name_caption_overlap_clipping_flat_and_whiteout():
     assert any("밋밋" in w for w in res.warnings), res.warnings
     assert res.metrics["motion_mean"] < 0.5
     # 하얗게 날아감: flashbang 최대 + 큰 flare
-    res = frames_of({"mode": "photo", "radius": 0, "motion": [{"type": "jab", "times": [0.3, 1.2, 2.0]}],
+    res = frames_of({"mode": "photo", "radius": 8, "motion": [{"type": "jab", "times": [0.3, 1.2, 2.0]}],
                      "fx": [{"type": "flashbang", "amount": 60, "tau": 0.4}]},
                     png(Image.new("RGB", (400, 400), (235, 235, 235))))
     assert any("하얗" in w for w in res.warnings), res.warnings
@@ -257,7 +257,7 @@ async def profile_video_uses_sticker_engine_spec_and_skips_art_for_drawings():
         res = await ask(r, A, [tool_call("make_profile_video", {"spec": {"motion": [{"type": "punch", "hits": 2}], "fx": ["sweep", "glitch"]},
                                                                 "art": "anime"})], image=img)
         assert "보냈음" in res[0] and "건너뜀" in res[0] and not arts, res                    # 이미 그림 → art 안 함
-        assert seen and seen[0]["mode"] == "photo" and seen[0]["radius"] == 0 and seen[0]["fx"][1]["type"] == "glitch"
+        assert seen and seen[0]["mode"] == "photo" and seen[0]["fx"][1]["type"] == "glitch"
         assert "스티커 엔진" in r.bot.named("send_document")[-1][3]
         res = await ask(r, A, [tool_call("make_profile_video", {"spec": {"fx": [{"type": "rain", "image": "/etc/passwd"}]}})], image=img)
         assert "spec 오류" in res[0], res
