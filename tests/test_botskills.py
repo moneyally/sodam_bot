@@ -517,3 +517,24 @@ async def seen_commands_keep_example_reply_and_are_relearned_from_history():
     assert "플레이어에 30,000,000P" in got["/플"]["example"], dict(got["/플"])
     desc = botskills.describe(await botskills.skills(r.db, Room.CHAT, KETER.id))
     assert "/플" in desc and "플레이어에 30,000,000P 배팅" in desc and "/ㅂㅋ" in desc, desc   # AI 가 어느 게 플레이어인지 봄
+
+
+@test
+async def unknown_meaning_never_auto_picks_and_command_the_bot_itself_named_is_allowed():
+    # 실제 사례(뉴월드 #149·#150): '케테르 포인트지급' → intent=other 로 '/ㅂㅋ 포인트지급'(뱅커 배팅!) 이 나감 ·
+    # 봇이 '먼저 /등록 명령어로 프로필을 등록' 이라 했는데 '/등록 은 없는 명령' 으로 거절
+    r = await blroom("interact")
+    await trust(r, KETER)
+    m = await r.say(A, "/ㅂㅋ 1000")
+    await bot_says(r, KETER, "✅ 🔴 뱅커에 1,000P 배팅!", reply_to=m)
+    m = await r.say(A, "/ㄱㄹㅈ")
+    await bot_says(r, KETER, "🃏 B I G R O A D", reply_to=m)
+    await botlink.approve(r.db, Room.CHAT, KETER.id, "/ㅂㅋ", BOSS.id)
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "케테르", "intent": "other", "query": "포인트지급"})])
+    assert "보냈음" not in res[0] and "/ㅂㅋ" in res[0] and "뱅커에" in res[0], res     # 목록·예시만 돌려줌
+    assert not [c for c in r.bot.named("send_message") if c[2].startswith("/ㅂㅋ")]
+    await bot_says(r, KETER, "⚠️ 먼저 /등록 명령어로 프로필을 등록한 뒤 사용해주세요.")
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "케테르", "command": "/등록"})])
+    assert "확인 버튼" in res[0], res
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "케테르", "command": "/지급"})])
+    assert "없음" in res[0], res                                            # 봇이 말한 적 없는 건 여전히 거절

@@ -295,6 +295,8 @@
   본 명령은 예시 한 줄(example: "'/플 {…}' → ✅ 🔵 플레이어에 … 배팅", 멤버 인자 글자는 안 남김)과 답으로 추정한 intent 를 저장,
   bot_command(intent) 때마다 기록(messages 의 '/명령' → 그 뒤 첫 봇 답)에서 다시 배움. 같은 뜻 명령이 여럿이고 이름으로 구분 못 하면
   (/ㅂㅋ·/플 둘 다 bet) 고르지 않고 예시 목록을 돌려 AI 가 command 로 고름.
+  intent=other(뜻 모름)면 절대 자동 선택 안 함 (실제 사례: '포인트지급' → '/ㅂㅋ 포인트지급' 뱅커 배팅이 나감). 없는 명령 검사는
+  그 봇이 최근 글에서 직접 말한 명령('먼저 /등록 명령어로 …')은 통과 (`botskills.named_by_bot`).
   아는 명령이 하나도 없는 봇은 bot_command 가 '/help@봇' 을 방·봇마다 하루 1번(claims blhelp:) 보내 답에서 배움 · 🎓 템플릿·직접.
 ## 📮 AI 요청 대기열 (`aiqueue.py`, Codex ext/queue, tests/test_aiqueue.py · 뮤테이션 8개)
 - 검사 통과한 요청은 ai_queue(봇·방·메시지) 한 줄 → 답 보내면 지움. 종료(취소)로 끊기면 줄을 남김 → persist.job_sweep(30초)이 다시 실행.

@@ -338,7 +338,11 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         return reason
     if intent and not raw:
         await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"])   # 기록에서 명령·예시 채움 (DB만)
-        same = [k for k in await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"]) if k["intent"] == intent]
+        known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
+        if intent == "other" and known:   # 뜻을 모르는 요청은 고르지 않음 (실제 사례: '포인트지급' → '/ㅂㅋ 포인트지급' 뱅커 배팅)
+            return (f"'{query or intent}' 에 맞는 명령을 이름만으론 모름. {_bot_label(row)} 아는 명령(예시 포함): "
+                    f"{botskills.describe(known)}. 예시를 보고 맞는 게 있으면 그 명령을 command 로 다시 부르고, 없으면 없다고 답할 것.")
+        same = [k for k in known if k["intent"] == intent]
         if len(same) > 1 and not any(botskills.guess_intent(k["command"]) == intent for k in same):
             # 같은 뜻 명령이 여럿인데 이름으론 구분 못 함 (실제 사례: 게임봇 '/ㅂㅋ'=뱅커·'/플'=플레이어 둘 다 배팅)
             return (f"{_bot_label(row)} 에 '{intent}' 명령이 여러 개: {botskills.describe(same)}. 예시를 보고 요청에 맞는 "
@@ -361,7 +365,8 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         if known and head not in {k["command"] for k in known}:   # 지어낸 명령 (실제 사례: '/취소 여름아'·'/다음곡')
             await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"])
             known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
-            if head not in {k["command"] for k in known}:
+            if head not in {k["command"] for k in known} and not await botskills.named_by_bot(
+                    ctx.svc.db, ctx.chat_id, row["bot_id"], head):   # 그 봇이 직접 말한 명령('먼저 /등록 …')은 됨
                 return (f"{_bot_label(row)} 에는 {head} 명령이 없음 — 명령을 지어내지 말 것. 아는 명령(설명 포함): "
                         f"{botskills.describe(known)}. 이 중 맞는 걸로 다시 부르거나(번호가 필요하면 먼저 대기열 명령), 없으면 없다고 답할 것.")
         intent = await botskills.intent_of(ctx.svc.db, ctx.chat_id, row["bot_id"], head)

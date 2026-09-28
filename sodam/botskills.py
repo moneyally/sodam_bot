@@ -389,6 +389,14 @@ async def learn_from_history(db, chat_id: int, bot_id: int) -> int:
     return n
 
 
+async def named_by_bot(db, chat_id: int, bot_id: int, command: str) -> bool:
+    """그 봇이 최근 글(50개)에서 직접 말한 명령인지 ('먼저 /등록 명령어로 …' 같은 안내)."""
+    rx = re.compile(r"(?<![\w/@<])" + re.escape(command) + r"(?![\w])", re.I)
+    rows = await db._all("SELECT text FROM botlink_msgs WHERE chat_id=? AND bot_id=? ORDER BY ts DESC LIMIT 50",
+                         (chat_id, bot_id))
+    return any(rx.search(r["text"] or "") for r in rows)
+
+
 async def _username(db, chat_id: int, bot_id: int) -> str:
     r = await db._one("SELECT username FROM botlink_bots WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
     return ((r["username"] if r else "") or "").lower()
