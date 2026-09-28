@@ -113,8 +113,8 @@ class Bridge:
             async with self._connect() as conn:
                 self.conn = conn
                 await conn.session.update(session=session_config(self.instructions, self.voice, self.reply))
-                if self.greet:
-                    await conn.response.create(response={"instructions": self.greet})
+                if self.greet:   # response.instructions 는 세션 지시를 '대신'함 → 캐릭터를 같이 넣음
+                    await conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
                 tasks = [asyncio.create_task(f()) for f in (self._reader, self._sender, self._pacer, self._watch)]
                 await self._done.wait()
                 for t in tasks:

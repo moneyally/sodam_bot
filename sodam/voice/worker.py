@@ -93,6 +93,10 @@ class Worker:
         self.client = client
         mtproto.write_session(session_path(self.cfg), client.session.save())
         me = await client.get_me()
+        try:
+            await client.get_dialogs(limit=200)   # 속한 방을 세션에 기억 (막 로그인한 세션은 -100… ID 로 방을 못 찾음)
+        except Exception as e:
+            log.warning("방 목록 읽기 실패: %s", e)
         name = " ".join(x for x in (me.first_name, me.last_name) if x) or "assistant"
         await self.db.set_state(0, store.ASSISTANT_KEY, {"id": me.id, "name": name, "username": me.username})
         self.frame = None
@@ -193,7 +197,7 @@ class Worker:
                                                                   md.VideoParameters(VW, VH, VFPS)),
                                           md.GroupCallConfig(auto_start=True))
                 except Exception as e:
-                    if type(e).__name__ in ("NoActiveGroupCall", "ChatAdminRequired", "UserBannedInChannel"):
+                    if type(e).__name__ in ("NoActiveGroupCall", "ChatAdminRequired", "UserBannedInChannel", "ValueError"):
                         raise
                     log.warning("영상 칸 없이 소리만으로 다시 (%s)", e)
                     video = False
@@ -203,8 +207,9 @@ class Worker:
         except Exception as e:
             name = type(e).__name__
             await self._leave(chat_id)
+            log.warning("통화 시작 실패 %s: %r", chat_id, e)
             return False, {"NoActiveGroupCall": "no_voice_chat", "ChatAdminRequired": "no_voice_right",
-                           "UserBannedInChannel": "banned"}.get(name, f"error:{name}")
+                           "UserBannedInChannel": "banned", "ValueError": "no_peer"}.get(name, f"error:{name}")
         self.bridges[chat_id] = bridge
         call_id = await store.call_started(self.db, chat_id, p.get("by"))
         self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))

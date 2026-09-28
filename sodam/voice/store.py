@@ -67,6 +67,14 @@ async def job(db, job_id: int):
     return await db._one("SELECT * FROM voice_jobs WHERE id=?", (job_id,))
 
 
+async def cancel_if_pending(db, job_id: int) -> bool:
+    """봇이 기다리다 포기할 때: 아직 안 가져간 일이면 취소 (늦게 시작돼서 '안 된다' 안내 뒤에 들어가는 일 방지)."""
+    cur = await db.conn.execute("UPDATE voice_jobs SET status='failed', result='no_worker', done_ts=?, payload='{}' "
+                                "WHERE id=? AND status='pending'", (int(time.time()), job_id))
+    await db.conn.commit()
+    return bool(cur.rowcount)
+
+
 async def expire_stale(db, now: int | None = None) -> int:
     """worker 가 안 가져간 오래된 일 → failed(no_worker). 봇 틱이 부름."""
     now = int(now or time.time())

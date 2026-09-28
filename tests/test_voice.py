@@ -502,3 +502,35 @@ async def guide_and_checklist_show_what_is_missing():
     assert "✅ 음성 도우미 계정 연결" in chk.text
     await db.set_state(0, store.WORKER_BEAT, time.time())
     assert "✅ 음성 담당" in (await P.s_check(c)).text
+
+
+@test
+async def wait_cancels_unpicked_job_but_waits_for_running_one():
+    db = await make_db()
+    old = (P.WAIT_JOB, P.WAIT_RUNNING)
+    P.WAIT_JOB, P.WAIT_RUNNING = 0.05, 0.3
+    try:
+        j = await store.add_job(db, CHAT, "start", {}, 1)
+        assert await P._wait(db, j) == ("failed", "no_worker")
+        assert not await store.take_jobs(db), "취소된 일은 worker 가 늦게 가져가지 않음"
+        j2 = await store.add_job(db, CHAT, "join", {}, 1)
+        await store.take_jobs(db)                                  # worker 가 이미 처리 중
+
+        async def finish_later():
+            await asyncio.sleep(0.15)
+            await store.finish(db, j2, True, "joined")
+        asyncio.create_task(finish_later())
+        assert await P._wait(db, j2) == ("done", "joined")
+    finally:
+        P.WAIT_JOB, P.WAIT_RUNNING = old
+
+
+@test
+async def greeting_keeps_persona():
+    b, conn, _ = make_bridge(greet="짧게 인사")
+    task = asyncio.create_task(b.run())
+    await until(lambda: conn.named("response.create"))
+    ins = conn.named("response.create")[0]["response"]["instructions"]
+    assert ins.startswith("너는 소담") and ins.endswith("짧게 인사")
+    b.stop("admin")
+    await asyncio.wait_for(task, 2)

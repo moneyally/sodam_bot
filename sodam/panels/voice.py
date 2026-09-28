@@ -32,6 +32,7 @@ CALL_MAX_SEC = int(os.getenv("VOICE_CALL_MAX_SEC", "900"))     # 한 통화 최�
 IDLE_SEC = int(os.getenv("VOICE_IDLE_SEC", "60"))              # 아무도 말 안 하면 끝
 VOICE = os.getenv("VOICE_VOICE", "marin")                     # 소담 = 여자 비서 → 여자 목소리
 WAIT_JOB = 25.0
+WAIT_RUNNING = 60.0             # worker 가 이미 처리 중이면 이만큼 더 (초대 입장·음성채팅 켜기가 느릴 때)
 _sleep = asyncio.sleep
 
 settings.register_setting("voice_who", "admin", "음성채팅 부르기", choices={"admin": "관리자만", "all": "누구나"})
@@ -57,6 +58,8 @@ RESULT_TEXT = {
     "busy": "📞 지금 다른 방 통화가 많아서 못 들어가요. 조금 뒤에 다시 불러 주세요.",
     "no_assistant": "📞 음성 도우미 계정이 아직 연결 안 됐어요 (운영자 설정 필요).",
     "no_worker": "📞 음성 담당이 지금 꺼져 있어요. 잠시 뒤 다시 불러 주세요.",
+    "slow": "📞 음성채팅 입장이 오래 걸리고 있어요. 잠시 뒤 음성채팅을 확인해 주세요.",
+    "no_peer": "📞 음성 도우미가 이 방을 아직 못 찾았어요. 도우미가 방에 있는지 [✅ 확인하기] 로 봐 주세요.",
 }
 END_REASON = {"idle": "조용해서", "time": "시간이 다 돼서", "bye": "인사하고", "admin": "관리자가 끊어서",
               "closed": "음성채팅이 닫혀서", "restart": "서버가 다시 시작돼서", "logout": "도우미 연결이 해제돼서"}
@@ -67,13 +70,17 @@ def _result_text(res: str) -> str:
 
 
 async def _wait(db, job_id: int, timeout: float = WAIT_JOB) -> tuple[str, str]:
+    """끝날 때까지 기다림. 시간이 지나도 안 가져갔으면 취소(no_worker), 이미 하는 중이면 WAIT_RUNNING 까지 더 기다림
+    (입장이 느릴 때 '꺼져 있어요' 라고 해 놓고 뒤늦게 들어가던 것)."""
     t = time.monotonic()
-    while time.monotonic() - t < timeout:
+    while True:
         row = await store.job(db, job_id)
         if row and row["status"] in ("done", "failed"):
             return row["status"], row["result"] or ""
+        waited = time.monotonic() - t
+        if waited >= timeout and (await store.cancel_if_pending(db, job_id) or waited >= timeout + WAIT_RUNNING):
+            return "failed", "no_worker" if waited < timeout + WAIT_RUNNING else "slow"
         await _sleep(0.5)
-    return "failed", "no_worker"
 
 
 # ── 부르기 ─────────────────────────────────────────────
