@@ -5,14 +5,24 @@ description: Turn any image plus a free-form request into a verified Telegram vi
 
 # Telegram Sticker Forge
 
-> **소담 봇에 붙인 위치 (2026-09-28)** — 엔진은 `sodam/stickerforge/` (받은 stickerlib 그대로 + 아래만 바꿈), 글꼴
-> `sodam/data_files/fonts/BlackHanSans.ttf`(OFL). 이 문서의 `scripts/forge.py` 대신 **`python tools/sticker_forge.py IMAGE 'SPEC-JSON' out.webm --preview p.png [--icon i.webm]`**.
-> - ffmpeg = imageio-ffmpeg 정적 바이너리(libvpx-vp9 포함), ffprobe 대신 `ffmpeg -i` 로 검사. 설치: `pip install -r requirements.txt` (numpy·scipy·imageio-ffmpeg) — apt 필요 없음.
-> - 인코딩 `-deadline good -cpu-used 1` (best/0 과 PSNR 같음 27.47 vs 27.48, 44초 → 4초). 한 장 총 ~10초(그리기 6초).
-> - 소담 AI 도구 `make_sticker(spec, icon)` (`sodam/panels/sticker.py`): AI 가 이 문서의 매핑대로 spec 을 디자인 → `stickerforge.sanitize`
->   (이름은 목록만, 값은 그 함수 인자 이름 + 숫자·참거짓·숫자 목록만, 범위는 아래 '하얗게 날아가지 않는' 한도로 자름, **파일 경로를 받는
->   rain/rise·font 는 막음**) → 검사표 전부 PASS 여야 보냄, 실패면 효과 하나 덜고 한 번 더 → 스티커 + 파일(@Stickers 등록용) 전송.
->   원본은 붙은·답장한 사진, 없으면 요청자 프사. 사람마다 하루 5개. 테스트 `python tests/run_all.py sticker`.
+> **소담 봇에 붙인 위치 (2026-09-28, 보강 09-29)** — 엔진은 `sodam/stickerforge/` (받은 stickerlib + 아래), 글꼴
+> `sodam/data_files/fonts/BlackHanSans.ttf`(OFL). 이 문서의 `scripts/forge.py` 대신
+> **`python tools/sticker_forge.py IMAGE 'SPEC-JSON' out.webm --preview p.png [--icon i.webm] [--mp4]`**, 카탈로그는 `--catalog '요청' --kind glow`.
+> - ffmpeg = imageio-ffmpeg 정적 바이너리(libvpx-vp9 포함), ffprobe 대신 `ffmpeg -i` 로 검사. 설치: `pip install -r requirements.txt` — apt 필요 없음.
+> - 속도: 프레임은 raw RGBA 한 파일(PNG 생략), sweep/rays 격자 캐시, unpremultiply 는 경계 픽셀만, VP9 1차 패스 cpu-used 4 / 2차 1,
+>   사다리는 넘친 비율만큼 건너뜀. 그리기 10.4→4.9초(4코어 컨테이너 기준).
+> - **photo 모드 framing** `auto`(에지 에너지 관심 영역 + 위쪽 가중 → 얼굴 안 잘림) · `center` · `top` · `blur`(흐린 배경 위에 전체). `engine.focus_window`.
+> - **qc.py 검수 지표 → `Result.warnings`/`metrics`**: caption_overlap(자막 vs 피사체 bbox / photo 는 관심 영역), edge_clip(가장자리 불투명),
+>   holes, motion_mean/max(프레임 차이 → 밋밋/요란), whiteout_frames. 경고 문장에 고칠 방향이 들어 있어 AI 가 한 번 고쳐 다시 부름.
+> - **recipes.py**: 검증된 조합 30개(name·moods·kinds cutout/photo/glow/mono·motion·fx·palette·margin), `pick(요청, kind, exclude_family)`,
+>   `vary(recipe, seed)`(같은 계열 안에서 파라미터 변주 — 같은 seed 같은 결과), `family()`(calm/beat/bounce/impact/float/photo).
+>   spec 에 `{"recipe": 이름, "seed": n}` 을 주면 sanitize 가 변주해 깔고 나머지 키로 덮음.
+> - **움프**: `stickerforge.forge_video(image, spec)` = 같은 프레임을 640×640 H.264 6초(3초 루프×2)·yuv420p·무음·faststart·2MB↓ 로.
+>   photo 모드·radius 0 권장(원형 프사). `panels/avatar.py` 의 `make_profile_video(spec=…)` 이 이 경로, spec 없으면 옛 부품 조합.
+> - 소담 AI 도구: `sticker_catalog(query, kind)`(읽기, 계열이 다른 레시피 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings)`
+>   (`sanitize`: 이름은 목록만, 값은 그 함수 인자 + 숫자·참거짓·숫자 목록, 범위 CLAMP/SPECIAL, **rain/rise·font 는 파일 경로라 막음**;
+>   검사표 PASS + 경고 없어야 전송, 경고면 안 보내고 돌려줌(두 번째는 accept_warnings), 규격 실패면 효과 하나 덜고 한 번 더).
+>   원본은 붙은·답장한 사진, 없으면 요청자 프사. 사람마다 하루 5개. 테스트 `python tests/run_all.py sticker sticker_upgrade`.
 
 You are the sticker maker. A customer sends an image and says what they want in
 plain language ("배경 빼고 글리치 넣어서 출근완료 스티커", "make it shake when the
