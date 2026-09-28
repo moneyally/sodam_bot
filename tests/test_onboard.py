@@ -219,11 +219,8 @@ async def apply_is_atomic():
     before = await stored(svc)
     _, apply = await to_preview(svc, bot, "notice")
     await svc.db._write("ALTER TABLE mod_log RENAME TO mod_log_off")   # 기록 쓰기가 실패하게
-    try:
-        await press(svc, bot, apply)
-        raise AssertionError("실패해야 함")
-    except Exception as e:
-        assert "mod_log" in str(e), e
+    q = await press(svc, bot, apply)                                 # 예외는 메뉴가 잡아 토스트로 (로딩만 돌지 않게)
+    assert "잠시 후" in q.answers[-1][0], q.answers
     await svc.db._write("ALTER TABLE mod_log_off RENAME TO mod_log")
     assert (await stored(svc)) == before                            # 설정 하나도 안 바뀜
     assert await count(svc, "onboard_log") == 0 and await count(svc, "onboard_state") == 1   # 다시 누를 수 있음

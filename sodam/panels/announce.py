@@ -17,7 +17,7 @@ from datetime import datetime
 
 from telegram.error import TelegramError
 
-from .. import cards, cron, menu
+from .. import cards, cron, menu, persist
 from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
 from ..util import esc
@@ -107,18 +107,29 @@ async def s_item(c: PanelCtx) -> Screen:
 
 
 # ── 동작 ──────────────────────────────────────────────────
+PREVIEW_GAP = 60   # AI 미리보기는 사람마다 60초에 한 번 (연타로 비용)
+
+
 async def r_preview(c: PanelCtx) -> Screen:
     r = await _row(c)
     if r is None:
         return await s_item(c)
     if r["action"] != "post":   # 알람 문구 / AI 작업을 지금 한 번 돌려 1:1 로 (방엔 안 올림)
-        try:
-            out = r["text"] if r["action"] == "remind" else await cron.run_skill(c.svc, r)
-            await c.bot.send_message(c.uid, f"👀 미리보기 ({cron.describe(r)})\n\n{esc(out or '(결과 없음)')[:3500]}",
-                                     parse_mode="HTML", reply_markup=CLOSE_KB)
-        except Exception as e:   # AI 한도·연결 오류도 토스트로
-            return Screen(None, toast=f"미리보기 실패: {str(e)[:80]}", alert=True)
-        return Screen(None, toast="👀 아래에 미리보기를 보냈어요.")
+        if r["action"] != "remind" and not await persist.claim(c.svc.db, f"scp_ai:{c.uid}", PREVIEW_GAP):
+            return Screen(None, toast=f"AI 미리보기는 {PREVIEW_GAP}초에 한 번이에요.", alert=True)
+
+        async def run() -> None:   # AI 작업은 오래 걸려 버튼 답(15초 제한)을 먼저 하고 뒤에서 (감사 B3)
+            try:
+                out = r["text"] if r["action"] == "remind" else await cron.run_skill(c.svc, r)
+                text = f"👀 미리보기 ({cron.describe(r)})\n\n{esc(out or '(결과 없음)')[:3500]}"
+            except Exception as e:   # AI 한도·연결 오류도 알려 줌
+                text = f"👀 미리보기 실패: {esc(str(e)[:120])}"
+            try:
+                await c.bot.send_message(c.uid, text, parse_mode="HTML", reply_markup=CLOSE_KB)
+            except TelegramError:
+                pass
+        persist.spawn(run())
+        return Screen(None, toast="👀 만드는 중… 곧 아래에 보내요.")
     try:  # 패널은 그대로 두고 1:1 에 새 메시지로 (닫기 버튼으로 지움)
         await c.svc.announcer.send(c.bot, c.uid, title=r["title"], text=r["text"], media_type=r["media_type"],
                                    media_id=r["media_id"], reply_markup=CLOSE_KB, rules_chat=c.cid)
@@ -253,6 +264,8 @@ async def r_copy(c: PanelCtx) -> Screen:
         rows += [[B(f"📤 전부 ({len(groups)}개 방)", f"m:scx:{c.cid}:{r['id']}:all")]] if len(groups) > 1 else []
         return Screen(f"📤 <b>#{r['id']} 을 어느 방에도 만들까요?</b>" if groups else "관리 중인 다른 방이 없어요.",
                       menu._kb(rows + [[B("⬅️ 뒤로", f"m:sci:{c.cid}:{r['id']}")]]))
+    if not await persist.claim(c.svc.db, f"scx:{c.uid}:{c.cid}:{r['id']}:{target}", 15):   # 두 번 눌러 두 개씩 생기던 것 (감사 B1)
+        return Screen(None, toast="방금 만들었어요 (두 번 눌림).")
     mine = {g for g, _ in groups}
     ids = [g for g in (mine if target == "all" else [int(target)] if CID_RE.fullmatch(target) else []) if g in mine]
     ids = [g for g in ids if len(await c.svc.db.schedules(g)) < MAX_PER_CHAT]
