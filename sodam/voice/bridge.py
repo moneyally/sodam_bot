@@ -28,7 +28,7 @@ SEND_BYTES = audio.AI_RATE * 2 * SEND_MS // 1000
 SILENCE = bytes(audio.FRAME_BYTES)
 MAX_BACKLOG = 50                                # 보낼 줄이 이만큼(5초) 밀리면 오래된 것부터 버림 (네트워크 막힘)
 MAX_ERRORS = 5
-MAX_OUT = 400                                   # 음성 출력 토큰 ≈ 초당 30 (실측 1,070토큰/33초) → 약 12초
+MAX_OUT = 600                                   # 음성 출력 토큰 ≈ 초당 30 (실측 1,070토큰/33초) → 약 20초 (400 은 도구 결과 설명이 문장 중간에 잘림 — 실측)
 BYE = re.compile(r"소담.{0,6}(나가|끊어|그만|잘\s*가|바이|종료)")
 
 
@@ -82,7 +82,7 @@ class Bridge:
                  voice: str = "marin", reply: str = "all", greet: str | None = None, max_sec: float = 900,
                  idle_sec: float = 60, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-                 tools: dict[str, Callable[[dict], Awaitable[str]]] | None = None):
+                 tools: dict[str, Callable[[dict], Awaitable[str]]] | None = None, tool_specs: list[dict] | None = None):
         self._connect, self._play = connect, play
         self.instructions, self.voice, self.reply, self.greet = instructions, voice, reply, greet
         self.max_sec, self.idle_sec = max_sec, idle_sec
@@ -101,6 +101,7 @@ class Bridge:
         self._errors = 0
         self._last_reply = -1e9
         self.tools = tools or {}                        # 이름 → async (인자) -> 결과 글
+        self.tool_specs = tool_specs
 
     # ── 통화 쪽에서 부름 ──────────────────────────────────
     def feed(self, frames48: list[bytes]) -> None:
@@ -131,7 +132,7 @@ class Bridge:
         try:
             async with self._connect() as conn:
                 self.conn = conn
-                specs = [WEB_SEARCH] if "web_search" in self.tools else []
+                specs = self.tool_specs if self.tool_specs is not None else ([WEB_SEARCH] if "web_search" in self.tools else [])
                 await conn.session.update(session=session_config(self.instructions, self.voice, self.reply, tools=specs))
                 if self.greet:   # response.instructions 는 세션 지시를 '대신'함 → 캐릭터를 같이 넣음
                     await conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
@@ -206,7 +207,7 @@ class Bridge:
         fn = self.tools.get(name)
         try:
             args = json.loads(arguments or "{}")
-            out = await asyncio.wait_for(fn(args), TOOL_TIMEOUT) if fn else "그런 도구 없음"
+            out = await asyncio.wait_for(fn(args), TOOL_TIMEOUT) if fn else "그런 도구 없음 (쓸 수 있는 도구만 부를 것)"
         except Exception as e:
             log.warning("음성 도구 %s 실패: %s", name, e)
             out = "검색이 지금 안 됨. 짧게 사과하고 채팅으로 물어보라고 안내."
