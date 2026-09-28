@@ -617,6 +617,16 @@ ENDED_NOTICE = ("⛔ {name} {what}이 끝났어요. AI 대화·게임·예약공
                 "방 관리(캡차·도배·금지어·경고)는 계속 무료로 동작해요. 관리자님은 아래 버튼에서 연장할 수 있어요.")
 
 
+async def _keep_typing(bot, chat_id: int, every: float = 4.0) -> None:
+    """AI 가 생각하는 동안 '입력 중…' 을 계속 (한 번 보내면 5초만 보임 — 긴 작업이 멈춘 것처럼 보이던 것)."""
+    while True:
+        await asyncio.sleep(every)
+        try:
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        except TelegramError:
+            pass
+
+
 async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, role: Role) -> bool:
     """구독 안 한 방 / 1:1 채팅의 하루 무료 AI 한도. 넘으면 안내하고 False (안내엔 금액을 넣지 않음)."""
     svc = _svc(context)
@@ -790,9 +800,10 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
 
     reply_to = None
     r = msg.reply_to_message
-    if r and r.from_user and (r.text or r.caption):  # 봇 답에 답장한 경우도 '어느 답'인지 알려줌
+    media = vision.describe(r) if r else None      # 글 없는 영상·사진에 답장해도 '무엇에 답장했는지' 알게 (예전엔 모름)
+    if r and r.from_user and (r.text or r.caption or media):  # 봇 답에 답장한 경우도 '어느 답'인지 알려줌
         who = f"{svc.cfg.bot_name}(봇)" if r.from_user.id == bot.id else f"{user_name(r.from_user)}({r.from_user.id})"
-        reply_to = f"{who}: {(r.text or r.caption)[:500]}"
+        reply_to = f"{who}: {' '.join(x for x in (media, (r.text or r.caption or '')[:500]) if x)}"
     if chat_id > 0 and s.get("ai_memory", True):
         memory.observe(svc, chat_id, user.id, request)  # 1:1 은 그룹 훅이 없어서 여기서 기억 후보 확인
 
@@ -805,12 +816,13 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         hints = [*hints, svc.games.active[chat_id].ai_hint()]
     elif (recent := svc.games.status(chat_id)) != "진행 중인 게임 없음":   # 방금 끝난 게임 ('고장났어?' 에 이유 설명·다시 시작)
         hints = [*hints, "게임 단서: " + recent + " (필요하면 game_control 로 다시 시작)"]
-    image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진 (고화질로 읽고, 고쳐 달라면 원본으로)
+    image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진·영상 (영상은 장면 여러 장, 고쳐 달라면 대표 장면을 원본으로)
     ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image, reply_msg_id=reply_ref(msg)[0])
+    typing = asyncio.create_task(_keep_typing(bot, chat_id))   # 텔레그램 '입력 중'은 5초면 꺼짐 → 답이 나올 때까지 4초마다
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
                                  request=request or "(사진만 보냄)", mode=via, hints=hints,
-                                 images=[image.part()] if image else None, steer=steer)
+                                 images=image.parts() if image else None, steer=steer)
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:
@@ -820,6 +832,8 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
             await _report_credit(svc, bot)
         else:
             answer = "AI 연결이 잠깐 불안정해요. 잠시 후 다시 불러주세요."
+    finally:
+        typing.cancel()
 
     if ctx.quiet:
         return
@@ -1085,7 +1099,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         role = await svc.perms.role(bot, msg.chat_id, user.id)
         await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [], ""))
         return
-    if not text and not vision.has_image(msg):
+    if not text and not vision.has_photo(msg):
         return
     text = text or "이 사진 봐줘"          # 1:1 에 사진만 보내면 사진을 읽고 답함
 

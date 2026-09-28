@@ -2,6 +2,7 @@
 실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 from openai import BadRequestError
@@ -19,6 +20,7 @@ log = logging.getLogger(__name__)
 # Codex CLI 처럼 모델이 도구를 그만 부를 때까지 돌되, 라운드·요금 상한은 둔다 (넘으면 도구 없이 마무리 답)
 MAX_STEPS = 8          # 도구 호출 라운드 최대 횟수
 RUN_USD_CAP = 0.05     # 한 실행(도구 안 AI 포함, agentlog.Run.usd_micro)이 이만큼 쓰면 더는 도구 라운드 안 함
+DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금까지로 답 (OpenAI Agents SDK max_turns 같은 벽시계 상한 — 단톡방은 빨리)
 TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
 MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
@@ -207,9 +209,13 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
 
     used = checked = num_checked = read = False
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
+    started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     for step in range(MAX_STEPS):
         if step and run.usd_micro >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
+            break
+        if step and time.monotonic() - started > deadline:        # 시간 상한: 기다리게 하지 말고 지금까지로 답
+            log.warning("에이전트 시간 상한 %d초 (chat=%s, %d라운드) → 도구 없이 마무리", deadline, ctx.chat_id, step)
             break
         inject()
         msg = await call()
