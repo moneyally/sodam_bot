@@ -923,11 +923,16 @@ class DB:
     async def pending_invoices(self, expires_after: int) -> list[aiosqlite.Row]:
         return await self._all("SELECT * FROM invoices WHERE status='pending' AND expires>?", (expires_after,))
 
+    async def match_candidates(self, expires_after: int) -> list[aiosqlite.Row]:
+        """입금과 맞춰 볼 청구서: 대기 중 + 만료됐지만 안 낸 것 (늦게 확인된 입금, billing.LATE_MATCH)."""
+        return await self._all("SELECT * FROM invoices WHERE status IN ('pending', 'expired') AND expires>?",
+                               (expires_after,))
+
     async def pending_amounts(self, expires_after: int) -> set[int]:
         """새 청구서가 피해야 할 금액. 취소·결제된 청구서도 유효시간(+여유) 동안은 그 금액으로 입금(취소 뒤 입금·
         두 번 보내기)이 올 수 있어서 포함 → 다른 방 청구서에 잘못 맞지 않고 '확인 필요'로 오너에게 감."""
         return {r["amount_units"] for r in await self._all(
-            "SELECT amount_units FROM invoices WHERE status IN ('pending', 'cancelled', 'paid') AND expires>?",
+            "SELECT amount_units FROM invoices WHERE status IN ('pending', 'cancelled', 'paid', 'expired') AND expires>?",
             (expires_after,))}
 
     async def pay_invoice(self, invoice_id: int, tx_id: str, chat_id: int, seconds: int, now_ts: int) -> int | None:

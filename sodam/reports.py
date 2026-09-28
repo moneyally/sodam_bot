@@ -222,8 +222,7 @@ async def send_trial_report(svc: Services, bot, chat_id: int, trial_until: int) 
     title = esc(await chat_title(svc, chat_id))
     pay_text, kb = await panel(svc, chat_id)
     text = (format_activity(act, title, svc.cfg.tz, heading=f"📊 무료 체험 동안 {esc(josa(svc.cfg.bot_name, '이가'))} 한 일")
-            + "\n\n⏳ 무료 체험이 곧 끝나요. 끝나면 AI 대화는 하루 "
-            f"{svc.cfg.free_ai_per_day}번까지만 되고 게임·예약공지·리포트·AI 하루 요약이 멈춰요.\n"
+            + "\n\n⏳ 무료 체험이 곧 끝나요. 끝나면 AI 대화·게임·예약공지·리포트·AI 하루 요약이 멈춰요.\n"
             "방 관리(캡차·도배·경고)는 계속 무료예요.\n\n" + pay_text)
     sent = set()
     for uid in await admin_targets(svc, bot, chat_id):

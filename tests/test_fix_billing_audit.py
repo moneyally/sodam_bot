@@ -51,8 +51,13 @@ async def trial_starts_once_and_cannot_be_restarted():
     assert abs(sub["trial_until"] - (time.time() + 3 * DAY)) < 5 and sub["added_by"] == 1
     await db.conn.execute("UPDATE subscriptions SET trial_until=? WHERE chat_id=?", (int(time.time()) - 60, CHAT))
     await db.conn.commit()
+    first = [c[2] for c in bot.named("send_message") if c[1] == CHAT]
+    assert any("3일 동안 모든 기능" in t for t in first), first     # 처음엔 체험 안내
     await _bot_event(svc, bot, owner, "member", "left")           # 내보냈다가
+    n = len(bot.named("send_message"))
     await _bot_event(svc, bot, admin2, "left", "member")          # 다른 관리자가 다시 초대
+    again = [c[2] for c in bot.named("send_message")[n:] if c[1] == CHAT]
+    assert again and not any("동안 모든 기능" in t for t in again), again   # 끝난 체험을 또 준다고 안 함
     await menu.group_panel(svc, bot, CHAT, 1)                      # 설정 화면 열기
     await subscription.panel(svc, CHAT)
     after = await db.get_subscription(CHAT)
@@ -295,3 +300,40 @@ async def trial_last_day_report_once_and_money_only_in_dm():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+@test
+async def valid_payment_confirmed_late_still_extends_even_without_cursor():
+    """유효시간 안에 보냈는데 TronGrid 장애·봇 꺼짐으로 2시간 뒤에야 확인 → 예전엔 30분 넘으면 자동 연장 안 됨,
+    커서가 없던(첫 결제) 경우엔 조회 범위(30분) 밖이라 오너 보고조차 없이 놓침. 이제 7일까지 그 청구서로 연결."""
+    db, svc, grid = await TB.setup(invoice_minutes=30, sub_days=30)
+    await svc.billing.ensure_trial(CHAT, 1)
+    inv = await svc.billing.create_invoice(CHAT, 1)
+    now = int(time.time())
+    await db.conn.execute("UPDATE invoices SET created=?, expires=? WHERE id=?", (now - 3 * 3600, now - 2 * 3600 - 1800, inv["id"]))
+    await db.conn.commit()
+    await db.expire_invoices(now - LATE_GRACE)                          # 그사이 만료 처리까지 됨
+    assert await db.get_state(0, billing_mod.CURSOR_KEY) is None
+    grid.transfer("tx-ontime", inv["amount_units"], ts=now - 3 * 3600 + 600)   # 유효시간 안에 보냄
+    paid, unmatched = await svc.billing.check_pending()
+    assert [p["tx_id"] for p in paid] == ["tx-ontime"] and not unmatched, (paid, unmatched)
+    st = await svc.billing.status(CHAT)
+    assert st.state == "paid" and st.until > now + 29 * DAY
+    paid, _ = await svc.billing.check_pending()                          # 다시 봐도 한 번만
+    assert not paid
+
+
+@test
+async def expired_unpaid_amount_is_not_reused_for_a_week():
+    db, svc, grid = await TB.setup(invoice_minutes=10)
+    restore = _fixed_random([7, 7, 8])
+    try:
+        a = await svc.billing.create_invoice(CHAT, 1)
+        now = int(time.time())
+        await db.conn.execute("UPDATE invoices SET created=?, expires=? WHERE id=?", (now - 3 * DAY, now - 3 * DAY + 600, a["id"]))
+        await db.conn.commit()
+        await db.expire_invoices(now)
+        b = await svc.billing.create_invoice(OTHER, 2)                    # 3일 전 만료 청구서 금액은 피함
+    finally:
+        restore()
+    assert b["amount_units"] != a["amount_units"]

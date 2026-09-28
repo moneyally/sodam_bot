@@ -75,8 +75,8 @@ async def free_quota_notice_once_per_day_and_temp():
     bot = FakeBot()
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
     results = [await handlers._within_ai_quota(ctx, BILL_CHAT, 20, Role.MEMBER) for _ in range(5)]
-    assert results == [True, False, False, False, False]
-    notices = [t for t in _sent(bot, BILL_CHAT) if "무료 AI" in t]
+    assert results == [False] * 5                                  # 끝난 방은 AI 없음, 안내만
+    notices = [t for t in _sent(bot, BILL_CHAT) if "이용 기간이 끝나서" in t]
     assert len(notices) == 1, notices                               # 부를 때마다가 아니라 한 번만
     sent_id = bot._next_id
     assert any(data == (BILL_CHAT, sent_id) for _, _, data in ctx.job_queue.once)  # 자동 삭제 예약
@@ -144,11 +144,16 @@ async def trial_reminders_last_day_only():
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
     await handlers.job_sub_reminders(ctx)
     assert not _sent(bot, -1001), "체험 첫날부터 알림"
-    last, ended, paid = _sent(bot, -1002), _sent(bot, -1003), _sent(bot, -1004)
+    last, paid = _sent(bot, -1002), _sent(bot, -1004)
+    assert not _sent(bot, -1003), "끝난 방 안내는 10시가 아니라 끝난 그 시각에 (_notify_ended)"
+    await handlers._notify_ended(ctx)
+    await handlers._notify_ended(ctx)                                # 두 번 돌아도 한 번
+    ended = _sent(bot, -1003)
     assert len(last) == 1 and "무료 체험이" in last[0] and "끝나요" in last[0]
-    assert len(ended) == 1 and "무료 체험이 끝났어요" in ended[0] and "하루 10번" in ended[0]
-    assert "AI 대화·게임·예약공지가 멈췄어요" not in ended[0]
+    assert len(ended) == 1 and "무료 체험이 끝났어요" in ended[0] and "AI 대화" in ended[0] and "계속 무료" in ended[0]
+    assert "USDT" not in ended[0]
     assert len(paid) == 1 and "2일 남았어요" in paid[0]
+    assert not _sent(bot, -1002)[1:] and not _sent(bot, -1004)[1:], "아직 안 끝난 방엔 끝남 안내 없음"
     assert len(ctx.job_queue.once) == 3 and all(when == handlers.REMINDER_TTL for _, when, _ in ctx.job_queue.once)
     for t in last + ended + paid:
         print("  실제 알림:", t)

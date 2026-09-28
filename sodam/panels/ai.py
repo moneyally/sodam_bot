@@ -19,7 +19,6 @@ from ..util import esc, fmt_time, to_int
 
 PAGE = 8
 VIEW_CHARS = 500
-FREE_KEY = "free_ai"   # handlers._within_ai_quota 가 쓰는 카운터 (범위 = 방 ID)
 
 menu.register_preset("reply_max_chars", [(v, f"답변 {v}자") for v in ("200", "400", "800")], "ai")
 menu.register_preset("user_rate_per_min", [(v, f"분당 {v}회") for v in ("2", "3", "5")], "ai")
@@ -91,15 +90,11 @@ def _page_note(page: int, pages: int) -> str:
 
 # ── 🤖 AI 화면 ────────────────────────────────────────────
 async def usage_line(svc, cid: int) -> str:
-    """오늘 무료 AI 사용량. 횟수만 보여주고 금액·결제 안내는 넣지 않는다."""
+    """이 방 AI 상태. 금액·결제 안내는 넣지 않는다 (끝난 방은 AI 가 쉼 — handlers._within_ai_quota)."""
     billing = svc.billing
     if billing is None or not billing.enabled or await billing.active(cid):
-        return "📊 오늘 무료 사용량: 한도 없이 이용 중"
-    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
-    used = await svc.db.counter(day, cid, FREE_KEY)
-    limit = svc.cfg.free_ai_per_day
-    tail = " · 오늘 몫을 다 썼어요 (자정에 다시 채워져요)" if used >= limit else ""
-    return f"📊 오늘 무료 사용량: {min(used, limit)} / {limit}회{tail}"
+        return "📊 AI 대화: 이용 중 (횟수 제한 없음)"
+    return "📊 AI 대화: 이용 기간이 끝나서 쉬는 중 (방 관리는 계속)"
 
 
 async def s_ai(c: PanelCtx) -> Screen:
