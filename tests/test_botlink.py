@@ -438,3 +438,11 @@ async def invented_command_is_refused_with_real_list():
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/cancel 여름아"})])
     assert "지어내지" in res[0] and "/remove" in res[0] and "(remove)" in res[0], res
     assert not [c for c in r.bot.named("send_message") if "보낼까요" in c[2]]
+
+
+@test
+async def bot_message_leaves_no_open_write_transaction():
+    """봇 글 기록(upsert_user)이 commit 없이 끝나면 쓰기 잠금이 다음 commit 까지 남음 (딜러 프로세스 대기)."""
+    r = await blroom("off")
+    await bot_says(r, DICE, "🎲 결과 3")
+    assert not r.db.conn.in_transaction

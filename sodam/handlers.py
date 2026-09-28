@@ -460,7 +460,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # 기록 훅만 (botlink) — 관리·명령·게임·AI·끼어들기·태그 알림·알림 규칙은 절대 안 탐 (봇끼리 무한 주고받기 방지)
     if user.is_bot:
         if user.id != bot.id:
-            await _record(svc.db.upsert_user(user))
+            await _record(svc.db.upsert_user(user, commit=True))
             _bot_hooks(context, hooks.BOT_MESSAGE_HOOKS, msg)
         return
     anonymous_admin = msg.sender_chat is not None
