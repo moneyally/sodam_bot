@@ -195,7 +195,7 @@ async def private_chat_routing():
         await handlers.on_private(SimpleNamespace(message=msg), ctx)
         return msg.replies
 
-    assert "맞지 않" in (await dm("/owner 99999999" if code != "99999999" else "/owner 00000000"))[0]
+    assert "운영자 전용" in (await dm("/owner 99999999" if code != "99999999" else "/owner 00000000"))[0]
     assert "오너로 등록" in (await dm(f"/owner {code}"))[0]
     assert await svc.perms.role(bot, 77, 77) == Role.OWNER
     assert "77" in (await dm(".내아이디"))[0]
@@ -226,16 +226,17 @@ async def cache_usage_accounting():
     assert "prompt_cache_retention" not in LLM(cfg(db.path), db)._cache("x")
     usage = SimpleNamespace(total_tokens=3000, prompt_tokens=2800,
                             prompt_tokens_details=SimpleNamespace(cached_tokens=2048))
-    await llm._record(usage)
-    await llm._record(SimpleNamespace(total_tokens=500, prompt_tokens=400, prompt_tokens_details=None))
+    await llm._record(usage, purpose="agent:member")
+    await llm._record(SimpleNamespace(total_tokens=500, prompt_tokens=400, prompt_tokens_details=None), purpose="memory")
     assert await llm.usage_today() == {"tokens": 3500, "prompt_tokens": 3200, "cached_tokens": 2048}
 
     svc = await make_svc(db, admins={1})
     svc.llm = llm
     cmd, args, argstr = commands.parse(".사용량", "sodambot")
     msg = FakeMsg(CHAT, fake_user(1, "관리자"), ".사용량")
-    await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, msg.from_user, Role.ADMIN, args, argstr), cmd)
-    assert "2,048" in msg.replies[0] and "64%" in msg.replies[0]
+    await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, msg.from_user, Role.OWNER, args, argstr), cmd)
+    assert "2,048" in msg.replies[0] and "64%" in msg.replies[0]       # 전체 토큰·캐시는 오너만 (방 관리자는 그 방만)
+    assert "agent:member 752 (73% 적중)" in msg.replies[0] and "memory 400 (0% 적중)" in msg.replies[0], msg.replies[0]
 
 
 if __name__ == "__main__":

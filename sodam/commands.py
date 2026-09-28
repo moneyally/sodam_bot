@@ -1,23 +1,26 @@
 """명령어. `.명령어` 와 `/command` 둘 다 받는다. 한글/영어 별칭 지원."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import TelegramError
 
-from . import knowledge, menu, stats, subscription
-from .permissions import Role
+from . import fedban, free, knowledge, menu, namehist, persist, stats, subscription
+from .permissions import Role, may, no_right_text
 from .services import Services
+from .security import normalize_domain
 from .settings import DEFAULTS, LABELS, coerce, render
 from .sports import SportsError
 from .styles import STYLES, resolve_style, style_list
 from .games import GAME_LIST
-from .util import display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int, user_name
+from .ai_settings import ROOM_TOKENS_MAX
+from .llm import ROOM_TOKENS
+from .util import (_DURATION, display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int,
+                   user_name)
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +49,7 @@ class Cmd:
     help: str = ""
     group: str = "일반"
     dm_ok: bool = False  # 1:1 채팅에서도 쓸 수 있는 명령
+    right: str | None = None  # "restrict"|"delete": 텔레그램 관리자 권한까지 확인 (permissions.Permissions.can)
 
 
 async def _target(ctx: CmdCtx, *, sanction: bool = True) -> tuple[int, str, list[str]] | None:
@@ -83,17 +87,15 @@ async def _private_notice(ctx: CmdCtx, text: str, reply_markup=None, seconds: in
         sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except TelegramError:
         return
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, seconds, ctx.svc.db)
 
-    async def _later():
-        await asyncio.sleep(seconds)
-        try:
-            await ctx.bot.delete_message(ctx.chat_id, sent.message_id)
-        except TelegramError:
-            pass
 
-    task = asyncio.create_task(_later())
-    _BACKGROUND.add(task)
-    task.add_done_callback(_BACKGROUND.discard)
+def _delete_later(bot, chat_id: int, message_id: int, seconds: int, db=None) -> None:
+    """seconds 뒤 지움 (DB 에도 적어 그 사이 재시작돼도 지움, sodam/persist.py)."""
+    task = persist.delete_later(bot, chat_id, message_id, seconds, db=db)
+    if task is not None:
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
 
 
 _BACKGROUND: set = set()
@@ -108,7 +110,76 @@ async def _safe(ctx: CmdCtx, coro, ok_text: str) -> None:
 
 
 # ── 일반 명령 ─────────────────────────────────────────────
+def feature_lines(call: str, *, in_dm: bool = False) -> list[str]:
+    """도움말 맨 위 '이런 것도 돼요' (AI·사진·그림·포인트 게임). menu.HELP 와 같은 내용."""
+    ai = "그냥 말 걸기" if in_dm else f"<code>{esc(call)} …</code> 질문 (AI 답에 답장해도 돼요)"
+    return [f"💬 AI: {ai} · 사진에 답장하며 <code>{esc(call)} 이거 뭐야</code> · <code>{esc(call)} ○○ 그려줘</code>",
+            "🎰 포인트 게임 <code>!도움</code> · 🖼 결과표 <code>!그림장</code> · 🎡 <code>!룰렛 금액</code> 버튼 베팅판"
+            + (" (그룹방에서)" if in_dm else "")]
+
+
+HELP_ROOM_SECONDS = 120  # 방 관리자 도움말은 방에 잠깐만
+
+# '.도움말' = 명령어보다 먼저 "소담에게 이렇게 말해보세요" (말로 하는 게 기본, 명령어 전체는 .명령어)
+# (묶음, 예시들). 예시는 실제 도구로 되는 말만 (tools.py · panels/roomrule.py)
+EXAMPLES_MEMBER: list[tuple[str, list[str]]] = [
+    ("💬 대화", ["부가세 신고 언제까지야?", "이거 뭐야 (사진에 답장)", "고양이 그림 그려줘"]),
+    ("📊 분석", ["오늘 방 분위기 어때?"]),
+    ("📚 자료", ["우리 방 규칙 알려줘"]),
+    ("🔎 검색", ["지난주에 USDT 얘기한 내용 찾아줘"]),
+    ("🎮 게임", ["끝말잇기 시작"]),
+]
+EXAMPLES_ADMIN: list[tuple[str, list[str]]] = [
+    ("👮 관리", ["철수 최근 경고 내역 보여줘"]),
+    ("📚 자료 저장", ["광고는 관리자에게 먼저 말하기, 방 규칙으로 기억해"]),
+    ("🕐 예약", ["매일 9시에 하루 요약해줘", "매주 월 10:00 신규 가입 통계"]),
+    ("🔔 알림", ["홍길동 들어오면 알려줘"]),
+]
+
+
+def example_lines(call: str, *, admin: bool, in_dm: bool = False) -> list[str]:
+    """역할별 말 예시 (멤버 = 멤버 예시만, 관리자 = + 관리자 예시). 예시는 그룹방 기준(호출어 붙임)."""
+    def say(s: str) -> str:
+        text, _, note = s.partition(" (")      # '이거 뭐야 (사진에 답장)' → 괄호는 코드 밖 설명
+        return f"<code>{esc(call + ' ' + text)}</code>" + (f" ({esc(note)}" if note else "")
+
+    def block(items):
+        return [f"{label} · " + " / ".join(say(s) for s in says) for label, says in items]
+    lines = ["🤖 <b>소담에게 이렇게 말해보세요</b>",
+             "그룹방에선 <code>" + esc(call) + "</code> 로 부르거나 소담 답에 답장"
+             + (" · 여기(1:1)에선 그냥 말하면 돼요" if in_dm else ""),
+             *block(EXAMPLES_MEMBER)]
+    if admin:
+        lines += ["", "<b>관리자</b>", *block(EXAMPLES_ADMIN)]
+    return lines
+
+
+def help_text(call: str, *, admin: bool, in_dm: bool = False) -> str:
+    return "\n".join(example_lines(call, admin=admin, in_dm=in_dm)
+                     + ["", "📋 명령어 전체 <code>.명령어</code> · 🎰 포인트 게임 <code>!도움</code>"])
+
+
+async def is_any_admin(svc: Services, bot: Bot, uid: int) -> bool:
+    """1:1 에서 관리자 예시를 보여줄지: 오너이거나 소담이 있는 방 하나라도 관리자."""
+    if uid in await svc.perms.owners():
+        return True
+    try:
+        return bool(await menu.admin_groups(svc, bot, uid))
+    except TelegramError:
+        return False
+
+
 async def c_help(ctx: CmdCtx) -> None:
+    """말 예시 먼저 (짧게). 방 관리자에겐 관리자 예시까지 — 방엔 잠깐만 보였다 지움."""
+    in_dm = ctx.chat_id > 0
+    admin = ctx.role >= Role.ADMIN or (in_dm and await is_any_admin(ctx.svc, ctx.bot, ctx.user.id))
+    sent = await ctx.reply(help_text(ctx.svc.cfg.call_names[0], admin=admin, in_dm=in_dm))
+    if admin and not in_dm:
+        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
+
+
+async def c_commands(ctx: CmdCtx) -> None:
+    """명령어 전체 목록 (예전 .도움말)."""
     groups: dict[str, list[str]] = {}
     in_dm = ctx.chat_id > 0
     for cmd in COMMANDS:
@@ -119,10 +190,22 @@ async def c_help(ctx: CmdCtx) -> None:
         line = f"<code>.{cmd.names[0]}</code>{(' ' + esc(cmd.usage)) if cmd.usage else ''} — {esc(cmd.help)}"
         groups.setdefault(cmd.group, []).append(line)
     parts = [f"🤖 <b>{esc(ctx.svc.cfg.bot_name)}</b> 명령어 (. 또는 / 로 시작)",
-             f"AI와 대화: <code>{esc(ctx.svc.cfg.call_names[-1])}아 …</code> 또는 봇 메시지에 답장"]
+             *feature_lines(ctx.svc.cfg.call_names[0], in_dm=in_dm)]
     for group, lines in groups.items():
         parts.append(f"\n<b>[{group}]</b>\n" + "\n".join(lines))
-    await ctx.reply("\n".join(parts))
+    full = "\n".join(parts)
+    if in_dm or ctx.role < Role.ADMIN:
+        await ctx.reply(full)
+        return
+    # 방 관리자: 관리자 명령까지 60줄이 넘어서 방엔 짧게(잠깐 뒤 삭제), 전체 목록은 1:1 로
+    try:
+        await ctx.bot.send_message(ctx.user.id, full, parse_mode="HTML")
+        text = ("📬 관리자 명령어 전체를 1:1 로 보냈어요.\n"
+                "버튼 설정 <code>.설정</code> · 이용 기간 <code>.구독</code> · AI 켜고 끄기 <code>.AI대화</code>")
+    except TelegramError:  # 봇과 1:1 을 시작 안 했으면 방에 잠깐 보여줌
+        text = full + "\n\n(봇과 1:1 대화를 시작해두면 다음부턴 1:1 로 보내드려요)"
+    sent = await ctx.reply(text)
+    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
 
 
 async def c_rules(ctx: CmdCtx) -> None:
@@ -156,6 +239,85 @@ async def c_me(ctx: CmdCtx) -> None:
     await ctx.reply("\n".join(lines))
 
 
+async def _name_lookup(ctx: CmdCtx, mode: str, *, self_only: bool = False) -> None:
+    """이름·아이디 변경 기록. 대상: 답장 > 인자(@아이디·ID·이름) > 전달된 메시지 > 나.
+    권한은 namehist.can_view (지금은 누구나 전부)."""
+    db, tz = ctx.svc.db, ctx.svc.cfg.tz
+    group = ctx.chat_id < 0
+    uid: int | None = ctx.user.id
+    remote = False
+    reply = ctx.msg.reply_to_message
+    if self_only:
+        pass
+    elif reply is not None and getattr(reply, "forward_origin", None) is not None:
+        uid, err = namehist.forwarded_user(reply)
+        if uid is None:
+            await ctx.reply(err)
+            return
+    elif reply is not None and reply.from_user:
+        if reply.from_user.is_bot:
+            await ctx.reply("봇 계정은 기록하지 않아요.")
+            return
+        uid = reply.from_user.id
+    elif ctx.args:
+        uid = await namehist.resolve(db, ctx.args[0], ctx.chat_id if group else None)
+        if uid is None and group:
+            rows = await db.find_members(ctx.chat_id, ctx.argstr)
+            uid = rows[0]["user_id"] if len(rows) == 1 else None
+        if uid is None:   # 기록에 없는 @아이디 → MTProto 도우미로 지금 주인 확인 (켜져 있을 때만)
+            uid, remote = await namehist.resolve_remote(ctx.svc, ctx.args[0], ctx.user.id)
+        if uid is None:
+            await ctx.reply(f"'{esc(ctx.argstr[:40])}' 기록을 못 찾았어요. @아이디(예전 아이디도 됨)·숫자 ID·답장으로 해주세요.")
+            return
+    elif getattr(ctx.msg, "forward_origin", None) is not None:
+        uid, err = namehist.forwarded_user(ctx.msg)
+        if uid is None:
+            await ctx.reply(err)
+            return
+    if not await namehist.can_view(db, ctx.user.id, uid, ctx.chat_id, ctx.role >= Role.OWNER):
+        await ctx.reply("🔒 볼 수 없는 기록이에요.")
+        return
+    title = "내 이름 기록" if uid == ctx.user.id else None
+    await ctx.reply(await namehist.history_text(db, uid, tz, mode=mode, title=title,
+                                                note=namehist.REMOTE_NOTE if remote else None),
+                    reply_markup=namehist.buttons(uid, mode, ctx.bot.username))
+
+
+async def name_lookup_forward(ctx: CmdCtx, mode: str = "recent") -> None:
+    """1:1 에 전달된 메시지 → 원래 보낸 사람의 기록 / @아이디·ID 만 보낸 경우 → 그 사람 기록."""
+    await _name_lookup(ctx, mode)
+
+
+async def c_history(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "recent")
+
+
+async def c_allhistory(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "all")
+
+
+async def c_check_name(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "names")
+
+
+async def c_check_username(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "usernames")
+
+
+async def c_myhistory(ctx: CmdCtx) -> None:
+    await _name_lookup(ctx, "recent", self_only=True)
+
+
+async def c_name_notice(ctx: CmdCtx) -> None:
+    sub = ctx.args[0] if ctx.args else ""
+    if sub in ("켜기", "on", "끄기", "off"):
+        await ctx.svc.db.set_setting(ctx.chat_id, "name_change_notice", coerce("name_change_notice", sub))
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, None, "setting", f"name_change_notice={sub}")
+    s = await ctx.svc.db.get_settings(ctx.chat_id)
+    await ctx.reply(f"🔄 <b>이름 변경 알림</b>: {render('name_change_notice', s['name_change_notice'])}\n"
+                    "멤버가 이름·@아이디를 바꾸면 방에 알려요. <code>.이름알림 켜기|끄기</code>")
+
+
 async def c_rank(ctx: CmdCtx) -> None:
     period = ctx.args[0] if ctx.args else "오늘"
     await ctx.reply(await stats.ranking_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period))
@@ -186,9 +348,13 @@ async def c_points(ctx: CmdCtx) -> None:
 
 async def c_game(ctx: CmdCtx) -> None:
     if not ctx.args:
-        await ctx.reply(f"🎮 게임 종류: {GAME_LIST}\n예: <code>.게임 초성퀴즈</code>")
+        await ctx.reply(f"🔗 말 게임: {GAME_LIST} (<code>.게임 끝말잇기</code> · <code>.게임 끝말잇기 차례</code>)\n\n"
+                        "🎰 <b>포인트 게임</b>: 홀짝·슬롯·바카라·블랙잭·그래프·경마…\n"
+                        "<code>!가입</code> 후 <code>!도움</code> 으로 전체 목록")
         return
-    await ctx.reply(esc(await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, ctx.args[0])))
+    result = await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.user.id, " ".join(ctx.args[:2]))
+    if not result.endswith("시작했어요!"):     # 시작했으면 게임 안내가 이미 올라감 (같은 말 두 번 안 함)
+        await ctx.reply(esc(result))
 
 
 async def c_stop_game(ctx: CmdCtx) -> None:
@@ -200,11 +366,6 @@ async def c_stop_game(ctx: CmdCtx) -> None:
         await ctx.reply("게임을 시작한 분이나 관리자만 끝낼 수 있어요.")
         return
     await ctx.svc.games.stop(ctx.chat_id)
-
-
-async def c_answer(ctx: CmdCtx) -> None:
-    if not await ctx.svc.games.on_text(ctx.msg, "정답 " + ctx.argstr):
-        await ctx.reply("정답을 받을 게임이 없어요.")
 
 
 async def c_style(ctx: CmdCtx) -> None:
@@ -279,12 +440,30 @@ async def c_about(ctx: CmdCtx) -> None:
 
 
 # ── 관리자 명령 ───────────────────────────────────────────
+async def c_members(ctx: CmdCtx) -> None:
+    """👥 멤버 목록을 관리자 1:1 로 (방에 명단을 뿌리지 않게)."""
+    from .panels.members import s_members
+    screen = await s_members(menu.PanelCtx(ctx.svc, ctx.bot, ctx.user.id, ctx.chat_id, []))
+    if screen.text is None:
+        await ctx.reply(screen.toast or "잠시 후 다시 해주세요.")
+        return
+    try:
+        await menu.send_panel(ctx.svc, ctx.bot, ctx.user.id, lambda: ctx.bot.send_message(
+            ctx.user.id, screen.text, parse_mode="HTML", reply_markup=screen.kb))
+        await _private_notice(ctx, "🔒 관리자님, 1:1 채팅에서 멤버 목록을 확인해주세요.")
+    except TelegramError:
+        await _private_notice(ctx, "관리자님, 먼저 봇과 1:1 대화를 시작해주세요.",
+                              InlineKeyboardMarkup([[InlineKeyboardButton(
+                                  "👥 열기", url=f"https://t.me/{ctx.bot.username}?start=cfg_{ctx.chat_id}")]]), seconds=60)
+
+
 async def c_settings(ctx: CmdCtx) -> None:
     """그룹헬프처럼 버튼 설정 패널을 관리자 1:1 로 보낸다. '.설정 전체' 는 글 목록."""
     if not (ctx.args and ctx.args[0] in ("전체", "all", "목록")):
-        text, kb = await menu.group_panel(ctx.svc, ctx.chat_id)
+        text, kb = await menu.group_panel(ctx.svc, ctx.bot, ctx.chat_id, ctx.user.id)
         try:
-            await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb)
+            await menu.send_panel(ctx.svc, ctx.bot, ctx.user.id,
+                                  lambda: ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb))
             await _private_notice(ctx, "🔒 관리자님, 봇과의 1:1 채팅에서 설정 메뉴를 확인해주세요.")
         except TelegramError:
             await _private_notice(ctx, "관리자님, 아래 버튼으로 설정 메뉴를 열어주세요.",
@@ -293,16 +472,22 @@ async def c_settings(ctx: CmdCtx) -> None:
                                   seconds=60)
         return
     s = await ctx.svc.db.get_settings(ctx.chat_id)
-    lines = ["⚙️ <b>방 설정</b> (바꾸기: <code>.set 키 값</code>)"]
+    lines = ["⚙️ <b>방 설정</b> (바꾸기: <code>.설정변경 키 값</code>)"]
     for key in DEFAULTS:
         lines.append(f"<code>{key}</code> {esc(LABELS.get(key, ''))}: {esc(render(key, s[key]))}")
-    await ctx.reply("\n".join(lines))
+    chunk: list[str] = []   # 설정이 늘어 한 메시지(4096자)를 넘으면 나눠 보냄
+    for line in lines:
+        if chunk and sum(len(x) + 1 for x in chunk) + len(line) > 4000:
+            await ctx.reply("\n".join(chunk))
+            chunk = []
+        chunk.append(line)
+    await ctx.reply("\n".join(chunk))
 
 
 async def c_set(ctx: CmdCtx) -> None:
     if len(ctx.args) < 2:
-        await ctx.reply("사용법: <code>.set 키 값</code> (예: <code>.set flood_count 5</code>, <code>.set style 자유분방</code>)\n"
-                        "키 목록은 <code>.settings</code>")
+        await ctx.reply("사용법: <code>.설정변경 키 값</code> (예: <code>.설정변경 flood_count 5</code>, <code>.설정변경 style 자유분방</code>)\n"
+                        "키 목록은 <code>.설정 전체</code>")
         return
     key, raw = ctx.args[0], ctx.argstr[len(ctx.args[0]):].strip()
     try:
@@ -345,6 +530,49 @@ async def c_warns(ctx: CmdCtx) -> None:
         await ctx.reply("\n".join(lines))
 
 
+async def c_free(ctx: CmdCtx) -> None:
+    """자유 멤버 지정: 걸려 있던 채팅 금지·캡차 대기·경고를 풀고, 앞으로 자동 통제를 안 받게 (sodam/free.py)."""
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
+        await ctx.reply("관리자·봇은 원래 자동 통제를 받지 않아요.")
+        return
+    await free.add(ctx.svc.db, ctx.chat_id, uid, ctx.user.id)
+    await ctx.svc.db.clear_warnings(ctx.chat_id, uid)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "free", "지정")
+    note = ""
+    try:
+        await ctx.svc.mod.unmute(ctx.bot, ctx.chat_id, uid, ctx.user.id)
+    except TelegramError as e:
+        note = f"\n(채팅 금지는 못 풀었어요: {esc(e.message)} — 봇의 '사용자 차단' 권한을 확인해주세요)"
+    await ctx.reply(f"🕊️ {mention(uid, name)}님을 자유 멤버로 지정했어요. 걸려 있던 채팅 금지·경고를 풀었고, "
+                    "앞으로 도배·링크·금지어·잠금·캡차 같은 자동 통제를 받지 않아요. (관리자 권한은 아니에요)" + note)
+
+
+async def c_unfree(ctx: CmdCtx) -> None:
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if not await free.remove(ctx.svc.db, ctx.chat_id, uid):
+        await ctx.reply(f"{mention(uid, name)}님은 자유 멤버가 아니에요.")
+        return
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "free", "해제")
+    await ctx.reply(f"{mention(uid, name)}님 자유 멤버를 해제했어요. 이제 다시 자동 통제를 받아요.")
+
+
+async def c_freelist(ctx: CmdCtx) -> None:
+    rows = await free.members(ctx.svc.db, ctx.chat_id)
+    if not rows:
+        await ctx.reply("자유 멤버가 없어요. <code>.free @아이디</code> 로 지정해요.")
+        return
+    names = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
+             f"(<code>{r['user_id']}</code>)" for r in rows]
+    await ctx.reply("🕊️ <b>자유 멤버</b> (자동 통제 안 받음)\n" + "\n".join(names))
+
+
 async def c_resetwarns(ctx: CmdCtx) -> None:
     t = await _target(ctx, sanction=False)
     if t:
@@ -360,6 +588,9 @@ async def c_mute(ctx: CmdCtx) -> None:
         return
     uid, name, rest = t
     minutes = parse_duration(rest[0]) if rest else None
+    if minutes is None and rest and _DURATION.match(rest[0]):  # 시간 형식인데 366일 초과
+        await ctx.reply("뮤트 시간은 최대 366일까지예요.")
+        return
     reason = " ".join(rest[1:] if minutes else rest) or "관리자 판단"
     minutes = minutes or 30
     await _safe(ctx, ctx.svc.mod.mute(ctx.bot, ctx.chat_id, uid, minutes, ctx.user.id, reason),
@@ -384,8 +615,8 @@ async def c_ban(ctx: CmdCtx) -> None:
 async def c_unban(ctx: CmdCtx) -> None:
     # 밴된 사람은 이름 검색이 안 될 수 있어서 숫자 ID도 바로 받는다
     arg = ctx.args[0] if ctx.args else ""
-    if arg.isdigit():
-        uid, name = int(arg), arg
+    if (uid := to_int(arg)) is not None and uid > 0:
+        name = arg
     else:
         t = await _target(ctx, sanction=False)
         if not t:
@@ -446,7 +677,7 @@ async def c_unlock(ctx: CmdCtx) -> None:
 async def c_announce(ctx: CmdCtx) -> None:
     an, db = ctx.svc.announcer, ctx.svc.db
     sub = ctx.args[0] if ctx.args else "목록"
-    sid = int(ctx.args[1].lstrip("#")) if len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdigit() else None
+    sid = int(ctx.args[1].lstrip("#")) if len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdecimal() else None
 
     if sub in ("목록", "list"):
         await ctx.reply(await an.list_text(ctx.chat_id))
@@ -522,8 +753,8 @@ async def c_cas(ctx: CmdCtx) -> None:
         await ctx.svc.db.set_setting(ctx.chat_id, "cas_enabled", coerce("cas_enabled", sub))
     elif sub in ("확인", "check") and len(ctx.args) > 1:
         arg = ctx.args[1].lstrip("@")
-        if arg.isdigit():
-            uid, name = int(arg), arg
+        if (uid := to_int(arg)) is not None and uid > 0:
+            name = arg
         else:
             ctx.args = ctx.args[1:]
             t = await _target(ctx, sanction=False)
@@ -534,9 +765,9 @@ async def c_cas(ctx: CmdCtx) -> None:
         await ctx.reply(f"🔎 {esc(name)}: " + ("⚠️ CAS 스팸 DB에 등록된 계정이에요." if banned else "등록 기록 없음 (또는 조회 실패)"))
         return
     s = await ctx.svc.db.get_settings(ctx.chat_id)
-    await ctx.reply(f"🛡️ <b>CAS 스팸DB 차단</b>: {render('cas_enabled', s['cas_enabled'])}\n"
+    await ctx.reply(f"🛡️ <b>스팸 명단(CAS·lols) 차단</b>: {render('cas_enabled', s['cas_enabled'])}\n"
                     "입장 시, 그리고 봇이 처음 보는 멤버가 말할 때 조회해서 등록된 스팸 계정이면 밴해요.\n"
-                    "<code>.cas 켜기|끄기</code> · <code>.cas 확인 @user|ID</code>")
+                    "<code>.스팸차단 켜기|끄기</code> · <code>.스팸차단 확인 @user|ID</code>")
 
 
 # ── 백업 (오너) ───────────────────────────────────────────
@@ -581,10 +812,11 @@ async def c_whitelist(ctx: CmdCtx) -> None:
     s = await ctx.svc.db.get_settings(ctx.chat_id)
     domains = list(s["whitelist_domains"])
     sub = ctx.args[0] if ctx.args else "목록"
-    dom = (ctx.args[1] if len(ctx.args) > 1 else "").lower().removeprefix("https://").removeprefix("http://")
-    dom = dom.split("/")[0].removeprefix("www.")
+    raw = ctx.args[1] if len(ctx.args) > 1 else ""
+    dom = raw.lower().removeprefix("https://").removeprefix("http://").split("/")[0].removeprefix("www.")
     if sub in ("추가", "add") and dom:
-        if not _DOMAIN_RE.fullmatch(dom):  # '<b>' 같은 값이 저장되면 이후 목록 출력이 깨짐
+        dom = normalize_domain(raw)
+        if not dom:  # '<b>' 같은 값이 저장되면 이후 목록 출력이 깨짐
             await ctx.reply("도메인 형식이 아니에요. 예: <code>youtube.com</code>")
             return
         domains = sorted(set(domains) | {dom})
@@ -598,8 +830,6 @@ async def c_whitelist(ctx: CmdCtx) -> None:
     await ctx.reply("✅ 허용 도메인: " + (esc(", ".join(domains)) or "없음"))
 
 
-_DOMAIN_RE = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}")
-
 
 async def c_botadmin(ctx: CmdCtx) -> None:
     sub = ctx.args[0] if ctx.args else "목록"
@@ -610,11 +840,45 @@ async def c_botadmin(ctx: CmdCtx) -> None:
             return
         on = sub in ("추가", "add")
         await ctx.svc.db.set_bot_admin(ctx.chat_id, t[0], on)
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, t[0], "bot_admin", "추가" if on else "해제")
         await ctx.reply(f"{esc(t[1])}님 봇 관리자 {'추가' if on else '해제'} (텔레그램 관리자가 아니어도 봇 관리 명령 사용 가능)")
         return
     ids = await ctx.svc.db.bot_admin_ids(ctx.chat_id)
     await ctx.reply("🛠️ 봇 관리자 ID: " + (", ".join(f"<code>{i}</code>" for i in ids) or "없음") +
                     "\n<code>.봇관리자 추가 @user</code> / <code>.봇관리자 삭제 @user</code>")
+
+
+async def c_fedban(ctx: CmdCtx) -> None:
+    """.공동차단 @user|답장 사유 → 공동 명단에 올리고 이 방에서 밴. .공동차단 해제 ID → 이 방 표시 빼기(오너는 완전 삭제)."""
+    svc = ctx.svc
+    if ctx.args and ctx.args[0] in ("해제", "삭제", "remove"):
+        uid = to_int(ctx.args[1]) if len(ctx.args) > 1 else None
+        if not uid or uid <= 0:
+            await ctx.reply("사용법: <code>.공동차단 해제 숫자ID</code>")
+            return
+        owner = ctx.user.id in await svc.perms.owners()
+        await ctx.reply(await fedban.remove(svc, ctx.chat_id, uid, ctx.user.id, owner=owner))
+        return
+    if not ctx.args and not ctx.msg.reply_to_message:
+        await ctx.reply(fedban.USAGE)
+        return
+    # 이미 나간 계정도 올릴 수 있게 숫자 ID 는 바로 받는다 (답장이 없을 때)
+    raw = to_int(ctx.args[0]) if ctx.args and not ctx.msg.reply_to_message else None
+    if raw and raw > 0 and not await svc.db.find_members(ctx.chat_id, ctx.args[0]):
+        if await svc.perms.protected(ctx.bot, ctx.chat_id, raw):
+            await ctx.reply("관리자·봇·운영자는 공동 차단 명단에 올릴 수 없어요.")
+            return
+        uid, name, rest = raw, f"ID {raw}", ctx.args[1:]
+    else:
+        t = await _target(ctx)
+        if not t:
+            return
+        uid, name, rest = t  # _target 이 관리자·봇·오너(protected)를 거른다
+    reason = " ".join(rest).strip()
+    if not reason:
+        await ctx.reply("사유를 꼭 적어주세요. 예: <code>.공동차단 @아이디 코인 사기 DM</code>")
+        return
+    await ctx.reply(await fedban.add(svc, ctx.bot, ctx.chat_id, uid, name, reason, ctx.user.id))
 
 
 async def c_ai(ctx: CmdCtx) -> None:
@@ -672,13 +936,35 @@ async def c_modlog(ctx: CmdCtx) -> None:
 
 
 async def c_usage(ctx: CmdCtx) -> None:
-    u = await ctx.svc.llm.usage_today()
-    budget = ctx.svc.cfg.daily_token_budget
-    hit = u["cached_tokens"] * 100 // max(u["prompt_tokens"], 1)
-    await ctx.reply(
-        f"🔋 오늘 AI 토큰: {u['tokens']:,} / {budget:,} ({u['tokens'] * 100 // max(budget, 1)}%)\n"
-        f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)\n"
-        "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요.")
+    """방 관리자: 그 방 사용량만 (봇 전체 토큰·예산은 다른 방 정보라 오너에게만)."""
+    lines = []
+    if ctx.chat_id < 0:
+        day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+        used = await ctx.svc.db.counter(day, ctx.chat_id, ROOM_TOKENS)
+        cap = min((await ctx.svc.db.get_settings(ctx.chat_id)).get("ai_room_daily_tokens") or ROOM_TOKENS_MAX,
+                  ROOM_TOKENS_MAX)
+        lines.append(f"🔋 오늘 이 방 AI 토큰: {used:,} / {cap:,} ({used * 100 // max(cap, 1)}%)")
+    if ctx.role >= Role.OWNER:
+        u = await ctx.svc.llm.usage_today()
+        from . import costs
+        hit = u["cached_tokens"] * 100 // max(u["prompt_tokens"], 1)
+        spent, ub, tb = await ctx.svc.llm.usd_today(), ctx.svc.llm.usd_budget, ctx.svc.llm.token_budget
+        cap = int(ub * costs.MICRO)
+        lines += [f"💵 오늘 AI 요금: {costs.fmt_usd(spent)}" + (f" / {costs.fmt_usd(cap)} ({spent * 100 // max(cap, 1)}%)"
+                                                            if ub > 0 else ""),
+                  f"🌐 오늘 전체 AI 토큰: {u['tokens']:,}" + (f" / {tb:,} ({u['tokens'] * 100 // tb}%)" if tb else ""),
+                  f"💾 프롬프트 캐시 적중: 입력 {u['prompt_tokens']:,} 중 {u['cached_tokens']:,} ({hit}%)",
+                  "캐시로 읽은 입력은 요금이 크게 할인돼요. 대화가 이어질수록 적중률이 올라가요."]
+        day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+        rows = await ctx.svc.db._all("SELECT key, n FROM counters WHERE day=? AND chat_id=0 AND "
+                                     "(key LIKE 'prompt:%' OR key LIKE 'cached:%')", (day,))
+        got = {r["key"]: r["n"] for r in rows}
+        miss = sorted(((got[k] - got.get("cached:" + k[7:], 0), k[7:], got[k]) for k in got if k.startswith("prompt:")),
+                      reverse=True)[:5]
+        if miss:
+            lines.append("캐시 안 된 입력이 많은 기능: " + " · ".join(
+                f"{p} {m:,} ({(t - m) * 100 // max(t, 1)}% 적중)" for m, p, t in miss))
+    await ctx.reply("\n".join(lines))
 
 
 # ── 지식 베이스 ───────────────────────────────────────────
@@ -723,7 +1009,7 @@ async def c_knowledge(ctx: CmdCtx) -> None:
                         f"이제 AI가 관련 질문에 이 자료를 찾아 답해요.{note}")
         return
 
-    if sub in ("삭제", "del") and len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdigit():
+    if sub in ("삭제", "del") and len(ctx.args) > 1 and ctx.args[1].lstrip("#").isdecimal():
         ok = await db.delete_knowledge(scope, int(ctx.args[1].lstrip("#")))
         await ctx.reply("🗑️ 삭제했어요." if ok else f"{scope_name} 자료 중에 그 번호가 없어요.")
         return
@@ -759,6 +1045,14 @@ async def c_subscribe(ctx: CmdCtx) -> None:
         await ctx.reply("관리자만 쓸 수 있는 명령어예요.")
         return
     if ctx.chat_id < 0:
+        try:  # 결제 화면(금액)은 텔레그램 관리자·오너만 (봇관리자 제외), 캐시 말고 지금 상태로
+            svc.perms.forget(ctx.chat_id)
+            tg_admin = await svc.perms.is_tg_admin(ctx.bot, ctx.chat_id, ctx.user.id)
+        except TelegramError:
+            tg_admin = False
+        if not tg_admin:
+            await _private_notice(ctx, "이용 기간·연장은 텔레그램 방 관리자만 볼 수 있어요.")
+            return
         if await subscription.send_panel_dm(svc, ctx.bot, ctx.chat_id, ctx.user.id):
             await _private_notice(ctx, "🔒 관리자님, 봇과의 1:1 채팅을 확인해주세요.")
         else:
@@ -766,11 +1060,11 @@ async def c_subscribe(ctx: CmdCtx) -> None:
                                   subscription.setup_button(ctx.bot.username, ctx.chat_id), seconds=60)
         return
     rows = []
-    for chat_id in await svc.db.all_chat_ids():
+    for chat_id in await svc.perms.candidate_chats(ctx.user.id):  # 후보 방만 (방 전체에 관리자 조회 안 돌게)
         if chat_id >= 0:
             continue
         try:
-            if not await svc.perms.is_admin(ctx.bot, chat_id, ctx.user.id):
+            if not await svc.perms.is_tg_admin(ctx.bot, chat_id, ctx.user.id):
                 continue
         except TelegramError:
             continue  # 봇이 나간 방
@@ -809,16 +1103,28 @@ async def c_report(ctx: CmdCtx) -> None:
 
 
 COMMANDS: list[Cmd] = [
-    Cmd(("도움말", "help", "명령어", "start"), c_help, help="명령어 목록", dm_ok=True),
+    Cmd(("도움말", "help", "start", "사용법"), c_help, help="소담에게 말하는 법 (예시)", dm_ok=True),
+    Cmd(("명령어", "commands", "명령어목록"), c_commands, help="명령어 전체 목록", dm_ok=True),
     Cmd(("내아이디", "id", "myid"), c_myid, help="내 텔레그램 숫자 ID (방에선 방 ID도)", dm_ok=True),
     Cmd(("규칙", "rules"), c_rules, help="방 규칙 보기"),
     Cmd(("내정보", "me", "정보", "info"), c_me, usage="[@user]", help="활동 정보"),
+    Cmd(("기록", "이름기록", "history"), c_history, usage="[@user|ID|답장]",
+        help="이름·아이디 변경 기록 (최근)", group="이름 기록", dm_ok=True),
+    Cmd(("전체기록", "allhistory"), c_allhistory, usage="[@user|ID|답장]", help="변경 기록 전체",
+        group="이름 기록", dm_ok=True),
+    Cmd(("이름조회", "check_name", "names"), c_check_name, usage="[@user|ID|답장]", help="이름 변경만",
+        group="이름 기록", dm_ok=True),
+    Cmd(("아이디조회", "check_username", "usernames"), c_check_username, usage="[@user|ID|답장]",
+        help="@아이디 변경만", group="이름 기록", dm_ok=True),
+    Cmd(("내기록", "myhistory"), c_myhistory, help="내 이름·아이디 기록", group="이름 기록", dm_ok=True),
+    Cmd(("멤버", "멤버목록", "members"), c_members, Role.ADMIN, help="방 멤버 목록 (1:1 로)", group="관리자"),
+    Cmd(("이름알림", "namealert"), c_name_notice, Role.ADMIN, usage="[켜기|끄기]", help="이름 변경 알림 설정",
+        group="관리자"),
     Cmd(("랭킹", "rank"), c_rank, usage="[오늘|주간|월간|전체]", help="채팅 랭킹", group="집계"),
     Cmd(("통계", "stats"), c_stats, usage="[오늘|주간|월간]", help="방 통계", group="집계"),
     Cmd(("검색", "search"), c_search, usage="키워드", help="대화 검색 (최근 30일)", group="집계"),
     Cmd(("게임", "game"), c_game, usage="[종류]", help="게임 시작", group="게임"),
     Cmd(("게임종료", "stopgame"), c_stop_game, help="게임 끝내기", group="게임"),
-    Cmd(("정답", "answer"), c_answer, usage="단어", help="스무고개 정답", group="게임"),
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘 축구|팀 이름|결과 이름|구독 이름|해제 이름|목록]",
         help="경기 일정·결과·알림", group="스포츠"),
@@ -826,41 +1132,48 @@ COMMANDS: list[Cmd] = [
     Cmd(("호칭", "callme"), c_nickname, usage="부를 이름", help="봇이 부를 호칭", dm_ok=True),
     Cmd(("봇정보", "about"), c_about, help="봇 소개", dm_ok=True),
     # 관리자
-    Cmd(("settings", "설정"), c_settings, Role.ADMIN, usage="[전체]", help="버튼 설정 메뉴를 1:1로 받기 (전체: 글 목록)",
+    Cmd(("설정", "settings"), c_settings, Role.ADMIN, usage="[전체]", help="버튼 설정 메뉴를 1:1로 받기 (전체: 글 목록)",
         group="관리자"),
-    Cmd(("set", "설정변경"), c_set, Role.ADMIN, usage="키 값", help="설정 바꾸기", group="관리자"),
-    Cmd(("경고", "warn"), c_warn, Role.ADMIN, usage="@user [사유]", help="경고 (누적 시 자동 제재)", group="관리자"),
-    Cmd(("경고취소", "unwarn"), c_unwarn, Role.ADMIN, usage="@user", help="경고 1회 취소", group="관리자"),
+    Cmd(("설정변경", "set"), c_set, Role.ADMIN, usage="키 값", help="설정 바꾸기", group="관리자"),
+    Cmd(("경고", "warn"), c_warn, Role.ADMIN, usage="@user [사유]", help="경고 (누적 시 자동 제재)", group="관리자", right="restrict"),
+    Cmd(("경고취소", "unwarn"), c_unwarn, Role.ADMIN, usage="@user", help="경고 1회 취소", group="관리자", right="restrict"),
     Cmd(("경고목록", "warns"), c_warns, Role.ADMIN, usage="@user", help="경고 내역", group="관리자"),
-    Cmd(("경고초기화", "resetwarns"), c_resetwarns, Role.ADMIN, usage="@user", help="경고 전부 삭제", group="관리자"),
-    Cmd(("뮤트", "mute"), c_mute, Role.ADMIN, usage="@user [30m|2h|1d] [사유]", help="채팅 금지", group="관리자"),
-    Cmd(("뮤트해제", "unmute"), c_unmute, Role.ADMIN, usage="@user", help="채팅 금지 해제", group="관리자"),
-    Cmd(("밴", "ban"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자"),
-    Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자"),
-    Cmd(("킥", "kick"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자"),
-    Cmd(("삭제", "del"), c_del, Role.ADMIN, help="답장한 메시지 삭제", group="관리자"),
-    Cmd(("청소", "purge"), c_purge, Role.ADMIN, usage="개수", help="최근 메시지 일괄 삭제", group="관리자"),
-    Cmd(("잠금", "lock"), c_lock, Role.ADMIN, help="방 잠금", group="관리자"),
-    Cmd(("잠금해제", "unlock"), c_unlock, Role.ADMIN, help="방 잠금 해제", group="관리자"),
+    Cmd(("경고초기화", "resetwarns"), c_resetwarns, Role.ADMIN, usage="@user", help="경고 전부 삭제", group="관리자", right="restrict"),
+    Cmd(("뮤트", "mute"), c_mute, Role.ADMIN, usage="@user [30m|2h|1d] [사유]", help="채팅 금지", group="관리자", right="restrict"),
+    Cmd(("뮤트해제", "unmute"), c_unmute, Role.ADMIN, usage="@user", help="채팅 금지 해제", group="관리자", right="restrict"),
+    Cmd(("free", "프리"), c_free, Role.ADMIN, usage="@user", help="자유 멤버: 제재 풀고 자동 통제 안 받게",
+        group="관리자", right="restrict"),
+    Cmd(("free해제", "unfree", "프리해제"), c_unfree, Role.ADMIN, usage="@user", help="자유 멤버 해제", group="관리자",
+        right="restrict"),
+    Cmd(("free목록", "freelist", "프리목록"), c_freelist, Role.ADMIN, help="자유 멤버 목록", group="관리자"),
+    Cmd(("밴", "ban"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자", right="restrict"),
+    Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자", right="restrict"),
+    Cmd(("킥", "kick"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자", right="restrict"),
+    Cmd(("삭제", "del"), c_del, Role.ADMIN, help="답장한 메시지 삭제", group="관리자", right="delete"),
+    Cmd(("청소", "purge"), c_purge, Role.ADMIN, usage="개수", help="최근 메시지 일괄 삭제", group="관리자", right="delete"),
+    Cmd(("잠금", "lock"), c_lock, Role.ADMIN, help="방 잠금", group="관리자", right="restrict"),
+    Cmd(("잠금해제", "unlock"), c_unlock, Role.ADMIN, help="방 잠금 해제", group="관리자", right="restrict"),
     Cmd(("금지어", "filter"), c_filter, Role.ADMIN, usage="[추가|삭제] 단어", help="금지어 관리", group="관리자"),
     Cmd(("허용도메인", "whitelist"), c_whitelist, Role.ADMIN, usage="[추가|삭제] 도메인", help="링크 허용 목록", group="관리자"),
-    Cmd(("ai",), c_ai, Role.ADMIN, usage="켜기|끄기", help="AI 대화 켜고 끄기", group="관리자"),
+    Cmd(("AI대화", "ai"), c_ai, Role.ADMIN, usage="켜기|끄기", help="AI 대화 켜고 끄기", group="관리자"),
     Cmd(("인사", "greet"), c_greet, Role.ADMIN, usage="켜기|끄기|설정|테스트", help="입장 인사 설정", group="관리자"),
     Cmd(("규칙설정", "setrules"), c_setrules, Role.ADMIN, usage="내용", help="방 규칙 저장", group="관리자"),
     Cmd(("공지", "notice"), c_notice, Role.ADMIN, usage="내용", help="공지 올리고 고정", group="관리자"),
     Cmd(("예약공지", "schedule"), c_announce, Role.ADMIN, usage="[만들기|수정|미리보기|지금|켜기|끄기|삭제] [번호]",
         help="제목·사진/영상 포함 예약·반복 공지", group="관리자"),
     Cmd(("캡차", "captcha"), c_captcha, Role.ADMIN, usage="[켜기|끄기|시간 N|실패 킥|밴|뮤트]", help="입장 캡차 설정", group="관리자"),
-    Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자"),
-    Cmd(("cas",), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="CAS 스팸DB 차단", group="관리자"),
+    Cmd(("캡차통과", "approve"), c_captcha_pass, Role.ADMIN, usage="@user", help="캡차 수동 통과", group="관리자", right="restrict"),
+    Cmd(("스팸차단", "cas"), c_cas, Role.ADMIN, usage="[켜기|끄기|확인 @user]", help="스팸 명단(CAS·lols) 차단", group="관리자"),
     Cmd(("관리기록", "modlog"), c_modlog, Role.ADMIN, help="최근 제재·설정 기록", group="관리자"),
-    Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰·캐시 적중률", group="관리자", dm_ok=True),
+    Cmd(("사용량", "usage"), c_usage, Role.ADMIN, help="오늘 AI 토큰 (방 관리자는 이 방만)", group="관리자", dm_ok=True),
     # 권한은 함수 안에서 판단: 방에선 관리자만, 1:1 에선 누구나(본인이 관리자인 방만 보여줌)
     Cmd(("구독", "설정하기", "subscribe"), c_subscribe, help="이용 기간 확인·연장 (방 관리자, 1:1 채팅으로 안내)",
         group="관리자", dm_ok=True),
     Cmd(("지식", "자료", "knowledge"), c_knowledge, Role.ADMIN, usage="[추가 제목|검색 단어|삭제 번호]",
         help="AI가 참고할 문서·자료 등록 (1:1 에선 모든 방 공통)", group="관리자", dm_ok=True),
     Cmd(("리포트", "report"), c_report, Role.ADMIN, help="오늘 집계 리포트", group="관리자"),
+    Cmd(("공동차단", "fedban"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
+        help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
     Cmd(("백업", "backup"), c_backup, Role.OWNER, usage="[목록]", help="DB 지금 백업 / 백업 목록", group="오너", dm_ok=True),
     Cmd(("구독부여", "grant"), c_grant, Role.OWNER, usage="방ID 일수", help="결제 없이 이용 기간 부여", group="오너", dm_ok=True),
@@ -886,6 +1199,13 @@ def parse(text: str, bot_username: str) -> tuple[Cmd, list[str], str] | None:
 async def dispatch(ctx: CmdCtx, cmd: Cmd) -> None:
     if ctx.role < cmd.role:
         await ctx.reply("관리자만 쓸 수 있는 명령어예요." if cmd.role == Role.ADMIN else "봇 오너만 쓸 수 있어요.")
+        return
+    if cmd.right and ctx.chat_id < 0 and not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.user.id, cmd.right):
+        sender = getattr(ctx.msg, "sender_chat", None)
+        if sender is not None and sender.id == ctx.chat_id:  # 익명 관리자: 누가 보냈는지 몰라 권한을 확인할 수 없음
+            await ctx.reply("익명 관리자로는 이 명령을 쓸 수 없어요. 텔레그램에서 익명 모드를 끄고 다시 해주세요.")
+        else:
+            await ctx.reply(no_right_text(cmd.right))
         return
     try:
         await cmd.fn(ctx)

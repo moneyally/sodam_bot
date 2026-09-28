@@ -40,8 +40,13 @@ AI m:ai    AI on/off · 🎭말투 · 답변 길이[200/400/800] · 1인 분당 
 입력값 esc()·URL 버튼 https·tg:// 만·최대 6개 / 모든 변경 log_mod.
 
 ## 우선순위
-- **P0**: 라우트 테이블·PanelCtx·_show 대응·목표값 토글·범용 프리셋·확인 토큰 / 허브·기능·입장(토글+캡차)·보안 화면(금지어·도메인 재사용: `db.banned_words`, `set_setting("whitelist_domains")`) /
+- **P0 (완료 2026-09-26)**: 라우트 테이블·PanelCtx·_show 대응·목표값 토글·범용 프리셋·확인 토큰 / 허브·기능·입장(토글+캡차)·보안 화면(금지어·도메인 재사용: `db.banned_words`, `set_setting("whitelist_domains")`) /
   입력 엔진(`svc.inputs`, `menu.handle_input`) / on_private 순서 조정 / tests/test_menu.py 보강(64바이트, 위조 cid, 강등, 재전송, 입력 시간초과, 멤버에게 💳 안 보임).
-- **P1**: 인사 편집기(설정 키 `greet_media_type/greet_media_id/greet_buttons`, Greeter 가 미디어·버튼 발송) / 예약공지 패널 + 마법사 1:1 분리 /
+- **P1 (완료 2026-09-26)**: 인사 편집기(설정 키 `greet_media_type/greet_media_id/greet_buttons`, Greeter 가 미디어·버튼 발송) / 예약공지 패널 + 마법사 1:1 분리 /
   AI 패널(말투·길이·사용량·자료) / 관리 기록 페이지 / 오너 메뉴(`payments_summary`, `unmatched_payments`, `all_subscriptions`) / 태그 알림.
-- **P2**: chat_admins 캐시 테이블, 패널 1개만 살아있게, 규칙 편집, 답장 알림, 숫자 직접 입력, 봇관리자 관리, 오너 공통 자료 패널.
+- **P2 (완료 2026-09-26)**: chat_admins 캐시 테이블, 패널 1개만 살아있게, 규칙 편집, 답장 알림, 숫자 직접 입력, 봇관리자 관리, 오너 공통 자료 패널.
+
+## 다음 (P3 전에 사용자 결정 필요)
+- 실제 방에서 먼저 끼어들기 켜보고 빈도·판단 기준 조정 (지금 기본 꺼짐)
+- 방별 하루 AI 토큰 한도(`ai_room_daily_tokens` 60만)와 전체 한도(200만) — 방이 늘면 조정
+- 답장 관계(어느 메시지에 답했는지) messages 테이블에 저장하면 이어 말하기·요약이 더 정확해짐

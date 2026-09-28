@@ -29,6 +29,13 @@ log = logging.getLogger(__name__)
 UNIT = 1_000_000
 TRONGRID = "https://api.trongrid.io"
 LATE_GRACE = 30 * 60      # 유효시간 안에 보냈는데 확인이 늦은 경우를 위해 만료 후에도 30분 더 찾아봄
+IDLE_SCAN = 10 * 60       # 대기 청구서가 없어도 이 간격으로 입금 조회 (만료 후 늦은 입금·청구서 없는 입금 탐지)
+CURSOR_KEY = "billing_cursor_ms"   # chat_state(chat_id=0): 마지막으로 본 입금의 block_timestamp(ms)
+CURSOR_OVERLAP = 10 * 60  # 확정이 늦게 된 거래를 놓치지 않게 커서보다 10분 앞부터 다시 조회 (중복은 tx UNIQUE 로 걸러짐)
+FIRST_LOOKBACK = LATE_GRACE  # 커서도 청구서도 없을 때(첫 실행) 되돌아볼 기간
+REUSE_LEFT = 5 * 60       # 청구서 다시 누름: 남은 시간이 이보다 짧으면 새로 (곧 끝날 청구서로 보내 '늦은 입금'이 되지 않게)
+STREAK_KEY = "billing_fail_streak"
+FAIL_ALERT = 3            # TronGrid 조회가 연속 이만큼 실패하면 오너에게 한 번 알림
 
 
 def fmt_usdt(units: int) -> str:
@@ -52,6 +59,22 @@ class Billing:
         self.http = http or httpx.AsyncClient(timeout=15)
         self.price_units = int(Decimal(cfg.sub_price_usdt) * UNIT)
         self._lock = asyncio.Lock()
+        self._inv_lock = asyncio.Lock()  # 청구서 만들기: 연타·동시 생성이 같은 금액·청구서 두 장을 만들지 않게
+        self._last_scan = 0.0      # 마지막 성공 조회 (monotonic)
+        self.fail_streak = 0       # TronGrid 연속 실패 횟수 (DB chat_state 0/STREAK_KEY 에도 → 장애 중 재시작해도 복구 알림)
+        self._streak_loaded = False
+        self._alert: str | None = None  # "down"/"up" — run_check 가 한 번 꺼내서 보고
+
+    async def _save_streak(self) -> None:
+        try:
+            await self.db.set_state(0, STREAK_KEY, self.fail_streak or None)
+        except Exception as e:   # 기록 실패는 알림만 못 이어갈 뿐
+            log.warning("billing streak not saved: %s", e)
+
+    def take_alert(self) -> str | None:
+        """TronGrid 장애('down', 연속 FAIL_ALERT 번 실패 시 1번)·복구('up') 알림을 한 번만 꺼낸다."""
+        a, self._alert = self._alert, None
+        return a
 
     @property
     def enabled(self) -> bool:
@@ -91,9 +114,13 @@ class Billing:
     # ── 청구서 ────────────────────────────────────────────
     async def create_invoice(self, chat_id: int, user_id: int):
         """같은 방에 아직 유효한 청구서가 있으면 그걸 다시 보여준다 (버튼 연타 대비)."""
+        async with self._inv_lock:
+            return await self._create_invoice_locked(chat_id, user_id)
+
+    async def _create_invoice_locked(self, chat_id: int, user_id: int):
         now = int(time.time())
         # 관리자마다 자기 청구서 (다른 관리자 청구서를 보여주면 그 사람은 확인 버튼을 쓸 수 없음)
-        existing = await self.db.open_invoice(chat_id, now, user_id)
+        existing = await self.db.open_invoice(chat_id, now + REUSE_LEFT, user_id)
         if existing:
             return existing
         taken = await self.db.pending_amounts(now - LATE_GRACE)
@@ -147,13 +174,46 @@ class Billing:
     async def _check_pending_locked(self) -> tuple[list[dict], list[dict]]:
         now = int(time.time())
         pending = await self.db.pending_invoices(now - LATE_GRACE)
-        if not pending:
+        # 대기 청구서가 없어도 IDLE_SCAN 마다 조회 → 만료 후 늦게 온 입금·청구서 없는 입금도 오너에게 보고
+        if not pending and self._last_scan and time.monotonic() - self._last_scan < IDLE_SCAN:
             return [], []
-        since_ms = (min(p["created"] for p in pending) - 120) * 1000
-        transfers = await self.fetch_transfers(since_ms)
+        cursor_ms = await self.db.get_state(0, CURSOR_KEY)
+        starts = [(min(p["created"] for p in pending) - 120) * 1000] if pending else []
+        if cursor_ms:
+            starts.append(int(cursor_ms) - CURSOR_OVERLAP * 1000)
+        elif not pending:  # 첫 실행(커서 없음)·청구서 없음 → 최근 FIRST_LOOKBACK 만
+            starts.append((now - FIRST_LOOKBACK) * 1000)
+        since_ms = min(starts)
+        if not self._streak_loaded:   # 재시작 전 연속 실패 수 ('장애' 알림 뒤 재시작돼도 '복구' 알림이 가게)
+            self._streak_loaded = True
+            self.fail_streak = max(self.fail_streak, int(await self.db.get_state(0, STREAK_KEY, 0) or 0))
+        try:
+            transfers = await self.fetch_transfers(since_ms)
+        except Exception:
+            self.fail_streak += 1
+            if self.fail_streak == FAIL_ALERT:
+                self._alert = "down"
+            await self._save_streak()
+            raise
+        if self.fail_streak >= FAIL_ALERT:
+            self._alert = "up"
+        if self.fail_streak:
+            self.fail_streak = 0
+            await self._save_streak()
+        self._last_scan = time.monotonic()
 
         paid, unmatched = [], []
+        # 입금 기록 직후(연장 전) 죽은 경우: tx 는 이미 기록돼 아래에선 '본 거래'로 건너뛰므로 여기서 연장.
+        # 오래 멈춰 청구서가 그 사이 만료 처리됐어도 (pay_invoice 가 청구서당 1번만)
+        for r in await self.db.unapplied_payments():
+            until = await self.db.pay_invoice(r["id"], r["pay_tx"], r["chat_id"], self.cfg.sub_days * 86400,
+                                              int(time.time()))
+            if until is not None:
+                pending = [p for p in pending if p["id"] != r["id"]]
+                paid.append({**dict(r), "tx_id": r["pay_tx"], "until": until, "from": r["from_addr"] or ""})
+        new_cursor = int(cursor_ms or 0)
         for t in transfers:
+            new_cursor = max(new_cursor, int(t.get("block_timestamp", 0) or 0))
             value = self._valid_transfer(t)
             tx_id = str(t.get("transaction_id", ""))
             if value is None or not tx_id:
@@ -161,16 +221,19 @@ class Billing:
             ts = int(t.get("block_timestamp", 0)) // 1000
             inv = next((p for p in pending if p["amount_units"] == value
                         and p["created"] - 120 <= ts <= p["expires"]), None)
-            # 거래 ID 는 한 번만 기록된다 (UNIQUE). 이미 본 거래면 건너뜀 → 이중 적용 불가
+            # 거래 ID 는 한 번만 기록된다 (UNIQUE). 이미 본 거래면 건너뜀 → 이중 적용 불가 (기록 뒤 죽은 건 위에서 처리)
             if not await self.db.record_payment(tx_id, inv["id"] if inv else None,
                                                 inv["chat_id"] if inv else None, value, t.get("from", ""), ts):
                 continue
-            if inv and await self.db.mark_invoice_paid(inv["id"], tx_id):
-                until = await self.extend(inv["chat_id"], self.cfg.sub_days)
+            until = await self.db.pay_invoice(inv["id"], tx_id, inv["chat_id"], self.cfg.sub_days * 86400,
+                                              int(time.time())) if inv else None
+            if until is not None:
                 pending = [p for p in pending if p["id"] != inv["id"]]
                 paid.append({**dict(inv), "tx_id": tx_id, "until": until, "from": t.get("from", "")})
             else:
-                # 청구서가 없거나, 방금 취소·결제 처리돼서 반영 못 한 입금 → 돈은 들어왔으니 반드시 오너에게 보고
+                # 청구서가 없거나(만료 후 입금 포함), 방금 취소·결제 처리돼서 반영 못 한 입금 → 반드시 오너에게 보고
                 unmatched.append({"tx_id": tx_id, "amount_units": value, "from": t.get("from", ""), "ts": ts})
+        if new_cursor > int(cursor_ms or 0):
+            await self.db.set_state(0, CURSOR_KEY, new_cursor)
         await self.db.expire_invoices(now - LATE_GRACE)
         return paid, unmatched

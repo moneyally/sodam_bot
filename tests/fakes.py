@@ -1,6 +1,8 @@
 """테스트용 가짜 텔레그램 객체와 공용 도우미. 네트워크를 쓰지 않는다."""
 import asyncio
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import traceback
@@ -24,7 +26,8 @@ def cfg(db_path=":memory:", **kw) -> Config:
     base = dict(telegram_token="t", openai_api_key="k", owner_ids=frozenset({1}), bot_name="소담",
                 call_names=("소담아", "소담이", "소담"), model="gpt-5.4", guard_model="gpt-5.4-mini",
                 reasoning_effort="", daily_token_budget=1_000_000, db_path=db_path, tz=TZ,
-                log_chat_id=None, sportsdb_key="123")
+                log_chat_id=None, sportsdb_key="123",
+                agent_think="off")   # 생각하는 에이전트(기본 auto)는 test_agent_think·test_agent_codex 에서 켜고 봄
     base.update(kw)
     return Config(**base)
 
@@ -52,6 +55,9 @@ class FakeBot:
         return [c for c in self.calls if c[0] == name]
 
     async def send_message(self, chat_id, text, **kw):
+        if chat_id in getattr(self, "dm_blocked", ()):
+            from telegram.error import Forbidden
+            raise Forbidden("Forbidden: bot was blocked by the user")
         self.calls.append(("send_message", chat_id, text, kw))
         return self._msg(chat_id, text=text)
 
@@ -59,11 +65,33 @@ class FakeBot:
         self.calls.append((kind, chat_id, media, caption, kw))
         return self._msg(chat_id)
 
+    files: dict = {}   # file_id → bytes (get_file 로 내려받는 사진)
+
+    async def get_file(self, file_id):
+        data = self.files[file_id]
+        self.calls.append(("get_file", file_id))
+
+        async def download_as_bytearray():
+            return bytearray(data)
+        return SimpleNamespace(file_id=file_id, download_as_bytearray=download_as_bytearray)
+
     async def send_photo(self, chat_id, photo, caption=None, **kw):
         return await self._send_media("send_photo", chat_id, photo, caption, **kw)
 
+    async def send_sticker(self, chat_id, sticker, **kw):
+        return await self._send_media("send_sticker", chat_id, sticker, None, **kw)
+
     async def send_video(self, chat_id, video, caption=None, **kw):
         return await self._send_media("send_video", chat_id, video, caption, **kw)
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None, **kw):
+        self.calls.append(("edit_text", chat_id, text, kw))
+
+    async def set_message_reaction(self, chat_id, message_id, reaction=None, **kw):
+        self.calls.append(("reaction", chat_id, message_id, reaction))
+
+    async def edit_message_caption(self, chat_id=None, message_id=None, caption=None, **kw):
+        self.calls.append(("edit_caption", chat_id, message_id, caption, kw))
 
     async def send_animation(self, chat_id, animation, caption=None, **kw):
         return await self._send_media("send_animation", chat_id, animation, caption, **kw)
@@ -80,6 +108,19 @@ class FakeBot:
     async def unban_chat_member(self, chat_id, user_id, only_if_banned=False, **kw):
         self.calls.append(("unban", chat_id, user_id))
 
+    async def approve_chat_join_request(self, chat_id, user_id):
+        self.calls.append(("approve", chat_id, user_id))
+
+    async def decline_chat_join_request(self, chat_id, user_id):
+        self.calls.append(("decline", chat_id, user_id))
+
+    async def create_chat_invite_link(self, chat_id, **kw):
+        self.calls.append(("invite_link", chat_id, kw))
+        return SimpleNamespace(invite_link="https://t.me/+fakeJoinRequest")
+
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None, reply_markup=None, **kw):
+        self.calls.append(("edit_markup", chat_id, message_id, reply_markup))
+
     async def delete_message(self, chat_id, message_id):
         self.calls.append(("delete", chat_id, message_id))
 
@@ -89,15 +130,39 @@ class FakeBot:
     async def pin_chat_message(self, chat_id, message_id, **kw):
         self.calls.append(("pin", chat_id, message_id))
 
+    public_chats: dict = {}   # '@아이디' 조회: 아이디 → 'channel'/'supergroup' (실제 텔레그램처럼 사람 계정은 못 찾음)
+
     async def get_chat(self, chat_id):
-        return SimpleNamespace(id=chat_id, permissions=self.chat_permissions)
+        if isinstance(chat_id, str) and chat_id.startswith("@"):
+            kind = self.public_chats.get(chat_id[1:].lower())
+            if not kind:
+                from telegram.error import BadRequest
+                raise BadRequest("Chat not found")
+            return SimpleNamespace(id=-1009 - len(chat_id), type=kind, username=chat_id[1:])
+        return SimpleNamespace(id=chat_id, permissions=self.chat_permissions,
+                               linked_chat_id=getattr(self, "linked", {}).get(chat_id))   # 채널 토론 그룹 (테스트가 bot.linked 지정)
 
     async def set_chat_permissions(self, chat_id, permissions, **kw):
         self.calls.append(("set_perms", chat_id, permissions))
         self.chat_permissions = permissions
 
-    async def get_chat_administrators(self, chat_id):
-        return [SimpleNamespace(user=u, status="administrator") for u in self.admins]
+    async def get_chat_administrators(self, chat_id):   # 방·채널마다 다르게: bot.chat_admins = {방: [사람]}
+        return [SimpleNamespace(user=u, status="administrator") for u in getattr(self, "chat_admins", {}).get(chat_id, self.admins)]
+
+    # 태그 알림용. 테스트가 bot.member_status = {(방, 사람): "left"} (없으면 "member"), bot.dm_blocked = {사람} 로 지정
+    async def get_chat_member_count(self, chat_id):
+        self.calls.append(("get_chat_member_count", chat_id))
+        return getattr(self, "member_count", 100)
+
+    async def get_chat_member(self, chat_id, user_id):
+        self.calls.append(("get_chat_member", chat_id, user_id))
+        if user_id == self.id:  # 봇 자신: 기본은 관리 권한 있는 관리자 (can_moderate=False 면 일반 멤버)
+            ok = getattr(self, "can_moderate", True)
+            return SimpleNamespace(status="administrator" if ok else "member", user=SimpleNamespace(id=user_id),
+                                   can_delete_messages=ok, can_restrict_members=ok, is_member=True,
+                                   can_post_messages=ok, can_edit_messages=ok, can_invite_users=ok)   # 채널 권한
+        status = getattr(self, "member_status", {}).get((chat_id, user_id), "member")
+        return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left")
 
 
 class FakeMsg:
@@ -111,12 +176,14 @@ class FakeMsg:
         self.entities, self.caption_entities = (), ()  # PTB 는 튜플
         self.deleted = False
         self.replies: list[str] = []
+        self.reply_kws: list[dict] = []
 
     async def delete(self):
         self.deleted = True
 
     async def reply_text(self, text, **kw):
         self.replies.append(text)
+        self.reply_kws.append(kw)
         return SimpleNamespace(message_id=self.message_id + 10_000)
 
 
@@ -127,36 +194,60 @@ class FakeQuery:
         self.data = data
         self.answers: list[tuple] = []
         self.edits: list[str] = []
+        self.kb = None  # 마지막으로 그린 버튼
 
     async def answer(self, text=None, show_alert=False):
         self.answers.append((text, show_alert))
 
     async def edit_message_text(self, text, **kw):
         self.edits.append(text)
+        self.kb = kw.get("reply_markup")
 
     async def edit_message_reply_markup(self, markup=None):
         self.edits.append("<markup removed>")
 
 
 class FakePerms:
-    def __init__(self, admins=()):
+    def __init__(self, admins=(), db=None):
         self.admins = set(admins)
+        self.db = db
+        self.owner_ids: set[int] = set()   # 테스트가 오너를 지정 (오너 = 모든 방 관리자 권한)
+
+    async def candidate_chats(self, user_id):
+        return await self.db.all_chat_ids() if self.db else []
 
     async def protected(self, bot, chat_id, uid):
         return uid in self.admins or uid == bot.id
 
     async def is_admin(self, bot, chat_id, uid):
+        return uid in self.admins or uid in self.owner_ids
+
+    async def is_tg_admin(self, bot, chat_id, uid):
         return uid in self.admins
 
+    async def can(self, bot, chat_id, uid, right="restrict"):
+        return uid in self.admins or uid in self.owner_ids   # 가짜 권한: 관리자면 모든 세부 권한 (세분화는 test_fedban_perms 가 실제 Permissions 로)
+
     async def owners(self):
-        return set()
+        return set(self.owner_ids)
 
     async def role(self, bot, chat_id, uid):
         from sodam.permissions import Role
-        return Role.ADMIN if uid in self.admins else Role.MEMBER
+        if uid in self.owner_ids:
+            return Role.OWNER
+        return Role.ADMIN if uid in self.admins and chat_id < 0 else Role.MEMBER
 
     def forget(self, chat_id):
         pass
+
+    def forget_bot(self, chat_id):
+        pass
+
+    async def bot_can_moderate(self, bot, chat_id):
+        return getattr(bot, "can_moderate", True)
+
+    async def admin_users(self, bot, chat_id):
+        return [a.user for a in await bot.get_chat_administrators(chat_id)]
 
 
 class FakeGreeter:
@@ -165,6 +256,9 @@ class FakeGreeter:
 
     def queue(self, bot, chat_id, user_id, name):
         self.queued.append((chat_id, user_id, name))
+
+    def auto_greeted(self, chat_id, user_id, within=600):
+        return any(c == chat_id and u == user_id for c, u, _ in self.queued)
 
 
 class FakeCas:
@@ -182,6 +276,10 @@ class FakeJobQueue:
     def run_once(self, cb, when, data=None, name=None):
         self.once.append((cb, when, data))
 
+
+# 테스트 임시 DB·파일은 한 폴더에 모아 끝나면 지운다 (안 지우면 돌릴 때마다 쌓여 서버 디스크가 참 — 실제로 30GB 쌓여 봇 쓰기 실패)
+tempfile.tempdir = tempfile.mkdtemp(prefix="sodam-test-")
+atexit.register(shutil.rmtree, tempfile.tempdir, True)
 
 OPEN_DBS: list[DB] = []
 
@@ -203,7 +301,7 @@ async def make_svc(db: DB, *, admins=(), cas_banned=(), **cfg_kw) -> Services:
     from sodam.captcha import Captcha
     from sodam.games import GameManager
     c = cfg(db.path, **cfg_kw)
-    perms = FakePerms(admins)
+    perms = FakePerms(admins, db)
     svc = Services(cfg=c, db=db, perms=perms, mod=Moderator(c, db, perms), llm=None, sports=None,
                    cas=FakeCas(cas_banned), backup=None)
     svc.games = GameManager(svc)
@@ -243,3 +341,12 @@ def runner():
         return failed
 
     return test, run_all
+
+
+from sodam import games as _games, handlers as _handlers  # noqa: E402
+
+_games.GAP_SECONDS = 0        # 게임 글 간격도 기다리지 않음
+_handlers.BURST_SECONDS = 0   # 테스트는 연달아 말해도 기다리지 않음 (연속 전송 합치기는 test_burst 가 따로 켬)
+from sodam.panels import botlink as _blpanel  # noqa: E402
+
+_blpanel.HELP_WAIT = 0.2      # 모르는 봇 /help 답 기다리기 (답하는 가짜 봇은 바로 답함)

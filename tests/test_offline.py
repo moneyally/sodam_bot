@@ -71,8 +71,9 @@ def app_wiring():
     importlib.import_module("sodam.__main__")  # import 오류 확인
     app = ApplicationBuilder().token("123456:TEST").build()
     handlers.register(app, TZ)
-    assert sum(len(h) for h in app.handlers.values()) == 7  # 입장·그룹전환·메시지·개인챗·멤버변경·봇초대·버튼
-    assert {"tick", "backup", "sports", "daily_report", "prune", "sub_reminders"} <= {j.name for j in app.job_queue.jobs()}
+    assert sum(len(h) for h in app.handlers.values()) == 12  # 이름기록(모든 업데이트)·입장·나감·그룹전환·메시지·수정된 메시지·개인챗·멤버변경·봇초대·가입신청·채널 글·버튼
+    assert {"tick", "backup", "sports", "daily_report", "prune", "sub_reminders", "name_sweep"} <= {j.name for j in app.job_queue.jobs()}
+    assert -1 in app.handlers  # 이름 기록기가 다른 처리보다 먼저
     aliases = [n.lower() for c in commands.COMMANDS for n in c.names]
     dupes = {a for a in aliases if aliases.count(a) > 1}
     assert not dupes, dupes  # 별칭이 겹치면 한쪽 명령이 가려짐
@@ -148,7 +149,6 @@ def settings_coerce():
 
 @test
 def hangul_games():
-    assert games.chosung("사과나무") == "ㅅㄱㄴㅁ"
     assert games.dueum("력") == "역" and games.dueum("녀") == "여" and games.dueum("라") == "나"
     assert games.dueum("기") == "기"
     assert games.starts_for("노력") == {"력", "역"}

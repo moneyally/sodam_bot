@@ -33,7 +33,11 @@ class Config:
     backup_time: str = "05:00"
     backup_send_to_log: bool = False
     cas_api: str = "https://api.cas.chat/check"
+    lols_api: str = "https://api.lols.bot/account"   # 빈 값이면 lols 조회 안 함
     cache_retention: str = ""  # '', 'in_memory', '24h'
+    image_model: str = "gpt-image-2.5-flare"         # 새 이미지 (빠름)
+    image_edit_model: str = "gpt-image-2.5-sunburst"  # 사진 고치기 (원본 유지가 정확)
+    image_quality: str = "medium"                    # low·medium·high (비쌀수록 오래 걸림)
     # 구독 결제 (PAY_ADDRESS 가 비어 있으면 결제 기능 꺼짐 = 모든 방 무료)
     pay_address: str = ""
     sub_price_usdt: str = "30"
@@ -42,10 +46,21 @@ class Config:
     free_ai_per_day: int = 10
     invoice_minutes: int = 60
     trongrid_api_key: str = ""
+    # all: 한 봇이 전부 / main: 포인트 게임(!) 빼고 전부 / dealer: 포인트 게임만 (게임 전용 딜러 봇)
+    # 같은 DB_PATH 를 쓰면 포인트·방 설정·구독을 두 봇이 같이 본다
+    bot_role: str = "all"
+    # 생각하는 에이전트 (agent.wants_thinking): off / auto(기본: 관리자·오너 요청 + 여러 단계·분석 요청) / always.
+    # 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀). 멤버 잡담은 예전 방식(싸게)
+    agent_think: str = "auto"
+    agent_think_effort: str = "low"
+    # MTProto 도우미 (sodam/mtproto.py, 선택): my.telegram.org 에서 받은 API ID/HASH. 비우면 꺼짐
+    mtproto_api_id: int = 0
+    mtproto_api_hash: str = ""
 
 
 def load_config() -> Config:
-    load_dotenv()
+    # 봇을 두 개(메인·딜러) 켤 때: SODAM_ENV=.env.dealer python -m sodam
+    load_dotenv(os.getenv("SODAM_ENV", ".env"))
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not token:
@@ -74,8 +89,12 @@ def load_config() -> Config:
         backup_dir=os.getenv("BACKUP_DIR", "").strip() or "data/backups",
         backup_keep=max(1, int(os.getenv("BACKUP_KEEP", "14"))),
         backup_time=parse_hhmm(os.getenv("BACKUP_TIME", "").strip() or "05:00"),
+        image_model=os.getenv("OPENAI_IMAGE_MODEL", "").strip() or "gpt-image-2.5-flare",
+        image_edit_model=os.getenv("OPENAI_IMAGE_EDIT_MODEL", "").strip() or "gpt-image-2.5-sunburst",
+        image_quality=os.getenv("OPENAI_IMAGE_QUALITY", "").strip() or "medium",
         backup_send_to_log=os.getenv("BACKUP_SEND_TO_LOG", "").strip().lower() in ("1", "true", "yes", "on"),
         cas_api=os.getenv("CAS_API", "").strip() or "https://api.cas.chat/check",
+        lols_api=os.getenv("LOLS_API", "https://api.lols.bot/account").strip(),
         cache_retention=_retention(os.getenv("OPENAI_CACHE_RETENTION", "")),
         pay_address=_pay_address(os.getenv("PAY_ADDRESS", "")),
         sub_price_usdt=_price(os.getenv("SUB_PRICE_USDT", "30")),
@@ -84,7 +103,32 @@ def load_config() -> Config:
         free_ai_per_day=max(0, int(os.getenv("FREE_AI_PER_DAY", "10"))),
         invoice_minutes=min(180, max(10, int(os.getenv("INVOICE_MINUTES", "60")))),
         trongrid_api_key=os.getenv("TRONGRID_API_KEY", "").strip(),
+        bot_role=_role(os.getenv("BOT_ROLE", "")),
+        agent_think=_choice("AGENT_THINK", "auto", ("off", "auto", "always")),
+        agent_think_effort=_choice("AGENT_THINK_EFFORT", "low", ("low", "medium", "high")),
+        mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
+        mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
     )
+
+
+def _int0(raw: str) -> int:
+    """선택 기능의 숫자 설정: 잘못 적어도 봇은 켜지고 그 기능만 꺼짐."""
+    raw = raw.strip()
+    return int(raw) if raw.isdecimal() else 0
+
+
+def _choice(key: str, default: str, allowed: tuple[str, ...]) -> str:
+    value = os.getenv(key, "").strip().lower() or default
+    if value not in allowed:
+        raise SystemExit(f"{key} 는 비우거나 {' / '.join(allowed)} 중 하나여야 해요.")
+    return value
+
+
+def _role(raw: str) -> str:
+    role = raw.strip().lower() or "all"
+    if role not in ("all", "main", "dealer"):
+        raise SystemExit("BOT_ROLE 은 all / main / dealer 중 하나로 적어주세요.")
+    return role
 
 
 def _pay_address(raw: str) -> str:
@@ -105,7 +149,9 @@ def _price(raw: str) -> str:
 
 
 def _retention(raw: str) -> str:
-    raw = raw.strip().lower()
-    if raw in ("", "in_memory", "24h"):
+    """기본 24h: 띄엄띄엄 대화하는 소통방은 캐시가 5~10분이면 사라져서 매번 전액. gpt-5.4 등은 24h 추가 요금 없음
+    (OpenAI 프롬프트 캐싱 문서). 지원 안 하는 모델이면 .env 에 in_memory."""
+    raw = raw.strip().lower() or "24h"
+    if raw in ("in_memory", "24h"):
         return raw
     raise SystemExit("OPENAI_CACHE_RETENTION 은 비우거나 in_memory / 24h 중 하나여야 해요.")

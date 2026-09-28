@@ -65,7 +65,7 @@ def invoice_text(svc: Services, inv, title: str) -> str:
         f"유효 시간: {_date(inv['expires'], svc.cfg.tz)} 까지\n\n"
         "⚠️ 다른 네트워크(ERC20·BEP20)나 다른 금액으로 보내면 자동 확인이 안 돼요.\n"
         "⚠️ 거래소에서 보낼 땐 출금 수수료를 뺀 금액이 아니라 <b>위 금액이 그대로 도착</b>해야 해요.\n"
-        "보낸 뒤 [✅ 입금했어요] 를 누르세요. 자동으로도 1분마다 확인해요 (트론 확정까지 1~3분)."
+        "보낸 뒤 [✅ 입금했어요] 를 누르세요. 자동으로도 30초마다 확인해요 (트론 확정까지 1~3분)."
     )
 
 
@@ -76,28 +76,24 @@ def invoice_buttons(inv_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+DM_EXTRA_ROWS: list = []   # 패널이 붙이는 버튼 줄: async fn(svc, chat_id, user_id) → [[버튼]] (예: 🚀 빠른 설정)
+
+
 async def send_panel_dm(svc: Services, bot: Bot, chat_id: int, user_id: int) -> bool:
     """관리자에게 1:1 로 설정 화면 전송. 봇과 대화를 시작한 적 없으면 False."""
     text, kb = await panel(svc, chat_id)
+    rows = [list(r) for r in kb.inline_keyboard] if kb else []
+    for fn in DM_EXTRA_ROWS:
+        try:
+            rows += await fn(svc, chat_id, user_id)
+        except Exception as e:   # 덧붙이는 버튼 때문에 초대 안내가 안 가면 안 됨
+            log.warning("panel dm extra rows failed: %s", e)
+    kb = InlineKeyboardMarkup(rows) if rows else None
     try:
         await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
         return True
     except TelegramError:
         return False
-
-
-async def on_deep_link(svc: Services, bot: Bot, msg, chat_id: int) -> None:
-    """t.me/봇?start=sub_<방ID> 로 들어온 경우 (1:1)."""
-    user = msg.from_user
-    try:
-        is_admin = await svc.perms.is_admin(bot, chat_id, user.id)
-    except TelegramError:
-        is_admin = False  # 봇이 없는 방 ID 등
-    if not is_admin:
-        await msg.reply_text("그 방의 관리자만 설정할 수 있어요.")
-        return
-    text, kb = await panel(svc, chat_id)
-    await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str]) -> None:
@@ -113,14 +109,19 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
 
     if action == "new":
         chat_id = n
-        try:
-            ok = await svc.perms.is_admin(bot, chat_id, q.from_user.id)
+        try:  # 결제는 텔레그램 관리자·오너만, 캐시 말고 지금 상태로 확인
+            svc.perms.forget(chat_id)
+            ok = await svc.perms.is_tg_admin(bot, chat_id, q.from_user.id)
         except TelegramError:
             ok = False
         if not ok:
             await q.answer("그 방의 관리자만 결제할 수 있어요.", show_alert=True)
             return
-        inv = await svc.billing.create_invoice(chat_id, q.from_user.id)
+        try:
+            inv = await svc.billing.create_invoice(chat_id, q.from_user.id)
+        except RuntimeError as e:  # 대기 청구서가 너무 많음 → 버튼이 빙글빙글 돌지 않게 안내
+            await q.answer(str(e), show_alert=True)
+            return
         await q.answer()
         await bot.send_message(q.from_user.id, invoice_text(svc, inv, await chat_title(svc, chat_id)),
                                parse_mode="HTML", reply_markup=invoice_buttons(inv["id"]))
@@ -135,7 +136,8 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         await q.answer("이미 결제가 확인됐어요 ✅", show_alert=True)
         return
     if inv["status"] in ("cancelled", "expired"):
-        await q.answer("끝난 청구서예요. 새로 결제하려면 .구독 을 다시 눌러주세요.", show_alert=True)
+        await q.answer("끝난 청구서예요. 이미 보내셨다면 다시 보내지 마세요 — 운영자가 확인해서 처리해드려요. "
+                       "아직 안 보냈으면 .구독 을 다시 눌러 새 청구서로.", show_alert=True)
         return
 
     if action == "cancel":
@@ -154,7 +156,10 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
         await q.answer("확인 중…")
         await run_check(svc, bot)
         inv = await svc.db.get_invoice(inv["id"])
-        if inv["status"] != "paid":
+        if inv["status"] == "expired":
+            await bot.send_message(q.from_user.id, "청구서 시간이 지났어요. 이미 보내셨다면 다시 보내지 마세요 — "
+                                                   "운영자에게 확인 요청이 가서 직접 처리해드려요.")
+        elif inv["status"] != "paid":
             await bot.send_message(q.from_user.id, "아직 입금이 확인되지 않았어요. 트론 네트워크 확정까지 1~3분 걸려요. "
                                                    "자동으로 계속 확인하고, 확인되면 바로 알려드릴게요.")
         return
@@ -167,7 +172,13 @@ async def run_check(svc: Services, bot: Bot) -> None:
         paid, unmatched = await svc.billing.check_pending()
     except Exception as e:  # 네트워크·API 오류: 다음 주기에 다시
         log.warning("결제 확인 실패: %s", e)
-        return
+        paid, unmatched = [], []
+    alert = svc.billing.take_alert()  # TronGrid 연속 실패 시 1번, 복구 시 1번
+    if alert == "down":
+        await svc.mod.report(bot, f"[결제 확인 장애] TronGrid 조회가 {svc.billing.fail_streak}번 연속 실패했어요. "
+                                  "입금 자동 확인이 멈춘 상태예요 (TRONGRID_API_KEY·네트워크 확인). 복구되면 다시 알려드릴게요.")
+    elif alert == "up":
+        await svc.mod.report(bot, "[결제 확인 복구] TronGrid 조회가 다시 정상이에요.")
     for p in paid:
         title = await chat_title(svc, p["chat_id"])
         until = _date(p["until"], svc.cfg.tz)

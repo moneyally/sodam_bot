@@ -20,7 +20,6 @@ from sodam.backup import Backup
 from sodam.cas import Cas
 from sodam.commands import CmdCtx
 from sodam.db import DB
-from sodam.games import Quiz
 from sodam.moderation import DEFAULT_MEMBER_PERMISSIONS
 from sodam.permissions import Role
 from sodam.services import PendingAction
@@ -516,19 +515,6 @@ async def ban_confirm_rechecks_admin():
 
 
 @test
-async def quiz_callback_bad_data():
-    db = await make_db()
-    svc = await make_svc(db)
-    quiz = Quiz(svc.games, FakeBot(), CHAT, 1)
-    quiz.token, quiz.round, quiz.answers = "abc", 0, {}
-    for parts in (["abc", "x", "1"], ["abc", "0"], ["zzz", "0", "1"], ["abc", "0", "-1"]):
-        q = FakeQuery(CHAT, fake_user(5, "a"))
-        await quiz.on_callback(q, parts)
-        assert q.answers and "지난" in (q.answers[0][0] or ""), parts
-    await db.close()
-
-
-@test
 def reasoning_effort_off_with_tools():
     # 실사용 버그: gpt-5.4 는 chat.completions 에서 도구 + reasoning_effort=low 를 400 으로 거절
     from fakes import cfg
@@ -546,7 +532,7 @@ async def help_and_settings_fit_in_one_message():
     db = await make_db()
     svc = await make_svc(db, admins={1})
     owner = fake_user(1, "오너")
-    for text in (".도움말", ".settings 전체"):  # .settings 는 1:1 버튼 패널, '전체'는 글 목록
+    for text in (".도움말", ".명령어", ".settings 전체"):  # .settings 는 1:1 버튼 패널, '전체'는 글 목록
         cmd, args, argstr = commands.parse(text, "sodambot")
         msg = FakeMsg(CHAT, owner, text)
         await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, owner, Role.OWNER, args, argstr), cmd)

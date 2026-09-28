@@ -1,0 +1,8 @@
+# 프로세스는 살아 있는데 멈춘(행) 봇 재시작 — tools/supervise.sh 의 하트비트 검사와 같은 일.
+# 죽은 경우는 sodam.service 의 Restart=always 가 처리. 로그: journalctl -u sodam-health
+[Unit]
+Description=Sodam heartbeat check
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sodam/deploy/healthcheck.sh

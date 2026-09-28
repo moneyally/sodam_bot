@@ -7,6 +7,8 @@ import secrets
 import unicodedata
 from dataclasses import dataclass
 
+from telegram import LinkPreviewOptions
+
 _ZERO_WIDTH = re.compile("[​-‏⁠-⁤﻿­]")
 
 # (패턴, 가중치, 이름). 합계 3 이상이면 차단, 1~2면 AI 판별로 넘긴다.
@@ -31,7 +33,7 @@ _RULES: list[tuple[re.Pattern, int, str]] = [
         (r"(?<![가-힣])(나는|내가|난|나)\s*(이\s*방\s*)?(관리자|운영자|오너|방장)(야|다|임|입니다|이야|거든|이니까)", 2, "권한 사칭"),
         (r"(모두|전부|전원|모든\s*(사람|멤버|인원|유저|사용자))\s*(를|을|다)?\s*(밴|강퇴|추방)\s*(해|시켜|하)", 3, "대량 제재 요청"),
         (r"<\|?(im_start|im_end|system|endoftext)\|?>|\[/?(inst|system)\]|<<\s*sys\s*>>", 3, "제어 토큰"),
-        (r"</?(chat_log|request|tool_result|speaker|user_memory|reply_to)\b", 3, "태그 위조"),
+        (r"</?(chat_log|request|tool_result|speaker|user_memory|room_memory|past_turns|reply_to)\b", 3, "태그 위조"),
         (r"[A-Za-z0-9+/]{120,}={0,2}", 1, "긴 인코딩 문자열"),
     ]
 ]
@@ -79,7 +81,9 @@ def nonce() -> str:
     return secrets.token_hex(4)
 
 
-_TAG_LIKE = re.compile(r"</?\s*(chat_log|request|tool_result|speaker|user_memory|system)[^>]*>", re.I)
+_TAG_LIKE = re.compile(
+    r"</?\s*(chat_log|request|tool_result|speaker|user_memory|room_memory|past_turns|reply_to|messages|known|"
+    r"previous|system)[^>]*>", re.I)
 
 
 def defang(text: str) -> str:
@@ -93,9 +97,15 @@ def wrap(tag: str, body: str, n: str, **attrs: str) -> str:
 
 
 # ── 출력 필터 ─────────────────────────────────────────────
-_URL = re.compile(r"(https?://\S+|www\.\S+|\b(t|telegram)\.me/\S+|\btg://\S+)", re.I)
+# 'evil.xyz/?d=비밀'·'비밀.evil.lol' 처럼 주소만 써도 텔레그램이 링크로 만들고 미리보기를 불러 정보가 샐 수 있어 도메인 모양은 전부
+# 'Node.js'·'report.pdf'·메일 주소는 두고, 흔한·사기에 잘 쓰이는 끝(TLD)만
+_TLD = ("com|net|org|io|co|kr|me|xyz|lol|top|site|app|link|cc|gg|ai|info|biz|ru|cn|jp|dev|online|store|shop|live|pro|"
+        "vip|fun|club|to|ly|sh|tv|us|uk|de|tk|ml|ga|cf|gq|win|bet|cash|money|click|icu|buzz|cyou|sbs|cfd|pw|ws|su")
+_URL = re.compile(r"(https?://\S+|www\.\S+|\btg://\S+|(?<![@\w-])(?:[a-z0-9-]+\.)+(?:" + _TLD + r")\b(?:[/?#]\S*)?)",
+                  re.I | re.A)
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)  # AI 답엔 링크 미리보기 안 띄움 (누르지 않아도 주소를 불러오는 통로)
 _MENTION = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{3,31})")
-_WALLETS = [
+WALLETS = [
     re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b"),          # TRON
     re.compile(r"\b0x[a-fA-F0-9]{40}\b"),                   # EVM
     re.compile(r"\b(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b"),  # BTC
@@ -105,7 +115,7 @@ _WALLETS = [
 def strip_unsafe(text: str, allowed_usernames: set[str] = frozenset()) -> str:
     """링크·지갑주소·외부 @멘션 제거 (길이는 건드리지 않음)."""
     text = _URL.sub("[링크 생략]", text)
-    for w in _WALLETS:
+    for w in WALLETS:
         text = w.sub("[주소 생략]", text)
     return _MENTION.sub(
         lambda m: m.group(0) if m.group(1).lower() in allowed_usernames else m.group(1), text)
@@ -144,7 +154,22 @@ def find_links(text: str) -> list[str]:
     return [d.lower() for d in _DOMAIN.findall(text)] or ["link"]
 
 
+def find_mentions(text: str) -> list[str]:
+    """글 속 @아이디 (소문자, 이메일 주소의 @ 는 제외)."""
+    return [m.lower() for m in _MENTION.findall(text)]
+
+
 def link_allowed(domains: list[str], whitelist: list[str]) -> bool:
     if not domains:
         return True
     return all(any(d == w or d.endswith("." + w) for w in whitelist) for d in domains)
+
+
+_DOMAIN_RE = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}")
+
+
+def normalize_domain(raw: str) -> str | None:
+    """'https://www.YouTube.com/watch' → 'youtube.com'. 도메인 형식이 아니면 None."""
+    dom = raw.strip().lower().removeprefix("https://").removeprefix("http://")
+    dom = dom.split("/")[0].removeprefix("www.")
+    return dom if _DOMAIN_RE.fullmatch(dom) else None

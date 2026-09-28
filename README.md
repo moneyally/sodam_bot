@@ -1,258 +1,305 @@
-# 소담 — 소통방 전용 텔레그램 AI 봇
+<div align="center">
 
-대표님들 소통방을 위한 AI 비서 봇. 입장 캡차·CAS 스팸 차단, 입장 인사, 자유 대화, 채팅 집계·검색, 게임, 스포츠 알림, 예약공지(제목·사진·영상), 방 관리(도배·링크·사칭·경고), DB 자동 백업, 프롬프트 인젝션 방어.
+# 소담 · Sodam
 
-- 언어: Python 3.11+ / python-telegram-bot 21 / OpenAI SDK 3.x / SQLite
-- 이름 `소담` = 소통 + 담소. `.env` 의 `BOT_NAME`, `BOT_CALL_NAMES` 로 바꿀 수 있음
+**An AI operating agent for Telegram groups: moderation, memory, scheduling, and a real tool-using agent, built for Korean community and business chats.**
 
-## 1. 준비
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![python-telegram-bot 21](https://img.shields.io/badge/python--telegram--bot-21-26A5E4?logo=telegram&logoColor=white)](https://python-telegram-bot.org/)
+[![OpenAI](https://img.shields.io/badge/LLM-OpenAI-412991?logo=openai&logoColor=white)](https://platform.openai.com/)
+[![SQLite](https://img.shields.io/badge/storage-SQLite%20WAL%20%2B%20FTS5-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Tests](https://img.shields.io/badge/tests-~900%20offline-brightgreen)](tests/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-1. **봇 만들기**: 텔레그램 @BotFather → `/newbot` → 토큰 받기
-2. **프라이버시 모드 끄기**: @BotFather → `/setprivacy` → 봇 선택 → `Disable`
-   (끄지 않으면 봇이 일반 대화를 못 봐서 집계·도배 감지가 안 됨)
-3. **방에 초대 후 관리자로 지정**. 필요한 권한: 메시지 삭제, 사용자 차단(제재·캡차에 필요), 메시지 고정, 초대
-   (관리자여야 입장 메시지를 숨긴 방에서도 입장을 감지할 수 있음)
-4. **OpenAI API 키**: https://platform.openai.com/api-keys — 사용 한도(Usage limit)를 꼭 걸어두기
-5. **내 텔레그램 ID**: @userinfobot 에 아무 말이나 보내면 숫자 ID를 알려줌
+**[Try it on Telegram →](https://t.me/sodam_ai_bot)** &nbsp;·&nbsp; **[Add to your group →](https://t.me/sodam_ai_bot?startgroup=true&admin=delete_messages+restrict_members+pin_messages+invite_users)**
 
-## 2. 실행
+<!-- TODO(owner): replace <YOUR_HANDLE> below with your Telegram username (no @). -->
+Contact the developer: [t.me/&lt;YOUR_HANDLE&gt;](https://t.me/<YOUR_HANDLE>)
+
+[English](#english) · [한국어](#한국어)
+
+</div>
+
+---
+
+## English
+
+Sodam (소담, "small talk") started as a bot for one busy Korean business chat. It grew into what I actually wanted
+there: something that runs the room the way a careful human admin would. It keeps spam out and remembers who said what.
+It can do the work when you ask in plain language, and it never bans anyone because a message told it to.
+
+It's live as [@sodam_ai_bot](https://t.me/sodam_ai_bot). Everything in this repo is the code that runs it.
+
+### Why it's different
+
+Classic group bots are a wall of `/commands` and toggles. An LLM bolted onto a group is a liability. Sodam tries to be neither.
+
+- **A real agent, fenced in.** About 50 tools (search chat, read history, schedule posts, warn/mute/ban, analyze a member,
+  replay an incident, draft a channel post...). The tool list itself depends on *who* is asking and *where*: owner, Telegram admin,
+  delegated bot admin, or member, in a group, a DM, or the owner's DM. If a tool isn't in the list, the model can't claim it did it.
+- **Sanctions need a human press.** The AI never mutes or bans directly. It posts a confirm card (up to 5 people, requester-only buttons),
+  one sanction per answer, and it checks Telegram's actual "ban users" right on every press.
+- **Member text is data, never instructions.** Chat history, memories, and knowledge docs go into the user turn wrapped in
+  per-request nonce tags. Nothing member-written ever lands in the system prompt.
+- **Tainted → read-only.** Once an answer has read member-written content (logs, timelines, other bots' output), the rest of that
+  run can only use read-only tools. A hidden "ban @x" in chat can't become an action.
+- **Dollar budgets per room.** Every call is priced in integer micro-dollars. There's a global daily cap and a per-room cap
+  (owner plan × admin %), all updated in one transaction. Prompts are ordered cache-first (fixed rules → style → volatile data).
+- **Incident-style alerts.** Anomaly detection (join bursts, look-alike names, repeated links, new-account ratios) sends admins a DM
+  with *Details / Harden / Ignore*. "Harden" temporarily tightens settings and reverts itself, restarts included. No auto-punishment.
+- **Bot-to-Bot aware.** Supports Telegram's Bot-to-Bot mode: observe or interact with trusted bots, with hard rate limits and loop guards.
+  Bot messages never trigger moderation, AI, or games.
+- **Channels, name history, digests.** Manage channels with an HTML composer, track name/username changes, and send each admin
+  one daily digest across all their rooms.
+- **Testable offline.** ~900 tests run with fake Telegram + fake LLM. A harness crawls every button as 4 roles
+  (1,962 presses, 0 problems at last render).
+
+### Features
+
+| Area | What you get |
+|---|---|
+| 🛡️ **Moderation & security** | Picture captcha on join (restart-safe timers), public spam-blocklist lookup, flood/duplicate/link/banned-word filters, edited-message re-checks, per-type locks, impersonation guard, raid mode (10 joins/60s → captcha-all or silent kick), join-request DM verification, shared ban list across rooms, recent-account heuristic, warn → mute → ban ladder, "free member" exemptions, prompt-injection guard (rules + small-model classifier). Sanctions require Telegram's *ban users* right. |
+| 🤖 **AI agent** | Natural-language requests in Korean ("소담아 …"), ~50 role/place-gated tools, confirm cards for anything destructive, optional reasoning mode (Responses API) routed by code rules, one-shot "you claimed an action but called no tool" re-check, burst merging, 6 speaking styles, addressee resolution (reply/tag/name/just-joined). |
+| 🧠 **Memory & knowledge** | Per-member memory (only about themselves; members can wipe it), rolling room summary, knowledge base / RAG (txt, md, csv, pdf). Room rules said in chat are saved only via a confirm card. Korean full-text search (FTS5 + bigram index, so 2-syllable words work). Member timelines keep *recorded facts* and *AI notes* in separate columns. |
+| ⏰ **Automation & scheduling** | Scheduled posts and reminders (daily / weekdays / weekly / every N min / one-off), AI jobs run as a tool-less skill pipeline (summary, isolated web search, stats, writing), alert rules as data (keyword/user/join/quiet → DM/call/post), long-gaming-session alerts, per-recipient daily AI digest. |
+| 🧭 **Owner & multi-room ops** | Button-driven DM menus, ops inbox of unhandled items per room, owner command center, cost forecast, AI run log (14 days), incident replay and "what if I change this setting" simulator (reads history, changes nothing), feature-request intake with de-duplication, daily "bot lost its admin rights" check. |
+| 📢 **Channels** | Register by adding Sodam as a channel admin, HTML composer with validation and URL buttons, drafts in DB, scheduled posts, AI drafts (posted only on a button press), join requests, subscriber trends. Optional MTProto helper for member rosters and view counts. |
+| 🎲 **Games & community** | Korean word-chain with a 320k-noun dictionary (judged by code, zero AI cost) plus an AI opponent re-checked by code, quizzes, points games with a separate dealer process (points can't be bought, sold, or transferred), welcome/farewell messages, tag & reply DM notifications, stats and rankings. |
+| 💳 **Billing** | Per-room monthly subscription in **USDT (TRC20)** with a free trial. The server holds only a receiving address, **never keys or seeds**. Payments are verified on-chain: official contract, exact per-invoice amount, confirmed tx, time window, each tx used once. Payment UI lives only in the admin's DM. Nothing about money appears in the group. |
+
+### Architecture
+
+**1 · Request flow**
+
+```mermaid
+flowchart LR
+    TG["Telegram update"] --> H["handlers.py<br/>router"]
+    H -->|"bot message"| BL["botlink hooks<br/>record only"]
+    H --> MOD["moderation · captcha · raid<br/>anomaly · spamshield"]
+    MOD -->|"clean"| HK["hooks<br/>tag notify · alert rules"]
+    HK --> CMD["commands · menu buttons"]
+    HK --> GM["games · casino"]
+    HK --> AG["agent.py loop"]
+    AG <-->|"prompt: rules → style → nonce-tagged data"| LLM["llm.py<br/>OpenAI + budget"]
+    AG --> GATE{"tools.available<br/>role × place"}
+    GATE -->|"read-only"| RO["search · timeline<br/>replay · stats"]
+    GATE -->|"write / sanction"| TAINT{"tainted?"}
+    TAINT -->|"yes"| DENY["refused: read-only now"]
+    TAINT -->|"no"| CARD["confirm card<br/>human press"]
+    CARD --> OUT["Telegram API<br/>send_retry · per-chat 429"]
+    RO --> AG
+    CMD --> OUT
+    GM --> OUT
+    AG -->|"answer, links stripped"| OUT
+```
+
+**2 · Data and background jobs**
+
+```mermaid
+flowchart TB
+    subgraph DB["SQLite · WAL · db.atomic = one SAVEPOINT per multi-write"]
+        M["messages + messages_fts"]
+        MEM["member_memory · room_memory"]
+        K["knowledge_docs + chunks"]
+        ML["mod_log · warnings"]
+        C["counters · usd budgets"]
+        AR["agent_runs"]
+        AN["anomaly_alerts · ops_events"]
+        S["schedules · menu_tokens"]
+        P["invoices · payments · subscriptions"]
+    end
+    J["job queue<br/>tick 30s · digest · prune · backup<br/>name sweep · disk guard · rights check"] --> DB
+    APP["bot process"] --> DB
+    DEALER["dealer process<br/>games only"] --> DB
+    MT["MTProto helper<br/>optional"] -->|"rosters · views"| DB
+    TRON["TronGrid"] -->|"confirmed USDT tx"| P
+```
+
+**3 · Production deploy**
+
+```mermaid
+flowchart LR
+    GH["GitHub main"] -->|"sodam-update / autoupdate timer"| UP["update.sh<br/>run tests in temp dir"]
+    UP -->|"pass"| SVC["sodam.service<br/>+ sodam-dealer.service"]
+    UP -->|"no start log in 90s"| RB["roll back to previous commit"]
+    HC["sodam-health.timer<br/>heartbeat > 180s"] -->|"restart"| SVC
+    BK["sodam-backup.timer<br/>online backup + integrity_check"] --> FILES["backups/*.db.gz · 14 days"]
+    SVC --> FILES
+```
+
+### Design principles
+
+- **Code decides facts, AI interprets.** Counts, timelines, word-chain judging, anomaly scores, and recommendations are computed by code.
+  The model explains them and marks guesses as guesses.
+- **Sanctions need a human press.** Every AI-initiated warn/mute/ban goes through a confirm card. Automated defenses (flood, captcha, raid) are rule-based and configurable.
+- **Member text is data.** Nonce-tagged, never in the system prompt, and it taints the run.
+- **Every multi-write is atomic.** One shared connection, so any multi-statement write goes through `db.atomic` (all or nothing).
+- **Restart-safe state.** Captcha deadlines, confirm cards, open bets, invoices, and "harden" reverts live in SQLite and survive restarts.
+- **Cost-aware.** Cache-first prompt layout, small models for triage, code-first answers where possible, and hard dollar caps.
+
+### Quick start (development)
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate          # 맥/리눅스: source .venv/bin/activate
+git clone https://github.com/moneyally/sodam_bot && cd sodam_bot
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env          # 맥/리눅스: cp .env.example .env
-# .env 열어서 TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, OWNER_IDS 채우기
-python -m sodam
+cp .env.example .env        # fill TELEGRAM_BOT_TOKEN, OPENAI_API_KEY (set a usage limit!)
+python -m sodam             # prints a one-time /owner code; send it to the bot in DM
 ```
 
-점검: `python tests/run_all.py` (네트워크 없이 64개 항목: 기본 15 + 캡차·CAS·예약공지·백업·회귀 27 + 지식·보고·캐시 12 + 구독 결제 10)
+In @BotFather, **disable privacy mode** (`/setprivacy`). Then add the bot as an admin with *delete messages*, *ban users*,
+*pin messages*, and *invite users*.
 
-24시간 돌리려면 VPS(리눅스)에서 `systemd` 나 `pm2`/`screen` 으로 띄우는 걸 추천.
-
-## 3. 봇 부르기
-
-- `소담아 오늘 방에서 무슨 얘기 했어?` — 이름으로 부르기
-- 봇 메시지에 **답장**하기, 또는 `@봇아이디` 멘션
-- 말투: `.말투 자유분방` (정중 / 친근 / 자유분방 / 간결 / 비서 / 츤데레). 방 기본값은 `.set style 정중`
-
-## 4. 명령어 (`.` 또는 `/` 로 시작)
-
-| 일반 | 설명 |
-|---|---|
-| `.도움말` | 명령어 목록 (권한에 맞게 보여줌) |
-| `.내정보 [@user]` | 메시지 수·포인트·입장일 |
-| `.랭킹 [오늘/주간/월간/전체]` | 채팅 랭킹 |
-| `.통계 [기간]` | 메시지 수, 참여자, 피크 시간 |
-| `.검색 키워드` | 최근 30일 대화 검색 |
-| `.게임 [종류]` / `.게임종료` / `.정답 단어` | 게임 |
-| `.포인트` | 게임 포인트 랭킹 |
-| `.스포츠 오늘 축구` / `.스포츠 팀 Tottenham` / `.스포츠 결과 Tottenham` | 경기 일정·결과 |
-| `.말투 종류` / `.호칭 김대표` | 나에게 쓸 말투·호칭 |
-
-| 관리자 | 설명 |
-|---|---|
-| `.settings` / `.set 키 값` | 설정 보기/바꾸기 |
-| `.경고 @user 사유` / `.경고취소` / `.경고목록` / `.경고초기화` | 경고 (3회 뮤트, 5회 밴 — 설정 가능) |
-| `.뮤트 @user 30m 사유` / `.뮤트해제` | 채팅 금지 (m/h/d, 분/시간/일) |
-| `.밴 @user` / `.밴해제 ID` / `.킥 @user` | 추방 |
-| `.삭제` (답장) / `.청소 50` | 메시지 삭제 |
-| `.잠금` / `.잠금해제` | 방 전체 채팅 잠금 (해제 시 잠그기 전 권한으로 복원) |
-| `.예약공지 만들기` / `.예약공지` (목록) | 제목·내용·사진/영상/GIF/파일·시간·고정을 차례로 설정 |
-| `.예약공지 수정/미리보기/지금/켜기/끄기/삭제 번호` | 예약공지 관리 |
-| `.캡차 켜기/끄기` / `.캡차 시간 5` / `.캡차 실패 킥/밴/뮤트` / `.캡차통과 @user` | 입장 캡차 |
-| `.cas 켜기/끄기` / `.cas 확인 @user` | CAS 스팸DB 차단 |
-| `.금지어 추가 단어` / `.허용도메인 추가 youtube.com` | 필터 |
-| `.ai 켜기/끄기` / `.인사 켜기/끄기/설정/테스트` | 기능 토글 |
-| `.규칙설정 내용` / `.공지 내용` | 규칙 저장 / 공지 올리고 고정 |
-| `.스포츠 구독 Tottenham` / `.스포츠 해제 Tottenham` | 경기 시작 전·결과 자동 알림 |
-| `.관리기록` / `.사용량` / `.리포트` | 제재 기록 / AI 토큰 / 오늘 집계 |
-| `.봇관리자 추가 @user` (오너) | 텔레그램 관리자가 아닌 사람에게 봇 관리 권한 |
-| `.백업` / `.백업 목록` (오너) | DB 지금 백업 / 백업 파일 목록 |
-
-대상 지정: 그 사람 메시지에 **답장**하면서 명령하거나 `@username` / 숫자 ID.
-
-AI에게 말로 시켜도 됨 (관리자만): `소담아 @kim 도배로 경고 줘`, `소담아 @spam 내보내` (밴은 확인 버튼이 뜸)
-
-## 5. 자동 관리 (설정으로 조절)
-
-| 기능 | 기본값 | 설정 키 |
-|---|---|---|
-| 입장 캡차: 5분 안에 그림 버튼, 3번 틀리거나 시간 초과 → 내보내기 | 켜짐 | `captcha_enabled`, `captcha_minutes`, `captcha_action` |
-| CAS 스팸DB 등록 계정 → 입장 즉시 밴 (기존 멤버는 처음 말할 때 조회) | 켜짐 | `cas_enabled` |
-| 도배: 8초에 6개 → 30분 뮤트 (게임 중엔 2배로 완화) | 켜짐 | `flood_seconds`, `flood_count`, `flood_mute_minutes` |
-| 같은 말 3번 연속 → 삭제+경고 | 켜짐 | `dup_limit` |
-| 관리자 외 링크 삭제 | 켜짐 | `link_filter`, `whitelist_domains` |
-| 신규 입장 24시간 링크 금지 | 켜짐 | `newbie_link_hours` |
-| 관리자 사칭 닉네임 → 뮤트 | 켜짐 | `impersonation_guard` |
-| 경고 3회 뮤트 / 5회 밴 | 켜짐 | `warn_mute_at`, `warn_ban_at` |
-| 봇 조작 시도 → 차단 + 경고 | 켜짐 | `injection_guard`, `injection_warn` |
-| 매일 23:50 채팅 리포트 | 켜짐 | `daily_report` |
-
-관리자·오너는 자동 제재 대상이 아님.
-
-### 입장 순서
-
-```
-입장 ─▶ CAS 스팸DB 등록? ─ 예 ─▶ 밴
-        └ 관리자 사칭 닉네임? ─ 예 ─▶ 뮤트 + 관리자 알림
-        └ 캡차 (채팅 제한 + "강아지 버튼을 누르세요")
-             ├ 정답 / 관리자 승인 ─▶ 제한 해제 + 환영 인사
-             └ 3회 오답 / 시간 초과 / 관리자 거절 ─▶ captcha_action (기본: 내보내기)
+```bash
+python tests/run_all.py            # all offline tests (fake Telegram + fake LLM, no network)
+python tests/run_all.py harness    # button crawler only: 4 roles × every screen
+python tools/render_screens.py     # regenerate docs/SCREENS.md from real button presses
 ```
 
-캡차 대기 목록은 DB에 저장돼서 봇을 재시작해도 시간 초과 처리가 이어짐.
-CAS 조회가 실패하면(서버 장애 등) 차단하지 않고 그대로 통과시킴.
+**Production:** Ubuntu + systemd. See [`deploy/README.md`](deploy/README.md) and the step-by-step
+[`deploy/migrate_from_container.md`](deploy/migrate_from_container.md). Run one token in one place only (two = `409 Conflict`).
 
-## 6. 예약공지
-
-관리자가 방에서 `.예약공지 만들기` 를 치면 단계별로 물어봄 (언제든 `취소`):
-
-1. **제목** (없으면 `없음`)
-2. **내용**: 글만, 또는 사진·영상·GIF·파일에 설명을 붙여서. `{규칙}` → 방 규칙, `{날짜}` → 오늘 날짜
-3. **시간**: `매일 09:00` 또는 `반복 120`(분) / `반복 3시간`
-4. **고정 여부** 버튼 → **미리보기** → ✅ 저장
-
-- 만드는 동안 오간 메시지는 저장·취소 시 자동으로 지워짐
-- 새 회차가 올라갈 때 지난 회차 공지는 지움 (고정도 새 걸로 바뀜)
-- `.예약공지 수정 번호` 는 같은 순서로 진행, 바꾸지 않을 항목은 `그대로`
-- 방당 최대 20개. 봇이 꺼져 있어서 정각을 놓쳐도 15분 안에 켜지면 늦게라도 올림
-
-예) 매일 아침 규칙 공지: 제목 `소통방 규칙` → 내용 `{규칙}` → `매일 09:00` → 📌 고정
-
-## 7. DB 백업
-
-- 매일 `BACKUP_TIME`(기본 05:00)에 `BACKUP_DIR` 로 자동 백업. 최근 `BACKUP_KEEP`(기본 14)개만 보관
-- 봇이 돌아가는 중에도 일관된 복사본을 뜨고, 무결성 검사를 통과한 것만 `.db.gz` 로 저장
-- 실패하면 `LOG_CHAT_ID` 로 알림. `BACKUP_SEND_TO_LOG=true` 면 백업 파일도 그 방으로 전송 (대화 기록이 들어 있으니 **비공개 관리자방일 때만**)
-- 오너가 `.백업` 으로 즉시 백업
-
-**복구**: 봇 중지 → 백업 파일 압축 해제 (`gzip -d sodam-YYYYMMDD-HHMMSS.db.gz`, 윈도우는 7-Zip) → `DB_PATH` 위치(`data/sodam.db`)에 덮어쓰기 → 봇 실행
-
-## 7-1. 오너 등록 · 관리자 보고 (개인 텔레그램)
-
-**오너 등록** — 내 숫자 ID를 몰라도 됨
-1. `.env` 의 `OWNER_IDS` 를 비워둔 채 봇 실행 → 터미널에 `🔑 ... /owner 123456` 이 뜸
-2. 봇과 **1:1 채팅**에서 `/owner 123456` 전송 → 오너 등록 (코드는 1회용, 서버 화면을 보는 사람만 앎)
-- 내 ID 확인만 하려면 어디서든 `.내아이디` (방에서 치면 방 ID도 나옴 → `LOG_CHAT_ID` 에 사용)
-
-**관리자 보고** — 오너 1:1 채팅 + `LOG_CHAT_ID` 방으로 자동 전송
-- 자동 밴(경고 누적), 도배 뮤트, 인젝션 차단, CAS 차단, 사칭 의심, 캡차 실패, 백업 실패
-- 멤버가 `소담아 관리자한테 전해줘 …` → AI가 요약해서 전달 (1인 하루 5회)
-- 봇은 먼저 말을 건 사람에게만 개인 메시지를 보낼 수 있어서, 오너가 봇과 1:1 채팅을 한 번은 해야 함
-
-## 7-2. 지식 베이스 (AI가 자료를 보고 답하기)
-
-- 방에서 관리자: 파일(txt·md·csv·pdf)이나 글에 **답장**하며 `.지식 추가 제목` → 그 방 전용 자료
-- 오너가 1:1 채팅에서 등록 → **모든 방 공통** 자료
-- `.지식` 목록 · `.지식 검색 단어` · `.지식 삭제 번호`
-- 멤버가 규칙·가격·운영 방식을 물으면 AI가 먼저 자료를 찾아 답하고, 없으면 모른다고 함
-- 모델을 재훈련하는 게 아니라 **검색해서 참고**하는 방식(RAG): 올리는 즉시 반영, 별도 학습 비용 없음
-- 자료 내용은 AI에게 '정보'로만 전달되고 지시로 따르지 않음 (지시문처럼 보이면 등록 시 경고)
-- 한도: 파일 5MB, 문서 20만 자, 방당 200만 자
-
-## 7-3. 비용 절감 (프롬프트 캐시)
-
-OpenAI는 **앞부분이 똑같은 요청**의 입력 토큰을 캐시해서 크게 할인해 줌 (1024토큰 이상).
-- 요청 순서를 `[도구 목록][고정 규칙]` → `[말투]` → `[시각·대화·질문]` 으로 둬서 앞부분을 항상 동일하게 유지
-- 용도별 `prompt_cache_key` 로 같은 캐시에 모이게 함
-- 대화가 띄엄띄엄인 방은 `.env` 에 `OPENAI_CACHE_RETENTION=24h` (모델이 지원할 때)
-- `.사용량` 에서 캐시 적중률 확인
-- 그 밖에: 인젝션 판별·인사·게임 문제는 작은 모델, 짧고 평범한 요청은 AI 판별 생략, 대화 기록 30줄·300자 제한, 도구 결과 4천 자 제한, 일일 토큰 한도
-
-## 7-4. 구독 결제 (방당 월정액, USDT TRC20)
-
-누구나 자기 방에 봇을 넣어 쓰고, 방 관리자가 월 이용료를 내는 구조.
-
-| 상태 | 쓸 수 있는 것 |
-|---|---|
-| 무료 체험 (`TRIAL_DAYS`, 기본 3일) / 구독 중 | 전부 |
-| 만료 | 방 관리(캡차·도배·CAS·경고·명령어)는 계속 + AI 하루 `FREE_AI_PER_DAY`회. 게임·예약공지·자료 등록·스포츠 알림·일일 리포트는 멈춤 |
-
-**흐름**
-1. 봇을 방에 초대 → 체험 시작. 방엔 인사와 **⚙️ 봇 설정 (관리자)** 버튼만 (금액·주소·'결제' 단어 없음)
-2. 관리자가 버튼 → 봇 1:1 채팅 → 관리자인지 확인 → 상태·요금 → **💳 구독 결제**
-3. 청구서: 끝자리까지 정해진 금액(예: `30.0137`), 받는 주소, 60분 유효 → 아임토큰 등으로 송금 → **✅ 입금했어요**
-4. 봇이 TronGrid 에서 확정된 입금을 조회해 대조 → 확인되면 30일 연장, 결제자·방·오너에게 알림 (방 알림엔 금액 없음)
-5. 만료 3일 전부터 매일 10시 안내, 오너는 `.구독부여 방ID 일수` 로 무료 부여
-
-**설정** (`.env`)
-```
-PAY_ADDRESS=T...           # 아임토큰 TRON 받기 주소 (체크섬 검사함, 오타면 봇이 안 켜짐)
-SUB_PRICE_USDT=30
-TRONGRID_API_KEY=...       # trongrid.io 에서 무료 발급
-```
-
-**보안 설계**
-- 서버엔 받는 주소만. **개인키·시드는 절대 두지 않음** → 서버가 뚫려도 돈을 뺄 수 없음
-- 입금 인정 조건: 공식 USDT 컨트랙트(`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`, 소수점 6) · 받는 주소 일치 · 확정 거래(`only_confirmed`) · 금액 정확히 일치 · 청구서 유효시간 안 · 거래 ID 1회만
-- 가짜 USDT 토큰, 다른 주소, 금액 부족, 거래 재사용은 자동으로 무시 (테스트로 검증)
-- 금액이 틀린 진짜 USDT 입금은 오너에게 '확인 필요'로 보고
-- 결제 버튼은 1:1 채팅에서만 동작, 관리자만 청구서 생성 가능
-
-**주의**: 불법 자금과 연결된 지갑에서 받으면 테더사가 주소를 동결하거나 거래소 현금화가 막힐 수 있음 → 결제 전용 주소를 쓰고 주기적으로 옮겨두기. 코인 수입도 세금 신고 대상.
-
-## 8. 게임
-
-| 게임 | 방법 | 점수 |
-|---|---|---|
-| 스무고개 | `?질문` 으로 묻고 `정답 단어` | 빨리 맞힐수록 높음 |
-| 초성퀴즈 | 초성 보고 그냥 채팅으로 정답 | 먼저 맞히면 +3 |
-| 상식퀴즈 | 버튼으로 4지선다 | 1등 +3, 정답 +1 |
-| 끝말잇기 | 봇과 대결, 두음법칙 허용 | 단어당 +1, 봇 이기면 +5 |
-| 업다운 | 1~100 숫자 맞히기 | 적게 시도할수록 높음 |
-| 밸런스게임 | 투표 | — |
-
-정답·점수 판정은 코드가 한다. **포인트는 순위용이고 돈·코인으로 바꾸는 기능은 넣지 말 것** (넣는 순간 도박 규제 대상).
-
-## 9. 보안 구조 (프롬프트 인젝션)
-
-```
-메시지 ─▶ [1층] 규칙 검사 (한/영 패턴, 제로폭 문자·전각 정규화)
-        ─▶ [2층] 애매하거나 긴 요청만 작은 모델로 판별
-        ─▶ [3층] 메인 AI: 지시는 system 에만, 방 대화·요청은 매번 새 nonce 태그로 감싼 '데이터'
-        ─▶ [4층] 도구 실행: 호출자·권한은 코드가 넣음, 권한별로 도구 목록 자체가 다름, 실행 직전 재검사
-        ─▶ [5층] 밴은 관리자 확인 버튼 / 출력 필터 (링크·지갑주소·외부 @멘션 제거, 길이 제한)
-```
-
-- 새 멤버 **닉네임은 AI에 넘기지 않음** (닉네임에 지시문을 넣는 공격 방지)
-- 인젝션으로 걸린 메시지는 이후 AI 맥락에서 제외
-- 웹검색은 도구가 하나도 없는 별도 호출에서 요약만 받아옴
-- AI는 송금·코인 거래·지갑·도박 안내를 하지 않도록 규칙에 박혀 있음
-- 1층 규칙은 평범한 한국어 대화 20문장(`tests/test_features.py` 의 `NORMAL_CHAT`)이 걸리지 않도록 맞춰 둠.
-  규칙을 고치면 `python tests/run_all.py` 로 오탐이 없는지 확인
-
-## 10. 구조
+### Project layout
 
 ```
 sodam/
-  __main__.py     실행, 객체 조립
-  handlers.py     텔레그램 이벤트 → 기록 → 관리 검사 → 명령어 → AI/게임, 입장 처리, 예약 작업
-  commands.py     . / 명령어 (한글·영어 별칭)
-  captcha.py      입장 캡차 (그림 버튼, 재시작해도 이어지는 시간 초과)
-  cas.py          CAS 스팸DB 조회 (캐시)
-  announce.py     예약공지 (만들기 마법사, 발송 스케줄)
-  backup.py       DB 온라인 백업·검증·압축·정리
-  agent.py        AI 도구 호출 루프 (최대 4라운드)
-  tools.py        AI 도구 18개 (멤버 13 / 관리자 5)
-  prompt.py       프롬프트 조립
-  llm.py          OpenAI 호출, 일일 토큰 한도, 웹검색, 인젝션 판별
-  security.py     인젝션 규칙, 출력 필터, 데이터 감싸기
-  moderation.py   도배·링크·금지어·사칭·경고·제재
-  games.py        게임 6종
-  greet.py        입장 인사
-  stats.py        집계 문구
-  sports.py       TheSportsDB 일정·결과·알림
-  db.py           SQLite (모든 SQL 여기)
-  settings.py     방 설정 기본값·검증
-  styles.py       말투 프리셋
+  __main__.py      wiring, job queue, heartbeat
+  handlers.py      update routing: record → moderate → hooks → commands / games / AI
+  agent.py         tool-calling loop, reasoning route, claim check
+  tools.py         tool registry, role/place gating, READ_ONLY, confirm cards
+  llm.py prompt.py OpenAI calls, pricing, budgets, cache-first prompts
+  security.py      injection rules, nonce wrapping, output filter
+  memory.py        member / room memory      knowledge.py  RAG docs
+  search.py        FTS5 + bigram Korean search
+  moderation.py captcha.py raid.py cas.py fedban.py   defenses
+  anomaly.py spamshield.py scamguard.py               alerts, never auto-punish
+  insight.py replay.py     timelines, incident replay, setting simulator
+  cron.py announce.py rules.py reports.py             scheduling, alert rules, digests
+  opsdesk.py costs.py agentlog.py                     ops inbox, pricing, AI run log
+  channel.py composer.py mtproto.py namehist.py       channels, name history
+  botlink.py       Bot-to-Bot mode
+  billing.py tron.py subscription.py                  USDT subscription
+  games.py wordbot.py casino/                         word-chain, points games
+  menu.py panels/  button UI (one file per screen, self-registering)
+  db.py            SQLite schema, atomic(), retention
+tests/             ~900 offline tests, fakes, harness.py, seed_*.py
+tools/             render_screens, usage_report, restore_check, AI evals
+deploy/            systemd units, install/update/backup/healthcheck scripts
+docs/              GAMES.md, SCREENS.md (auto-generated)
 ```
 
-## 11. 알아둘 점
+New screens, settings, tables, hooks, and AI tools register themselves from their own module
+(`menu.register_*`, `settings.register_setting`, `db.register_schema`, `tools.register_tool`), so parallel work rarely touches the same file.
 
-- **스포츠**: TheSportsDB 무료 키(`123`)는 호출 제한과 일부 기능 제한이 있음. 팀 이름은 영어로. 알림을 제대로 쓰려면 유료 키 권장
-- **웹검색**: OpenAI Responses API 의 `web_search` 도구를 씀. `OPENAI_GUARD_MODEL` 이 웹검색을 지원하는 모델이어야 함
-- **추론 모델**: `OPENAI_REASONING_EFFORT` 는 gpt-5 계열 같은 추론 모델에서만 동작. 에러 나면 비우기
-- **대화 기록**: 90일 지난 메시지는 매일 04:00 자동 삭제
-- **비용**: `DAILY_TOKEN_BUDGET` 넘으면 AI만 멈추고 관리 기능은 계속 동작. `.사용량` 으로 확인
-- **CAS**: 외부 서비스(api.cas.chat)라 응답이 없으면 차단 없이 통과. 주소는 `.env` 의 `CAS_API` 로 바꿀 수 있음
+### Testing philosophy
+
+- **Offline by default.** `tests/fakes.py` and `tests/fake_llm.py` stand in for Telegram and OpenAI. The full suite needs no network or keys.
+- **Crawl every button.** `tests/harness.py` does a BFS through every menu as owner, Telegram admin, bot admin, and member. It checks
+  for exceptions, exactly one `answer()`, 64-byte callback limits, valid HTML, and permission leaks.
+- **Mutation-verified fixes.** Each bug fix in `tests/test_fix_*.py` is checked by reverting the fix: the test must fail.
+- **Live AI evals are separate.** `tools/ai_live.py` and `tools/ai_eval_*.py` hit the real API and cost money, so they run only on purpose.
+
+### Roadmap
+
+- Move from the cloud container to a VPS (deploy scripts ready; MTProto features need a real TCP connection).
+- A cheaper "lite" model tier for high-volume rooms.
+- A watch engine: user-defined conditions evaluated continuously, building on alert rules and anomaly signals.
+
+### ⭐ If this is useful
+
+If you run a Telegram community, try [@sodam_ai_bot](https://t.me/sodam_ai_bot) in a group.
+If you build agents, the permission gate + tainted rule + confirm card pattern might be worth borrowing.
+Either way, a star helps other people find it.
+
+---
+
+## 한국어
+
+소담은 바쁜 한국어 업자 소통방 하나를 위해 만든 봇에서 시작했습니다. 지금은 꼼꼼한 사람 관리자처럼 방을 운영하는 에이전트가 됐습니다.
+스팸은 막고, 누가 무슨 말을 했는지 기억합니다. 말로 시키면 일을 하되, 대화 속 문장 하나 때문에 누군가를 밴하지는 않습니다.
+
+[@sodam_ai_bot](https://t.me/sodam_ai_bot) 으로 실제 운영 중이고, 이 저장소가 그 코드 전부입니다.
+
+### 뭐가 다른가
+
+- **진짜 에이전트, 대신 울타리 안에서.** 도구 약 50개(대화 검색·기록 읽기·예약·경고/뮤트/밴·멤버 분석·사건 재현·채널 초안 …).
+  **누가**(오너·TG 관리자·봇관리자·멤버) **어디서**(그룹·1:1·오너 1:1) 묻느냐에 따라 도구 목록 자체가 달라집니다. 목록에 없는 일은 했다고 말할 수 없습니다.
+- **제재는 사람이 누릅니다.** AI 는 직접 뮤트·밴하지 않고 확인 카드(최대 5명, 요청자만 누름)를 올립니다. 답변 1번에 제재 1번, 누를 때마다 텔레그램 '사용자 차단' 권한을 다시 확인합니다.
+- **멤버 글은 데이터일 뿐.** 대화·기억·자료는 매번 새 nonce 태그로 감싸 user 메시지에만 넣습니다. system 에는 절대 넣지 않습니다.
+- **오염되면 읽기 전용.** 멤버가 쓴 글(기록·타임라인·다른 봇 출력)을 읽은 실행은 그 뒤로 읽기 도구만 씁니다. 대화에 숨긴 "밴해"는 행동이 되지 않습니다.
+- **방마다 달러 예산.** 모든 호출을 정수 마이크로달러로 계산해서 전체 하루 한도와 방 한도(오너 요금제 × 관리자 %)를 한 트랜잭션으로 셉니다. 프롬프트는 캐시가 먼저 맞게 배치합니다.
+- **사건형 알림.** 입장 몰림·비슷한 이름·같은 링크·새 계정 비율을 감지하면 관리자 1:1 로 [상세][보안 강화][무시]를 보냅니다. 보안 강화는 시간이 지나면 저절로 되돌아가고, 재시작해도 이어집니다. 자동 제재는 없습니다.
+- **다른 봇 연동 · 채널 · 이름 기록 · 하루 요약.** Bot-to-Bot 모드(무한 주고받기 방지), 채널 관리와 HTML 편집기, 이름/아이디 변경 기록, 받는 사람 기준 하루 요약(한 사람 하루 한 통).
+- **오프라인으로 전부 테스트.** 가짜 텔레그램 + 가짜 LLM 으로 약 900개. 하네스가 4개 역할로 모든 버튼을 눌러 봅니다(최근 1,962번, 문제 0).
+
+### 기능
+
+| 분야 | 내용 |
+|---|---|
+| 🛡️ **방 관리·보안** | 입장 그림 캡차(재시작해도 시간 초과 유지), 공개 스팸 명단 조회, 도배·같은 말·링크·금지어, 수정 메시지 재검사, 종류별 잠금, 사칭 방지, 대량 입장 방어, 가입 신청 1:1 확인, 방끼리 공동 차단 명단, 최근 계정 캡차, 경고→뮤트→밴 단계, 자유 멤버, 봇 조작(인젝션) 방어 |
+| 🤖 **AI 에이전트** | "소담아 …" 로 말로 시키기, 역할·장소별 도구, 위험한 일은 확인 카드, 코드 규칙으로 고르는 생각 모드, 도구 없이 '했어요' 하면 한 번 다시 확인, 연달아 보낸 말 합치기, 말투 6종, "누구 얘기인지" 판단 |
+| 🧠 **기억·자료** | 멤버 기억(본인 얘기만, `.기억 지우기`), 방 흐름 요약, 자료 학습(RAG: txt·md·csv·pdf), 말로 한 방 규칙은 확인 카드로만 저장, 한국어 전문 검색(FTS5 + 두 글자 색인), 타임라인은 '기록된 사실'과 'AI 메모'를 나눠 표시 |
+| ⏰ **자동화·예약** | 예약 공지·알람(매일·평일·매주·N분마다·한 번), AI 예약 작업(도구 없는 스킬: 요약·격리 웹검색·통계·글쓰기), 알림 규칙(키워드·사람·입장·조용함 → 1:1·호출·글), 장시간 게임 알림, 하루 요약 |
+| 🧭 **오너·여러 방 운영** | 1:1 버튼 메뉴, 방별 운영 인박스, 오너 운영센터, 비용 예측, AI 작업 기록, 사건 재현·설정 시뮬레이터(읽기만), 기능 요청 접수(비슷한 요청 묶음), 봇 권한 빠진 방 알림 |
+| 📢 **채널** | 채널 관리자로 넣으면 등록, HTML 편집기(검증·URL 버튼), 초안 저장, 예약 게시, AI 초안(버튼 눌러야 게시), 가입 신청, 구독자 추이, 선택 MTProto 헬퍼 |
+| 🎲 **게임·커뮤니티** | 표준국어대사전 명사 32만 개 끝말잇기(판정은 코드, AI 비용 0)와 코드가 다시 검사하는 AI 선수, 퀴즈, 딜러 프로세스가 맡는 포인트 게임(충전·환전·선물 없음), 입장·퇴장 인사, 태그·답장 알림, 통계·랭킹 |
+| 💳 **구독 결제** | 방당 월 구독, **USDT(TRC20)**, 무료 체험. 서버엔 받는 주소만 두고 **개인키·시드는 없습니다**. 공식 컨트랙트·청구서별 정확한 금액·확정 거래·유효 시간·거래 1회만 확인합니다. 결제 화면은 관리자 1:1 에서만, 방엔 금액이 안 보입니다 |
+
+구조 다이어그램은 위 [Architecture](#architecture) 를 보세요.
+
+### 설계 원칙
+
+- **사실은 코드가 세고, 해석은 AI 가.** 숫자·타임라인·끝말잇기 판정·이상징후 점수·추천은 코드가 계산합니다. AI 는 설명하고, 추정은 추정이라고 말합니다.
+- **제재는 사람이 누른다.** AI 가 시작한 경고·뮤트·밴은 전부 확인 카드를 거칩니다. 자동 방어(도배·캡차·대량 입장)는 규칙 기반이고 설정할 수 있습니다.
+- **멤버 글은 데이터.** nonce 태그 안에만 두고, 읽은 실행은 오염으로 표시합니다.
+- **여러 문장 쓰기는 전부 원자적으로.** `db.atomic` 안에서 전부 되거나 전부 안 됩니다.
+- **재시작해도 이어지는 상태.** 캡차 마감·확인 카드·열린 베팅·청구서·보안 강화 되돌림은 SQLite 에 있습니다.
+- **비용을 의식.** 캐시 우선 프롬프트, 가벼운 판별은 작은 모델, 코드로 되는 건 코드로, 달러 상한.
+
+### 빠른 시작 (개발)
+
+```bash
+git clone https://github.com/moneyally/sodam_bot && cd sodam_bot
+python3 -m venv .venv && source .venv/bin/activate     # 윈도우: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env        # TELEGRAM_BOT_TOKEN, OPENAI_API_KEY 채우기 (OpenAI 사용 한도 꼭 걸기)
+python -m sodam             # 터미널에 뜨는 1회용 코드를 봇 1:1 에 /owner 코드 로 보내면 오너 등록
+```
+
+@BotFather 에서 **프라이버시 모드를 끄고**(`/setprivacy` → Disable), 방에 관리자로 넣어 주세요(메시지 삭제·사용자 차단·고정·초대 권한).
+
+```bash
+python tests/run_all.py            # 오프라인 테스트 전체 (네트워크·키 불필요)
+python tests/run_all.py harness    # 버튼 크롤러만: 4개 역할 × 모든 화면
+python tools/render_screens.py     # 실제 버튼을 눌러 docs/SCREENS.md 다시 만들기
+```
+
+**서버 운영:** Ubuntu + systemd. [`deploy/README.md`](deploy/README.md), 단계별 이사 안내는 [`deploy/migrate_from_container.md`](deploy/migrate_from_container.md).
+같은 봇 토큰은 한 곳에서만 켜세요(둘이면 `409 Conflict`에 DB 도 갈라집니다).
+
+### 폴더 구조
+
+위 [Project layout](#project-layout) 과 같습니다. 새 화면·설정·표·훅·AI 도구는 각자 모듈에서 스스로 등록하므로 여러 작업이 같은 파일을 거의 건드리지 않습니다.
+
+### 테스트 방식
+
+- **기본은 오프라인.** `tests/fakes.py`·`tests/fake_llm.py` 가 텔레그램과 OpenAI 를 대신합니다.
+- **모든 버튼을 눌러 본다.** `tests/harness.py` 가 오너·TG 관리자·봇관리자·멤버로 BFS. 예외·`answer()` 1번·64바이트·HTML·권한 누출을 검사합니다.
+- **뮤테이션으로 검증한 버그 수정.** `tests/test_fix_*.py` 는 고친 줄을 되돌리면 반드시 실패해야 합니다.
+- **실제 AI 평가는 따로.** `tools/ai_live.py`·`tools/ai_eval_*.py` 는 돈이 들어서 필요할 때만 돌립니다.
+
+### 로드맵
+
+- 클라우드 컨테이너에서 VPS 로 이사 (배포 스크립트 준비됨, MTProto 기능은 VPS 에서만)
+- 메시지 많은 방을 위한 저렴한 'lite' 모델 등급
+- 감시 엔진: 알림 규칙·이상징후 신호 위에서 사용자가 정한 조건을 계속 확인
+
+### ⭐ 도움이 됐다면
+
+텔레그램 방을 운영한다면 [@sodam_ai_bot](https://t.me/sodam_ai_bot) 을 방에 넣어 보세요.
+에이전트를 만든다면 '권한 게이트 + 오염 규칙 + 확인 카드' 패턴을 가져다 써도 좋습니다.
+어느 쪽이든 스타 하나가 다른 사람들이 이 프로젝트를 찾는 데 도움이 됩니다.
+
+---
+
+<sub>Apache-2.0 · Word-chain dictionary data is CC BY-SA (see <code>sodam/data_files/WORDS_LICENSE.md</code>).</sub>

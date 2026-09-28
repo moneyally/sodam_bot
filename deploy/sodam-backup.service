@@ -1,0 +1,20 @@
+# 매일 밤 DB 온라인 백업 → /opt/sodam/backups (14일 보관). 봇 안의 자동 백업(data/backups)과 별개로,
+# 봇이 멈춰 있어도 돈다. 수동 실행: systemctl start sodam-backup  로그: journalctl -u sodam-backup
+[Unit]
+Description=Sodam SQLite backup
+
+[Service]
+Type=oneshot
+User=sodam
+Group=sodam
+ExecStart=/opt/sodam/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+# WAL DB 를 읽으려면 -shm 에 쓸 수 있어야 함 → data 도 쓰기 허용
+ReadWritePaths=/opt/sodam/data /opt/sodam/backups
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true

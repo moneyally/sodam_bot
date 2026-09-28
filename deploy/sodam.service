@@ -1,0 +1,52 @@
+# /etc/systemd/system/sodam.service — deploy/install.sh 가 설치. 로그: journalctl -u sodam -f
+# 코드·venv 는 root 소유(읽기만), 봇이 쓰는 곳은 /opt/sodam/data 하나 (DB·하트비트·봇 자체 백업).
+[Unit]
+Description=Sodam Telegram bot (main)
+Wants=network-online.target
+After=network-online.target
+# 몇 번을 죽어도 계속 다시 켬 (기본값은 10초에 5번 넘게 죽으면 포기)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+# .env 는 sodam/config.py 가 WorkingDirectory 에서 직접 읽음 (SODAM_ENV 기본 .env)
+ExecStart=/opt/sodam/.venv/bin/python -m sodam
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=5
+# SIGTERM → PTB 정상 종료: post_stop(종료 알림) → post_shutdown(진행 중 판 환불·기억 정리·DB 닫기). 60초 넘으면 SIGKILL.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam
+UMask=0077
+
+# ── 보안 (봇이 털려도 서버·코드는 못 건드리게) ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

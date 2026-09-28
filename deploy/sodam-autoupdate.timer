@@ -1,0 +1,10 @@
+[Unit]
+Description=Sodam auto update every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=1min
+
+[Install]
+WantedBy=timers.target

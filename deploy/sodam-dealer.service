@@ -1,0 +1,50 @@
+# /etc/systemd/system/sodam-dealer.service — 게임 전용 딜러 봇 (docs/GAMES.md 'BOT_ROLE').
+# /opt/sodam/.env.dealer (BOT_ROLE=dealer, 다른 봇 토큰, 같은 DB_PATH) 가 있을 때만 켜짐. 메인 .env 는 BOT_ROLE=main.
+# 로그: journalctl -u sodam-dealer -f   하트비트: data/heartbeat-dealer
+[Unit]
+Description=Sodam Telegram bot (dealer)
+Wants=network-online.target
+After=network-online.target sodam.service
+ConditionPathExists=/opt/sodam/.env.dealer
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SODAM_ENV=.env.dealer
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-dealer
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

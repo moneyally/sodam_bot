@@ -3,3 +3,10 @@ data/
 __pycache__/
 *.pyc
 .venv/
+.claude/
+.env.dealer
+.env.*.local
+/backups/
+/VERSION
+sodam-migrate-*.enc
+*.session

@@ -1,6 +1,6 @@
 """방별 설정. 기본값 + 타입 검증. `.set 키 값` 으로 바꾼다."""
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .styles import STYLES, resolve_style
 
@@ -9,7 +9,7 @@ DEFAULTS: dict[str, Any] = {
     "ai_enabled": True,
     "style": "polite",              # 방 기본 말투
     "reply_max_chars": 400,         # 답변 최대 글자 수
-    "user_rate_per_min": 3,         # 1인당 분당 AI 호출
+    "user_rate_per_min": 5,         # 1인당 분당 AI 호출 (연달아 보낸 말은 한 번으로 셈 — handlers.BURST_SECONDS)
     "room_rate_per_min": 20,        # 방 전체 분당 AI 호출
     "web_search_daily": 30,         # 방당 하루 웹검색 횟수
     # 입장
@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "captcha_minutes": 5,
     "captcha_action": "kick",       # 실패/시간초과 시: kick(재입장 가능) / ban / mute
     "cas_enabled": True,            # CAS 스팸 DB 조회
+    "recent_account_captcha": True,  # 최근 만든 계정(ID 로 추정, accountage.py)은 캡차 설정과 상관없이 캡차
     # 도배
     "flood_count": 6,
     "flood_seconds": 8,
@@ -58,7 +59,8 @@ LABELS: dict[str, str] = {
     "captcha_enabled": "입장 캡차",
     "captcha_minutes": "캡차 제한시간(분)",
     "captcha_action": "캡차 실패 시",
-    "cas_enabled": "CAS 스팸DB 차단",
+    "cas_enabled": "스팸 명단(CAS·lols) 차단",
+    "recent_account_captcha": "최근 만든 계정은 캡차",
     "flood_count": "도배 기준(개)",
     "flood_seconds": "도배 기준(초)",
     "flood_mute_minutes": "도배 뮤트(분)",
@@ -83,7 +85,12 @@ CHOICES: dict[str, dict[str, str]] = {
     "captcha_action": {"kick": "kick", "킥": "kick", "내보내기": "kick",
                        "ban": "ban", "밴": "ban", "mute": "mute", "뮤트": "mute"},
 }
-CHOICE_LABELS = {"kick": "내보내기(재입장 가능)", "ban": "밴", "mute": "뮤트"}
+# 선택지 설정의 화면 글자: 설정 키 → {저장값: 글자} (같은 값 'kick' 도 설정마다 뜻이 달라서 키별로)
+CHOICE_LABELS: dict[str, dict[str, str]] = {"captcha_action": {"kick": "내보내기(재입장 가능)", "ban": "밴", "mute": "뮤트"}}
+
+
+def choice_label(key: str, value: str) -> str:
+    return CHOICE_LABELS.get(key, {}).get(value, str(value))
 TIME_KEYS: set[str] = set()  # HH:MM 형식 설정 (지금은 없음, 추가 시 여기에)
 # 숫자 설정의 허용 범위
 RANGES: dict[str, tuple[int, int]] = {
@@ -101,6 +108,9 @@ RANGES: dict[str, tuple[int, int]] = {
     "warn_mute_minutes": (1, 525600),
     "warn_ban_at": (1, 100),
 }
+
+# 특수한 값의 표시 방법 (목록 안에 목록 등). register_setting(render_fn=…) 로 추가
+RENDERERS: dict[str, Callable[[Any], str]] = {}
 
 _TRUE = {"on", "true", "1", "yes", "켜기", "켬", "예", "ㅇ"}
 _FALSE = {"off", "false", "0", "no", "끄기", "끔", "아니오", "ㄴ"}
@@ -155,15 +165,33 @@ def coerce(key: str, raw: str) -> Any:
 
 
 def render(key: str, value: Any) -> str:
+    if key in RENDERERS:
+        return RENDERERS[key](value)
     if isinstance(value, bool):
         return "켜짐" if value else "꺼짐"
     if key == "style":
         return STYLES[value].label if value in STYLES else str(value)
     if key in CHOICES:
-        return CHOICE_LABELS.get(value, str(value))
+        return choice_label(key, value)
     if isinstance(value, list):
         return ", ".join(value) if value else "(없음)"
     if value == "":
         return "(없음)"
     text = str(value)
     return text if len(text) <= 40 else text[:40] + "…"
+
+
+def register_setting(key: str, default: Any, label: str, *, range_: tuple[int, int] | None = None,
+                     choices: dict[str, str] | None = None, choice_labels: dict[str, str] | None = None,
+                     render_fn: Callable[[Any], str] | None = None) -> None:
+    """기능 모듈이 자기 설정 키를 추가한다 (settings.py 를 직접 고치지 않게). import 시점에 호출."""
+    DEFAULTS.setdefault(key, default)
+    LABELS.setdefault(key, label)
+    if range_:
+        RANGES[key] = range_
+    if choices:
+        CHOICES[key] = choices
+    if choice_labels:
+        CHOICE_LABELS[key] = choice_labels
+    if render_fn:
+        RENDERERS[key] = render_fn

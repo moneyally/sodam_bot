@@ -201,7 +201,7 @@ async def expired_room_gating():
     assert "start=sub_" in notice[3]["reply_markup"].inline_keyboard[0][0].url
     assert await handlers._within_ai_quota(ctx, CHAT, 1, Role.OWNER)            # 오너는 제한 없음
 
-    assert "이용 기간" in await svc.games.start(bot, CHAT, 20, "업다운")
+    assert "이용 기간" in await svc.games.start(bot, CHAT, 20, "끝말잇기")
     await db.add_schedule(CHAT, kind="interval", at_time=None, interval_min=30, title="t", text="x",
                           media_type=None, media_id=None, pin=False, created_by=1)
     await db.conn.execute("UPDATE schedules SET last_sent=0")
@@ -211,7 +211,7 @@ async def expired_room_gating():
 
     await svc.billing.extend(CHAT, 30)
     assert await handlers._within_ai_quota(ctx, CHAT, 20, Role.MEMBER)
-    assert "시작" in await svc.games.start(bot, CHAT, 20, "업다운")
+    assert "시작" in await svc.games.start(bot, CHAT, 20, "끝말잇기")
 
 
 # ── 결제 화면 (1:1 전용) ──────────────────────────────────
@@ -222,13 +222,9 @@ async def payment_flow_private_only():
     bot = FakeBot()
     admin, member = fake_user(1, "방장"), fake_user(20, "멤버")
 
-    # 딥링크: 관리자만 설정 화면
-    m = FakeMsg(20, member, f"/start sub_{CHAT}")
-    await subscription.on_deep_link(svc, bot, m, CHAT)
-    assert "관리자만" in m.replies[0]
-    m = FakeMsg(1, admin, f"/start sub_{CHAT}")
-    await subscription.on_deep_link(svc, bot, m, CHAT)
-    assert "30.0000 USDT" in m.replies[0] or "30 USDT" in m.replies[0] or "USDT" in m.replies[0]
+    # 구독 화면(관리자 1:1 에서만 열림, 권한 확인은 menu 라우터 몫)에 금액이 나옴
+    text, _ = await subscription.panel(svc, CHAT)
+    assert "USDT" in text
 
     # 방에서 누른 결제 버튼은 거부
     q = FakeQuery(CHAT, admin)
@@ -320,9 +316,9 @@ async def subscribe_command_in_group_hides_details():
     assert "관리 중인 방이 없" in msg.replies[0]
 
     # 방의 일반 멤버 도움말엔 .구독 이 안 보임, 관리자에겐 보임
-    hcmd, hargs, hargstr = commands.parse(".도움말", "sodambot")
+    hcmd, hargs, hargstr = commands.parse(".명령어", "sodambot")
     for role, visible in ((Role.MEMBER, False), (Role.ADMIN, True)):
-        msg = FakeMsg(CHAT, member, ".도움말")
+        msg = FakeMsg(CHAT, member, ".명령어")
         await commands.dispatch(CmdCtx(svc, bot, msg, CHAT, member, role, hargs, hargstr), hcmd)
         assert (".구독" in msg.replies[0]) is visible, role
 

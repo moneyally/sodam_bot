@@ -4,7 +4,10 @@ from __future__ import annotations
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from . import persist
+from .util import RateLimiter
 
 if TYPE_CHECKING:
     from .announce import Announcer
@@ -18,13 +21,14 @@ if TYPE_CHECKING:
     from .greet import Greeter
     from .llm import LLM
     from .moderation import Moderator
+    from .mtproto import MTProto
     from .permissions import Permissions
     from .sports import Sports
 
 
 @dataclass
 class PendingAction:
-    """관리자 확인 버튼이 필요한 동작 (밴 등)."""
+    """관리자 확인 버튼이 필요한 동작 (경고·뮤트·밴)."""
     chat_id: int
     kind: str
     target_id: int
@@ -32,6 +36,33 @@ class PendingAction:
     reason: str
     requested_by: int
     expires: float = field(default_factory=lambda: time.time() + 120)
+    minutes: int = 0   # mute 기간
+    extra: tuple[tuple[int, str], ...] = ()   # 같은 확인 버튼으로 함께 처리할 대상들 (한 번에 여러 명)
+    from_dm: bool = False   # 오너가 1:1 에서 요청 → 확인 카드는 1:1 에, 원하면 방에 안내
+    refused: set[int] = field(default_factory=set)   # 권한 없이 누른 사람 (기록은 한 번만)
+
+    @property
+    def targets(self) -> list[tuple[int, str]]:
+        return [(self.target_id, self.target_name), *self.extra]
+
+
+@dataclass
+class PendingInput:
+    """버튼 메뉴에서 '글자로 보내주세요' 를 기다리는 중 (1:1, 한 사람당 1개)."""
+    kind: str
+    chat_id: int
+    args: list[str] = field(default_factory=list)  # 예: 인사 편집기에서 어느 칸을 고치는지
+    expires: float = field(default_factory=lambda: time.time() + 300)
+
+
+@dataclass
+class MenuToken:
+    """버튼에 담기엔 긴 값(금지어 등)·파괴적 동작용 서버 쪽 1회용 토큰."""
+    user_id: int
+    chat_id: int
+    action: str
+    arg: Any
+    expires: float
 
 
 @dataclass
@@ -51,7 +82,19 @@ class Services:
     greeter: Greeter = None
     captcha: Captcha = None
     announcer: Announcer = None
+    mtproto: MTProto | None = None   # MTProto 도우미 (sodam/mtproto.py). MTPROTO_API_ID/HASH 없으면 None
     pending: dict[str, PendingAction] = field(default_factory=dict)
+    inputs: dict[int, PendingInput] = field(default_factory=dict)      # user_id → 메뉴 글자 입력 대기
+    menu_tokens: dict[str, MenuToken] = field(default_factory=dict)
+    menu_limiter: RateLimiter = field(default_factory=RateLimiter)
+    panel_msgs: dict[int, int] = field(default_factory=dict)  # user_id → 지금 살아있는 메뉴 메시지 (옛 메뉴 버튼 정리용)
+
+    def __post_init__(self) -> None:
+        # 글자 입력 대기는 DB 에도 (재시작 뒤 다음 말이 그 입력으로 가게, sodam/persist.py)
+        if self.db is not None and not isinstance(self.inputs, persist.InputStore):
+            store = persist.InputStore(self.db)
+            dict.update(store, self.inputs)
+            self.inputs = store
 
     async def paid_features(self, chat_id: int) -> bool:
         """구독(또는 체험) 중인 방인지. 결제 기능이 꺼져 있으면 항상 True.
@@ -65,4 +108,6 @@ class Services:
             del self.pending[key]
         key = secrets.token_hex(4)
         self.pending[key] = action
+        if self.db is not None:
+            persist.save_pending(self.db, key, action)   # 재시작 뒤 눌러도 카드가 살아 있게 (handlers._confirm_action)
         return key
