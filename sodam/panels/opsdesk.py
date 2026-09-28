@@ -52,11 +52,36 @@ def _nav(prefix: str, page: int, pages: int) -> list:
     return row
 
 
+# 방 전체를 다시 세는 화면(📥·🧭)은 쪽 넘김·필터마다 같은 계산(방 72개 = DB 1천 번↑)을 반복했음 → 사람마다 CACHE_TTL 초 기억 (감사 S2).
+# 숨기기는 그 사람 캐시를 비워 바로 반영. 버튼·권한은 누를 때마다 그대로 확인 (캐시는 보여 줄 목록만).
+CACHE_TTL = 30
+
+
+async def _cached(c: PanelCtx, key: tuple, make, reuse: bool = True):
+    """reuse=False(화면을 처음 열 때) 면 새로 계산해 담고, 쪽 넘김·필터에서만 담아 둔 걸 씀 → 새 일은 바로 보임."""
+    cache = c.svc.__dict__.setdefault("_ops_cache", {})
+    now, hit = time.monotonic(), cache.get(key)
+    if reuse and hit and now - hit[0] < CACHE_TTL:
+        return hit[1]
+    val = await make()
+    if len(cache) > 500:
+        cache.clear()
+    cache[key] = (now, val)
+    return val
+
+
+def _forget(c: PanelCtx) -> None:
+    cache = c.svc.__dict__.get("_ops_cache", {})
+    for k in [k for k in cache if k[0] == c.uid]:
+        del cache[k]
+
+
 # ── 📥 처리할 일 ─────────────────────────────────────────
 async def _inbox(c: PanelCtx, rooms: list[tuple[int, str]], scope: str, page: int) -> Screen:
     svc = c.svc
     room = c.cid if scope == "r" else None
-    items = await opsdesk.inbox(svc, c.bot, c.uid, rooms)
+    items = await _cached(c, (c.uid, "ib", tuple(r for r, _ in rooms)), lambda: opsdesk.inbox(svc, c.bot, c.uid, rooms),
+                          reuse=page > 0)
     pages = _pages(len(items), PAGE)
     page = min(page, pages - 1)
     head = "📥 <b>처리할 일</b>" + (f" · <b>{esc(rooms[0][1])}</b>" if room else "")
@@ -100,6 +125,7 @@ async def r_hide(c: PanelCtx) -> Screen:
         toast = "이미 처리됐거나 없는 항목이에요."
     else:
         toast = "✓ 숨겼어요." if await opsdesk.hide(c.svc.db, c.uid, c.cid, key) else "이미 숨긴 항목이에요."
+        _forget(c)
     screen = await (s_room_inbox if scope == "r" else s_inbox)(PanelCtx(c.svc, c.bot, c.uid, c.cid, [str(page)]))
     screen.toast = toast
     return screen
@@ -113,7 +139,7 @@ def _filter(raw: str) -> str:
 @_owner_only
 async def s_center(c: PanelCtx) -> Screen:
     svc, f = c.svc, _filter(c.arg(0))
-    statuses, tot = await opsdesk.command_center(svc, c.bot, c.uid)
+    statuses, tot = await _cached(c, (c.uid, "opc"), lambda: opsdesk.command_center(svc, c.bot, c.uid), reuse=bool(c.args))
     shown = opsdesk.narrow(statuses, FILTER_CODE[f])
     pages = _pages(len(shown), ROOM_PAGE)
     page = min(_page(c.arg(1)), pages - 1)
