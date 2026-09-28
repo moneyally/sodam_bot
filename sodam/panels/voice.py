@@ -190,7 +190,7 @@ async def t_voice_call(ctx: tools.ToolCtx, a: dict) -> str:
 tools.register_tool(tools.Tool(
     "voice_call",
     "이 방의 텔레그램 음성채팅(보이스챗)에 소담이 들어가서 실시간으로 목소리로 대화한다 (start) / 나간다 (stop). "
-    "'음성방 들어와', '보이스챗 와 줘', '통화하자', '음성으로 얘기하자' → start. '음성 나가', '통화 끊어' → stop. "
+    "'음성방 들어와', '보이스챗 와 줘', '통화하자', '전화 걸어줘', '전화하자', '콜 하자', '음성으로 얘기하자' → start. '음성 나가', '통화 끊어' → stop. "
     "노래 틀기·영상 통화는 아님.",
     {"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"], t_voice_call, where="room"))
 
