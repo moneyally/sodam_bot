@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 UNIT = 1_000_000
 TRONGRID = "https://api.trongrid.io"
-LATE_GRACE = 30 * 60      # 유효시간 안에 보냈는데 확인이 늦은 경우를 위해 만료 후에도 30분 더 찾아봄
+LATE_GRACE = 30 * 60      # 대기 청구서(자주 조회하는 대상)로 보는 기간: 만료 후 30분
+LATE_MATCH = 7 * 86400    # 유효시간 안에 보낸 입금은 확인이 이만큼 늦어도(장애·봇 꺼짐) 그 청구서로 연결 — 이 동안 같은 금액은 새 청구서에 안 줌
 IDLE_SCAN = 10 * 60       # 대기 청구서가 없어도 이 간격으로 입금 조회 (만료 후 늦은 입금·청구서 없는 입금 탐지)
 CURSOR_KEY = "billing_cursor_ms"   # chat_state(chat_id=0): 마지막으로 본 입금의 block_timestamp(ms)
 CURSOR_OVERLAP = 10 * 60  # 확정이 늦게 된 거래를 놓치지 않게 커서보다 10분 앞부터 다시 조회 (중복은 tx UNIQUE 로 걸러짐)
@@ -123,7 +124,7 @@ class Billing:
         existing = await self.db.open_invoice(chat_id, now + REUSE_LEFT, user_id)
         if existing:
             return existing
-        taken = await self.db.pending_amounts(now - LATE_GRACE)
+        taken = await self.db.pending_amounts(now - LATE_MATCH)
         for _ in range(50):
             amount = self.price_units + secrets.randbelow(999) * 100 + 100  # +0.0001 ~ +0.0999
             if amount not in taken:
@@ -177,12 +178,19 @@ class Billing:
         # 대기 청구서가 없어도 IDLE_SCAN 마다 조회 → 만료 후 늦게 온 입금·청구서 없는 입금도 오너에게 보고
         if not pending and self._last_scan and time.monotonic() - self._last_scan < IDLE_SCAN:
             return [], []
+        # 연결 후보 = 대기 + 만료됐지만 안 낸 청구서(LATE_MATCH 안). 입금 시각이 유효시간 안이면 늦게 확인돼도 연결
+        pending = await self.db.match_candidates(now - LATE_MATCH)
         cursor_ms = await self.db.get_state(0, CURSOR_KEY)
-        starts = [(min(p["created"] for p in pending) - 120) * 1000] if pending else []
+        starts = []
         if cursor_ms:
             starts.append(int(cursor_ms) - CURSOR_OVERLAP * 1000)
-        elif not pending:  # 첫 실행(커서 없음)·청구서 없음 → 최근 FIRST_LOOKBACK 만
+        elif pending:      # 첫 실행(커서 없음): 가장 오래된 후보 청구서부터 (예전엔 30분만 봐서 조용히 놓침)
+            starts.append((min(p["created"] for p in pending) - 120) * 1000)
+        else:
             starts.append((now - FIRST_LOOKBACK) * 1000)
+        live = [p for p in pending if p["status"] == "pending"]
+        if live:           # 지금 기다리는 청구서는 커서와 상관없이 만든 시각부터
+            starts.append((min(p["created"] for p in live) - 120) * 1000)
         since_ms = min(starts)
         if not self._streak_loaded:   # 재시작 전 연속 실패 수 ('장애' 알림 뒤 재시작돼도 '복구' 알림이 가게)
             self._streak_loaded = True

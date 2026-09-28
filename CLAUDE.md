@@ -29,7 +29,11 @@
   `.env.backup-template` = 실제 .env 에서 `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `TRONGRID_API_KEY` 만 비운 것.
 - 결제: 서버엔 받는 주소만(`PAY_ADDRESS`), 개인키·시드 금지. 입금은 TronGrid 로 공식 USDT 컨트랙트
   `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`·받는 주소·정확한 금액(청구서마다 끝자리 다름)·확정거래·유효시간·tx 1회만 검사.
-  `check_pending` 은 asyncio.Lock, 연장은 SQL 한 문장(`db.extend_paid`). 설정: 월 30 USDT / 30일 / 체험 3일 / 비구독 방 AI 하루 10회.
+  `check_pending` 은 asyncio.Lock, 연장은 SQL 한 문장(`db.extend_paid`). 설정: 월 30 USDT / 30일 / 체험 3일.
+  **끝난 방은 AI 답 없음, 안내만**(방마다 1시간 1번, 오너 결정 2026-09-28 — 예전 '하루 10회 무료' 없앰). 1:1 은 FREE_AI_PER_DAY 그대로.
+  끝난 그 시각에 방 안내 + 초대한 관리자 1:1 (`handlers._notify_ended`, 30초 틱, (방,끝난 시각) claim). 10시 작업은 '곧 끝나요'만.
+  늦게 확인된 입금: 입금 시각이 청구서 유효시간 안이면 7일(billing.LATE_MATCH)까지 그 청구서로 연결(`db.match_candidates`, 만료 상태 포함),
+  그 7일 동안 같은 금액은 새 청구서에 안 줌. 커서 없는 첫 결제도 후보 청구서 만든 시각부터 조회. 재초대 인사는 체험 중일 때만 '3일 무료'.
 - 결제 UI 는 **관리자 1:1 에서만**. 방엔 "⚙️ 봇 설정 (관리자)" 버튼과 금액 없는 문구만. 방 명령 `.구독/.설정` 은 명령 메시지 삭제 + 15초 뒤 사라지는 안내.
 - 방 관리자 = 텔레그램 관리자 자동 인식(코드 불필요). **봇 오너**(운영자 1명)만 서버 로그의 1회용 8자리 코드로 `/owner 코드` 등록 (1인 5회/전체 20회 틀리면 코드 폐기).
 - OpenAI: gpt-5.x 는 chat.completions 에서 **도구 + reasoning_effort 동시 사용 불가** → 도구 있는 호출은 `reasoning_effort="none"` (`llm._extra`).

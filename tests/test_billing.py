@@ -195,7 +195,9 @@ async def expired_room_gating():
     bot = FakeBot()
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
     results = [await handlers._within_ai_quota(ctx, CHAT, 20, Role.MEMBER) for _ in range(3)]
-    assert results == [True, True, False]                          # 무료 2회까지
+    assert results == [False, False, False]                        # 끝난 방은 AI 없음, 안내만 (오너 결정 2026-09-28)
+    assert await handlers._within_ai_quota(ctx, CHAT, 5, Role.ADMIN) is False
+    assert len(bot.named("send_message")) == 1                     # 안내는 1시간에 1번
     notice = bot.named("send_message")[-1]
     assert "USDT" not in notice[2] and PAY not in notice[2]         # 방에는 금액·주소 노출 안 함
     assert "start=sub_" in notice[3]["reply_markup"].inline_keyboard[0][0].url

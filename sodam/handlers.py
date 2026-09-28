@@ -306,10 +306,13 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if svc.billing and svc.billing.enabled:
         await svc.billing.ensure_trial(chat.id, adder.id if adder else None)
     days = svc.cfg.trial_days
+    # 다시 초대한 방엔 체험이 다시 생기지 않음 → 지금 막 시작한 체험일 때만 '3일 무료' (끝난 방에 약속하던 것)
+    st = await svc.billing.status(chat.id) if svc.billing and svc.billing.enabled else None
+    in_trial = bool(st and st.state == "trial" and st.until and st.until - time.time() > (days - 1) * 86400)
     intro = (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n"
              "원활한 동작을 위해 저를 <b>관리자</b>로 지정해주세요 (메시지 삭제·사용자 차단·고정 권한).\n"
              "🕵️ 이제 멤버가 이름·@아이디를 바꾸면 알려드려요. 누구든 <code>.기록</code> 으로 변경 기록을 볼 수 있어요.\n"
-             + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if svc.billing and svc.billing.enabled and days else "")
+             + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if in_trial and days else "")
              + "명령어는 <code>.도움말</code>")
     markup = subscription.setup_button(bot.username, chat.id) if svc.billing and svc.billing.enabled else None
     try:
@@ -608,6 +611,12 @@ async def _prefix_hint(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: s
     return True
 
 
+EXPIRED_NOTICE_GAP = 3600   # 끝난 방에서 AI 를 부를 때 안내는 방마다 1시간에 1번
+EXPIRED_AI_NOTICE = "🔒 이 방의 {name} 이용 기간이 끝나서 AI 대화는 쉬고 있어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
+ENDED_NOTICE = ("⛔ {name} {what}이 끝났어요. AI 대화·게임·예약공지 같은 기능은 멈추고, "
+                "방 관리(캡차·도배·금지어·경고)는 계속 무료로 동작해요. 관리자님은 아래 버튼에서 연장할 수 있어요.")
+
+
 async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, role: Role) -> bool:
     """구독 안 한 방 / 1:1 채팅의 하루 무료 AI 한도. 넘으면 안내하고 False (안내엔 금액을 넣지 않음)."""
     svc = _svc(context)
@@ -615,21 +624,19 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     if role >= Role.OWNER:
         return True
     if chat_id < 0:
-        # 그룹: 결제 기능이 꺼졌거나 구독(체험) 중이면 제한 없음 (분당 호출 제한은 따로 있음)
+        # 그룹: 결제 기능이 꺼졌거나 구독(체험) 중이면 제한 없음 (분당 호출 제한은 따로 있음).
+        # 끝난 방은 AI 답 없이 안내만 (오너 결정 2026-09-28: 무료 하루 N번 없앰) — 방마다 EXPIRED_NOTICE_GAP 에 1번, 잠깐 보였다 사라짐
         if billing is None or not billing.enabled or await billing.active(chat_id):
             return True
+        if await persist.claim(svc.db, f"expired_notice:{chat_id}", EXPIRED_NOTICE_GAP):
+            await send_temp(context, chat_id, EXPIRED_AI_NOTICE.format(name=svc.cfg.bot_name), 120,
+                            reply_markup=subscription.setup_button(context.bot.username, chat_id))
+        return False
     # 1:1 은 결제 여부와 상관없이 하루 무료 한도 적용 → 낯선 사람이 전체 AI 예산을 다 쓰지 못하게
-    key, scope = ("free_ai", chat_id) if chat_id < 0 else ("free_ai_dm", user_id)
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
-    if await svc.db.bump(day, scope, key) <= svc.cfg.free_ai_per_day:
+    if await svc.db.bump(day, user_id, "free_ai_dm") <= svc.cfg.free_ai_per_day:
         return True
-    if chat_id < 0:
-        if await svc.db.bump(day, scope, "free_ai_notice") == 1:  # 방마다 하루 한 번만, 잠깐 보였다 사라지게
-            await send_temp(context, chat_id,
-                            "🔒 오늘 무료 AI 이용량을 다 썼어요. 관리자님은 아래 버튼에서 이용 기간을 확인해주세요.",
-                            120, reply_markup=subscription.setup_button(context.bot.username, chat_id))
-    else:
-        await send_temp(context, chat_id, "오늘 무료 대화량을 다 썼어요. 내일 다시 이야기해요 🙏", 30)
+    await send_temp(context, chat_id, "오늘 무료 대화량을 다 썼어요. 내일 다시 이야기해요 🙏", 30)
     return False
 
 
@@ -1149,7 +1156,8 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
             ("raid", lambda bot: raid.tick(svc, bot)),  # 끝난 대량 입장 방어 모드 해제
             ("anomaly", lambda bot: anomaly.tick(svc, bot)),  # 이상징후 '보안 강화' 시간 끝나면 설정 되돌림
             ("joinreq", lambda bot: joinreq.expire(svc, bot)),  # 시간 지난 가입 신청 거절
-            ("hooks", lambda bot: hooks.tick(svc, bot))]  # 채널 예약 글·구독자 수 등 (hooks.add_tick_hook)
+            ("hooks", lambda bot: hooks.tick(svc, bot)),  # 채널 예약 글·구독자 수 등 (hooks.add_tick_hook)
+            ("sub_end", lambda bot: _notify_ended(context))]  # 이용 기간이 끝난 그 시각에 안내
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
     for name, fn in jobs:
@@ -1176,22 +1184,18 @@ async def job_sub_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not (svc.billing and svc.billing.enabled):
         return
     now, tz, name = int(time.time()), svc.cfg.tz, svc.cfg.bot_name
-    for row in await svc.db.subscriptions_expiring(now - 86400, now + 3 * 86400):
+    for row in await svc.db.subscriptions_expiring(now + 1, now + 3 * 86400):   # 끝난 방 안내는 끝난 그 시각에 (job_tick → _notify_ended)
         chat_id, until = row["chat_id"], row["until"]
         trial = not (row["paid_until"] and row["paid_until"] >= until)
-        if until > now:
-            if trial:
-                if until - now > 86400:
-                    continue  # 체험(3일)은 첫날부터 매일 말고 마지막 날 한 번만
-                when = "오늘" if datetime.fromtimestamp(until, tz).date() == datetime.fromtimestamp(now, tz).date() else "내일"
-                text = (f"⏳ {name} 무료 체험이 {when}({datetime.fromtimestamp(until, tz):%H:%M}) 끝나요. "
-                        "관리자님은 아래 버튼에서 연장할 수 있어요.")
-            else:
-                days = max(1, (until - now + 86399) // 86400)
-                text = f"⏳ 이 방의 {name} 이용 기간이 {days}일 남았어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
+        if trial:
+            if until - now > 86400:
+                continue  # 체험(3일)은 첫날부터 매일 말고 마지막 날 한 번만
+            when = "오늘" if datetime.fromtimestamp(until, tz).date() == datetime.fromtimestamp(now, tz).date() else "내일"
+            text = (f"⏳ {name} 무료 체험이 {when}({datetime.fromtimestamp(until, tz):%H:%M}) 끝나요. "
+                    "관리자님은 아래 버튼에서 연장할 수 있어요.")
         else:
-            text = (f"⛔ {name} {'무료 체험' if trial else '이용 기간'}이 끝났어요. AI 대화는 하루 {svc.cfg.free_ai_per_day}번까지만 되고, "
-                    "게임·예약공지·스포츠 알림·일일 리포트는 멈춰요. 방 관리(캡차·도배·경고)는 계속 동작해요.")
+            days = max(1, (until - now + 86399) // 86400)
+            text = f"⏳ 이 방의 {name} 이용 기간이 {days}일 남았어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
         await send_temp(context, chat_id, text, REMINDER_TTL,
                         reply_markup=subscription.setup_button(bot.username, chat_id))
         got_report: set[int] = set()
@@ -1202,6 +1206,24 @@ async def job_sub_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
                 log.exception("trial report failed for %s", chat_id)
         if row["added_by"] and row["added_by"] not in got_report and \
                 await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
+            await subscription.send_panel_dm(svc, bot, chat_id, row["added_by"])
+
+
+async def _notify_ended(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """30초 틱: 체험·이용 기간이 방금 끝난 방에 그 시각에 바로 안내 1번 + 초대한 관리자 1:1 결제 화면 (예전엔 다음 날 10시).
+    끝난 지 하루 안 된 방만, (방, 끝난 시각) claim 으로 한 번 — 재시작해도 두 번 안 감."""
+    svc, bot = _svc(context), context.bot
+    if not (svc.billing and svc.billing.enabled):
+        return
+    now = int(time.time())
+    for row in await svc.db.subscriptions_expiring(now - 86400, now):
+        chat_id, until = row["chat_id"], row["until"]
+        if until > now or not await persist.claim(svc.db, f"sub_ended:{chat_id}:{until}", 3 * 86400):
+            continue
+        trial = not (row["paid_until"] and row["paid_until"] >= until)
+        await send_temp(context, chat_id, ENDED_NOTICE.format(name=svc.cfg.bot_name, what="무료 체험" if trial else "이용 기간"),
+                        REMINDER_TTL, reply_markup=subscription.setup_button(bot.username, chat_id))
+        if row["added_by"] and await _is_admin_safe(svc, bot, chat_id, row["added_by"], fresh=True):
             await subscription.send_panel_dm(svc, bot, chat_id, row["added_by"])
 
 

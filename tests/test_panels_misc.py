@@ -124,26 +124,20 @@ async def ai_screen_toggle_presets_and_permissions():
 
 @test
 async def ai_usage_shows_count_never_price():
+    """AI 화면 상태 줄: 끝난 방은 '쉬는 중', 이용 중이면 제한 없음. 금액·결제는 절대 안 보임."""
     db, svc, bot, _ = await setup()
     with_billing(svc, db, free_ai_per_day=10)
     await expire(db, CHAT)
-    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
-    await db.bump(day, CHAT, "free_ai", 4)
-    await db.bump("2000-01-01", CHAT, "free_ai", 9)                  # 다른 날은 안 셈
-    await db.bump(day, OTHER, "free_ai", 7)                          # 다른 방도 안 셈
     for uid in (TGA, BOTADM):
         q = await press(svc, bot, uid, f"m:ai:{CHAT}")
         text = q.edits[-1]
-        assert "4 / 10회" in text, text
+        assert "쉬는 중" in text, text
         for leak in ("USDT", "37", "$", PAY, "결제", "구독"):
             assert leak not in text, (leak, text)
         assert not any("💳" in b.text or "pay:" in (b.callback_data or "") for b in buttons(q.kb))
-    await db.bump(day, CHAT, "free_ai", 20)                          # 한도를 넘게 셌어도 표시는 한도까지
+    await svc.billing.extend(CHAT, 30)                               # 이용 중이면 제한 없음
     text = (await press(svc, bot, TGA, f"m:ai:{CHAT}")).edits[-1]
-    assert "10 / 10회" in text and "다 썼어요" in text and "37" not in text
-    await svc.billing.extend(CHAT, 30)                               # 이용 중이면 무료 한도 없음
-    text = (await press(svc, bot, TGA, f"m:ai:{CHAT}")).edits[-1]
-    assert "한도 없이" in text and "/ 10회" not in text
+    assert "제한 없음" in text and "쉬는 중" not in text
 
 
 # ── 📚 학습 자료 ──────────────────────────────────────────
