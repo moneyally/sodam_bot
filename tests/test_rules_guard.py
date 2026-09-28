@@ -145,8 +145,8 @@ async def log(r, uid, text, ts, is_bot=False):
 async def replay_keyword_cooldown_creator_and_daily_cap():
     r = await room()
     now = int(time.time())
-    base = now - 3 * 86400
-    for dt in (0, 60, 120, 700, 1300):                  # 쿨다운 10분 → 0·700·1300 = 3번
+    base = int(datetime.fromtimestamp(now - 3 * 86400, r.svc.cfg.tz).replace(hour=12, minute=0, second=0).timestamp())
+    for dt in (0, 60, 120, 700, 1300):                  # 정오 기준 (자정 근처에 돌리면 두 날로 갈라지던 것)
         await log(r, A.id, "입 금 됐나요", base + dt)
     await log(r, BOSS.id, "입금 확인", base + 2000)       # 만든 사람 말은 안 셈
     await log(r, B.id, "그냥 대화", base + 2100)
