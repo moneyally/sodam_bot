@@ -82,7 +82,7 @@ _BY_NAME = {
     **dict.fromkeys(("bet", "b", "wager"), "bet"),
 }
 # 설명 낱말 → intent (순서 중요: '일시정지' ⊃ '정지', '재생목록' ⊃ '재생', '다시 재생'·'재개' 먼저)
-_BY_WORD = (("remove", ("빼기", "빼", "삭제", "취소", "remove")), ("pause", ("일시정지", "일시 정지", "pause")), ("resume", ("재개", "다시 재생", "이어", "resume")),
+_BY_WORD = (("remove", ("빼기", "빼", "삭제", "취소", "remove")), ("pause", ("일시정지", "일시 정지", "pause")), ("resume", ("재개", "다시 재생", "이어서", "이어 재생", "resume")),
             ("queue", ("대기열", "재생목록", "목록", "queue", "playlist")), ("skip", ("건너", "스킵", "다음 곡", "skip")),
             ("stop", ("정지", "멈춤", "종료", "stop")), ("search", ("검색", "search")),
             ("play", ("재생", "신청", "틀어", "노래", "play")), ("dice", ("주사위", "dice")),
@@ -135,7 +135,7 @@ async def intent_of(db, chat_id: int, bot_id: int, command: str) -> str:
 
 def describe(rows, limit: int = 12) -> str:
     return ", ".join(f"{r['command']}" + (f" {r['args_hint']}" if r["args_hint"] else "") + f"({r['intent']})"
-                     for r in rows[:limit]) or "(없음)"
+                     + (f" [예: {r['example']}]" if r["example"] else "") for r in rows[:limit]) or "(없음)"
 
 
 def _terms(q: str) -> list[str]:
@@ -256,19 +256,37 @@ async def delete(db, chat_id: int, bot_id: int, command: str) -> bool:
         "DELETE FROM botlink_skills WHERE chat_id=? AND bot_id=? AND command=?", (chat_id, bot_id, command)).rowcount))
 
 
-async def record_seen(db, chat_id: int, bot_id: int, command: str, has_args: bool) -> bool:
-    """본 것: 있으면 횟수·시각만(관리자가 적은 설명·intent 는 그대로, 모르던 intent 만 채움), 없으면 새로 (상한 안에서)."""
-    now, intent = int(time.time()), guess_intent(command)
+def example_of(sent: str, reply: str) -> str:
+    """사람이 보낸 명령 + 그 봇의 답 첫 줄 → 예시 한 줄 (AI 가 한글·줄임 명령의 뜻을 알게).
+    멤버가 쓴 인자 글자(곡명 등)는 저장 안 함 → 명령엔 {…}, 답에 그대로 나온 인자 낱말도 '…'."""
+    first = next((ln.strip() for ln in (reply or "").splitlines() if ln.strip()), "")
+    if not first:
+        return ""
+    head, _, args = " ".join(sent.split()).partition(" ")
+    for w in sorted(set(args.split()), key=len, reverse=True):
+        if len(w) >= 2 and not w.replace(",", "").isdecimal():
+            first = first.replace(w, "…")
+    return f"'{head.split('@')[0][:32]}{' {…}' if args else ''}' → {first[:70]}"
+
+
+async def record_seen(db, chat_id: int, bot_id: int, command: str, has_args: bool, sent: str = "", reply: str = "") -> bool:
+    """본 것: 있으면 횟수·시각·예시만(관리자가 적은 설명·intent 는 그대로, 모르던 intent 만 채움), 없으면 새로 (상한 안에서).
+    intent 는 이름으로 모르면 그 봇의 답으로 ('/ㅂㅋ' → '뱅커에 … 배팅' = bet)."""
+    now, example = int(time.time()), example_of(sent, reply)
+    intent = guess_intent(command)
+    if intent == "other" and reply:
+        intent = guess_intent("", reply[:80])
 
     def work(c):
-        if c.execute("UPDATE botlink_skills SET count=count+1, updated=?, "
+        if c.execute("UPDATE botlink_skills SET count=count+1, updated=?, example=CASE WHEN ?='' THEN example ELSE ? END, "
                      "intent=CASE WHEN intent='other' THEN ? ELSE intent END WHERE chat_id=? AND bot_id=? AND command=?",
-                     (now, intent, chat_id, bot_id, command)).rowcount:
+                     (now, example, example, intent, chat_id, bot_id, command)).rowcount:
             return True
         if not _cap_ok(c, chat_id, bot_id, command):
             return False
-        c.execute("INSERT INTO botlink_skills(chat_id, bot_id, command, args_hint, source, intent, updated, count) "
-                  "VALUES(?,?,?,?,?,?,?,1)", (chat_id, bot_id, command, SEEN_HINT if has_args else "", "seen", intent, now))
+        c.execute("INSERT INTO botlink_skills(chat_id, bot_id, command, args_hint, source, intent, updated, count, example) "
+                  "VALUES(?,?,?,?,?,?,?,1,?)", (chat_id, bot_id, command, SEEN_HINT if has_args else "", "seen", intent, now,
+                                                example))
         return True
     return await db.atomic(work)
 
@@ -334,7 +352,7 @@ async def on_member_message(svc: Services, bot, msg, role) -> None:
     if not row or row["status"] == "ignored":
         return
     st, now = state(svc), time.time()
-    st.pending[(msg.chat_id, msg.message_id)] = (row["bot_id"], "/" + m.group(1).lower(), bool(m.group(3)), now)
+    st.pending[(msg.chat_id, msg.message_id)] = (row["bot_id"], "/" + m.group(1).lower(), bool(m.group(3)), now, text)
     if len(st.pending) > 500:
         for k in [k for k, v in st.pending.items() if now - v[3] > LEARN_WINDOW] or list(st.pending)[:100]:
             st.pending.pop(k, None)
@@ -349,7 +367,31 @@ async def learn_from_history(db, chat_id: int, bot_id: int) -> int:
         cmds = help_commands(r["text"])
         if cmds:
             n += await save_helper(db, chat_id, bot_id, cmds[:MAX_SKILLS], source="help")
+    # 사람 '/명령' → LEARN_WINDOW 안에 그 사람에게 온 이 봇의 답 (기능이 생기기 전 대화도 · 이미 아는 명령은 예시만 채움)
+    pairs = await db._all(   # 명령마다 그 뒤 첫 답 (가까운 다른 명령의 답과 섞이지 않게)
+        "SELECT m.text AS sent, (SELECT b.text FROM botlink_msgs b WHERE b.chat_id=m.chat_id AND b.bot_id=? "
+        "AND b.to_user=m.user_id AND b.ts BETWEEN m.ts AND m.ts+? ORDER BY b.ts, b.msg_id LIMIT 1) AS reply "
+        "FROM messages m WHERE m.chat_id=? AND m.is_bot=0 AND m.text LIKE '/%' AND m.ts>=? ORDER BY m.ts DESC LIMIT 100",
+        (bot_id, int(LEARN_WINDOW), chat_id, int(time.time()) - 7 * 86400))
+    known = {k["command"]: k for k in await skills(db, chat_id, bot_id)}
+    for p in pairs:
+        if not p["reply"]:
+            continue
+        m = MEMBER_CMD.fullmatch(p["sent"].strip())
+        if not m or (m.group(2) and m.group(2).lower() != (await _username(db, chat_id, bot_id))):
+            continue
+        cmd = "/" + m.group(1).lower()
+        if cmd in known and known[cmd]["example"]:
+            continue
+        if await record_seen(db, chat_id, bot_id, cmd, bool(m.group(3)), p["sent"], p["reply"]):
+            n += cmd not in known
+            known[cmd] = {"example": "x"}
     return n
+
+
+async def _username(db, chat_id: int, bot_id: int) -> str:
+    r = await db._one("SELECT username FROM botlink_bots WHERE chat_id=? AND bot_id=?", (chat_id, bot_id))
+    return ((r["username"] if r else "") or "").lower()
 
 
 async def on_bot_seen(svc: Services, bot, msg, status: str, now: float) -> None:
@@ -358,7 +400,7 @@ async def on_bot_seen(svc: Services, bot, msg, status: str, now: float) -> None:
     if r is not None and r.from_user is not None and not r.from_user.is_bot:
         got = st.pending.pop((cid, r.message_id), None)
         if got and got[0] in (None, msg.from_user.id) and now - got[3] <= LEARN_WINDOW and status != "ignored":
-            await record_seen(svc.db, cid, msg.from_user.id, got[1], got[2])
+            await record_seen(svc.db, cid, msg.from_user.id, got[1], got[2], got[4], msg.text or msg.caption or "")
     cmds = help_commands(msg.text or msg.caption or "")
     if cmds:
         await save_helper(svc.db, cid, msg.from_user.id, cmds[:MAX_SKILLS], source="help")

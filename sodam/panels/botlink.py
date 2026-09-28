@@ -337,6 +337,12 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
     if reason:
         return reason
     if intent and not raw:
+        await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"])   # 기록에서 명령·예시 채움 (DB만)
+        same = [k for k in await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"]) if k["intent"] == intent]
+        if len(same) > 1 and not any(botskills.guess_intent(k["command"]) == intent for k in same):
+            # 같은 뜻 명령이 여럿인데 이름으론 구분 못 함 (실제 사례: 게임봇 '/ㅂㅋ'=뱅커·'/플'=플레이어 둘 다 배팅)
+            return (f"{_bot_label(row)} 에 '{intent}' 명령이 여러 개: {botskills.describe(same)}. 예시를 보고 요청에 맞는 "
+                    "명령을 골라 command 로 다시 부를 것 (인자 포함, 예시와 같은 모양). 처음 쓰는 명령은 확인 카드가 뜸.")
         sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)
         if not sk and await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"]):
             sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)   # 기록된 사용법 글에서 방금 배움

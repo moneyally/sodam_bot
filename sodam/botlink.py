@@ -29,7 +29,7 @@ from telegram import Bot, LinkPreviewOptions, ReplyParameters
 from telegram.error import TelegramError
 
 from . import gametime, hooks
-from .db import register_schema
+from .db import register_columns, register_schema
 from .security import scan
 from .settings import register_setting
 
@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS botlink_skills (
 );
 """, migrate={"botlink_bots": "composite", "botlink_msgs": "drop", "botlink_cmds": "composite", "botlink_sent": "plain",
               "botlink_skills": "composite"})
+# 본 명령의 예시 한 줄: "'/플 30000000' → ✅ 🔵 플레이어에 30,000,000P 배팅!" (한글·줄임 명령은 이름만으론 뜻을 모름)
+register_columns("botlink_skills", {"example": "TEXT NOT NULL DEFAULT ''"})
 
 # 다른 봇 글을 기록한 뒤 불림 (sodam/botskills.py 명령 배우기): async fn(svc, bot, msg, status, now). 방에 보내지 말 것.
 SEEN_HOOKS: list = []
