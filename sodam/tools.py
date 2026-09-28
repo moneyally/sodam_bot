@@ -87,6 +87,8 @@ PERIOD = {"type": "string", "enum": ["오늘", "어제", "주간", "월간", "�
 async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     """이름/@username/ID → 방 멤버 1명. 실패하면 에러 문자열."""
     rows = await ctx.svc.db.find_members(ctx.chat_id, name)
+    if not rows and (bare := _strip_title(name)) and bare != name.strip().lstrip("@"):
+        rows = await ctx.svc.db.find_members(ctx.chat_id, bare)   # '지영님' → '지영' 정확히 (음성·채팅 모두 흔함, 제재도 정확 일치만)
     if not rows and not for_sanction:  # 인사·조회는 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
         rows = await _fuzzy_members(ctx, name)
     former = None

@@ -87,7 +87,8 @@ class Worker:
         self.realtime_connect = realtime_connect
         self.media = media                      # py-tgcalls 형식 모음 (테스트는 가짜)
         self.web_search = web_search            # async (query, chat_id) -> 요약 글 (채팅 소담과 같은 격리 검색·같은 예산)
-        self.svc, self.bot = svc, bot           # 채팅 소담 읽기 전용 도구용 (toolset.py) — 없으면 검색만
+        self.svc, self.bot = svc, bot           # 채팅 소담 도구용 (toolset.py) — 없으면 검색만
+        self.ssrc_users: dict[int, dict[int, int]] = {}   # 방 → 소리 번호(ssrc) → 계정 (말한 사람 확인)
         self.client = None                      # 로그인된 어시스턴트
         self.calls = None                       # PyTgCalls
         self.pending = None                     # 로그인 중 (client, phone, phone_code_hash)
@@ -229,6 +230,7 @@ class Worker:
                         lambda f: self.calls.send_frame(chat_id, md.Device.MICROPHONE, f),
                         instructions=p.get("instructions") or "", voice=p.get("voice") or "marin",
                         reply=p.get("reply") or "all", greet=p.get("greet"),
+                        transcribe_prompt=str(p.get("transcribe_prompt") or ""),
                         max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60),
                         **(await self._toolset(chat_id, p.get("by") or 0)))
         params = md.AudioParameters(48000, 1)
@@ -249,6 +251,7 @@ class Worker:
                 await asyncio.wait_for(self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params),
                                                        md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
             await self.calls.record(chat_id, md.RecordStream(True, params))
+            await self._load_participants(chat_id)
         except Exception as e:
             await self._leave(chat_id)
             log.warning("통화 시작 실패 %s: %r", chat_id, e)
@@ -269,7 +272,9 @@ class Worker:
             return {"tools": {"web_search": search} if search else {}}
         from . import toolset
         settings = await self.db.get_settings(chat_id)
-        specs, handlers = toolset.build(self.svc, self.bot, chat_id, starter, settings, web_search=search)
+        users = self.ssrc_users.setdefault(chat_id, {})
+        specs, handlers = toolset.build(self.svc, self.bot, chat_id, starter, settings, web_search=search,
+                                        speaker=lambda ssrc: users.get(ssrc) if ssrc is not None else None)
         return {"tools": handlers, "tool_specs": specs}
 
     def _tools(self, chat_id: int) -> dict:
@@ -297,6 +302,16 @@ class Worker:
                 return
             await asyncio.sleep(1 / VFPS)
 
+    async def _load_participants(self, chat_id: int) -> None:
+        """지금 음성채팅 참가자의 소리 번호(source=ssrc) → 계정. 이후 들어오는 사람은 call_participant 이벤트로."""
+        users = self.ssrc_users.setdefault(chat_id, {})
+        try:
+            for part in await self.calls.get_participants(chat_id):
+                if getattr(part, "source", None):
+                    users[part.source] = part.user_id
+        except Exception as e:
+            log.debug("참가자 목록 %s: %s", chat_id, e)
+
     async def _run_call(self, chat_id: int, call_id: int, bridge: Bridge, video: bool = False) -> None:
         vt = asyncio.create_task(self._video_loop(chat_id, bridge)) if video else None
         try:
@@ -306,6 +321,7 @@ class Worker:
                 vt.cancel()
             self.bridges.pop(chat_id, None)
             self.tasks.pop(chat_id, None)
+            self.ssrc_users.pop(chat_id, None)
             await self._leave(chat_id)
         await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns)
         await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds)
@@ -336,13 +352,20 @@ class Worker:
         async def _frames(_, update):
             b = self.bridges.get(update.chat_id)
             if b:
-                b.feed([f.frame for f in update.frames])
+                b.feed([(f.ssrc, f.frame) for f in update.frames])   # ssrc = 누가 말했나 (말한 사람 확인)
 
         @self.calls.on_update(md.filters.chat_update(md.ChatUpdate.Status.LEFT_CALL))   # 음성채팅 닫힘·방에서 내보내짐
         async def _gone(_, update):
             b = self.bridges.get(update.chat_id)
             if b:
                 b.stop("closed")
+
+        if hasattr(md.filters, "call_participant"):   # 새로 들어온·바뀐 참가자의 소리 번호 → 계정
+            @self.calls.on_update(md.filters.call_participant(md.Action.JOINED | md.Action.UPDATED))
+            async def _joined(_, update):
+                part = update.participant
+                if update.chat_id in self.bridges and getattr(part, "source", None):
+                    self.ssrc_users.setdefault(update.chat_id, {})[part.source] = part.user_id
 
         if hasattr(md.filters, "call_participant"):   # 통화에서만 내보내짐 (방엔 남음) — ChatUpdate 로 안 옴
             @self.calls.on_update(md.filters.call_participant(md.Action.KICKED | md.Action.LEFT) & md.filters.me)

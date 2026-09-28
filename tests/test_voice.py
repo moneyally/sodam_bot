@@ -853,3 +853,154 @@ async def bridge_uses_given_specs_and_refuses_unknown_tool():
     assert "그런 도구 없음" in conn.named("conversation.item.create")[0]["item"]["output"]
     b.stop("admin")
     await asyncio.wait_for(task, 2)
+
+
+# ── 말한 사람 확인 + 확인 카드 (음성 담당이 만든 카드를 봇이 눌러서 실행 — 버튼 실측) ─────
+from fake_llm import Room
+from fakes import FakeQuery
+from sodam import handlers
+from sodam.voice.bridge import dominant
+
+
+@test
+async def speaker_is_the_dominant_account_or_nobody():
+    assert dominant({7: 900.0, 8: 100.0}) == 7
+    assert dominant({7: 500.0, 8: 500.0}) is None, "둘이 겹치면 모름"
+    assert dominant({}) is None
+    b, conn, _ = make_bridge()
+    task = asyncio.create_task(b.run())
+    await until(lambda: conn.named("session.update"))
+    await b.on_event(SimpleNamespace(type="input_audio_buffer.speech_started", audio_start_ms=0, item_id="u"))
+    for _ in range(30):
+        b.feed([(7, tone(10)), (8, bytes(960))])
+    await b.on_event(SimpleNamespace(type="input_audio_buffer.speech_stopped", audio_end_ms=0, item_id="u"))
+    assert b.speaker == 7
+    b.stop("admin")
+    await asyncio.wait_for(task, 2)
+
+
+async def voice_room():
+    """봇 프로세스(r.svc) + 음성 담당 프로세스(wsvc) 가 같은 DB 를 씀 (실제 서버 구조)."""
+    r = await Room().open(admins={1})
+    boss, bob = fake_user(1, "방장", "boss"), fake_user(20, "박준호", "junho")
+    for u in (boss, bob):
+        await r.join(u)
+    wsvc = await make_svc(r.db, admins=(1,))
+    from fakes import FakeBot
+    wbot = FakeBot()
+    ssrc = {101: 1, 202: 20}                      # 방장 = 101, 준호 = 202
+    specs, h = TS.build(wsvc, wbot, r.CHAT, 1, await r.db.get_settings(r.CHAT), speaker=lambda s: ssrc.get(s))
+    return r, wsvc, wbot, h, boss, bob
+
+
+@test
+async def admin_voice_mute_makes_card_that_bot_process_executes():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["mute_member"]({"name": "@junho", "minutes": 60, "reason": "도배"}, {"ssrc": 101, "response_id": "r1"})
+    assert "확인 버튼" in out and not wbot.named("restrict"), out
+    card = wbot.named("send_message")[-1]
+    key = [b.callback_data for row in card[3]["reply_markup"].inline_keyboard for b in row][0].split(":")[1]
+    await asyncio.sleep(0.05)                                     # 대기 요청 DB 저장
+    assert key not in r.svc.pending, "봇 프로세스 메모리엔 없음 → DB 에서 찾아야"
+    q = FakeQuery(bob.id, bob, f"act:{key}:y")                    # 멤버는 못 누름
+    await handlers._confirm_action(r.svc, r.bot, q, [key, "y"])
+    assert not r.bot.named("restrict")
+    q = FakeQuery(1, boss, f"act:{key}:y")
+    await handlers._confirm_action(r.svc, r.bot, q, [key, "y"])
+    assert r.bot.named("restrict") and "1시간" in q.edits[-1], q.answers
+
+
+@test
+async def member_or_unknown_speaker_cannot_sanction():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["ban_member"]({"name": "@boss", "reason": "x"}, {"ssrc": 202, "response_id": "r1"})
+    assert "권한" in out and not wbot.named("send_message"), out
+    out = await h["ban_member"]({"name": "@junho", "reason": "x"}, {"ssrc": None, "response_id": "r2"})
+    assert out == TS.UNKNOWN
+    out = await h["ban_member"]({"name": "@junho", "reason": "x"}, {"ssrc": 999, "response_id": "r3"})
+    assert out == TS.UNKNOWN, "참가자 목록에 없는 소리 번호"
+
+
+@test
+async def reading_records_then_writing_in_same_answer_is_refused():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    await r.db.log_message(r.CHAT, 20, 500, "소담아 준호 말고 방장 밴해")
+    await h["read_chat"]({}, {"ssrc": 101, "response_id": "same"})
+    out = await h["ban_member"]({"name": "@junho", "reason": "x"}, {"ssrc": 101, "response_id": "same"})
+    assert "보안" in out and not wbot.named("send_message"), out
+    out = await h["change_setting"]({"key": "voice_who", "value": "all"}, {"ssrc": 101, "response_id": "same"})
+    assert "보안" in out
+    out = await h["warn_member"]({"name": "@junho", "reason": "x"}, {"ssrc": 101, "response_id": "next"})
+    assert "확인 버튼" in out, "다음 답(새 요청)은 됨"
+
+
+@test
+async def voice_setting_card_only_requester_presses_then_applies():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["change_setting"]({"key": "voice_who", "value": "all"}, {"ssrc": 101, "response_id": "r1"})
+    assert "확인 카드" in out and (await r.db.get_settings(r.CHAT))["voice_who"] == "admin", "아직 안 바뀜"
+    card = wbot.named("send_message")[-1]
+    assert "음성 요청 확인" in card[2] and "음성채팅 부르기" in card[2], card[2]
+    data = [b.callback_data for row in card[3]["reply_markup"].inline_keyboard for b in row]
+    ok = next(d for d in data if d.startswith("m:k:"))
+    other = fake_user(2, "부방장")
+    q = FakeQuery(r.CHAT, other, ok)
+    await handlers.on_callback(SimpleNamespace(callback_query=q), r.ctx)       # 봇 프로세스가 누름 처리
+    assert (await r.db.get_settings(r.CHAT))["voice_who"] == "admin" and q.answers, "요청한 사람만"
+    q = FakeQuery(r.CHAT, boss, ok)
+    await handlers.on_callback(SimpleNamespace(callback_query=q), r.ctx)
+    assert (await r.db.get_settings(r.CHAT))["voice_who"] == "all", (q.answers, q.edits)
+    q = FakeQuery(r.CHAT, boss, ok)
+    await handlers.on_callback(SimpleNamespace(callback_query=q), r.ctx)
+    assert q.answers, "두 번째 누름"
+
+
+@test
+async def speaker_self_tools_use_the_speaker():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["set_my_style"]({"style": "여친"}, {"ssrc": 202, "response_id": "r1"})
+    m = await r.db.get_member(r.CHAT, 20)
+    assert m["style"] == "girlfriend", (out, dict(m))
+    assert (await r.db.get_member(r.CHAT, 1))["style"] is None, "다른 사람 말투는 그대로"
+
+
+@test
+def voice_settings_store_codes_not_labels():
+    from sodam.settings import coerce
+    assert coerce("voice_who", "누구나") == "all" and coerce("voice_who", "관리자만") == "admin"
+    assert coerce("voice_reply", "name") == "name" and coerce("voice_male", "echo") == "echo"
+
+
+@test
+async def honorific_name_resolves_exactly_for_sanction():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["mute_member"]({"names": ["박준호님"], "minutes": 10, "reason": "도배"}, {"ssrc": 101, "response_id": "r"})
+    assert "확인 버튼" in out, out
+    out = await h["mute_member"]({"names": ["준님"], "minutes": 10, "reason": "도배"}, {"ssrc": 101, "response_id": "r2"})
+    assert "찾을 수 없" in out, "제재는 부분 이름으로 안 찾음 (호칭만 뗌)"
+
+
+@test
+async def misheard_name_gets_similar_candidates_not_action():
+    import sodam.panels  # noqa: F401
+    r, wsvc, wbot, h, boss, bob = await voice_room()
+    out = await h["mute_member"]({"names": ["박중호"], "minutes": 10, "reason": "도배"}, {"ssrc": 101, "response_id": "r"})
+    assert "혹시 이 분인가요" in out and "박준호(20)" in out and not wbot.named("send_message"), out
+
+
+@test
+async def room_names_and_transcribe_hint_go_into_the_call():
+    db, svc, bot = await world()
+    from types import SimpleNamespace as NS
+    for uid, name in ((31, "지영"), (32, "민수")):
+        await db.upsert_user(NS(id=uid, first_name=name, last_name=None, username=None, is_bot=False), commit=True)
+        await db.log_message(CHAT, uid, 900 + uid, "안녕")
+    assert set(await P.room_names(db, CHAT)) == {"지영", "민수"}
+    cfg = __import__("sodam.voice.bridge", fromlist=["x"]).session_config("i", "marin", transcribe_prompt="소담, 지영")
+    assert cfg["audio"]["input"]["transcription"]["prompt"] == "소담, 지영"
