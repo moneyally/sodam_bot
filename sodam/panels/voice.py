@@ -19,7 +19,7 @@ from telegram import Message
 from telegram.error import TelegramError
 
 from .. import ai_instructions, hooks, llm, menu, persist, settings, tools
-from ..menu import ADMIN, OWNER, B, HubItem, PanelCtx, Route, Screen
+from ..menu import ADMIN, OWNER, TG_ADMIN, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
 from ..services import PendingInput
 from ..util import esc
@@ -32,6 +32,11 @@ CALL_MAX_SEC = int(os.getenv("VOICE_CALL_MAX_SEC", "900"))     # 한 통화 최�
 IDLE_SEC = int(os.getenv("VOICE_IDLE_SEC", "60"))              # 아무도 말 안 하면 끝
 VOICE = os.getenv("VOICE_VOICE", "marin")                     # 소담 = 여자 비서 → 여자 목소리
 WAIT_JOB = 25.0
+RADIO_MAX_SEC = int(os.getenv("VOICE_RADIO_MAX_SEC", "3600"))   # 방송 한 번 최대 1시간
+RADIO_IDLE_SEC = int(os.getenv("VOICE_RADIO_IDLE_SEC", "600"))  # 10분 아무 말 없으면 끝
+STT_MODEL = os.getenv("VOICE_STT_MODEL", "gpt-4o-mini-transcribe")
+STT_MAX_SEC = 60
+STT_USD_PER_MIN = 0.003
 _sleep = asyncio.sleep
 
 settings.register_setting("voice_who", "admin", "음성채팅 부르기", choices={"admin": "관리자만", "all": "누구나"})
@@ -77,6 +82,26 @@ async def _wait(db, job_id: int, timeout: float = WAIT_JOB) -> tuple[str, str]:
 
 
 # ── 부르기 ─────────────────────────────────────────────
+NO_WAY = ("🎙 소담을 음성채팅에 부를 준비가 아직 안 됐어요. 둘 중 하나면 돼요:\n"
+          "① 📡 방송 모드 (계정 필요 없음): 관리자님이 1:1 메뉴 → 이 방 → 🎙 음성채팅 → [📡 방송 키 등록]\n"
+          "② 📞 통화 모드 (같이 말하기): 운영자가 음성 도우미 계정을 연결")
+RADIO_GREET = "안녕하세요 대표님들, 소담이에요! 채팅이나 음성메시지로 말 걸어 주시면 여기서 목소리로 답할게요."
+RADIO_READY = ("📡 소담 방송 준비됐어요!\n"
+               "① 음성채팅이 <b>'다른 앱으로 방송(Stream with…)'</b>으로 열려 있어야 해요 — 화면에 '방송 시작'이 보이면 눌러 주세요.\n"
+               "② 말은 채팅 <code>소담아 …</code> 나 🎤 음성메시지로 걸어 주세요. 소담이 음성채팅에서 목소리로 답해요.\n"
+               "끝낼 땐 <code>소담아 방송 꺼</code>")
+RESULT_TEXT.update({"no_rtmp": "📡 방송 키가 없어요. 관리자님이 1:1 메뉴 🎙 에서 등록해 주세요.",
+                    "no_ffmpeg": "📡 서버에 방송 프로그램(ffmpeg)이 없어요. 운영자에게 알려 주세요."})
+
+
+async def pick_mode(db, chat_id: int) -> str | None:
+    """call = 도우미 계정 통화(같이 말하기) · radio = 방송 키만 있음(계정 불필요) · None = 준비 안 됨."""
+    if await store.assistant(db):
+        return "call"
+    if await db.get_state(chat_id, store.RTMP_KEY):
+        return "radio"
+    return None
+
 async def precheck(svc, chat_id: int, uid: int, role: Role) -> str | None:
     """못 부르면 이유 (방에 보일 문장), 되면 None."""
     db = svc.db
@@ -90,8 +115,8 @@ async def precheck(svc, chat_id: int, uid: int, role: Role) -> str | None:
             await svc.llm._check_budget(chat_id)      # 통화 요금도 하루 AI 예산에 들어감 (store.record_cost)
     except llm.BudgetExceeded:
         return "🎙 오늘 AI 사용 한도가 다 차서 음성채팅은 내일 다시 불러 주세요."
-    if not await store.assistant(db):
-        return RESULT_TEXT["no_assistant"]
+    if not await pick_mode(db, chat_id):
+        return NO_WAY
     if not await store.worker_alive(db):
         return RESULT_TEXT["no_worker"]
     if await store.active_call(db, chat_id):
@@ -133,11 +158,30 @@ async def _promote(bot, chat_id: int, aid: int) -> None:
         log.debug("음성 도우미 권한 못 줌: %s", e)
 
 
+async def start_radio(svc, bot, chat_id: int, uid: int) -> None:
+    db = svc.db
+    rtmp = await db.get_state(chat_id, store.RTMP_KEY) or {}
+    jid = await store.add_job(db, chat_id, "radio_start", {"url": rtmp.get("url"), "key": rtmp.get("key"),
+                                                           "greet": RADIO_GREET, "max_sec": RADIO_MAX_SEC,
+                                                           "idle_sec": RADIO_IDLE_SEC}, uid)
+    if not jid:
+        return
+    st, res = await _wait(db, jid)
+    await store.mark_notified(db, "voice_jobs", jid)
+    if st == "done" and res in ("radio_started", "already"):
+        await db.set_state(chat_id, store.MODE_KEY, "radio")
+        await bot.send_message(chat_id, RADIO_READY, parse_mode="HTML")
+    else:
+        await bot.send_message(chat_id, _result_text(res))
+
+
 async def start_call(svc, bot, chat_id: int, uid: int) -> None:
-    """뒤에서: 초대 → (들어가면) 권한 → 시작 → 결과 한 줄."""
+    """뒤에서: 초대 → (들어가면) 권한 → 시작 → 결과 한 줄. 도우미 계정이 없고 방송 키가 있으면 방송 모드."""
     db = svc.db
     a = await store.assistant(db)
     if not a:
+        if await db.get_state(chat_id, store.RTMP_KEY):
+            await start_radio(svc, bot, chat_id, uid)
         return
     prep = await _prepare_member(bot, chat_id, a["id"])
     if prep in ("banned", "no_invite_right"):
@@ -190,7 +234,8 @@ async def t_voice_call(ctx: tools.ToolCtx, a: dict) -> str:
 tools.register_tool(tools.Tool(
     "voice_call",
     "이 방의 텔레그램 음성채팅(보이스챗)에 소담이 들어가서 실시간으로 목소리로 대화한다 (start) / 나간다 (stop). "
-    "'음성방 들어와', '보이스챗 와 줘', '통화하자', '전화 걸어줘', '전화하자', '콜 하자', '음성으로 얘기하자' → start. '음성 나가', '통화 끊어' → stop. "
+    "도우미 계정이 없으면 방송 모드(소담 목소리만 음성채팅에, 멤버는 채팅·음성메시지로 말함)로 자동. "
+    "'음성방 들어와', '보이스챗 와 줘', '방송 켜', '통화하자', '전화 걸어줘', '전화하자', '콜 하자', '음성으로 얘기하자' → start. '음성 나가', '통화 끊어', '방송 꺼' → stop. "
     "노래 틀기·영상 통화는 아님.",
     {"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"], t_voice_call, where="room"))
 
@@ -202,6 +247,8 @@ async def tick(svc, bot) -> None:
     for row in await store.ended_unnotified(db):
         if not await store.mark_notified(db, "voice_calls", row["id"]):
             continue
+        if not await store.active_call(db, row["chat_id"]):
+            await db.set_state(row["chat_id"], store.MODE_KEY, None)
         if row["reason"] == "restart" or not row["seconds"]:
             continue
         mins = max(1, round(row["seconds"] / 60))
@@ -212,6 +259,43 @@ async def tick(svc, bot) -> None:
             pass
 
 hooks.add_tick_hook(tick)
+
+
+# ── 📡 방송 중: AI 답을 목소리로 · 음성메시지를 글로 ─────────────
+async def _radio_live(db, chat_id: int) -> bool:
+    return chat_id < 0 and await db.get_state(chat_id, store.MODE_KEY) == "radio" and bool(await store.active_call(db, chat_id))
+
+
+async def on_ai_answer(svc, bot, chat_id: int, text: str) -> None:
+    if text and await _radio_live(svc.db, chat_id):
+        await store.add_job(svc.db, chat_id, "radio_say", {"text": text[:600]}, None, dedup=False)
+
+
+async def on_voice(svc, bot, msg) -> str | None:
+    """방송 중인 방의 음성메시지(60초까지) → 받아쓰기 → '소담아 …' (방송 중엔 음성메시지 = 소담에게 하는 말)."""
+    chat_id = msg.chat_id
+    media = msg.voice or msg.video_note
+    if not media or not svc.llm or not await _radio_live(svc.db, chat_id):
+        return None
+    if (media.duration or 0) > STT_MAX_SEC:
+        return None
+    try:
+        await svc.llm._check_budget(chat_id)
+    except llm.BudgetExceeded:
+        return None
+    f = await bot.get_file(media.file_id)
+    data = bytes(await f.download_as_bytearray())
+    name = "voice.ogg" if msg.voice else "note.mp4"
+    r = await svc.llm.client.audio.transcriptions.create(model=STT_MODEL, file=(name, data), language="ko")
+    await svc.llm._record(None, chat_id, "voice_stt", STT_MODEL,
+                          extra_micro=int((media.duration or 1) / 60 * STT_USD_PER_MIN * 1_000_000))
+    text = (getattr(r, "text", "") or "").strip()
+    if not text:
+        return None
+    return text if text.startswith(("소담", "@")) else f"소담아 {text}"
+
+hooks.AI_ANSWER_HOOKS.append(on_ai_answer)
+hooks.VOICE_TEXT_HOOKS.append(on_voice)
 
 
 # ── 방 허브 🎙 ─────────────────────────────────────────
@@ -226,13 +310,24 @@ async def s_room(c: PanelCtx) -> Screen:
              "방 음성채팅에 소담이 들어가서 목소리로 실시간 대화해요. 채팅으로 <code>소담아 음성방 들어와</code>.",
              f"지금: <b>{'통화 중 📞' if live else '쉬는 중'}</b> · 이번 달 {used // 60}/{MONTH_MIN}분",
              f"한 번에 최대 {CALL_MAX_SEC // 60}분, {IDLE_SEC}초 조용하면 스스로 나와요. 대화 내용은 저장 안 해요."]
+    rtmp = await db.get_state(c.cid, store.RTMP_KEY)
+    try:
+        tg_admin = await menu._allowed(c.svc, c.bot, c.cid, c.uid, TG_ADMIN)   # 방송 키는 텔레그램 관리자만
+    except Exception:
+        tg_admin = False
+    lines.append("")
+    lines.append(f"📞 통화 모드 (같이 말하기): {'도우미 계정 연결됨 ✅' if a else '도우미 계정 없음 (운영자 설정)'}")
+    lines.append(f"📡 방송 모드 (계정 없이, 소담 목소리만): {'방송 키 등록됨 ✅' if rtmp else '방송 키 없음'}")
     if not a:
-        lines.append("\n⚠️ 음성 도우미 계정이 아직 연결 안 됐어요 (운영자 설정).")
+        lines.append("  방송 모드 = 음성채팅을 '다른 앱으로 방송(Stream with…)'으로 열고, 거기 나오는 서버 URL·스트림 키를 등록. "
+                     "멤버는 채팅·🎤 음성메시지로 말하고 소담은 음성채팅에서 목소리로 답해요.")
     kb = [[B(("● " if who == k else "") + v, f"m:vcw:{c.cid}:{k}") for k, v in (("admin", "관리자만"), ("all", "누구나"))],
           [B(("● " if rep == k else "") + v, f"m:vcy:{c.cid}:{k}") for k, v in (("all", "항상 대답"), ("name", "'소담' 부를 때만"))],
           [B("📴 지금 끊기", f"m:vcx:{c.cid}") if live else B("📞 지금 부르기", f"m:vcs:{c.cid}")],
+          ([B("📡 방송 키 " + ("바꾸기" if rtmp else "등록"), f"m:in:{c.cid}:vck")]
+           + ([B("🗑 방송 키 지우기", f"m:vckd:{c.cid}")] if rtmp else [])) if tg_admin else [],
           menu._back(c.cid)]
-    return Screen("\n".join(lines), menu._kb(kb))
+    return Screen("\n".join(lines), menu._kb([r for r in kb if r]))
 
 
 async def r_who(c: PanelCtx) -> Screen:
@@ -262,7 +357,39 @@ async def r_stop(c: PanelCtx) -> Screen:
     return Screen(None, toast="끊는 중이에요." if ok else "통화 중이 아니에요.")
 
 
+RTMP_URL = re.compile(r"rtmps?://[^\s]+", re.I)
+RTMP_PROMPT = ("📡 <b>방송 키 등록</b>\n"
+               "1) 이 방 음성채팅 시작 메뉴에서 <b>'다른 앱으로 방송(Stream with…)'</b>을 누르세요.\n"
+               "2) 나오는 <b>서버 URL</b>과 <b>스트림 키</b>를 복사해서 두 줄로 보내 주세요:\n"
+               "<code>rtmps://dc…/s/</code>\n<code>12345:AbCdEf…</code>\n"
+               "보낸 메시지는 바로 지워요. 키는 방송에만 쓰고 화면에 다시 보여주지 않아요.")
+
+
+async def i_rtmp(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    raw = (msg.text or "").strip()
+    await _forget_msg(msg)
+    m = RTMP_URL.search(raw)
+    rest = [t for t in re.split(r"\s+", RTMP_URL.sub(" ", raw)) if t]
+    if not m or not rest or len(rest[0]) < 6:
+        return False, "서버 URL(rtmps://…)과 스트림 키를 두 줄로 보내 주세요."
+    url = m.group(0)
+    if not re.match(r"rtmps?://[\w.-]+\.t\.me(/|$)", url, re.I):
+        return False, "텔레그램이 준 방송 주소(….t.me)가 아니에요. 음성채팅 '다른 앱으로 방송' 화면의 서버 URL 을 보내 주세요."
+    await c.svc.db.set_state(c.cid, store.RTMP_KEY, {"url": url, "key": rest[0]})
+    await c.svc.db.log_mod(c.cid, c.uid, None, "voice_rtmp", "방송 키 등록")
+    return True, "✅ 방송 키를 등록했어요. 방에서 <code>소담아 방송 켜</code> 라고 하면 돼요."
+
+
+async def r_rtmp_delete(c: PanelCtx) -> Screen:
+    await c.svc.db.set_state(c.cid, store.RTMP_KEY, None)
+    screen = await s_room(c)
+    screen.toast = "방송 키를 지웠어요."
+    return screen
+
+
 menu.register_hub(HubItem(57, "vcr", "🎙 음성채팅", ADMIN))
+menu.register_input("vck", RTMP_PROMPT, "vcr", i_rtmp, lambda c: s_room(c), need=TG_ADMIN)
+menu.register_route("vckd", Route(r_rtmp_delete, TG_ADMIN, fresh=True))
 menu.register_screen("vcr", s_room, ADMIN)
 for _code, _fn in (("vcw", r_who), ("vcy", r_reply), ("vcs", r_start), ("vcx", r_stop)):
     menu.register_route(_code, Route(_fn, ADMIN))

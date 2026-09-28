@@ -15,6 +15,8 @@ from .. import db as dbm
 
 JOB_TTL = 120            # 이만큼 안 가져가면 worker 가 안 도는 것 → failed(no_worker)
 ASSISTANT_KEY = "voice_assistant"
+RTMP_KEY = "voice_rtmp"                # chat_state(방, …) = {url, key} 📡 방송 모드 (관리자가 등록, 화면엔 안 보임)
+MODE_KEY = "voice_mode"                # chat_state(방, …) = "radio" 방송 중 (통화 끝나면 틱이 지움)
 WORKER_BEAT = "voice_worker_beat"      # chat_state(0, …) = worker 가 마지막으로 살아 있던 시각
 WORKER_ALIVE = 30
 
@@ -32,12 +34,13 @@ CREATE INDEX IF NOT EXISTS voice_calls_chat ON voice_calls(chat_id, start_ts);
 """, migrate={"voice_jobs": "plain", "voice_calls": "plain"})
 
 
-async def add_job(db, chat_id: int, kind: str, payload: dict | None = None, by: int | None = None) -> int | None:
-    """같은 방·같은 종류 일이 이미 대기 중이면 None (연타)."""
+async def add_job(db, chat_id: int, kind: str, payload: dict | None = None, by: int | None = None,
+                  dedup: bool = True) -> int | None:
+    """같은 방·같은 종류 일이 이미 대기 중이면 None (연타). dedup=False = 줄 세움 (방송 말하기)."""
     now = int(time.time())
 
     def run(c):
-        if c.execute("SELECT 1 FROM voice_jobs WHERE chat_id=? AND kind=? AND status IN ('pending','running') AND ts>?",
+        if dedup and c.execute("SELECT 1 FROM voice_jobs WHERE chat_id=? AND kind=? AND status IN ('pending','running') AND ts>?",
                      (chat_id, kind, now - JOB_TTL)).fetchone():
             return None
         return c.execute("INSERT INTO voice_jobs(chat_id, kind, payload, by_user, ts) VALUES(?,?,?,?,?)",
