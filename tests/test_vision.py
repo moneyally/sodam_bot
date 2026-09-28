@@ -264,3 +264,64 @@ async def reply_to_drawn_image_continues_without_call_name():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+# ── 영상 읽기 (2026-09-28 실제 사례: 글 없는 영상에 답장해 '저렇게 만들어줘' → 영상을 못 보고 프사로 만듦) ──
+
+
+@test
+async def reply_to_video_without_text_shows_frames_and_says_what_it_is():
+    from test_avatar import pattern
+    from sodam import avatar
+    r = await room()
+    mp4 = await avatar.make(pattern(), avatar.Spec("pan", "fast"))
+    r.bot.files["vid"] = mp4
+    clip = SimpleNamespace(from_user=fake_user(5, "하나"), text=None, caption=None, photo=(), document=None, message_id=3,
+                           forward_origin=None, animation=None, video_note=None, sticker=None,
+                           video=SimpleNamespace(file_id="vid", file_size=len(mp4), duration=6, mime_type="video/mp4",
+                                                 thumbnail=None))
+    r.llm.script = ["어두운 배경에 반짝이가 흩날리는 영상이네요"]
+    await say(r, group_msg(r, text="소담아 저렇게 영상 만들어줘", reply_to=clip))
+    call = r.llm.of("chat")[0]
+    parts = image_parts(call)
+    assert 3 <= len(parts) <= 8, len(parts)                                  # 장면 여러 장
+    body = str(call["messages"])
+    assert "[영상 6초]" in body and "장면" in body and "초]" in body, "답장 대상이 영상이라는 것 + 장면 시각"
+
+
+@test
+async def big_video_uses_thumbnail_and_says_so():
+    r = await room()
+    r.bot.files["thumb"] = b"thumb-jpeg"
+    big = SimpleNamespace(from_user=fake_user(5, "하나"), text=None, caption=None, photo=(), document=None, message_id=4,
+                          forward_origin=None, animation=None, video_note=None, sticker=None,
+                          video=SimpleNamespace(file_id="huge", file_size=50 * 1024 * 1024, duration=120, mime_type="video/mp4",
+                                                thumbnail=SimpleNamespace(file_id="thumb")))
+    m = group_msg(r, text="이거 뭐야", reply_to=big)
+    att = await vision.fetch(r.bot, m)
+    assert att and att.data == b"thumb-jpeg" and "20MB" in att.note and ("get_file", "huge") not in r.bot.calls
+    assert "20MB" in str(att.parts())
+
+
+@test
+def sticker_or_video_alone_in_dm_is_not_a_question():
+    st = SimpleNamespace(photo=(), sticker=SimpleNamespace(file_id="s", is_video=True, is_animated=False, file_size=10, thumbnail=None))
+    assert vision.has_image(st) and not vision.has_photo(st)
+
+
+@test
+async def new_drawing_becomes_source_for_profile_video_in_same_answer():
+    """'새 그림 만들어서 저렇게 영상으로' → 그린 그림이 같은 답변의 움프 원본 (예전엔 프사로 만들었음)."""
+    r = await room()
+    asked = []
+
+    async def photos(uid, limit=1, **kw):
+        asked.append(uid)
+        return SimpleNamespace(photos=[])
+    r.bot.get_user_profile_photos = photos
+    r.llm.script = [tool_call("make_image", {"prompt": "밤하늘 반짝이", "mode": "new"}),
+                    tool_call("make_profile_video", {"motion": "zoom"}, call_id="c2"), "만들었어요"]
+    await say(r, group_msg(r, text="소담아 새 그림 만들어서 움프로 만들어줘"))
+    results = [x["content"] for x in r.llm.of("chat")[-1]["messages"] if x["role"] == "tool"]
+    assert len(results) == 2 and "원본" in results[0], results
+    assert not asked and "프사" not in results[1], (asked, results[1])     # 프사를 찾지 않고 방금 그림으로

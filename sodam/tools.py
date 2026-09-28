@@ -317,7 +317,9 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     # AI 답으로 기록 → 이 그림에 답장하면('더 밝게') 소담이 이어서 받음 (handlers: AI 답에 단 답장만 호출)
     await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id)
     await ctx.svc.db.bump(day, ctx.chat_id, "image")
-    return "이미지를 방에 보냈음. 사진 설명은 다시 하지 말고 한마디만 짧게."
+    # 방금 그린 그림을 이 실행의 원본으로 → '새 그림 만들어서 움프/스티커로' 를 한 번에 이어서 (make_profile_video·make_sticker)
+    ctx.image = Attached(data, "image/png", ctx.caller.id)
+    return "이미지를 방에 보냈음 (이 그림이 이제 원본 — 움프·스티커로 이어서 만들 수 있음). 사진 설명은 다시 하지 말고 한마디만 짧게."
 
 
 async def t_web_search(ctx: ToolCtx, a: dict) -> str:
