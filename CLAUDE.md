@@ -396,6 +396,10 @@
 - 도우미 계정 = **@Sodam_bot2** (사람 계정, 2026-09-29 오너가 만듦). 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
   영상 칸 = 도우미 프사 I420 한 장(video.py, 로그인 때 1번 변환·1fps 재전송, 실패면 소리만). 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
   스킬 `.claude/skills/telegram-voice-assistant/SKILL.md`. 봇 계정으로 음성채팅 제한을 우회·탐색하지 않음 (정책·토큰 위험).
+- 말투별 목소리(voice_setup): 부른 사람 .말투 > 방 기본 말투, AI 도구 style 인자('여친 모드로 와 줘'). 남친 = 남자 캐릭터·voice_male(기본 cedar),
+  나머지 = 여자 비서 소담·voice_female(기본 marin). 🎙 화면에서 10개 중 선택(다음 통화부터). 한 답 max_output_tokens 400 + '최대 2문장'.
+- 실측 `tools/voice_live.py [--style girlfriend] "말1" "말2"` (실제 Realtime·TTS, 텔레그램만 가짜, 비용 조금 — 오너 허락): 2026-09-29
+  말 끝→첫 소리 0.6~1.4초(VAD 0.7초 포함), 한 통화 2문장씩 2번 ≈ 입력 2.2k·출력 0.7~0.8k 토큰. 도구 재감사(음악봇·py-tgcalls 3.0 소스) 반영.
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →

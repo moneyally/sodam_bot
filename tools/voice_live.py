@@ -42,8 +42,11 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("lines", nargs="*", default=["소담아 안녕? 오늘 기분 어때?", "소담아 점심 메뉴 하나만 추천해 줘."])
     ap.add_argument("--out", default=str(ROOT / "voice_live.wav"))
+    ap.add_argument("--style", default=None, help="polite·secretary·girlfriend·boyfriend … (없으면 방 기본 = 정중)")
     a = ap.parse_args()
-    from sodam.panels.voice import GREET, PERSONA
+    from sodam.panels.voice import GREET, voice_setup
+    from sodam.settings import DEFAULTS
+    instructions, voice = voice_setup(dict(DEFAULTS), a.style)
     oai = AsyncOpenAI(api_key=_key())
 
     utter = []
@@ -59,7 +62,7 @@ async def main() -> None:
             played.append(frame)
             marks.setdefault(f"first_audio_{marks.get('turn', 0)}", time.monotonic())
 
-    bridge = Bridge(lambda: oai.realtime.connect(model=MODEL), play, instructions=PERSONA, greet=GREET,
+    bridge = Bridge(lambda: oai.realtime.connect(model=MODEL), play, instructions=instructions, voice=voice, greet=GREET,
                     max_sec=90, idle_sec=15)
     t0 = time.monotonic()
     run = asyncio.create_task(bridge.run())
@@ -83,14 +86,16 @@ async def main() -> None:
             bridge.feed([SILENCE])
             await asyncio.sleep(0.01)
         await wait_turns(i + 1, 25)
-    while bridge.out:
-        await asyncio.sleep(0.05)
+        quiet = 0.0                                        # 이어지는 답까지 다 들을 때까지 (2초 조용하면 다음)
+        while quiet < 2.0:
+            await asyncio.sleep(0.1)
+            quiet = 0.0 if bridge.out else quiet + 0.1
     bridge.stop("test")
     res = await run
 
-    print(f"\n모델 {MODEL} · 목소리 marin · {time.monotonic() - t0:.1f}초 · 끝난 이유 {res.reason}")
+    print(f"\n모델 {MODEL} · 말투 {a.style or '정중(기본)'} · 목소리 {voice} · {time.monotonic() - t0:.1f}초 · 끝난 이유 {res.reason}")
     for who, text in bridge.transcript:
-        print(f"{'🗣 멤버' if who == 'user' else '👩 소담'}: {text}")
+        print(f"{'🗣 멤버' if who == 'user' else '🤖 소담'}: {text}")
     for i in range(1, len(utter) + 1):
         if f"said_{i}" in marks and f"first_audio_{i}" in marks:
             gap = marks[f"first_audio_{i}"] - marks[f"said_{i}"]

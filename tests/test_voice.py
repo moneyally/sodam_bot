@@ -362,7 +362,8 @@ async def start_invites_assistant_promotes_and_posts_result():
     assert bot.promoted and bot.promoted[0][2] == {"can_manage_video_chats": True}
     start = await db._one("SELECT * FROM voice_jobs WHERE kind='start'")
     assert start["payload"] == "{}", "끝난 일은 지움"
-    assert "여자" in P.PERSONA and P.VOICE == "marin"
+    text, voice = P.voice_setup(await db.get_settings(CHAT), None)
+    assert "여자 AI 비서" in text and voice == "marin"
     out = await P.t_voice_call(ctx(svc, bot, 5, Role.MEMBER), {"action": "start"})
     assert "이미" in out
 
@@ -673,3 +674,58 @@ async def public_group_join_by_username_and_basic_group_hint():
     join = await db._one("SELECT * FROM voice_jobs WHERE kind='join'")
     assert join and not bot.named("invite_link"), "공개 방은 초대링크 없이 아이디로"
     assert any("일반 그룹" in x[2] for x in bot.named("send_message")), bot.named("send_message")
+
+
+
+# ── 말투별 목소리: 여자 비서 기본 · 여친 · 남친 ─────────────────
+@test
+async def voice_follows_style_girlfriend_boyfriend():
+    db, svc, bot = await world()
+    s = await db.get_settings(CHAT)
+    t, v = P.voice_setup(s, None)
+    assert v == "marin" and "여자 AI 비서" in t and "[말투: 정중]" in t
+    t, v = P.voice_setup(s, "girlfriend")
+    assert v == "marin" and "여친" in t and "자기" in t and "글자로 읽지 말고" in t
+    t, v = P.voice_setup(s, "boyfriend")
+    assert v == "cedar" and "남자친구 모드" in t and "남성" in t
+    await db.set_setting(CHAT, "voice_male", "echo")
+    await db.set_setting(CHAT, "voice_female", "coral")
+    s = await db.get_settings(CHAT)
+    assert P.voice_setup(s, "boyfriend")[1] == "echo" and P.voice_setup(s, "secretary")[1] == "coral"
+    assert P.voice_setup(s, "없는말투")[1] == "coral"
+
+
+@test
+async def tool_style_and_caller_style_reach_the_call():
+    db, svc, bot = await world("all")
+    await db.set_state(0, store.ASSISTANT_KEY, {"id": 4242, "name": "소담 음성", "username": "Sodam_bot2"})
+    await db.set_state(0, store.WORKER_BEAT, time.time())
+    bot.member_status = {(CHAT, 4242): "member"}
+    seen = []
+    orig = store.take_jobs
+
+    async def spy(db_, limit=10):
+        jobs = await orig(db_, limit)
+        seen.extend(j for j in jobs if j["kind"] == "start")
+        return jobs
+    store.take_jobs = spy
+    w = asyncio.create_task(fake_worker(db, {"start": "started"}))
+    try:
+        await P.t_voice_call(ctx(svc, bot, 5, Role.MEMBER), {"action": "start", "style": "남친"})
+        await until(lambda: seen, 5)
+    finally:
+        w.cancel()
+        store.take_jobs = orig
+    assert seen[0]["payload"]["voice"] == "cedar" and "남자친구 모드" in seen[0]["payload"]["instructions"]
+
+
+@test
+async def voice_picker_screen_whitelist():
+    db, svc, bot = await world()
+    c = PanelCtx(svc, bot, 1, CHAT, ["m", "ash"])
+    await P.r_voice_set(c)
+    assert (await db.get_settings(CHAT))["voice_male"] == "ash"
+    await P.r_voice_set(PanelCtx(svc, bot, 1, CHAT, ["f", "evil"]))
+    assert (await db.get_settings(CHAT))["voice_female"] == "marin"
+    scr = await P.s_room(PanelCtx(svc, bot, 1, CHAT, []))
+    assert "남자 목소리: ash" in str(scr.kb)
