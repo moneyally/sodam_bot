@@ -26,7 +26,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHand
 from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
-from . import agent
+from . import agent, aiqueue
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -36,7 +36,7 @@ from .llm import BudgetExceeded, out_of_credit
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .tools import ToolCtx
-from .util import RateLimiter, day_start, esc, human_minutes, is_stale, iyeyo, mention, sent_at, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
+from .util import RateLimiter, day_start, send_retry, surely_unsent, esc, human_minutes, is_stale, iyeyo, mention, sent_at, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
 HISTORY_HOURS = 6
@@ -712,9 +712,18 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
             return
         await svc.db.log_request(chat_id, user.id, request)
 
+    await aiqueue.put(svc.db, bot, msg, role, via, request)   # 재시작·끊김에도 답이 사라지지 않게 (sweep 이 이어서)
     steer = agent.open_steer(svc, chat_id, user.id)   # 여기부터 이 사람이 이어 보낸 말은 이 실행으로
     try:
         await _answer(context, msg, role, request, s, via, steer)
+    except asyncio.CancelledError:   # 종료(배포) 중 끊김 → 줄을 남겨 다시 켜진 봇이 답함
+        aiqueue.RUNNING.discard((bot.id, chat_id, msg.message_id))
+        raise
+    except BaseException:
+        await aiqueue.done(svc.db, bot, chat_id, msg.message_id)
+        raise
+    else:
+        await aiqueue.done(svc.db, bot, chat_id, msg.message_id)
     finally:
         left = agent.close_steer(svc, chat_id, user.id, steer)
     if left:   # 마무리 답 뒤에 온 말 (드묾) → 잃지 않게 새 실행
@@ -814,7 +823,15 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         body = " ".join(mention(uid, name) for uid, name in dict(ctx.mentions).items()) + " " + body
     # 기다리는 동안 원본이 지워져도 답은 가게 (1:1 은 원래대로 인용 없이)
     reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if chat_id < 0 else None
-    sent = await msg.reply_text(body, parse_mode="HTML", reply_parameters=reply, link_preview_options=security.NO_PREVIEW)
+    try:
+        sent = await send_retry(lambda: msg.reply_text(body, parse_mode="HTML", reply_parameters=reply,
+                                                       link_preview_options=security.NO_PREVIEW))
+    except NetworkError as e:
+        if not surely_unsent(e):   # 응답만 끊김 = 이미 올라갔을 수 있음 → 다시 안 보냄 (중복 방지)
+            raise
+        await aiqueue.keep_answer(svc.db, bot, chat_id, msg.message_id, body)   # 연결이 돌아오면 sweep 이 보냄
+        log.warning("답 전송 실패(연결 끊김) → 대기열에 보관 chat=%s msg=%s", chat_id, msg.message_id)
+        return
     await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,   # 누구에게 한 답인지
                                      reply_to_msg_id=msg.message_id if reply else None,
                                      reply_to_user=user.id if reply else None))

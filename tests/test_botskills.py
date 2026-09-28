@@ -428,3 +428,33 @@ async def single_known_command_in_bot_text_is_learned():
     assert "확인 버튼" in res[0], res
     await bot_says(r, YT, "/xyzzy 로 해보세요")                           # 모르는 이름 한 개는 여전히 안 배움
     assert "/xyzzy" not in sk_map(await botskills.skills(r.db, Room.CHAT, YT.id))
+
+
+@test
+async def unknown_bot_is_asked_help_once_a_day_then_command_is_used():
+    # 사용자: '게임봇도 왠만하면 다 /help' → 명령을 모르면 소담이 /help@봇 을 한 번 보내 사용법을 배우고 이어서 씀
+    import asyncio
+    r = await blroom("interact")
+    await trust(r, YT)
+    orig, helps = r.bot.send_message, []
+
+    async def send(chat_id, text, **kw):
+        sent = await orig(chat_id, text, **kw)
+        if text == "/help@ytmusic_player_bot":
+            helps.append(text)
+            mine = SimpleNamespace(message_id=sent.message_id, from_user=r.bot_user())
+            asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(
+                bot_says(r, YT, "사용법\n/song 곡 — 재생\n/next — 다음 곡", reply_to=mine)))
+        return sent
+    r.bot.send_message = send
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "밤편지"})])
+    assert helps == ["/help@ytmusic_player_bot"] and "확인 버튼" in res[0], res
+    assert "/song@ytmusic_player_bot 밤편지" in [c for c in r.bot.named("send_message") if "보낼까요" in c[2]][-1][2]
+    got = sk_map(await botskills.skills(r.db, Room.CHAT, YT.id))
+    assert got["/song"][:2] == ("help", "play") and got["/next"][1] == "skip", got
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "stop"})])
+    assert helps == ["/help@ytmusic_player_bot"] and "따로 표시돼 있지 않음" in res[0], res   # 하루 1번만 물어봄
+    await r.db._write("DELETE FROM botlink_skills")
+    await r.db._write("DELETE FROM botlink_msgs")                          # 기록에서 다시 배우는 길도 없앰
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "밤편지"})])
+    assert helps == ["/help@ytmusic_player_bot"] and "따로 표시돼 있지 않음" in res[0], res   # 배운 게 지워져도 오늘은 다시 안 물음

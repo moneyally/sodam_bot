@@ -392,3 +392,8 @@ async def job_sweep(context) -> None:
         await sweep(svc.db, context.bot)
     except Exception:
         log.exception("persist sweep failed")
+    try:
+        from . import aiqueue
+        await aiqueue.sweep(context)
+    except Exception:
+        log.exception("ai queue sweep failed")

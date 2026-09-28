@@ -16,7 +16,7 @@ import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .. import botlink, botskills, cards, menu, tools
+from .. import botlink, botskills, cards, menu, persist, tools
 from ..menu import ADMIN, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
 from ..settings import register_setting
@@ -272,6 +272,24 @@ SENDS_PER_ANSWER = 2   # 한 답변에 보낼 수 있는 명령 (대기열 보�
 register_setting("botlink_members", "request", "멤버의 다른 봇 명령 (끔/신청만/조작까지)")
 menu.register_preset("botlink_members", [(k, v[0]) for k, v in MEMBER_LEVELS.items()], "blk")
 
+HELP_EVERY = 86400          # 방·봇마다 /help 물어보기 하루 1번
+HELP_WAIT = 8.0
+
+
+async def _ask_help(ctx, row) -> int:
+    """명령을 모르는 봇에게 '/help@봇' 을 보내 답에서 사용법을 배움 (배운 수). 방·봇마다 하루 1번, 보내기 제한 그대로."""
+    if not await persist.claim(ctx.svc.db, f"blhelp:{ctx.chat_id}:{row['bot_id']}", HELP_EVERY):
+        return 0
+    built = botlink.build("/help", row["username"])
+    if not built or botlink.reserve(ctx.svc, ctx.chat_id, row["bot_id"]):
+        return 0
+    mid = await botlink.send(ctx.svc, ctx.bot, ctx.chat_id, row, built[1], ctx.caller.id)
+    got = await botlink.wait_reply(ctx.svc, ctx.chat_id, mid, timeout=HELP_WAIT, bot_id=row["bot_id"])
+    cmds = botskills.help_commands(got or "")
+    return await botskills.save_helper(ctx.svc.db, ctx.chat_id, row["bot_id"], cmds[:botskills.MAX_SKILLS],
+                                       source="help") if cmds else 0
+
+
 SETUP_GUIDE = ("아직 이 방의 다른 봇과 연동 전이라 보낼 수 없음 (소담이 이 방에서 다른 봇 글을 받은 적이 없음). '못 한다'고 끝내지 말고 "
                "켜는 순서를 짧게 안내할 것: ① 소담 운영자가 @BotFather 미니앱에서 소담의 Bot-to-Bot Communication 켜기 "
                "② 방 관리자가 1:1 메뉴 → 🤝 다른 봇 연동 → 🤖 명령까지 ③ 그 봇이 방에 한 번 말하면 목록에서 ✅ 믿는 봇. "
@@ -322,6 +340,9 @@ async def t_command(ctx: tools.ToolCtx, a: dict) -> str:
         sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)
         if not sk and await botskills.learn_from_history(ctx.svc.db, ctx.chat_id, row["bot_id"]):
             sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)   # 기록된 사용법 글에서 방금 배움
+        if not sk and not await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"]) and await _ask_help(ctx, row):
+            # 아는 명령이 하나도 없는 봇: 대부분 /help 로 사용법을 알려줌 → 배우고 이어서
+            sk = await botskills.for_intent(ctx.svc.db, ctx.chat_id, row["bot_id"], intent)
         known = await botskills.skills(ctx.svc.db, ctx.chat_id, row["bot_id"])
         if not sk:
             return (f"{_bot_label(row)} 의 '{intent}' 명령이 따로 표시돼 있지 않음. 아는 명령(설명 포함): {botskills.describe(known)}. "
