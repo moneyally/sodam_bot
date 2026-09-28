@@ -379,6 +379,17 @@
   집계 `db.reply_stats(chat_id, since, user_id=None)` = (from_id, to_id, n), 봇·자기 답장 제외. 수정된 메시지는 다시 기록 안 함.
 - 관계(🕸️ scamring)·의미 검색(🔎 semsearch)은 2026-09-28 추가. PostgreSQL 은 여러 서버로 나눌 때.
 
+## 운영 서버 (2026-09-28 VPS 이사 완료)
+- **봇은 Hetzner VPS 에서 돈다**: cx23(2 vCPU·4GB·40GB) nbg1, Ubuntu 24.04, IP 178.104.55.232, `/opt/sodam` (systemd `sodam`,
+  하트비트 감시·매일 백업·보안 업데이트). 월 약 €6.5. 클라우드 컨테이너의 옛 봇은 끔 — `.env` 를 `.env.migrated-to-vps` 로 치워
+  다시 켜질 수 없음. **컨테이너에서 봇을 켜지 말 것** (같은 토큰 두 곳 = 409 Conflict + DB 갈라짐). 세션 시작 훅·생존 확인 Routine 도 끔.
+- **배포 = GitHub main 에 머지** → 서버 `sodam-autoupdate.timer` 가 10분마다 가져가서 전체 테스트 통과해야 재시작, 시작 로그 없으면 자동 되돌림.
+  (claude/button-panels 에 푸시 → PR → main 머지.) 확인은 텔레그램 오너 알림 '▶️ 소담 시작 (버전 …)'.
+- 컨테이너 → VPS SSH 는 막힘 (egress 프록시가 TLS 만 통과). 서버 조작은 Hetzner Cloud API(HTTPS, 토큰은 사용자에게) 또는
+  사용자가 PowerShell `ssh root@IP`. 이사는 cloud-init user_data 부트스트랩 + 텔레그램 오너 1:1 **고정 메시지를 우편함**으로
+  (#ready → #bundle 암호화 꾸러미 → #done) 했음 — getUpdates 는 안 부름. 같은 방식으로 다시 할 수 있음.
+- 서버 로그는 컨테이너에서 못 봄 → 사용자가 `journalctl -u sodam -n 100` 을 보여주거나, 봇의 오너 오류 알림으로.
+
 ## 클라우드 세션 서버 실행
 - 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.
   갱신: `git --work-tree=/home/user/sodam_run checkout HEAD -- sodam tests tools docs requirements.txt` 후
