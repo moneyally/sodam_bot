@@ -393,6 +393,9 @@
 - 한도: 통화 15분·60초 조용하면 끝·방마다 한 달 120분(VOICE_ROOM_MONTH_MIN)·동시 3통화·이용 중인 방만. 요금은 분당 추정(VOICE_USD_PER_MIN 0.08)을
   하루 AI 예산 counters 에 더함 → 예산 다 차면 못 부름.
 - **실제 통화 확인은 VPS 에서만** (컨테이너는 UDP·MTProto 막힘). 테스트는 가짜 Realtime·py-tgcalls.
+- 도우미 계정 = **@Sodam_bot2** (사람 계정, 2026-09-29 오너가 만듦). 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
+  영상 칸 = 도우미 프사 I420 한 장(video.py, 로그인 때 1번 변환·1fps 재전송, 실패면 소리만). 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
+  스킬 `.claude/skills/telegram-voice-assistant/SKILL.md`. 봇 계정으로 음성채팅 제한을 우회·탐색하지 않음 (정책·토큰 위험).
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →

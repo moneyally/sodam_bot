@@ -23,17 +23,33 @@ from typing import Any, Callable
 from .. import mtproto
 from . import store
 from .bridge import Bridge
+from .video import FPS as VFPS, H as VH, W as VW, to_i420
 
 log = logging.getLogger("sodam.voice")
 
 MODEL = os.getenv("VOICE_MODEL", "gpt-realtime-2.1-mini")
 POLL = 1.0
+VIDEO = os.getenv("VOICE_VIDEO", "1") != "0"             # 영상 칸에 도우미 계정 프사 (끄기: VOICE_VIDEO=0)
 MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 
 
 def session_path(cfg) -> Path:
     return Path(cfg.db_path).parent / "voice_assistant.session"
+
+
+def api_path(cfg) -> Path:
+    """도우미 계정 전용 api_id/api_hash (my.telegram.org 에서 그 계정으로 발급, 0600). 없으면 .env MTPROTO_API_ID/HASH."""
+    return Path(cfg.db_path).parent / "voice_assistant.api"
+
+
+def read_api(cfg) -> tuple[int, str]:
+    raw = mtproto.read_session(api_path(cfg))
+    if raw and ":" in raw:
+        i, h = raw.split(":", 1)
+        if i.isdecimal() and h:
+            return int(i), h
+    return int(cfg.mtproto_api_id or 0), cfg.mtproto_api_hash or ""
 
 
 def user_client(session: str, api_id: int, api_hash: str):
@@ -55,6 +71,7 @@ class Worker:
         self.client = None                      # 로그인된 어시스턴트
         self.calls = None                       # PyTgCalls
         self.pending = None                     # 로그인 중 (client, phone, phone_code_hash)
+        self.frame: bytes | None = None         # 영상 칸 I420 한 장 (로그인 때 1번 변환)
         self.bridges: dict[int, Bridge] = {}
         self.tasks: dict[int, asyncio.Task] = {}
 
@@ -63,7 +80,7 @@ class Worker:
         s = mtproto.read_session(session_path(self.cfg))
         if not s:
             return
-        client = self.client_factory(s, self.cfg.mtproto_api_id, self.cfg.mtproto_api_hash)
+        client = self.client_factory(s, *read_api(self.cfg))
         await client.connect()
         if not await client.is_user_authorized():
             log.warning("어시스턴트 세션이 풀렸어요 — 🎙 화면에서 다시 로그인")
@@ -78,6 +95,13 @@ class Worker:
         me = await client.get_me()
         name = " ".join(x for x in (me.first_name, me.last_name) if x) or "assistant"
         await self.db.set_state(0, store.ASSISTANT_KEY, {"id": me.id, "name": name, "username": me.username})
+        self.frame = None
+        if VIDEO and self.media is not None:
+            try:
+                photo = await client.download_profile_photo("me", file=bytes)
+            except Exception:
+                photo = None
+            self.frame = await asyncio.to_thread(to_i420, photo)      # 한 번만 변환 (통화마다 같은 bytes 재사용)
         if self.calls_factory:
             self.calls = self.calls_factory(client)
             await self.calls.start()
@@ -85,9 +109,12 @@ class Worker:
         return f"ok:{name}"
 
     async def _login_phone(self, p: dict) -> tuple[bool, str]:
-        if not (self.cfg.mtproto_api_id and self.cfg.mtproto_api_hash):
+        if str(p.get("api_id") or "").isdecimal() and p.get("api_hash"):
+            mtproto.write_session(api_path(self.cfg), f"{int(p['api_id'])}:{p['api_hash']}")
+        api_id, api_hash = read_api(self.cfg)
+        if not (api_id and api_hash):
             return False, "no_api_id"
-        client = self.client_factory("", self.cfg.mtproto_api_id, self.cfg.mtproto_api_hash)
+        client = self.client_factory("", api_id, api_hash)
         await client.connect()
         sent = await client.send_code_request(p["phone"])
         self.pending = (client, p["phone"], sent.phone_code_hash)
@@ -158,8 +185,20 @@ class Worker:
                         reply=p.get("reply") or "all", greet=p.get("greet"),
                         max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60))
         params = md.AudioParameters(48000, 1)
+        video = self.frame is not None
         try:
-            await self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params), md.GroupCallConfig(auto_start=True))
+            if video:
+                try:
+                    await self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO | md.ExternalMedia.VIDEO, params,
+                                                                  md.VideoParameters(VW, VH, VFPS)),
+                                          md.GroupCallConfig(auto_start=True))
+                except Exception as e:
+                    if type(e).__name__ in ("NoActiveGroupCall", "ChatAdminRequired", "UserBannedInChannel"):
+                        raise
+                    log.warning("영상 칸 없이 소리만으로 다시 (%s)", e)
+                    video = False
+            if not video:
+                await self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params), md.GroupCallConfig(auto_start=True))
             await self.calls.record(chat_id, md.RecordStream(True, params))
         except Exception as e:
             name = type(e).__name__
@@ -168,13 +207,28 @@ class Worker:
                            "UserBannedInChannel": "banned"}.get(name, f"error:{name}")
         self.bridges[chat_id] = bridge
         call_id = await store.call_started(self.db, chat_id, p.get("by"))
-        self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge))
+        self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))
         return True, "started"
 
-    async def _run_call(self, chat_id: int, call_id: int, bridge: Bridge) -> None:
+    async def _video_loop(self, chat_id: int, bridge: Bridge) -> None:
+        """1초에 한 번 같은 사진 (새 bytes 안 만듦). 통화가 끝나면 _run_call 이 취소."""
+        md, frame = self.media, self.frame
+        info = md.Frame.Info(width=VW, height=VH)
+        while not bridge.done:
+            try:
+                await self.calls.send_frame(chat_id, md.Device.CAMERA, frame, info)
+            except Exception as e:
+                log.debug("영상 칸 전송 실패 (소리는 계속): %s", e)
+                return
+            await asyncio.sleep(1 / VFPS)
+
+    async def _run_call(self, chat_id: int, call_id: int, bridge: Bridge, video: bool = False) -> None:
+        vt = asyncio.create_task(self._video_loop(chat_id, bridge)) if video else None
         try:
             res = await bridge.run()
         finally:
+            if vt:
+                vt.cancel()
             self.bridges.pop(chat_id, None)
             self.tasks.pop(chat_id, None)
             await self._leave(chat_id)
@@ -269,10 +323,12 @@ def _media():
     from pytgcalls import filters
     from pytgcalls.types import (ChatUpdate, Device, Direction, ExternalMedia, GroupCallConfig, MediaStream,
                                  RecordStream)
-    from pytgcalls.types.raw import AudioParameters
+    from pytgcalls.types import Frame
+    from pytgcalls.types.raw import AudioParameters, VideoParameters
     return SimpleNamespace(filters=filters, ChatUpdate=ChatUpdate, Device=Device, Direction=Direction,
                            ExternalMedia=ExternalMedia, GroupCallConfig=GroupCallConfig, MediaStream=MediaStream,
-                           RecordStream=RecordStream, AudioParameters=AudioParameters)
+                           RecordStream=RecordStream, AudioParameters=AudioParameters, VideoParameters=VideoParameters,
+                           Frame=Frame)
 
 
 async def main() -> None:

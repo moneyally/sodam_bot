@@ -231,6 +231,7 @@ async def s_room(c: PanelCtx) -> Screen:
     kb = [[B(("● " if who == k else "") + v, f"m:vcw:{c.cid}:{k}") for k, v in (("admin", "관리자만"), ("all", "누구나"))],
           [B(("● " if rep == k else "") + v, f"m:vcy:{c.cid}:{k}") for k, v in (("all", "항상 대답"), ("name", "'소담' 부를 때만"))],
           [B("📴 지금 끊기", f"m:vcx:{c.cid}") if live else B("📞 지금 부르기", f"m:vcs:{c.cid}")],
+          [B("📖 사용 안내", f"m:vcg:{c.cid}"), B("✅ 확인하기", f"m:vcck:{c.cid}")],
           menu._back(c.cid)]
     return Screen("\n".join(lines), menu._kb(kb))
 
@@ -262,6 +263,86 @@ async def r_stop(c: PanelCtx) -> Screen:
     return Screen(None, toast="끊는 중이에요." if ok else "통화 중이 아니에요.")
 
 
+# ── 📖 사용 안내 · ✅ 확인하기 ───────────────────────────────
+def _who(a: dict | None) -> str:
+    if not a:
+        return "음성 도우미 계정"
+    return "@" + esc(a["username"]) if a.get("username") else esc(a["name"])
+
+
+async def s_guide(c: PanelCtx) -> Screen:
+    a = await store.assistant(c.svc.db)
+    who = _who(a)
+    lines = ["📖 <b>음성채팅 소담 사용 안내</b>", "",
+             "<b>① 소담 봇 권한</b> (방 설정 → 관리자 → 소담)",
+             "  · <b>초대 링크로 사용자 초대</b> — 음성 도우미를 방에 넣을 때",
+             "  · <b>새 관리자 추가</b> — 도우미에게 '음성채팅 관리'를 자동으로 줄 때",
+             "  · <b>음성채팅 관리</b>",
+             "",
+             f"<b>② 음성 도우미 {who}</b>",
+             "  음성채팅에 실제로 들어가는 계정이에요 (봇은 텔레그램 규칙상 음성채팅에 못 들어가요).",
+             "  · 자동: 소담을 부르면 1회용 초대링크로 들어오고 '음성채팅 관리' 권한을 받아요 (①이 켜져 있을 때).",
+             f"  · 직접: 방에 {who} 초대 → 관리자로 → <b>'음성채팅 관리'만</b> 켜기 (다른 권한은 필요 없어요).",
+             "",
+             "<b>③ 부르기</b>",
+             "  채팅에 <code>소담아 음성방 들어와</code> 또는 이 화면의 [📞 지금 부르기].",
+             "  음성채팅이 꺼져 있어도 도우미에게 '음성채팅 관리'가 있으면 소담이 직접 켜요.",
+             "",
+             "<b>④ 대화</b>",
+             "  음성채팅에서 그냥 말하면 소담이 목소리로 답해요. 말하는 중에 끼어들면 멈추고 들어요.",
+             "  사람이 많으면 [’소담’ 부를 때만]으로 바꾸면 '소담아 …' 할 때만 대답해요.",
+             "  영상 칸엔 소담 사진이 떠요 (소리 위주, 영상통화처럼 움직이진 않아요).",
+             "",
+             "<b>⑤ 끝내기</b>",
+             f"  <code>소담아 나가</code> · [📴 지금 끊기] · {IDLE_SEC}초 조용하면 스스로 · 한 번에 최대 {CALL_MAX_SEC // 60}분.",
+             "",
+             f"대화 내용은 저장 안 해요. 방마다 한 달 {MONTH_MIN}분까지, 요금은 AI 사용 한도에 같이 들어가요.",
+             "막히면 [✅ 확인하기] 를 눌러 보세요 — 빠진 권한을 알려 줘요."]
+    return Screen("\n".join(lines), menu._kb([[B("✅ 확인하기", f"m:vcck:{c.cid}")], [B("⬅️ 음성채팅", f"m:vcr:{c.cid}")]]))
+
+
+async def _member(bot, chat_id: int, uid: int):
+    try:
+        return await bot.get_chat_member(chat_id, uid)
+    except TelegramError:
+        return None
+
+
+async def checklist(svc, bot, chat_id: int) -> list[tuple[bool, str, str]]:
+    """(통과?, 항목, 고치는 법). 전부 Bot API 로만 확인."""
+    db = svc.db
+    a = await store.assistant(db)
+    out = [(bool(a), "음성 도우미 계정 연결", "운영자가 1:1 메뉴 🎙 에서 연결해야 해요"),
+           (await store.worker_alive(db), "음성 담당 프로그램 켜짐", "서버의 음성 담당(sodam-voice)이 꺼져 있어요 — 운영자에게 알려 주세요"),
+           (await svc.paid_features(chat_id), "이용 기간", "이용 기간이 끝난 방이에요")]
+    me = await _member(bot, chat_id, bot.id)
+    for attr, label, fix in (("can_invite_users", "소담 봇: 초대 링크로 사용자 초대", "방 설정 → 관리자 → 소담 → '초대 링크로 사용자 초대' 켜기"),
+                             ("can_promote_members", "소담 봇: 새 관리자 추가", "켜면 도우미에게 '음성채팅 관리'를 자동으로 줘요 (없으면 ②를 직접)"),
+                             ("can_manage_video_chats", "소담 봇: 음성채팅 관리", "방 설정 → 관리자 → 소담 → '음성채팅 관리' 켜기")):
+        out.append((bool(me and getattr(me, attr, False)), label, fix))
+    if a:
+        m = await _member(bot, chat_id, a["id"])
+        st = getattr(m, "status", "left")
+        out.append((st not in ("left", "kicked"), f"도우미 {_who(a)} 방에 있음",
+                    "부르면 자동으로 들어와요 (봇에 '초대' 권한 필요) · 막혀 있으면(kicked) 차단을 풀어 주세요"))
+        out.append((st == "creator" or bool(getattr(m, "can_manage_video_chats", False)), f"도우미 {_who(a)}: 음성채팅 관리",
+                    "없으면 음성채팅을 사람이 먼저 켜야 해요 — 도우미를 관리자로 두고 '음성채팅 관리'만 켜기"))
+    return out
+
+
+async def s_check(c: PanelCtx) -> Screen:
+    items = await checklist(c.svc, c.bot, c.cid)
+    ok = all(i[0] for i in items)
+    lines = ["✅ <b>음성채팅 준비 확인</b>", ""]
+    for good, label, fix in items:
+        lines.append(("✅ " if good else "❌ ") + label + ("" if good else f"\n   → {fix}"))
+    lines += ["", "모두 준비됐어요! 채팅에 <code>소담아 음성방 들어와</code> 🎙" if ok else "❌ 항목을 고친 뒤 다시 눌러 보세요."]
+    return Screen("\n".join(lines), menu._kb([[B("🔄 다시 확인", f"m:vcck:{c.cid}"), B("📖 사용 안내", f"m:vcg:{c.cid}")],
+                                             [B("⬅️ 음성채팅", f"m:vcr:{c.cid}")]]))
+
+
+menu.register_screen("vcg", s_guide, ADMIN)
+menu.register_screen("vcck", s_check, ADMIN, fresh=True)
 menu.register_hub(HubItem(57, "vcr", "🎙 음성채팅", ADMIN))
 menu.register_screen("vcr", s_room, ADMIN)
 for _code, _fn in (("vcw", r_who), ("vcy", r_reply), ("vcs", r_start), ("vcx", r_stop)):
@@ -302,12 +383,38 @@ async def s_owner(c: PanelCtx) -> Screen:
     return Screen("\n".join(lines), menu._kb(kb))
 
 
+API_GUIDE = ("🔑 <b>1단계: 도우미 계정 전용 API 키</b>\n"
+             "① 폰/PC 브라우저로 <b>my.telegram.org</b> 접속\n"
+             "② <b>도우미 계정 번호</b>로 로그인 (코드는 도우미 계정 텔레그램 앱으로 와요)\n"
+             "③ <b>API development tools</b> → App title <code>sodam voice</code>, Short name <code>sodamvoice</code>, Platform <code>Other</code> → Create\n"
+             "④ 나온 <b>App api_id</b>(숫자)와 <b>App api_hash</b>(32자)를 한 줄로 보내 주세요:\n"
+             "<code>12345678 0123456789abcdef0123456789abcdef</code>\n\n"
+             "보낸 메시지는 바로 지워요. 서버 설정 키를 그대로 쓰려면 <code>건너뛰기</code>")
+
+
 async def r_login(c: PanelCtx) -> Screen:
     if not await _is_owner(c):
         return NOT_OWNER
-    c.svc.inputs[c.uid] = PendingInput("vcp", 0)
-    return Screen("📱 도우미 계정 전화번호를 보내 주세요 (예: <code>+821012345678</code>).\n"
-                  "보낸 메시지는 바로 지워요. 5분 안에 · 그만두려면 <code>취소</code>", menu._kb([[B("❌ 취소", "m:vc")]]))
+    c.svc.inputs[c.uid] = PendingInput("vcai", 0)
+    return Screen(API_GUIDE + "\n\n5분 안에 · 그만두려면 <code>취소</code>", menu._kb([[B("❌ 취소", "m:vc")]]))
+
+
+API_KEY = "_voice_api"          # svc.__dict__[API_KEY][uid] = (api_id, api_hash) — 전화번호 단계까지 메모리에만
+
+
+async def i_api(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    raw = (msg.text or "").strip()
+    await _forget_msg(msg)
+    store_ = c.svc.__dict__.setdefault(API_KEY, {})
+    if raw in ("건너뛰기", "skip"):
+        store_.pop(c.uid, None)
+    else:
+        m = re.fullmatch(r"(\d{4,12})\s+([0-9a-fA-F]{32})", raw)
+        if not m:
+            return False, "api_id(숫자)와 api_hash(32자)를 띄어서 한 줄로 보내 주세요. 서버 키를 쓰려면 <code>건너뛰기</code>"
+        store_[c.uid] = (m.group(1), m.group(2).lower())
+    c.svc.__dict__.setdefault(STAGE, {})[c.uid] = "phone"
+    return True, "✅ 키 받았어요." if raw not in ("건너뛰기", "skip") else "서버 설정 키를 쓸게요."
 
 
 async def r_logout_ask(c: PanelCtx) -> Screen:
@@ -350,7 +457,11 @@ async def i_phone(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     phone = "+" + re.sub(r"\D", "", raw) if re.sub(r"\D", "", raw) else ""
     if not 9 <= len(phone) <= 16:
         return False, "전화번호 형식이 아니에요. 예: <code>+821012345678</code>"
-    st, res = await _login_job(c, "login_phone", {"phone": phone})
+    payload = {"phone": phone}
+    api = c.svc.__dict__.get(API_KEY, {}).pop(c.uid, None)
+    if api:
+        payload.update(api_id=api[0], api_hash=api[1])
+    st, res = await _login_job(c, "login_phone", payload)
     if st != "done":
         c.svc.__dict__.setdefault(STAGE, {}).pop(c.uid, None)
         return True, "❌ " + LOGIN_ERR.get(res, esc(res))
@@ -387,6 +498,10 @@ async def i_password(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 async def s_after(c: PanelCtx) -> Screen:
     """입력 하나가 끝난 뒤: 다음에 받을 게 있으면 입력 대기를 다시 걸고 안내만, 없으면 🎙 화면."""
     nxt = c.svc.__dict__.get(STAGE, {}).get(c.uid)
+    if nxt == "phone":
+        c.svc.inputs[c.uid] = PendingInput("vcp", 0)
+        return Screen("📱 <b>2단계</b>: 도우미 계정 전화번호를 보내 주세요 (예: <code>+821012345678</code>, 보낸 메시지는 바로 지워요).",
+                      menu._kb([[B("❌ 취소", "m:vc")]]))
     if nxt == "code":
         c.svc.inputs[c.uid] = PendingInput("vcc", 0)
         return Screen("", menu._kb([[B("❌ 취소", "m:vc")]]))
@@ -398,8 +513,9 @@ async def s_after(c: PanelCtx) -> Screen:
 
 menu.register_main(93, "vc", "🎙 음성채팅", OWNER)
 for _code, _fn in (("vc", s_owner), ("vcl", r_login), ("vco", r_logout_ask), ("vcoy", r_logout),
-                   ("vcp", s_owner), ("vcc", s_owner), ("vcpw", s_owner)):
+                   ("vcai", s_owner), ("vcp", s_owner), ("vcc", s_owner), ("vcpw", s_owner)):
     menu.register_route(_code, Route(_fn, OWNER, scoped=False))
+menu.register_input("vcai", "", "vc", i_api, s_after, need=OWNER)
 menu.register_input("vcp", "", "vc", i_phone, s_after, need=OWNER)
 menu.register_input("vcc", "", "vc", i_code, s_after, need=OWNER)
 menu.register_input("vcpw", "", "vc", i_password, s_after, need=OWNER)
