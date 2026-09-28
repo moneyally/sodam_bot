@@ -47,6 +47,7 @@ class ToolCtx:
     mentions: list[tuple[int, str]] = field(default_factory=list)
     sanctioned: bool = False  # 이번 답변(run_agent 1회)에서 경고·뮤트·밴을 이미 했는지 → 인젝션으로 연속 제재 방지
     tainted: bool = False     # 이번 답변에서 다른 방 기록(멤버가 쓴 글)을 읽음 → 이후 읽기 도구만 (execute)
+    bot_tainted: bool = False  # 다른 봇 글을 읽음 → 읽기 도구 + bot_command(허락된 명령만 바로, 새 명령은 확인 카드)
     quiet: bool = False       # 봇이 이미 방에 올림(게임 시작 등) → AI 답은 보내지 않음
     image: Attached | None = None  # 요청(또는 답장한 메시지)에 붙은 사진 → make_image(mode=edit) 원본
     reply_msg_id: int | None = None  # 요청이 답장한 메시지 ID (handlers.reply_ref) → 사건 재현 기준 (AI 가 고르지 않음)
@@ -1051,7 +1052,7 @@ async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
     # 2중 검사: 목록에서 숨겼더라도 실행 직전에 다시 확인
     if not tool or tool not in available(ctx.role, ctx.settings, ctx.chat_id > 0):
         return "이 도구는 지금 사용할 수 없음 (권한 없음)."
-    if ctx.tainted and name not in READ_ONLY:   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
+    if (ctx.tainted or (ctx.bot_tainted and name != "bot_command")) and name not in READ_ONLY:   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
         return "방 기록을 읽은 답변에서는 이 도구를 못 씀 (보안). 필요하면 오너가 따로 다시 요청하라고 안내할 것."
     try:
         args = json.loads(raw_args or "{}")

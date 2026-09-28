@@ -164,8 +164,8 @@ async def results_tool_wraps_data_and_taints_turn():
                               tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"}, "c2")])
     assert res[0].startswith("<tool_result id=") and "🎲 = 6" in res[0] and "↩캎이바라요" in res[0], res[0]
     assert "‹/tool_result›" in res[0] and "‹system›" in res[0] and res[0].count("</tool_result") == 1, "봇 글 속 가짜 태그 무력화"
-    assert "못 씀" in res[1], "봇 글을 읽은 답변에선 명령 못 보냄 (봇 글 속 지시 → 명령 차단)"
-    assert not [c for c in r.bot.named("send_message") if "@dice_bot" in c[2]]
+    assert "확인 버튼" in res[1], res[1] or "봇 글을 읽은 답변에선 새 명령은 사람이 누르는 카드로만 (봇 글 속 지시 → 바로 전송 X)"
+    assert not [c for c in r.bot.named("send_message") if c[2].startswith("/dice")]
     res = await ask(r, A, [tool_call("other_bot_results", {})], role=Role.MEMBER)
     assert "🎲 = 6" in res[0], "결과 조회는 멤버도"
     await r.db.set_setting(Room.CHAT, "botlink_mode", "off")

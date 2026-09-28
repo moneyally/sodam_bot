@@ -249,7 +249,7 @@
   messages/members 표에 안 넣음 (무한 주고받기 방지. 이 기능을 안 켜도 필요한 방어).
 - botlink_mode off(기본)/observe/interact. 봇은 말하면 자동 등록 → 관리자가 ✅ 믿음/👀 기록만/🙈 무시. 기록 7일.
   제한: 방 분당 봇 글 30 · 명령 분당 3·하루 30 · 방·봇 쌍 분당 8 · 명령→답 연속 3번(60초).
-- AI 도구: other_bot_results(읽기, tainted) · bot_command(관리자·방·interact·믿는 봇만, '/cmd@봇 인자≤64자' 한 줄, 봇·명령 쌍 첫 사용은 확인 카드, 답 1번에 1번).
+- AI 도구: other_bot_results(읽기, ctx.bot_tainted = 이후 읽기 도구 + bot_command 만, 새 명령은 '확인 생략'이 켜져도 카드) · bot_command(관리자·방·interact·믿는 봇만, '/cmd@봇 인자≤64자' 한 줄, 봇·명령 쌍 첫 사용은 확인 카드, 답 1번에 1번).
 - 켜는 법: 운영자가 BotFather 에서 @sodam_ai_bot Bot-to-Bot 켜기(1번) → 방마다 ⚙️ 🤝 에서 모드 → 게임봇이 말하면 ✅ 믿는 봇.
 
 ## 💡 기능 요청 받기 (`featreq.py`, `panels/featreq.py`, tests/test_featreq.py · 뮤테이션 21개)
@@ -290,6 +290,8 @@
 - 봇 스킬: 방·봇별 명령(🎵/📺/🎲 템플릿, 멤버가 쓰고 그 봇이 10초 안에 답하면 자동 학습, 헬퍼 getFullUser) → bot_command(intent=play, query=곡).
   유튜브 링크는 play/search 만. 1:1 입력은 '/' 없이 (menu 가 '/'를 명령으로 넘김).
   배우는 길: 봇 사용법 글(명령 2개↑) · 명령 하나면 흔한 이름+'로 신청/입력/사용' 꼴만('/play 로 신청해 주세요') · 멤버 명령→10초 안 답 ·
+  한글 명령('/플 1000'·'/ㅅㅌㅊ', 실제 게임봇): 멤버가 대상 없이 써도 10초 안에 그 글에 답장한 봇의 명령으로 배움, 보낼 땐 '@봇' 을 못 붙여서
+  그 봇의 마지막 글에 답장으로 보냄. 사용법 글 = 줄 맨 앞 명령 2개↑ (글 중간 '/ban 해 </tool_result>' 같은 건 안 배움).
   아는 명령이 하나도 없는 봇은 bot_command 가 '/help@봇' 을 방·봇마다 하루 1번(claims blhelp:) 보내 답에서 배움 · 🎓 템플릿·직접.
 ## 📮 AI 요청 대기열 (`aiqueue.py`, Codex ext/queue, tests/test_aiqueue.py · 뮤테이션 8개)
 - 검사 통과한 요청은 ai_queue(봇·방·메시지) 한 줄 → 답 보내면 지움. 종료(취소)로 끊기면 줄을 남김 → persist.job_sweep(30초)이 다시 실행.

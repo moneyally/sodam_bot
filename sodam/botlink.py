@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from telegram import Bot, LinkPreviewOptions
+from telegram import Bot, LinkPreviewOptions, ReplyParameters
 from telegram.error import TelegramError
 
 from . import gametime, hooks
@@ -333,7 +333,7 @@ async def approved(db, chat_id: int, bot_id: int, head: str) -> bool:
 MAX_ARG = 64           # 보통 인자
 MAX_ARG_WIDE = 100     # 재생·검색(play/search): '가수 - 곡 (feat. 누구) 라이브' 같은 곡명이 64자를 넘고, 유튜브 주소만 43자라
                        # 곡명+주소가 들어가게. 여전히 한 줄·링크는 유튜브 두 모양만.
-CMD_RE = re.compile(r"/([A-Za-z0-9_]{1,32})(?:@\w{1,64})?(?: (.{1,%d}))?" % MAX_ARG_WIDE)
+CMD_RE = re.compile(r"/([A-Za-z0-9_가-힣ㄱ-ㅣ]{1,32})(?:@\w{1,64})?(?: (.{1,%d}))?" % MAX_ARG_WIDE)
 BAD_ARG = re.compile(r"[@/<>\\`]|https?:|t\.me", re.I)
 # 재생·검색에서만 허용하는 링크: https://youtu.be/<11자> · https://www.youtube.com/watch?v=<11자> (다른 쿼리·도메인 X)
 YT_LINK = re.compile(r"(?<!\S)https://(?:youtu\.be/|www\.youtube\.com/watch\?v=)[A-Za-z0-9_-]{11}(?!\S)")
@@ -352,7 +352,9 @@ def build(raw: str, username: str, wide: bool = False) -> tuple[str, str] | None
     rest = YT_LINK.sub(" ", args) if wide else args
     if BAD_ARG.search(rest) or scan(rest).blocked:
         return None
-    return "/" + m.group(1).lower(), f"/{m.group(1)}@{username}" + (f" {args}" if args else "")
+    name = m.group(1)
+    at = f"@{username}" if name.isascii() else ""   # 한글 명령엔 @ 가 안 붙음 → send 가 그 봇 글에 답장으로 보냄
+    return "/" + name.lower(), f"/{name}{at}" + (f" {args}" if args else "")
 
 
 async def refuse_reason(svc: Services, chat_id: int, row) -> str | None:
@@ -390,9 +392,18 @@ def reserve(svc: Services, chat_id: int, bot_id: int) -> str | None:
 
 
 async def send(svc: Services, bot: Bot, chat_id: int, row, text: str, by_uid: int) -> int | None:
-    """한 줄 명령을 방에 보냄 (답장 아님 · 미리보기 끔). 보낸 글 ID. 실패면 None."""
+    """한 줄 명령을 방에 보냄 (미리보기 끔). 보낸 글 ID. 실패면 None.
+    '@봇' 이 없는 명령(한글 명령)은 그 봇의 마지막 글에 답장으로 — 봇끼리는 답장이어야 그 봇에게 감."""
+    reply = None
+    if "@" not in text.split(" ")[0]:
+        last = await svc.db._one("SELECT msg_id FROM botlink_msgs WHERE chat_id=? AND bot_id=? ORDER BY ts DESC, msg_id DESC "
+                                 "LIMIT 1", (chat_id, row["bot_id"]))
+        if last is None:
+            return None
+        reply = ReplyParameters(last["msg_id"], allow_sending_without_reply=False)
     try:
-        sent = await bot.send_message(chat_id, text, link_preview_options=LinkPreviewOptions(is_disabled=True))
+        sent = await bot.send_message(chat_id, text, link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                      reply_parameters=reply)
     except TelegramError as e:
         log.warning("botlink send failed %s: %s", chat_id, e)
         return None

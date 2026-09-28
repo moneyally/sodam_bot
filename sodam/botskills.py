@@ -34,17 +34,24 @@ WIDE = ("play", "search")          # 인자 100자 + 유튜브 링크 허용 (bo
 SOURCE_BADGE = {"preset": "📌직접", "manual": "📌직접", "seen": "👀본 것", "helper": "🔧헬퍼", "help": "📖안내"}
 # 봇이 올린 사용법 글의 '/명령 설명' 줄 (실제 사례: 멜론봇 /help 에 /play·/skip… 이 다 있는데 /help 만 배움)
 _INVITE = re.compile(r"(으로|로)\s*\S*\s*(신청|입력|사용|요청|써|쓰|보내|이용|재생)")
-HELP_CMD = re.compile(r"(?<![\w/@])/([A-Za-z][A-Za-z0-9_]{0,31})(?![\w@])([^\n/]*)")
+HELP_CMD = re.compile(r"(?<![\w/@<])/([A-Za-z가-힣ㄱ-ㅎ][A-Za-z0-9_가-힣ㄱ-ㅣ]{0,31})(?![\w@])([^\n/]*)")
+# 사용법 줄 = 줄 맨 앞(글머리표·번호·이모지 뒤)의 명령. 글 중간의 '/ban 해' '</tool_result>' 같은 건 사용법이 아님 (봇 글 속 주입)
+HELP_LINE = re.compile(r"(?m)^[^\w/\n]{0,6}(?:\d{1,2}[.)]\s*)?/([A-Za-z가-힣ㄱ-ㅎ][A-Za-z0-9_가-힣ㄱ-ㅣ]{0,31})(?![\w@])([^\n/]*)")
 
 
 def help_commands(text: str) -> list[tuple[str, str]]:
     """사용법 글 → [(명령, 설명)]. 명령이 2개 이상일 때, 하나뿐이면 흔한 이름(/play 등)만
     (실제 사례: '새로운 노래는 /play 로 신청해 주세요!' 뿐인 음악봇 — 못 배워서 재생 요청이 막힘)."""
-    found = {}
-    for name, rest in HELP_CMD.findall(text or ""):
-        found.setdefault(name.lower(), " ".join(rest.replace("—", " ").replace("-", " ").split()))
-    if len(found) >= 2:
+    def scan(rx):
+        found = {}
+        for name, rest in rx.findall(text or ""):
+            found.setdefault(name.lower(), " ".join(rest.replace("—", " ").replace("-", " ").split()))
+        return found
+    found = scan(HELP_CMD)
+    if len(scan(HELP_LINE)) >= 2:   # 사용법 글이면 한 줄에 둘('⏸ /pause · ▶️ /resume')인 것까지
         return list(found.items())
+    if len(found) != 1:
+        return []
     return [(n, d) for n, d in found.items() if n in _BY_NAME and _INVITE.match(d)]   # '/play 로 신청해 주세요' 꼴만
 MAX_SKILLS = 30                    # 봇마다
 MAX_HINT = 30
@@ -86,7 +93,7 @@ _ALIASES = (("멜론", "melon"), ("유튜브", "유튭", "youtube", "yt"), ("지
             ("스포티파이", "spotify"), ("사운드클라우드", "soundcloud"), ("음악", "노래", "music", "song"),
             ("주사위", "dice"), ("카지노", "casino"))
 
-MEMBER_CMD = re.compile(r"/([A-Za-z0-9_]{1,32})(?:@(\w{3,64}))?(?:\s+(\S.*))?", re.S)
+MEMBER_CMD = re.compile(r"/([A-Za-z0-9_가-힣ㄱ-ㅣ]{1,32})(?:@(\w{3,64}))?(?:\s+(\S.*))?", re.S)
 
 
 def guess_intent(command: str, hint: str = "") -> str:
@@ -322,8 +329,8 @@ async def on_member_message(svc: Services, bot, msg, role) -> None:
                                 (msg.chat_id, target))
     elif r is not None and r.from_user is not None and r.from_user.is_bot and r.from_user.id != bot.id:
         row = await botlink.get_bot(svc.db, msg.chat_id, r.from_user.id)
-    else:
-        return
+    else:   # '/플 30000000' 처럼 대상 없이 → 10초 안에 이 글에 답장한 봇의 명령으로 (실제 사례: 게임봇 한글 명령)
+        row = {"bot_id": None, "status": "seen"}
     if not row or row["status"] == "ignored":
         return
     st, now = state(svc), time.time()
@@ -350,8 +357,8 @@ async def on_bot_seen(svc: Services, bot, msg, status: str, now: float) -> None:
     st, r, cid = state(svc), msg.reply_to_message, msg.chat_id
     if r is not None and r.from_user is not None and not r.from_user.is_bot:
         got = st.pending.pop((cid, r.message_id), None)
-        if got and got[0] == msg.from_user.id and now - got[3] <= LEARN_WINDOW:
-            await record_seen(svc.db, cid, got[0], got[1], got[2])
+        if got and got[0] in (None, msg.from_user.id) and now - got[3] <= LEARN_WINDOW and status != "ignored":
+            await record_seen(svc.db, cid, msg.from_user.id, got[1], got[2])
     cmds = help_commands(msg.text or msg.caption or "")
     if cmds:
         await save_helper(svc.db, cid, msg.from_user.id, cmds[:MAX_SKILLS], source="help")

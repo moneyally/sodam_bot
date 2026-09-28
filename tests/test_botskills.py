@@ -458,3 +458,32 @@ async def unknown_bot_is_asked_help_once_a_day_then_command_is_used():
     await r.db._write("DELETE FROM botlink_msgs")                          # 기록에서 다시 배우는 길도 없앰
     res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "밤편지"})])
     assert helps == ["/help@ytmusic_player_bot"] and "따로 표시돼 있지 않음" in res[0], res   # 배운 게 지워져도 오늘은 다시 안 물음
+
+
+KETER = fake_user(770013, "케테르 게임봇", "keter_game_bot", is_bot=True)
+
+
+@test
+async def korean_game_commands_learned_from_members_and_sent_as_reply_after_reading_results():
+    # 실제 사례(뉴월드): 게임봇은 /help 없음, 멤버는 '/플 30000000'·'/ㅅㅌㅊ' (@ 없이) → 게임봇이 답장.
+    # 소담은 한글 명령을 못 배우고, 결과를 읽은 뒤엔 '방 기록을 확인한 흐름이라 못 보냄' 으로 막혔음
+    r = await blroom("interact")
+    await trust(r, KETER)
+    m = await r.say(A, "/플 30000000")
+    await bot_says(r, KETER, "✅ 🔵 플레이어에 30,000,000P 배팅! 판을 열었어요.", reply_to=m)
+    m = await r.say(A, "/ㅅㅌㅊ")
+    last = await bot_says(r, KETER, "ℹ️ 나영님의 상태창 💰 80,003,322 P", reply_to=m)
+    got = sk_map(await botskills.skills(r.db, Room.CHAT, KETER.id))
+    assert got["/플"][0] == "seen" and "/ㅅㅌㅊ" in got, got
+    await botlink.approve(r.db, Room.CHAT, KETER.id, "/플", BOSS.id)       # 관리자가 한 번 허락한 명령
+    res = await ask(r, BOSS, [tool_call("other_bot_results", {"bot": "케테르"}),
+                              tool_call("bot_command", {"bot": "케테르", "command": "/플 1000"})])
+    assert "보냈음" in res[1], res                                          # 봇 결과를 읽었어도 허락된 명령은 보냄
+    sent = [c for c in r.bot.named("send_message") if c[2] == "/플 1000"]
+    assert len(sent) == 1 and sent[0][3]["reply_parameters"].message_id == last.message_id, sent   # @ 대신 그 봇 글에 답장
+    await r.db._write("INSERT INTO ai_approvals(chat_id, user_id, tool, until) VALUES(?,?,?,?)",
+                      (Room.CHAT, BOSS.id, "bot_command", time.time() + 3600))   # '오늘은 확인 생략' 을 켜 뒀어도
+    res = await ask(r, BOSS, [tool_call("other_bot_results", {"bot": "케테르"}),
+                              tool_call("bot_command", {"bot": "케테르", "command": "/ㅅㅌㅊ"}),
+                              tool_call("greet_members", {"names": ["캎이바라요"]})])
+    assert "확인 버튼" in res[1] and "못 씀" in res[2], res                   # 새 명령은 카드, 제재 등 다른 도구는 계속 막힘
