@@ -12,6 +12,7 @@ SYSTEMCTL=${SYSTEMCTL:-systemctl}
 JOURNALCTL=${JOURNALCTL:-journalctl}
 START_WAIT=${START_WAIT:-90}
 LOCK=${LOCK:-/run/lock/sodam-update.lock}
+UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
 FORCE=0; QUIET=0; BRANCH=""
 for a in "$@"; do
     case $a in
@@ -34,6 +35,18 @@ flock -n 9 || { say "다른 갱신이 진행 중"; exit 0; }
 units() {   # 켜 둔 봇들 (딜러는 .env.dealer 가 있고 켜 둔 경우만)
     echo sodam
     if [ -f "$APP_DIR/.env.dealer" ] && $SYSTEMCTL is-enabled -q sodam-dealer 2>/dev/null; then echo sodam-dealer; fi
+}
+
+# 📞 음성 담당(sodam-voice): 본체가 뜬 뒤 따로 — 패키지·서비스 파일 설치·재시작. 실패해도 본체는 그대로 (되돌리지 않음).
+voice_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-voice.service" ] || return 0
+    "$PY" -m pip install -q --disable-pip-version-check -r "$APP_DIR/requirements-voice.txt" \
+        || { log "voice: 패키지 설치 실패 (본체는 정상)"; return 0; }
+    if ! cmp -s "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/sodam-voice.service"; then
+        cp "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q sodam-voice 2>/dev/null || $SYSTEMCTL enable -q sodam-voice
+    $SYSTEMCTL restart sodam-voice && log "voice: 음성 담당 재시작" || log "voice: 재시작 실패 (journalctl -u sodam-voice)"
 }
 
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
@@ -90,6 +103,7 @@ VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then
     log "ok: 버전 $VER 실행 중"
+    voice_setup
     exit 0
 fi
 

@@ -1,0 +1,50 @@
+# /etc/systemd/system/sodam-voice.service — 📞 음성채팅 담당 (sodam/voice/worker.py, docs: CLAUDE.md '음성채팅').
+# 도우미 계정 로그인·통화를 맡음. 봇 본체와는 DB(voice_jobs)로만 이야기 → 이게 죽어도 본체는 그대로.
+# deploy/update.sh 가 설치·재시작. 로그: journalctl -u sodam-voice -f
+[Unit]
+Description=Sodam voice chat worker
+Wants=network-online.target
+After=network-online.target sodam.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam.voice.worker
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-voice
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+# WebRTC(ntgcalls) 가 네트워크 장치 목록을 netlink 로 읽음 · 통화 소리는 UDP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

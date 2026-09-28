@@ -1,0 +1,4 @@
+# 📞 음성채팅 담당 프로세스 전용 (sodam/voice/worker.py, systemd sodam-voice). 본체·테스트는 안 씀.
+# deploy/update.sh 가 서버에서 자동 설치. ntgcalls 는 linux x86_64/arm64 휠이 있음.
+py-tgcalls==3.0.0
+websockets>=13,<16      # openai realtime (client.realtime.connect)

@@ -371,6 +371,22 @@
 - 빠른 답: AI 답 만드는 동안 '입력 중' 4초마다(`handlers._keep_typing`), 벽시계 상한 `agent.DEADLINE` 그룹 25초·1:1 45초 → 넘으면 지금까지로 답.
   병렬 도구 호출(parallel_tool_calls)은 아직 끔 — 제재 도구가 한 라운드에 여러 개 나올 수 있어 안전 검토 뒤에.
 
+## 📞 음성채팅 (`sodam/voice/`, `panels/voice.py`, tests/test_voice.py · 뮤테이션 2개)
+- 봇 계정은 통화(phone.*) 불가 → 음악봇(오픈소스 YukkiMusicBot 구조 참고, 코드는 새로)처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
+  오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
+  세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.
+- 별도 프로세스 `python -m sodam.voice.worker`(systemd sodam-voice, update.sh 가 본체 재시작 성공 뒤 패키지 requirements-voice.txt·서비스 설치/재시작,
+  실패해도 본체 안 되돌림). 봇 ↔ worker 는 DB voice_jobs(1초 폴링, 120초 안 가져가면 no_worker)·voice_calls(시간·이유만, 대화 저장 안 함)·
+  chat_state(0) voice_assistant / voice_worker_beat.
+- 부르기: AI 도구 voice_call(start|stop, 방) 또는 허브 🎙(m:vcr). voice_who 관리자만(기본)/누구나 · voice_reply 항상/'소담' 부를 때만.
+  봇이 1회용 초대링크(1명·10분)로 도우미를 넣고, promote(can_manage_video_chats) 시도 → py-tgcalls play(auto_start) 가 음성채팅이 없으면 직접 켬
+  (봇에 '관리자 추가' 권한 없으면 사람이 켜야 → 안내). 결과·끝남은 방에 한 줄.
+- 소리: 텔레그램 48k 모노 10ms ↔ OpenAI Realtime(gpt-realtime-2.1-mini, VOICE_MODEL) 24k PCM. server_vad·far_field 잡음 제거·끼어들면 truncate(들려준 ms).
+  목소리 VOICE_VOICE 기본 marin (**소담 = 여자 AI 비서**). PERSONA + 📝 AI 방 안내. '소담아 나가' 로 끝.
+- 한도: 통화 15분·60초 조용하면 끝·방마다 한 달 120분(VOICE_ROOM_MONTH_MIN)·동시 3통화·이용 중인 방만. 요금은 분당 추정(VOICE_USD_PER_MIN 0.08)을
+  하루 AI 예산 counters 에 더함 → 예산 다 차면 못 부름.
+- **실제 통화 확인은 VPS 에서만** (컨테이너는 UDP·MTProto 막힘). 테스트는 가짜 Realtime·py-tgcalls.
+
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
