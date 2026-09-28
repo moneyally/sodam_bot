@@ -28,6 +28,7 @@ SEND_BYTES = audio.AI_RATE * 2 * SEND_MS // 1000
 SILENCE = bytes(audio.FRAME_BYTES)
 MAX_BACKLOG = 50                                # 보낼 줄이 이만큼(5초) 밀리면 오래된 것부터 버림 (네트워크 막힘)
 MAX_ERRORS = 5
+MAX_OUT = 400                                   # 음성 출력 토큰 ≈ 초당 30 (실측 1,070토큰/33초) → 약 12초
 BYE = re.compile(r"소담.{0,6}(나가|끊어|그만|잘\s*가|바이|종료)")
 
 
@@ -46,6 +47,7 @@ def session_config(instructions: str, voice: str, reply: str = "all", language: 
         "type": "realtime",
         "instructions": instructions,
         "output_modalities": ["audio"],
+        "max_output_tokens": MAX_OUT,        # 한 답 상한 (실측: '1~2문장' 규칙에도 4문장·10초↑ 답이 나옴)
         "audio": {
             "input": {
                 "format": {"type": "audio/pcm", "rate": audio.AI_RATE},
@@ -113,8 +115,8 @@ class Bridge:
             async with self._connect() as conn:
                 self.conn = conn
                 await conn.session.update(session=session_config(self.instructions, self.voice, self.reply))
-                if self.greet:
-                    await conn.response.create(response={"instructions": self.greet})
+                if self.greet:   # response.instructions 는 세션 지시를 '대신'함 → 캐릭터를 같이 넣음
+                    await conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
                 tasks = [asyncio.create_task(f()) for f in (self._reader, self._sender, self._pacer, self._watch)]
                 await self._done.wait()
                 for t in tasks:

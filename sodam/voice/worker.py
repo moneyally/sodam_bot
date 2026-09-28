@@ -34,6 +34,22 @@ MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통�
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 
 
+# 텔레그램 오류 이름(Telethon: …Error) → 방에 보일 결과 코드 (감사 2026-09-29: 예전엔 'Error' 없는 이름이라 안 맞았음)
+ERR_CODE = {"ChatAdminRequiredError": "no_voice_right", "GroupcallForbiddenError": "no_voice_right",
+            "UserBannedInChannelError": "banned", "ChannelPrivateError": "not_member", "ChatForbiddenError": "not_member",
+            "FloodWaitError": "flood", "NoActiveGroupCall": "no_voice_chat", "ValueError": "no_peer",
+            "TimeoutError": "slow", "InviteHashExpiredError": "bad_link", "InviteHashInvalidError": "bad_link",
+            "InviteRequestSentError": "join_request", "ChannelsTooMuchError": "too_many_chats"}
+FATAL = {"ChatAdminRequiredError", "GroupcallForbiddenError", "UserBannedInChannelError", "ChannelPrivateError",
+         "ChatForbiddenError", "FloodWaitError", "ValueError", "TimeoutError"}   # 영상 빼고 다시 해도 소용없는 것
+PLAY_TIMEOUT = 30          # play() 가 연결을 무한정 기다리지 않게
+HEALTH_EVERY = 300         # 도우미 세션 살아 있는지 (세션 폐기·연결 끊김 알아채기)
+
+
+def err_code(e: BaseException) -> str:
+    return ERR_CODE.get(type(e).__name__, f"error:{type(e).__name__}")
+
+
 def session_path(cfg) -> Path:
     return Path(cfg.db_path).parent / "voice_assistant.session"
 
@@ -57,7 +73,8 @@ def user_client(session: str, api_id: int, api_hash: str):
     from telethon import TelegramClient
     from telethon.sessions import StringSession
     return TelegramClient(StringSession(session or None), api_id, api_hash, device_model="Sodam Voice",
-                          system_version="Linux", app_version="1.0")
+                          system_version="Linux", app_version="1.0",
+                          flood_sleep_threshold=10)   # 긴 FloodWait 동안 조용히 멈추지 않고 오류로 (다른 방 일이 안 막히게)
 
 
 class Worker:
@@ -74,6 +91,9 @@ class Worker:
         self.frame: bytes | None = None         # 영상 칸 I420 한 장 (로그인 때 1번 변환)
         self.bridges: dict[int, Bridge] = {}
         self.tasks: dict[int, asyncio.Task] = {}
+        self.jobs: set[asyncio.Task] = set()   # 일감마다 따로 (한 방 입장이 느려도 다른 방·로그인이 안 막힘)
+        self.locks: dict[int, asyncio.Lock] = {}
+        self._health_at = 0.0
 
     # ── 로그인 ──────────────────────────────────────────
     async def resume(self) -> None:
@@ -90,9 +110,15 @@ class Worker:
         await self._ready(client)
 
     async def _ready(self, client) -> str:
+        for chat_id in list(self.bridges):          # 다시 로그인 = 옛 통화는 정리하고 새 클라이언트로
+            await self._stop(chat_id, "logout")
         self.client = client
         mtproto.write_session(session_path(self.cfg), client.session.save())
         me = await client.get_me()
+        try:
+            await client.get_dialogs(limit=200)   # 속한 방을 세션에 기억 (막 로그인한 세션은 -100… ID 로 방을 못 찾음)
+        except Exception as e:
+            log.warning("방 목록 읽기 실패: %s", e)
         name = " ".join(x for x in (me.first_name, me.last_name) if x) or "assistant"
         await self.db.set_state(0, store.ASSISTANT_KEY, {"id": me.id, "name": name, "username": me.username})
         self.frame = None
@@ -114,11 +140,21 @@ class Worker:
         api_id, api_hash = read_api(self.cfg)
         if not (api_id and api_hash):
             return False, "no_api_id"
+        await self._drop_pending()
         client = self.client_factory("", api_id, api_hash)
         await client.connect()
         sent = await client.send_code_request(p["phone"])
         self.pending = (client, p["phone"], sent.phone_code_hash)
         return True, "code_sent"
+
+    async def _drop_pending(self) -> None:
+        """중간에 그만둔 로그인 클라이언트는 끊음 (연결이 계속 남던 것)."""
+        if self.pending:
+            old, self.pending = self.pending[0], None
+            try:
+                await old.disconnect()
+            except Exception:
+                pass
 
     async def _login_code(self, p: dict) -> tuple[bool, str]:
         if not self.pending:
@@ -158,15 +194,22 @@ class Worker:
     async def _join(self, p: dict) -> tuple[bool, str]:
         if not self.client:
             return False, "no_assistant"
+        if p.get("username"):                        # 공개 방: 아이디로 (봇 초대 권한 없어도 됨)
+            from telethon.tl.functions.channels import JoinChannelRequest
+            await self.client(JoinChannelRequest(p["username"]))
+            return True, "joined"
         m = INVITE.search(p.get("link") or "")
         if not m:
             return False, "bad_link"
         from telethon.tl.functions.messages import ImportChatInviteRequest
         try:
-            await self.client(ImportChatInviteRequest(m.group(1)))
+            r = await self.client(ImportChatInviteRequest(m.group(1)))
         except Exception as e:
             if type(e).__name__ != "UserAlreadyParticipantError":
                 raise
+            return True, "joined"
+        if r is not None and type(r).__name__ == "ChatInviteJoinResultWebView":   # 들어간 게 아님 (Telethon 1.45)
+            return False, "bad_link"
         return True, "joined"
 
     async def _start(self, chat_id: int, p: dict) -> tuple[bool, str]:
@@ -189,24 +232,29 @@ class Worker:
         try:
             if video:
                 try:
-                    await self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO | md.ExternalMedia.VIDEO, params,
-                                                                  md.VideoParameters(VW, VH, VFPS)),
-                                          md.GroupCallConfig(auto_start=True))
+                    await asyncio.wait_for(self.calls.play(
+                        chat_id, md.MediaStream(md.ExternalMedia.AUDIO | md.ExternalMedia.VIDEO, params,
+                                                md.VideoParameters(VW, VH, VFPS)),
+                        md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
                 except Exception as e:
-                    if type(e).__name__ in ("NoActiveGroupCall", "ChatAdminRequired", "UserBannedInChannel"):
+                    if type(e).__name__ in FATAL:
                         raise
                     log.warning("영상 칸 없이 소리만으로 다시 (%s)", e)
                     video = False
             if not video:
-                await self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params), md.GroupCallConfig(auto_start=True))
+                await asyncio.wait_for(self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params),
+                                                       md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
             await self.calls.record(chat_id, md.RecordStream(True, params))
         except Exception as e:
-            name = type(e).__name__
             await self._leave(chat_id)
-            return False, {"NoActiveGroupCall": "no_voice_chat", "ChatAdminRequired": "no_voice_right",
-                           "UserBannedInChannel": "banned"}.get(name, f"error:{name}")
+            log.warning("통화 시작 실패 %s: %r", chat_id, e)
+            return False, err_code(e)
+        try:
+            call_id = await store.call_started(self.db, chat_id, p.get("by"))   # 기록 먼저 → 실패해도 dict 에 안 남음
+        except Exception:
+            await self._leave(chat_id)
+            raise
         self.bridges[chat_id] = bridge
-        call_id = await store.call_started(self.db, chat_id, p.get("by"))
         self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))
         return True, "started"
 
@@ -263,12 +311,18 @@ class Worker:
             if b:
                 b.feed([f.frame for f in update.frames])
 
-        @self.calls.on_update(md.filters.chat_update(md.ChatUpdate.Status.LEFT_CALL | md.ChatUpdate.Status.KICKED
-                                                     | md.ChatUpdate.Status.CLOSED_VOICE_CHAT))
+        @self.calls.on_update(md.filters.chat_update(md.ChatUpdate.Status.LEFT_CALL))   # 음성채팅 닫힘·방에서 내보내짐
         async def _gone(_, update):
             b = self.bridges.get(update.chat_id)
             if b:
                 b.stop("closed")
+
+        if hasattr(md.filters, "call_participant"):   # 통화에서만 내보내짐 (방엔 남음) — ChatUpdate 로 안 옴
+            @self.calls.on_update(md.filters.call_participant(md.Action.KICKED | md.Action.LEFT) & md.filters.me)
+            async def _removed(_, update):
+                b = self.bridges.get(update.chat_id)
+                if b:
+                    b.stop("kicked")
 
     # ── 일 처리 ────────────────────────────────────────
     async def handle(self, job: dict) -> None:
@@ -296,15 +350,70 @@ class Worker:
             ok, res = False, f"error:{type(e).__name__}"
         await store.finish(self.db, job["id"], ok, res)
 
+    async def _run_job(self, job: dict) -> None:
+        key = 0 if job["kind"].startswith(("login", "logout")) else job["chat_id"]   # 로그인끼리·같은 방끼리만 차례로
+        async with self.locks.setdefault(key, asyncio.Lock()):
+            await self.handle(job)
+
     async def step(self) -> None:
         await self.db.set_state(0, store.WORKER_BEAT, time.time())
         for job in await store.take_jobs(self.db):
-            await self.handle(job)
+            t = asyncio.create_task(self._run_job(job))
+            self.jobs.add(t)
+            t.add_done_callback(self.jobs.discard)
+        if time.monotonic() - self._health_at > HEALTH_EVERY:
+            self._health_at = time.monotonic()
+            await self.health()
+
+    async def drain(self) -> None:
+        """돌고 있는 일감이 끝날 때까지 (테스트·종료용)."""
+        while self.jobs:
+            await asyncio.gather(*list(self.jobs), return_exceptions=True)
+
+    async def health(self) -> None:
+        """도우미 세션이 풀렸으면(다른 기기에서 세션 종료 등) 표시를 지워 봇이 '연결 안 됨' 으로 안내하게."""
+        if not self.client:
+            return
+        try:
+            if not self.client.is_connected():
+                await self.client.connect()
+            if await self.client.is_user_authorized():
+                return
+        except Exception as e:
+            if type(e).__name__ not in ("AuthKeyUnregisteredError", "SessionRevokedError", "UserDeactivatedError"):
+                log.warning("도우미 상태 확인 실패(다음에 다시): %s", e)
+                return
+        log.warning("도우미 세션이 풀렸어요 — 🎙 에서 다시 연결")
+        for chat_id in list(self.bridges):
+            await self._stop(chat_id, "logout")
+        self.client = self.calls = None
+        await self.db.set_state(0, store.ASSISTANT_KEY, None)
+
+    async def shutdown(self) -> None:
+        """SIGTERM(배포·재시작): 통화마다 나가기 → 방에 유령 참가자가 안 남음."""
+        for chat_id in list(self.bridges):
+            await self._stop(chat_id, "restart")
+
+    async def leave_orphans(self, chats: list[int]) -> None:
+        """지난번에 인사 없이 꺼졌다면(kill -9 등) 그 방 음성채팅에서 나감 (ntgcalls 는 기록이 없어 leave_call 이 안 됨)."""
+        if not self.client or not chats:
+            return
+        from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.tl.functions.phone import LeaveGroupCallRequest
+        for chat_id in chats:
+            try:
+                full = await self.client(GetFullChannelRequest(await self.client.get_input_entity(chat_id)))
+                if full.full_chat.call:
+                    await self.client(LeaveGroupCallRequest(call=full.full_chat.call, source=0))
+            except Exception as e:
+                log.debug("남은 통화 정리 %s: %s", chat_id, e)
 
     async def run(self) -> None:
+        orphans = [r["chat_id"] for r in await self.db._all("SELECT DISTINCT chat_id FROM voice_calls WHERE end_ts IS NULL")]
         await store.close_orphans(self.db)
         try:
             await self.resume()
+            await self.leave_orphans(orphans)
         except Exception as e:
             log.warning("어시스턴트 세션 열기 실패: %s", e)
         log.info("📞 음성 담당 시작 (어시스턴트 %s)", "있음" if self.client else "없음")
@@ -323,9 +432,10 @@ def _media():
     from pytgcalls import filters
     from pytgcalls.types import (ChatUpdate, Device, Direction, ExternalMedia, GroupCallConfig, MediaStream,
                                  RecordStream)
-    from pytgcalls.types import Frame
+    from pytgcalls.types import Frame, GroupCallParticipant
     from pytgcalls.types.raw import AudioParameters, VideoParameters
     return SimpleNamespace(filters=filters, ChatUpdate=ChatUpdate, Device=Device, Direction=Direction,
+                           Action=GroupCallParticipant.Action,
                            ExternalMedia=ExternalMedia, GroupCallConfig=GroupCallConfig, MediaStream=MediaStream,
                            RecordStream=RecordStream, AudioParameters=AudioParameters, VideoParameters=VideoParameters,
                            Frame=Frame)
@@ -344,7 +454,19 @@ async def main() -> None:
     oai = AsyncOpenAI(api_key=cfg.openai_api_key)
     w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: oai.realtime.connect(model=model),
                media=_media())
-    await w.run()
+    import signal
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    runner = asyncio.create_task(w.run())
+    await stop.wait()
+    log.info("📞 음성 담당 끄는 중 — 통화에서 나가기")
+    try:
+        await asyncio.wait_for(w.shutdown(), 20)
+    finally:
+        runner.cancel()
+        await db.close()
 
 
 if __name__ == "__main__":

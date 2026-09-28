@@ -36,7 +36,9 @@ def audio_rates_and_mix():
     back = np.frombuffer(audio.up(audio.down(a)), "<i2").astype(int)
     assert np.abs(back - np.frombuffer(a, "<i2")).max() < 1500           # 모양이 거의 그대로
     loud = np.full(480, 30000, "<i2").tobytes()
-    assert set(np.frombuffer(audio.mix([loud, loud]), "<i2")) == {30000}  # 섞어도 안 넘침 (평균)
+    assert set(np.frombuffer(audio.mix([loud, loud]), "<i2")) == {32767}  # 더하고 넘치면 자름
+    quiet = np.full(480, 1000, "<i2").tobytes()
+    assert set(np.frombuffer(audio.mix([quiet, quiet]), "<i2")) == {2000}, "여럿이 말해도 작아지지 않음"
     assert audio.mix([]) == b"" and audio.level(bytes(960)) == 0
 
 
@@ -250,6 +252,7 @@ async def make_worker(need_pw=False):
 async def run_job(db, w, kind, payload, chat=0):
     jid = await store.add_job(db, chat, kind, payload, 7)
     await w.step()
+    await w.drain()
     return await store.job(db, jid)
 
 
@@ -274,7 +277,7 @@ async def worker_start_stop_records_call():
     assert row["result"] == "started", row["result"]
     play = next(x for x in w.calls.log if x[0] == "play")
     assert play[3] == {"auto_start": True}                                                 # 음성채팅 없으면 켜기
-    assert play[2] == ("media", 3, (48000, 1), ("video", 640, 360, 1)), play[2]            # 소리 + 영상 칸(사진 1fps)
+    assert play[2] == ("media", 3, (48000, 1), ("video", 640, 360, 2)), play[2]            # 소리 + 영상 칸(사진 2fps)
     assert any(x[0] == "record" for x in w.calls.log) and await store.active_call(db, CHAT)
     assert (await run_job(db, w, "start", {}, CHAT))["result"] == "already"
     await until(lambda: any(x[0] == "frame" for x in w.calls.log))
@@ -359,7 +362,8 @@ async def start_invites_assistant_promotes_and_posts_result():
     assert bot.promoted and bot.promoted[0][2] == {"can_manage_video_chats": True}
     start = await db._one("SELECT * FROM voice_jobs WHERE kind='start'")
     assert start["payload"] == "{}", "끝난 일은 지움"
-    assert "여자" in P.PERSONA and P.VOICE == "marin"
+    text, voice = P.voice_setup(await db.get_settings(CHAT), None)
+    assert "여자 AI 비서" in text and voice == "marin"
     out = await P.t_voice_call(ctx(svc, bot, 5, Role.MEMBER), {"action": "start"})
     assert "이미" in out
 
@@ -502,3 +506,226 @@ async def guide_and_checklist_show_what_is_missing():
     assert "✅ 음성 도우미 계정 연결" in chk.text
     await db.set_state(0, store.WORKER_BEAT, time.time())
     assert "✅ 음성 담당" in (await P.s_check(c)).text
+
+
+@test
+async def wait_cancels_unpicked_job_but_waits_for_running_one():
+    db = await make_db()
+    old = (P.WAIT_JOB, P.WAIT_RUNNING)
+    P.WAIT_JOB, P.WAIT_RUNNING = 0.05, 0.3
+    try:
+        j = await store.add_job(db, CHAT, "start", {}, 1)
+        assert await P._wait(db, j) == ("failed", "no_worker")
+        assert not await store.take_jobs(db), "취소된 일은 worker 가 늦게 가져가지 않음"
+        j2 = await store.add_job(db, CHAT, "join", {}, 1)
+        await store.take_jobs(db)                                  # worker 가 이미 처리 중
+
+        async def finish_later():
+            await asyncio.sleep(0.15)
+            await store.finish(db, j2, True, "joined")
+        asyncio.create_task(finish_later())
+        assert await P._wait(db, j2) == ("done", "joined")
+    finally:
+        P.WAIT_JOB, P.WAIT_RUNNING = old
+
+
+@test
+async def greeting_keeps_persona():
+    b, conn, _ = make_bridge(greet="짧게 인사")
+    task = asyncio.create_task(b.run())
+    await until(lambda: conn.named("response.create"))
+    ins = conn.named("response.create")[0]["response"]["instructions"]
+    assert ins.startswith("너는 소담") and ins.endswith("짧게 인사")
+    b.stop("admin")
+    await asyncio.wait_for(task, 2)
+
+
+# ── 재감사 2차 (음악봇 비교·py-tgcalls 3.0 소스 대조) ────────────
+from sodam.voice import worker as WK
+
+
+class ChatAdminRequiredError(Exception):
+    pass
+
+
+async def logged_in_worker():
+    db, w, client, conn = await make_worker()
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    await run_job(db, w, "login_code", {"code": "12345"})
+    return db, w, client
+
+
+@test
+async def telethon_error_names_map_and_are_not_retried():
+    db, w, _ = await logged_in_worker()
+    tries = []
+
+    async def no_right(chat_id, stream, config):
+        tries.append(stream)
+        raise ChatAdminRequiredError()
+    w.calls.play = no_right
+    assert (await run_job(db, w, "start", {}, CHAT))["result"] == "no_voice_right"
+    assert len(tries) == 1, "권한 없음은 영상 빼고 다시 안 함 (음성채팅 만들기를 두 번 보내던 것)"
+    assert WK.err_code(type("FloodWaitError", (Exception,), {})()) == "flood"
+    assert WK.err_code(RuntimeError()) == "error:RuntimeError"
+
+
+@test
+async def slow_room_does_not_block_other_jobs():
+    db, w, _ = await logged_in_worker()
+    gate = asyncio.Event()
+    orig = w.calls.play
+
+    async def slow(chat_id, stream, config):
+        if chat_id == CHAT:
+            await gate.wait()
+        await orig(chat_id, stream, config)
+    w.calls.play = slow
+    a = await store.add_job(db, CHAT, "start", {}, 1)
+    b = await store.add_job(db, -100777, "stop", {}, 1)
+    await w.step()
+    for _ in range(100):
+        if (await store.job(db, b))["status"] == "done":
+            break
+        await asyncio.sleep(0.01)
+    assert (await store.job(db, b))["status"] == "done", "다른 방 일은 기다리지 않음"
+    assert (await store.job(db, a))["status"] == "running"
+    gate.set()
+    await w.drain()
+    assert (await store.job(db, a))["result"] == "started"
+    await run_job(db, w, "stop", {}, CHAT)
+
+
+@test
+async def join_checks_result_and_uses_username_for_public_groups():
+    db, w, client = await logged_in_worker()
+    sent = []
+
+    async def call(req):
+        sent.append(type(req).__name__)
+        return type("ChatInviteJoinResultWebView", (), {})()
+    client.__class__ = type("C", (FakeClient,), {"__call__": lambda self, req: call(req)})
+    assert (await run_job(db, w, "join", {"link": "https://t.me/+abcDEF123"}))["result"] == "bad_link"
+    assert (await run_job(db, w, "join", {"username": "publicroom"}))["result"] == "joined"
+    assert sent == ["ImportChatInviteRequest", "JoinChannelRequest"], sent
+
+
+@test
+async def shutdown_leaves_calls_and_room_is_told_to_call_again():
+    db, w, _ = await logged_in_worker()
+    await run_job(db, w, "start", {}, CHAT)
+    await asyncio.sleep(0.05)
+    await w.shutdown()
+    assert ("leave", CHAT) in w.calls.log and not w.bridges
+    _, svc, bot = await world()
+    svc.db = db
+    await P.tick(svc, bot)
+    assert any("다시 불러" in x[2] for x in bot.named("send_message")), bot.named("send_message")
+
+
+@test
+async def health_clears_revoked_assistant():
+    db, w, client = await logged_in_worker()
+    assert await store.assistant(db)
+    client.is_connected = lambda: True
+
+    async def no():
+        return False
+    client.is_user_authorized = no
+    await w.health()
+    assert not await store.assistant(db) and w.client is None
+
+
+@test
+async def abandoned_login_disconnects_old_client():
+    db, w, client = await make_worker()[:3] if False else (await make_worker())[:3]
+    dis = []
+
+    async def disconnect():
+        dis.append(1)
+    client.disconnect = disconnect
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    assert dis == [1]
+
+
+@test
+async def public_group_join_by_username_and_basic_group_hint():
+    db, svc, bot = await world("all")
+    await db.set_state(0, store.ASSISTANT_KEY, {"id": 4242, "name": "소담 음성", "username": "Sodam_bot2"})
+    await db.set_state(0, store.WORKER_BEAT, time.time())
+    bot.member_status = {(CHAT, 4242): "left"}
+
+    async def get_chat(chat_id):
+        return SimpleNamespace(id=chat_id, username="openroom", type="group")
+    bot.get_chat = get_chat
+    w = asyncio.create_task(fake_worker(db, {"join": "joined"}))
+    orig_finish = store.finish
+
+    async def fin(db_, job_id, ok, result=""):
+        row = await store.job(db_, job_id)
+        await orig_finish(db_, job_id, row["kind"] != "start", "no_voice_right" if row["kind"] == "start" else result)
+    store.finish = fin
+    try:
+        await P.start_call(svc, bot, CHAT, 5)
+    finally:
+        store.finish = orig_finish
+        w.cancel()
+    join = await db._one("SELECT * FROM voice_jobs WHERE kind='join'")
+    assert join and not bot.named("invite_link"), "공개 방은 초대링크 없이 아이디로"
+    assert any("일반 그룹" in x[2] for x in bot.named("send_message")), bot.named("send_message")
+
+
+
+# ── 말투별 목소리: 여자 비서 기본 · 여친 · 남친 ─────────────────
+@test
+async def voice_follows_style_girlfriend_boyfriend():
+    db, svc, bot = await world()
+    s = await db.get_settings(CHAT)
+    t, v = P.voice_setup(s, None)
+    assert v == "marin" and "여자 AI 비서" in t and "[말투: 정중]" in t
+    t, v = P.voice_setup(s, "girlfriend")
+    assert v == "marin" and "여친" in t and "자기" in t and "글자로 읽지 말고" in t
+    t, v = P.voice_setup(s, "boyfriend")
+    assert v == "cedar" and "남자친구 모드" in t and "남성" in t
+    await db.set_setting(CHAT, "voice_male", "echo")
+    await db.set_setting(CHAT, "voice_female", "coral")
+    s = await db.get_settings(CHAT)
+    assert P.voice_setup(s, "boyfriend")[1] == "echo" and P.voice_setup(s, "secretary")[1] == "coral"
+    assert P.voice_setup(s, "없는말투")[1] == "coral"
+
+
+@test
+async def tool_style_and_caller_style_reach_the_call():
+    db, svc, bot = await world("all")
+    await db.set_state(0, store.ASSISTANT_KEY, {"id": 4242, "name": "소담 음성", "username": "Sodam_bot2"})
+    await db.set_state(0, store.WORKER_BEAT, time.time())
+    bot.member_status = {(CHAT, 4242): "member"}
+    seen = []
+    orig = store.take_jobs
+
+    async def spy(db_, limit=10):
+        jobs = await orig(db_, limit)
+        seen.extend(j for j in jobs if j["kind"] == "start")
+        return jobs
+    store.take_jobs = spy
+    w = asyncio.create_task(fake_worker(db, {"start": "started"}))
+    try:
+        await P.t_voice_call(ctx(svc, bot, 5, Role.MEMBER), {"action": "start", "style": "남친"})
+        await until(lambda: seen, 5)
+    finally:
+        w.cancel()
+        store.take_jobs = orig
+    assert seen[0]["payload"]["voice"] == "cedar" and "남자친구 모드" in seen[0]["payload"]["instructions"]
+
+
+@test
+async def voice_picker_screen_whitelist():
+    db, svc, bot = await world()
+    c = PanelCtx(svc, bot, 1, CHAT, ["m", "ash"])
+    await P.r_voice_set(c)
+    assert (await db.get_settings(CHAT))["voice_male"] == "ash"
+    await P.r_voice_set(PanelCtx(svc, bot, 1, CHAT, ["f", "evil"]))
+    assert (await db.get_settings(CHAT))["voice_female"] == "marin"
+    scr = await P.s_room(PanelCtx(svc, bot, 1, CHAT, []))
+    assert "남자 목소리: ash" in str(scr.kb)
