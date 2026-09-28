@@ -330,6 +330,13 @@
   h264 yuv420p·소리 없음·faststart·2MB↓ → send_document (영상으로 보내면 재압축). 움직임은 sin(2πn/180) 주기라 끊김 없이 반복.
 - 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
 
+## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, 스킬 `.claude/skills/telegram-sticker-forge/`, tests/test_sticker.py)
+- 사용자가 준 telegram-sticker-forge 엔진(배경 빼기·움직임 14·효과 20·타이핑 자막) → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘.
+  AI 도구 make_sticker(spec): AI 가 사진·요청을 보고 디자이너처럼 spec 을 고름(도구 설명에 매핑 요약), `sanitize` 가 이름·숫자·범위만
+  통과(rain/rise·font = 파일 경로라 막음), 검사표(크기·코덱·길이·용량·alpha_mode·alpha 범위·소리·구멍·글자 깨짐) 통과해야 전송,
+  실패면 효과 하나 덜고 한 번 더. 스티커 + 파일(재압축 막으려고 문서로) 전송, 사람마다 하루 5개, 한 번에 하나(to_thread).
+- 인코딩 good/cpu-used 1 (best/0 과 화질 같고 10배 빠름). 명령줄 `tools/sticker_forge.py` 로 직접 만들어 미리보기(8장) 확인.
+
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).

@@ -78,6 +78,9 @@ class FakeBot:
     async def send_photo(self, chat_id, photo, caption=None, **kw):
         return await self._send_media("send_photo", chat_id, photo, caption, **kw)
 
+    async def send_sticker(self, chat_id, sticker, **kw):
+        return await self._send_media("send_sticker", chat_id, sticker, None, **kw)
+
     async def send_video(self, chat_id, video, caption=None, **kw):
         return await self._send_media("send_video", chat_id, video, caption, **kw)
 

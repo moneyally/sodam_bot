@@ -9,3 +9,5 @@ pillow>=10  # 게임 그림장 이미지
 telethon>=1.45,<2  # MTProto 도우미 (sodam/mtproto.py, 선택 기능 — MTPROTO_API_ID/HASH 없으면 안 씀)
 sqlite-vec>=0.1.6
 imageio-ffmpeg>=0.5  # 움프 영상 (sodam/avatar.py) — ffmpeg 정적 바이너리 포함, 시스템 ffmpeg 없어도 됨
+numpy>=1.26    # 스티커 공방 (sodam/stickerforge) — 배경 빼기·효과
+scipy>=1.11    # 스티커 공방 배경 빼기 (ndimage label·fill)
