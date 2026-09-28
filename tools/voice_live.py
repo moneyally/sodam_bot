@@ -39,6 +39,8 @@ def _key() -> str:
 
 
 async def main() -> None:
+    import logging
+    logging.basicConfig(level=logging.WARNING, format="⚠️ %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("lines", nargs="*", default=["소담아 안녕? 오늘 기분 어때?", "소담아 점심 메뉴 하나만 추천해 줘."])
     ap.add_argument("--out", default=str(ROOT / "voice_live.wav"))
@@ -122,7 +124,7 @@ async def main() -> None:
     await wait_turns(1, 20)                                # 들어오자마자 인사
     for i, pcm in enumerate(utter, 1):
         await asyncio.sleep(1.0)
-        while bridge.out:                                  # 소담 말이 끝날 때까지 (끼어들기 시험은 아님)
+        while bridge.out and not bridge.done:              # 소담 말이 끝날 때까지 (끼어들기 시험은 아님)
             await asyncio.sleep(0.05)
         for j in range(0, len(pcm), audio.FRAME_BYTES):    # 통화처럼 10 ms 씩 실시간 (소리 번호 101 = 말하는 사람)
             frame = pcm[j:j + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0")
@@ -135,7 +137,7 @@ async def main() -> None:
             await asyncio.sleep(0.01)
         await wait_turns(i + 1, 25)
         quiet = 0.0                                        # 이어지는 답·도구 뒤 답까지 (6초 조용하면 다음)
-        while quiet < 6.0:
+        while quiet < 6.0 and not bridge.done:
             await asyncio.sleep(0.1)
             quiet = 0.0 if bridge.out else quiet + 0.1
     bridge.stop("test")
