@@ -100,7 +100,9 @@ async def main() -> None:
         if f"said_{i}" in marks and f"first_audio_{i}" in marks:
             gap = marks[f"first_audio_{i}"] - marks[f"said_{i}"]
             print(f"⏱ {i}번째 말 끝 → 소담 첫 소리 {gap:.2f}초 (말 끝 판단 0.7초 포함)")
-    print(f"토큰 {res.usage}")
+    u = res.usage
+    print(f"토큰 입력 {u.get('input_tokens', 0)} (캐시 {u.get('cached_tokens', 0)} = "
+          f"{100 * u.get('cached_tokens', 0) // max(1, u.get('input_tokens', 0))}%) · 출력 {u.get('output_tokens', 0)}")
     with wave.open(a.out, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)

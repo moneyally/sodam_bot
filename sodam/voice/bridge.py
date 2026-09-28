@@ -171,6 +171,9 @@ class Bridge:
             usage = getattr(getattr(ev, "response", None), "usage", None)
             for k in ("input_tokens", "output_tokens"):
                 self.result.usage[k] = self.result.usage.get(k, 0) + int(getattr(usage, k, 0) or 0)
+            det = getattr(usage, "input_token_details", None)        # 앞 턴을 다시 읽는 부분은 자동 캐시 (할인)
+            self.result.usage["cached_tokens"] = (self.result.usage.get("cached_tokens", 0)
+                                                  + int(getattr(det, "cached_tokens", 0) or 0))
         elif t == "error":
             self._errors += 1
             log.warning("Realtime 오류: %s", getattr(getattr(ev, "error", None), "message", ev))
