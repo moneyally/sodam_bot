@@ -8,7 +8,7 @@ STALE=${STALE:-180}
 SYSTEMCTL=${SYSTEMCTL:-systemctl}
 
 now=$(date +%s)
-uptime_s=$(awk '{print int($1)}' /proc/uptime)
+uptime_s=$(awk '{print int($1)}' "${PROC_UPTIME:-/proc/uptime}")   # 테스트는 가짜 파일
 rc=0
 for pair in "sodam:heartbeat" "sodam-dealer:heartbeat-dealer"; do
     unit=${pair%%:*}

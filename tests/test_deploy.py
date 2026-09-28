@@ -75,7 +75,8 @@ def _health(app: Path, active: str, started_ago: int) -> list[str]:
     log = app / "restarts.log"
     log.write_text("")
     fake = app / "systemctl"
-    uptime = float(Path("/proc/uptime").read_text().split()[0])
+    uptime = 100000.0                                     # 가짜 부팅 시간 (컨테이너가 막 켜져도 같게)
+    (app / "uptime").write_text(f"{uptime} 0")
     start_us = max(0, int((uptime - started_ago) * 1_000_000))
     fake.write_text(f"""#!/bin/sh
 case "$1" in
@@ -86,7 +87,7 @@ esac
 """)
     fake.chmod(0o755)
     r = subprocess.run(["bash", str(DEPLOY / "healthcheck.sh")], env={**os.environ, "APP_DIR": str(app),
-                       "SYSTEMCTL": str(fake)}, capture_output=True, text=True, timeout=30)
+                       "SYSTEMCTL": str(fake), "PROC_UPTIME": str(app / "uptime")}, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stdout + r.stderr
     return log.read_text().split()
 
@@ -163,6 +164,14 @@ def scripts_parse_and_units_sane():
                      "PrivateTmp=true", "TimeoutStopSec=", "User=sodam"):
             assert need in u, f"{name}: {need} 없음"
     assert "SODAM_ENV=.env.dealer" in (DEPLOY / "sodam-dealer.service").read_text()
+    v = (DEPLOY / "sodam-voice.service").read_text()      # 📞 음성 담당: update.sh voice_setup 이 설치
+    for need in ("ExecStart=/opt/sodam/.venv/bin/python -m sodam.voice.worker", "Restart=always", "User=sodam",
+                 "ReadWritePaths=/opt/sodam/data", "AF_NETLINK"):
+        assert need in v, f"sodam-voice.service: {need} 없음"
+    assert not any("#" in line.split("=", 1)[1] for line in v.splitlines() if "=" in line and not line.startswith("#")), \
+        "systemd 값 줄 끝 주석은 값이 돼 버림"
+    up = (DEPLOY / "update.sh").read_text()
+    assert "voice_setup" in up and "requirements-voice.txt" in up and (ROOT / "requirements-voice.txt").exists()
     # update.sh 가 기다리는 줄이 실제 시작 로그와 같은 모양인지
     src = (ROOT / "sodam" / "__main__.py").read_text()
     assert '시작!%s' in src and '(버전 {version})' in src
