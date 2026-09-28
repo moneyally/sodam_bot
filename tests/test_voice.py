@@ -729,3 +729,58 @@ async def voice_picker_screen_whitelist():
     assert (await db.get_settings(CHAT))["voice_female"] == "marin"
     scr = await P.s_room(PanelCtx(svc, bot, 1, CHAT, []))
     assert "남자 목소리: ash" in str(scr.kb)
+
+
+# ── 영상대화 중 웹 검색 · 속도 설정 ─────────────────────────────
+@test
+async def realtime_can_search_web_and_speaks_result():
+    calls = []
+
+    async def search(args):
+        calls.append(args)
+        return "서울 오늘 맑음, 낮 최고 24도"
+    b, conn, _ = make_bridge()
+    b.tools = {"web_search": search}
+    task = asyncio.create_task(b.run())
+    await until(lambda: conn.named("session.update"))
+    cfg = conn.named("session.update")[0]["session"]
+    assert cfg["tools"][0]["name"] == "web_search" and cfg["reasoning"] == {"effort": "minimal"}
+    assert cfg["audio"]["input"]["turn_detection"]["silence_duration_ms"] == 500
+    assert cfg["truncation"]["retention_ratio"] == 0.8
+    conn.push(type="response.function_call_arguments.done", call_id="c1", name="web_search", arguments='{"query": "서울 날씨"}')
+    await until(lambda: conn.named("response.create"))
+    item = conn.named("conversation.item.create")[0]["item"]
+    assert calls == [{"query": "서울 날씨"}] and item["type"] == "function_call_output" and item["call_id"] == "c1"
+    assert "24도" in item["output"] and b.result.usage["tool_calls"] == 1
+    b.stop("admin")
+    await asyncio.wait_for(task, 2)
+
+
+@test
+async def no_tools_means_no_tool_config_and_failed_search_is_graceful():
+    b, conn, _ = make_bridge()
+    task = asyncio.create_task(b.run())
+    await until(lambda: conn.named("session.update"))
+    assert "tools" not in conn.named("session.update")[0]["session"]
+
+    async def boom(args):
+        raise RuntimeError("down")
+    b.tools = {"web_search": boom}
+    conn.push(type="response.function_call_arguments.done", call_id="c2", name="web_search", arguments="{}")
+    await until(lambda: conn.named("conversation.item.create"))
+    assert "안 됨" in conn.named("conversation.item.create")[0]["item"]["output"]
+    b.stop("admin")
+    await asyncio.wait_for(task, 2)
+
+
+@test
+async def worker_gives_search_with_room_budget():
+    db, w, _, conn = await make_worker()
+    seen = []
+
+    async def ws(q, chat_id):
+        seen.append((q, chat_id))
+        return "결과"
+    w.web_search = ws
+    out = await w._tools(CHAT)["web_search"]({"query": "환율"})
+    assert out == "결과" and seen[0][0].startswith("환율 (기준: 한국 시각 ") and seen[0][1] == CHAT, seen

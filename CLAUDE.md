@@ -400,6 +400,10 @@
   나머지 = 여자 비서 소담·voice_female(기본 marin). 🎙 화면에서 10개 중 선택(다음 통화부터). 한 답 max_output_tokens 400 + '최대 2문장'.
 - 실측 `tools/voice_live.py [--style girlfriend] "말1" "말2"` (실제 Realtime·TTS, 텔레그램만 가짜, 비용 조금 — 오너 허락): 2026-09-29
   말 끝→첫 소리 0.6~1.4초(VAD 0.7초 포함), 한 통화 2문장씩 2번 ≈ 입력 2.2k·출력 0.7~0.8k 토큰. 도구 재감사(음악봇·py-tgcalls 3.0 소스) 반영.
+- 영상대화 개선(OpenAI 실시간 프롬프트 가이드·VAD·costs 문서 근거, 2026-09-29): reasoning effort minimal(2.1-mini 는 추론 모델) ·
+  server_vad silence 500 · truncation retention_ratio 0.8(캐시 덜 깸) · 지시문 섹션(길이·언어·말하는 법·도구·규칙), 반복 금지·말투 하나로 고정 ·
+  **web_search 함수 도구**(bridge._call_tool → llm.web_search 같은 격리 검색·같은 예산, 한국 시각 기준 붙임). 실측: '서울 날씨' → '잠깐만요, 찾아볼게요'
+  → 검색 4초 → 정확히 답, 캐시 51%(대화 길어질수록↑, 캐시 입력 90~97% 할인). 캐시 토큰은 Result.usage.cached_tokens.
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
