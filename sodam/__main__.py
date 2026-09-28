@@ -8,6 +8,7 @@ from pathlib import Path
 from telegram import Update
 from telegram.error import NetworkError, TelegramError
 from telegram.ext import Application, ApplicationBuilder, ContextTypes
+from telegram.request import HTTPXRequest
 
 from . import handlers
 from .announce import Announcer
@@ -32,6 +33,7 @@ from .util import esc
 # 텔레그램 전송 한도: 전체 초당 30·같은 방 분당 20 이 공식 한도 → 여유를 두고 25·18, RetryAfter 는 2번까지 기다렸다 재시도
 RATE_LIMIT = dict(overall_max_rate=25, overall_time_period=1, group_max_rate=18, group_time_period=60, max_retries=2)
 HEARTBEAT_SEC = 30          # data/heartbeat 파일 갱신 주기 (systemd 헬스체크가 mtime 을 봄, deploy/README.md)
+POLL_STALE = 120           # getUpdates 는 30초마다 돌아옴 → 2분 넘게 안 돌아오면 받기(폴링)가 멈춘 것
 ERROR_NOTIFY_GAP = 10 * 60  # 같은 종류 예외는 10분에 1번만 오너에게
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -107,8 +109,23 @@ def write_heartbeat(path: Path) -> None:
     tmp.replace(path)  # 원자적 교체 → 헬스체크가 반쯤 쓴 파일을 읽지 않게
 
 
+class PollRequest(HTTPXRequest):
+    """getUpdates 전용 연결. 응답이 올 때마다 시각 기록 → 받기만 멈춘 경우도 하트비트가 멈춤
+    (실제 2026-09-28: RemoteProtocolError 뒤 폴링만 멈췄는데 get_webhook_info 는 성공해서 재시작이 안 됐음)."""
+    last_ok = time.monotonic()
+
+    async def do_request(self, *a, **kw):
+        out = await super().do_request(*a, **kw)
+        PollRequest.last_ok = time.monotonic()
+        return out
+
+
 async def job_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """텔레그램에 실제로 닿을 때만 기록 → 연결이 끊긴 채 멈춰 있으면 하트비트가 멈춰 감시(supervise.sh·systemd)가 재시작."""
+    """텔레그램에 실제로 닿고 + 받기(폴링)도 돌 때만 기록 → 멈춰 있으면 하트비트가 멈춰 감시(supervise.sh·systemd)가 재시작."""
+    idle = time.monotonic() - PollRequest.last_ok
+    if idle > POLL_STALE:
+        logging.warning("heartbeat: 업데이트 받기가 %d초째 멈춤", idle)
+        return
     try:
         await asyncio.wait_for(context.bot.get_webhook_info(), timeout=20)   # 가벼운 호출 (시작 때 get_me 는 안 부름)
     except Exception as e:  # 연결 오류·시간 초과: 이번엔 기록 안 함 (3분 넘게 이어지면 재시작됨)
@@ -196,6 +213,7 @@ def build_app(cfg: Config, db: DB) -> Application:
         jq = app.job_queue
         hb = heartbeat_path(cfg)
         write_heartbeat(hb)
+        PollRequest.last_ok = time.monotonic()   # 받기 시계는 봇 시작부터
         jq.run_repeating(job_heartbeat, interval=HEARTBEAT_SEC, first=HEARTBEAT_SEC, data=hb, name="heartbeat")
         # 재시작으로 타이머가 사라진 임시 안내 지우기 등 (메인·딜러 봇 모두 — 자기가 보낸 글만)
         jq.run_repeating(persist.job_sweep, interval=30, first=15, name="persist_sweep")
@@ -228,7 +246,7 @@ def build_app(cfg: Config, db: DB) -> Application:
            .concurrent_updates(True)  # AI 응답을 기다리는 동안에도 도배 검사 등은 계속 돌게
            # 기본 5초는 서버 네트워크가 잠깐 느려지면 메시지 처리가 끊김 → 넉넉하게
            .connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
-           .get_updates_read_timeout(30)
+           .get_updates_request(PollRequest(read_timeout=30, write_timeout=20, connect_timeout=10, pool_timeout=10))
            .rate_limiter(ChatRateLimiter(**RATE_LIMIT))   # 429 는 그 방만 멈춤 (sodam/ratelimit.py)
            .post_init(post_init)
            .post_stop(post_stop)

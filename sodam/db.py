@@ -412,7 +412,8 @@ class DB:
         self._settings_cache[chat_id] = settings
 
     # ── 사용자 / 멤버 ─────────────────────────────────────
-    async def upsert_user(self, user) -> None:
+    async def upsert_user(self, user, commit: bool = False) -> None:
+        """commit=False 면 뒤따르는 touch_member 등의 commit 에 묻어감. 혼자 쓰는 곳은 commit=True (쓰기 잠금이 남지 않게)."""
         await self.conn.execute(
             "INSERT INTO users(user_id, username, first_name, last_name, is_bot, updated_at) "
             "VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
@@ -420,6 +421,8 @@ class DB:
             "last_name=excluded.last_name, updated_at=excluded.updated_at",
             (user.id, user.username, user.first_name, user.last_name, int(user.is_bot), now()),
         )
+        if commit:
+            await self.conn.commit()
 
     async def touch_member(self, chat_id: int, user_id: int, joined: bool = False) -> None:
         ts = now()
