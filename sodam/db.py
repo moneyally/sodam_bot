@@ -272,12 +272,25 @@ class DB:
         # sqlite.org/pragma.html: WAL 에선 NORMAL 도 DB 가 깨지지 않음 (정전 때 마지막 커밋 몇 개만 잃을 수 있음) → 쓰기가 빠름
         await self.conn.execute("PRAGMA synchronous=NORMAL")
         await self._all(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
+        self.vec = await self._load_vec()
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:  # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)
         await self._migrate()
         await self._backfill_fts()
         await self.conn.commit()
+
+    async def _load_vec(self) -> bool:
+        """sqlite-vec 확장 (의미 검색, sodam/semsearch.py). 없거나 못 올리면 False → 단어 검색만."""
+        try:
+            import sqlite_vec
+            await self.conn.enable_load_extension(True)
+            await self.conn.load_extension(sqlite_vec.loadable_path())
+            await self.conn.enable_load_extension(False)
+            return True
+        except Exception as e:   # 패키지 없음·확장 금지 빌드
+            log.info("sqlite-vec 없음 → 의미 검색 끔 (%s)", e)
+            return False
 
     async def _backfill_fts(self) -> None:
         """색인이 없던 예전 기록을 색인에 넣는다 (id 가 늘기만 해서 '색인된 마지막 id 다음'만 보면 됨)."""

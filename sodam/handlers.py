@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, social,
+from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue

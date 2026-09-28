@@ -20,6 +20,7 @@ PRICES: dict[str, tuple[float, float, float]] = {
     # 수백 토큰 × $3/1M 차이라 과다 청구는 1장에 $0.001 안쪽). 장당 토큰 수는 모델이 정함 (예: 출력 1,056토큰이면 ≈ $0.032).
     "gpt-image-2.5-flare": (8.00, 2.00, 30.00),
     "gpt-image-2.5-sunburst": (8.00, 2.00, 30.00),
+    "text-embedding-3-small": (0.02, 0.02, 0.0),   # 의미 검색 색인 (sodam/semsearch.py) — 메시지 2천 개 ≈ $0.001
 }
 IMAGE_PREFIX = "gpt-image"
 WEB_SEARCH_PER_CALL = 0.01       # 웹 검색 도구 1번 ($10 / 1천 번)

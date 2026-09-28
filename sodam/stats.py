@@ -41,13 +41,19 @@ async def summary_text(db: DB, chat_id: int, tz, period: str = "오늘") -> str:
     return "\n".join(lines)
 
 
-async def search_text(db: DB, chat_id: int, tz, keyword: str, days: int = 7, limit: int = 10) -> str:
+async def search_text(db: DB, chat_id: int, tz, keyword: str, days: int = 7, limit: int = 10, svc=None) -> str:
+    """svc 를 주면 뜻이 비슷한 글도 (sodam/semsearch.py, ≈ 표시)."""
     since = 0 if days <= 0 else int(datetime.now(tz).timestamp()) - days * 86400
-    rows = await db.search_messages(chat_id, keyword, since, limit)
+    if svc is not None:
+        from . import semsearch
+        rows = await semsearch.search(svc, chat_id, keyword, since, limit)
+    else:
+        rows = await db.search_messages(chat_id, keyword, since, limit)
     if not rows:
         return f"🔎 '{esc(keyword)}' 가 들어간 메시지를 못 찾았어요. (2글자 이상, 여러 낱말은 띄어서)"
     lines = [f"🔎 '{esc(keyword)}' 검색 결과 (최근 {len(rows)}개)"]
     for r in rows:
         text = r["text"].replace("\n", " ")
-        lines.append(f"[{fmt_time(r['ts'], tz)}] {esc(_name(r))}: {esc(text[:80])}")
+        mark = "≈ " if isinstance(r, dict) and r.get("semantic") else ""   # 뜻으로만 찾은 글
+        lines.append(f"{mark}[{fmt_time(r['ts'], tz)}] {esc(_name(r))}: {esc(text[:80])}")
     return "\n".join(lines)

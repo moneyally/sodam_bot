@@ -144,6 +144,13 @@ class LLM:
                 "INSERT INTO counters(day, chat_id, key, n) VALUES(?, ?, ?, ?) "
                 "ON CONFLICT(day, chat_id, key) DO UPDATE SET n=n+excluded.n", [(day, *r) for r in rows]))
 
+    async def embed(self, texts: list[str], *, dims: int, model: str, purpose: str = "embed") -> list[list[float]]:
+        """의미 검색용 임베딩 (sodam/semsearch.py). 전체 하루 예산 안에서, 요금은 전체로만 셈 (방 한도엔 안 넣음)."""
+        await self._check_budget(None)
+        r = await self.client.embeddings.create(model=model, input=texts, dimensions=dims)
+        await self._record(r.usage, None, purpose, model)
+        return [d.embedding for d in r.data]
+
     async def usd_today(self, chat_id: int = 0) -> int:
         """오늘 쓴 요금 (마이크로달러). chat_id=0 은 전체."""
         return await self.db.counter(self._today(), chat_id, costs.USD if chat_id == 0 else costs.ROOM_USD)

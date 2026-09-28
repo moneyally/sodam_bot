@@ -310,6 +310,20 @@
 - 권한: 텔레그램 관리자·오너만 (봇관리자 위임 X), 그 답변에서 읽기 도구(기록·봇 글)를 썼으면 저장 안 함 (남의 글로 교훈 심기 방지).
   저장·삭제는 mod_log ai_lesson / ai_lesson_del.
 
+## 🕸️ 사기 무리 탐지 (`scamring.py`, `panels/scamring.py`, tests/test_scamring.py · 뮤테이션 13개)
+- 참고 arXiv 2512.19061 (강한/약한 연결 → 무리). messages 최근 30일 사람 글에서 강한 연결 = 같은 지갑·비공개 초대링크(t.me/+·joinchat),
+  약한 연결 = 똑같은 긴 글(40자↑) → union-find (AI 0원, 실DB 0.01초, 5분 캐시). 한 값을 30명↑ 쓰면 공지로 보고 제외. 봇·관리자 캐시·오너 제외.
+- 밴(mod_log ban) → tick 이 새 밴만(커서 읽기+옮기기 한 트랜잭션, 처음엔 옛 밴 건너뜀) 그 무리가 남은 방마다 '사용자 차단' 권한 관리자 1:1
+  (incidents 'ring'). 강함이거나 증거 2가지↑만. **자동 제재 없음.** 다른 방 이름은 숫자로만.
+- 그룹 허브 🕸️ m:rgl → m:rng 자세히 → m:rngb 확인 → m:rngx 이 방에서 밴 (누를 때 may 재확인, 관리자·봇·자유 멤버·누른 사람 제외,
+  무리당 60초 차지로 한 번). AI 도구 scam_ring(name) 읽기 전용·tainted.
+
+## 🔎 의미 검색 (`semsearch.py`, tests/test_semsearch.py · 뮤테이션 8개)
+- FTS5 + sqlite-vec(requirements `sqlite-vec`, DB.open 이 확장 로드 → db.vec, 실패면 단어 검색만) RRF k=60. 색인 = 30초 tick 에 64개씩
+  (claims 로 한 프로세스만, 커서 chat_state semsearch_cursor, 한 시간에 한 번 지운 글 벡터 정리), text-embedding-3-small 256차원 cosine,
+  vec0 chat_id 파티션. 요금은 전체 예산에만 (메시지 2천 개 ≈ $0.001). search_chat(stats.search_text svc=) 결과에 뜻으로만 찾은 글은 ≈.
+  끄기 .env SEMSEARCH=0 · 거리 SEM_MAX_DIST(기본 0.7).
+
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
@@ -336,7 +350,7 @@
   (포럼 토픽 첫 글 답장 제외, 채널·익명 관리자 글은 사람 없음) — 그룹·1:1·봇 AI 답(부른 사람에게). 답장받은 사람도 users 에 upsert.
   AI chat_log·방 흐름 요약 입력에 `[시각] 이름(ID) ↩상대: 글` (`prompt.reply_mark`, 이름은 db.REPLY_JOIN 한 번, 20자, 글 인용 없음).
   집계 `db.reply_stats(chat_id, since, user_id=None)` = (from_id, to_id, n), 봇·자기 답장 제외. 수정된 메시지는 다시 기록 안 함.
-- 다음 단계(필요할 때): 관계 표(사기 계정 무리·평판) → 의미 검색(sqlite-vec). PostgreSQL 은 여러 서버로 나눌 때.
+- 관계(🕸️ scamring)·의미 검색(🔎 semsearch)은 2026-09-28 추가. PostgreSQL 은 여러 서버로 나눌 때.
 
 ## 클라우드 세션 서버 실행
 - 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.

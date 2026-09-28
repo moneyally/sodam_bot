@@ -196,7 +196,7 @@ async def t_search_chat(ctx: ToolCtx, a: dict) -> str:
     if len(keyword) < 2:
         return "검색어는 2글자 이상이어야 함."
     days = max(1, min(int(a.get("days", 7)), 60))
-    return _plain(await stats.search_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, keyword, days, 10))
+    return _plain(await stats.search_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, keyword, days, 10, svc=ctx.svc))
 
 
 async def t_read_chat(ctx: ToolCtx, a: dict) -> str:
@@ -887,7 +887,7 @@ TOOLS: list[Tool] = [
          {"period": PERIOD}, [], t_my_requests),
     Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다.", {"period": PERIOD}, [], t_chat_stats),
     Tool("search_chat", "방 대화 기록에서 키워드를 검색한다 (2글자 이상 부분 일치). 여러 낱말은 띄어 쓰면 하나라도 들어간 "
-         "메시지를 많이 맞는 순으로 찾는다 — 비슷한 말도 같이 넣어라 (예: '환불 반품 돌려').",
+         "메시지를 많이 맞는 순으로 찾고, 뜻이 비슷한 글(≈ 표시, 예: '먹튀' → '입금했는데 잠수')도 같이 찾는다.",
          {"keyword": {"type": "string"}, "days": {"type": "integer", "description": "최근 며칠 (1~60)"}},
          ["keyword"], t_search_chat),
     Tool("read_chat", "최근 N시간 방 대화를 읽는다. '요약해줘', '무슨 얘기 했어' 같은 요청에 사용.",
