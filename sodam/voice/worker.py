@@ -23,14 +23,11 @@ from typing import Any, Callable
 from .. import mtproto
 from . import store
 from .bridge import Bridge
-from .radio import Radio, target_of
 
 log = logging.getLogger("sodam.voice")
 
 MODEL = os.getenv("VOICE_MODEL", "gpt-realtime-2.1-mini")
 POLL = 1.0
-TTS_MODEL = os.getenv("VOICE_TTS_MODEL", "gpt-4o-mini-tts")
-TTS_STYLE = "밝고 따뜻한 20대 여성 비서 목소리. 한국어를 자연스럽고 또박또박, 너무 빠르지 않게."
 MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 
@@ -49,8 +46,7 @@ def user_client(session: str, api_id: int, api_hash: str):
 
 class Worker:
     def __init__(self, cfg, db, *, client_factory: Callable | None = None, calls_factory: Callable | None = None,
-                 realtime_connect: Callable | None = None, media: Any = None, tts: Callable | None = None,
-                 radio_factory: Callable | None = None):
+                 realtime_connect: Callable | None = None, media: Any = None):
         self.cfg, self.db = cfg, db
         self.client_factory = client_factory or user_client
         self.calls_factory = calls_factory
@@ -61,9 +57,6 @@ class Worker:
         self.pending = None                     # 로그인 중 (client, phone, phone_code_hash)
         self.bridges: dict[int, Bridge] = {}
         self.tasks: dict[int, asyncio.Task] = {}
-        self.tts = tts                          # async (text) -> 24 kHz 모노 PCM (방송 모드)
-        self.radio_factory = radio_factory or Radio
-        self.radios: dict[int, Radio] = {}
 
     # ── 로그인 ──────────────────────────────────────────
     async def resume(self) -> None:
@@ -223,58 +216,6 @@ class Worker:
             if b:
                 b.stop("closed")
 
-    # ── 📡 방송 모드 (계정 없이 RTMP, radio.py) ─────────────────
-    async def _radio_start(self, chat_id: int, p: dict) -> tuple[bool, str]:
-        if chat_id in self.radios:
-            return True, "already"
-        if len(self.radios) >= MAX_CALLS:
-            return False, "busy"
-        if not (p.get("url") and p.get("key")):
-            return False, "no_rtmp"
-        radio = self.radio_factory(target_of(p["url"], p["key"]), max_sec=float(p.get("max_sec") or 3600),
-                                   idle_sec=float(p.get("idle_sec") or 600))
-        try:
-            await radio.start()
-        except FileNotFoundError:
-            return False, "no_ffmpeg"
-        self.radios[chat_id] = radio
-        call_id = await store.call_started(self.db, chat_id, p.get("by"))
-        self.tasks[chat_id] = asyncio.create_task(self._run_radio(chat_id, call_id, radio))
-        if p.get("greet") and self.tts:
-            radio.say(await self.tts(p["greet"]))
-        return True, "radio_started"
-
-    async def _run_radio(self, chat_id: int, call_id: int, radio: Radio) -> None:
-        try:
-            reason = await radio.run()
-        finally:
-            self.radios.pop(chat_id, None)
-            self.tasks.pop(chat_id, None)
-        await store.call_ended(self.db, call_id, radio.spoken_sec, reason or "closed")   # 한 달 한도는 말한 시간만
-        await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, radio.spoken_sec)   # 말한 시간만
-        log.info("방송 끝 %s %s (말 %.0f초)", chat_id, reason, radio.spoken_sec)
-
-    async def _radio_say(self, chat_id: int, p: dict) -> tuple[bool, str]:
-        radio = self.radios.get(chat_id)
-        if not radio:
-            return False, "not_live"
-        if not self.tts:
-            return False, "no_tts"
-        text = str(p.get("text") or "")[:600]
-        if text:
-            radio.say(await self.tts(text))
-        return True, "said"
-
-    async def _radio_stop(self, chat_id: int) -> tuple[bool, str]:
-        radio = self.radios.get(chat_id)
-        if not radio:
-            return True, "not_live"
-        radio.stop("admin")
-        t = self.tasks.get(chat_id)
-        if t:
-            await asyncio.wait({t}, timeout=10)
-        return True, "stopped"
-
     # ── 일 처리 ────────────────────────────────────────
     async def handle(self, job: dict) -> None:
         kind, p, chat_id = job["kind"], job["payload"], job["chat_id"]
@@ -293,11 +234,7 @@ class Worker:
             elif kind == "start":
                 ok, res = await self._start(chat_id, p)
             elif kind == "stop":
-                ok, res = await (self._radio_stop(chat_id) if chat_id in self.radios else self._stop(chat_id))
-            elif kind == "radio_start":
-                ok, res = await self._radio_start(chat_id, p)
-            elif kind == "radio_say":
-                ok, res = await self._radio_say(chat_id, p)
+                ok, res = await self._stop(chat_id)
             else:
                 ok, res = False, "unknown"
         except Exception as e:
@@ -340,12 +277,7 @@ def _media():
 
 async def main() -> None:
     from openai import AsyncOpenAI
-    try:
-        from pytgcalls import PyTgCalls        # 없어도 방송 모드는 됨
-        media = _media()
-    except Exception as e:
-        log.warning("py-tgcalls 없음 → 도우미 계정 통화는 끔, 방송 모드만: %s", e)
-        PyTgCalls, media = None, None
+    from pytgcalls import PyTgCalls
 
     from ..config import load_config
     from ..db import DB
@@ -354,14 +286,8 @@ async def main() -> None:
     db = DB(cfg.db_path)
     await db.open()
     oai = AsyncOpenAI(api_key=cfg.openai_api_key)
-
-    async def tts(text: str) -> bytes:
-        r = await oai.audio.speech.create(model=TTS_MODEL, voice=os.getenv("VOICE_VOICE", "marin"), input=text,
-                                          response_format="pcm", instructions=TTS_STYLE)
-        return r.content
-
     w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: oai.realtime.connect(model=model),
-               media=media, tts=tts)
+               media=_media())
     await w.run()
 
 

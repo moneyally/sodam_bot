@@ -98,32 +98,3 @@ async def member_joined(svc, bot, chat_id: int, user) -> bool:
 def member_left(svc, chat_id: int, user_id: int) -> None:
     for fn in MEMBER_LEFT_HOOKS:
         fn(svc, chat_id, user_id)
-
-
-# 글 없는 음성메시지를 글로 (📡 방송 모드 받아쓰기, panels/voice.py): async hook(svc, bot, msg) -> str | None.
-# 처음으로 글을 돌려준 훅의 값을 그 메시지의 글로 씀 (그 뒤 호출어·AI 처리는 보통 글과 같음)
-VOICE_TEXT_HOOKS: list = []
-# 그룹방에서 AI 답을 보낸 뒤 (백그라운드): async hook(svc, bot, chat_id, text) — 📡 방송 모드가 목소리로도 읽음
-AI_ANSWER_HOOKS: list = []
-
-
-async def voice_text(svc, bot, msg) -> str | None:
-    import logging
-    for fn in VOICE_TEXT_HOOKS:
-        try:
-            text = await fn(svc, bot, msg)
-        except Exception:
-            logging.getLogger(__name__).exception("voice text hook failed")
-            continue
-        if text:
-            return text
-    return None
-
-
-async def ai_answered(svc, bot, chat_id: int, text: str) -> None:
-    import logging
-    for fn in AI_ANSWER_HOOKS:
-        try:
-            await fn(svc, bot, chat_id, text)
-        except Exception:
-            logging.getLogger(__name__).exception("ai answer hook failed")

@@ -482,8 +482,6 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _record(svc.db.touch_member(chat_id, user.id))
 
     text = msg.text or msg.caption or ""
-    if not text and (msg.voice or msg.video_note) and hooks.VOICE_TEXT_HOOKS:   # 📡 방송 중인 방의 음성메시지 → 받아쓴 글
-        text = await hooks.voice_text(svc, bot, msg) or ""
     try:
         role = Role.ADMIN if anonymous_admin else await svc.perms.role(bot, chat_id, user.id)
     except TelegramError as e:  # 관리자 목록을 처음 받는 중 연결 오류: 일반 멤버로 보고 계속 (명령·게임·AI 는 동작)
@@ -858,8 +856,6 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
     await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,   # 누구에게 한 답인지
                                      reply_to_msg_id=msg.message_id if reply else None,
                                      reply_to_user=user.id if reply else None))
-    if chat_id < 0 and hooks.AI_ANSWER_HOOKS:   # 📡 방송 중이면 목소리로도 (panels/voice.py)
-        persist.spawn(hooks.ai_answered(svc, bot, chat_id, out))
     asked = "\n".join([request, *steer.taken])   # 실행 중 이어 보낸 말까지 (한 답이 둘 다 반영)
     await memory.record_turn(svc.db, chat_id, user.id, via, asked, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 
