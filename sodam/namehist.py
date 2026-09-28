@@ -354,6 +354,8 @@ def users_in_update(update) -> list:
 async def _notify(svc, bot, chat_id: int, user_id: int, changed) -> None:
     if chat_id >= 0 or not (await svc.db.get_settings(chat_id))["name_change_notice"]:
         return
+    if await svc.db._one("SELECT 1 FROM channels WHERE chat_id=?", (chat_id,)):   # 채널엔 기록만 (구독자 이름 알림이 채널 글로 올라가던 것)
+        return
     try:
         await bot.send_message(chat_id, change_notice(user_id, *changed), parse_mode="HTML",
                                reply_markup=InlineKeyboardMarkup(
@@ -366,7 +368,7 @@ async def _notify(svc, bot, chat_id: int, user_id: int, changed) -> None:
 async def observe(svc, bot, update) -> None:
     """모든 업데이트 앞에서 (handlers 그룹 -1): 보이는 사람 이름을 전부 기록, 그룹에서 바뀐 걸 보면 알림."""
     chat = getattr(update, "effective_chat", None)
-    chat_id = chat.id if chat is not None else 0
+    chat_id = chat.id if chat is not None and getattr(chat, "type", None) != "channel" else 0   # 채널: 기록만
     for u in users_in_update(update):
         changed = await record(svc.db, u)
         if changed:

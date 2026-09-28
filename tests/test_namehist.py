@@ -382,3 +382,22 @@ async def admin_list_fetch_records_names():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+@test
+async def channel_updates_record_names_but_never_post_notice():
+    """실제 사례(2026-09-28): 구독자가 아이디를 바꾸자 오너 채널 '소담이의 메모장' 에 '이름 변경 감지' 글이 올라감.
+    이름 알림은 그룹방 기능 — 채널엔 기록만."""
+    db, svc, bot, ctx = await setup()
+    CH = -1004455399205
+    await db.ensure_chat(CH, "소담이의 메모장")
+    await db._write("INSERT INTO channels(chat_id, title, active, can_post) VALUES(?,?,1,1)", (CH, "소담이의 메모장"))
+    await namehist.record(db, user(5, "구독자", None))
+    ch = SimpleNamespace(id=CH, type="channel", title="소담이의 메모장")
+    await handlers.on_any_update(SimpleNamespace(effective_chat=ch, message_reaction=SimpleNamespace(
+        user=user(5, "구독자", "saaag"))), ctx)
+    await namehist.record_admins(svc, bot, CH, [SimpleNamespace(user=user(6, "새이름", "x6"))])
+    await namehist.record(db, user(6, "옛이름", "x6"))
+    await namehist.record_admins(svc, bot, CH, [SimpleNamespace(user=user(6, "새이름2", "x6"))])
+    assert not notices(bot, CH), notices(bot, CH)
+    assert [h for h in await namehist.history(db, 5)], "기록은 남김"
