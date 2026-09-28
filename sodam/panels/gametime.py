@@ -145,7 +145,7 @@ menu.register_screen("gt", s_gt)
 menu.register_route("gtme", Route(r_me, ADMIN))
 menu.register_route("gtp", Route(r_playing, ADMIN))
 menu.register_route("gtx", Route(r_copy, ADMIN))
-menu.register_route("gtb", Route(r_button, ADMIN))
+menu.register_route("gtb", Route(r_button, ADMIN, fresh=True))   # 뮤트·풀기: 지금 권한으로
 menu.register_input("gth", "⏱ 기준 시간을 숫자로 보내주세요 (1~48). 예: <code>10</code>", "gt", i_hours, s_gt)
 menu.register_input("gtc", "🎯 게임으로 칠 명령을 띄어서 보내주세요. 예: <code>/ㅅㅌㅊ /ㄱㄹㅈ /ㄷㄹ</code>\n"
                     "기본(/ 나 ! 로 시작하는 명령·🎲 전부)으로 돌리려면 <code>전부</code>", "gt", i_cmds, s_gt)

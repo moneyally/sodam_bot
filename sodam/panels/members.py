@@ -236,3 +236,4 @@ register_route("mbr", Route(r_refresh))
 register_route("mbx", Route(r_export, fresh=True))
 register_input("mbq", "🔎 찾을 멤버의 <b>이름·@아이디·숫자 ID</b>를 보내주세요.", "mb", _search, s_after_search)
 menu.SCREENS["mb"] = s_members
+menu.register_route("mbq", Route(s_members))   # 검색 입력 화면의 [⬅️ 메뉴로] (m:mbq:<방>) — 라우트가 없어 무반응이던 것 (감사 B4)

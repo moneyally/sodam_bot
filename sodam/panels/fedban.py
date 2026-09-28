@@ -125,7 +125,7 @@ menu.register_hub(HubItem(57, "fb", "🚷 공동 차단"))
 menu.register_screen("fb", s_fb)
 menu.register_screen("fbl", s_fbl)
 menu.register_preset("fedban_mode", MODE_PRESETS, "fb")
-menu.register_route("fbx", Route(r_alert, ADMIN))
+menu.register_route("fbx", Route(r_alert, ADMIN, fresh=True))   # 밴: 지금 권한으로
 menu.register_token_action("fb_unmark", t_unmark, fresh=True)
 menu.register_token_action("fb_ask", t_ask_delete, need=OWNER)
 menu.register_token_action("fb_del", t_delete, fresh=True, need=OWNER)

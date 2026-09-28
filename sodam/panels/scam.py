@@ -179,7 +179,7 @@ menu.register_screen("sg", s_sg)
 menu.register_screen("sgk", s_sgk)
 menu.register_route("sgr", Route(r_recommend, ADMIN))
 menu.register_route("sgt", Route(r_trust_clear, ADMIN, fresh=True))
-menu.register_route("sgx", Route(r_alert, ADMIN))
+menu.register_route("sgx", Route(r_alert, ADMIN, fresh=True))   # 밴·뮤트·삭제: 강등된 관리자 캐시(5분) 말고 지금 권한
 menu.register_input("sgk", "📝 추가할 <b>의심 키워드</b>를 보내주세요. 예: <code>수익 보장</code>\n"
                     "여러 개면 쉼표나 줄바꿈으로 구분 (한 번에 최대 20개)", "sgk", i_add, s_sgk)
 menu.register_token_action("sgk_ask", t_ask)

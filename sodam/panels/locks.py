@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .. import menu, raid
+from .. import menu, persist, raid
+from ..permissions import may
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..moderation import LOCK_KINDS
 from ..settings import choice_label
@@ -70,6 +71,10 @@ async def r_raid_mode(c: PanelCtx) -> Screen:
     want = c.arg(0)
     if want not in ("0", "1"):
         return Screen(None)
+    if not await may(c.svc.perms, c.bot, c.cid, c.uid):   # 방어 모드 = 전원 캡차·내보내기 → 제재와 같은 '사용자 차단' 권한 (🧭 보안 강화와 같게)
+        return Screen(None, toast="'사용자 차단' 권한이 있는 관리자만 방어 모드를 켜고 끌 수 있어요.", alert=True)
+    if not await persist.claim(c.svc.db, f"raid_btn:{c.cid}:{want}", 5):   # 두 관리자가 동시에 → 방 안내 2개·기록 2줄 (감사 B2)
+        return Screen(None, toast="방금 처리했어요.")
     on = await raid.active(c.svc, c.cid)
     if want == "1" and not on:
         minutes = (await c.svc.db.get_settings(c.cid))["raid_minutes"]
@@ -87,6 +92,6 @@ async def r_raid_mode(c: PanelCtx) -> Screen:
 
 menu.register_screen("lk", s_locks)
 menu.register_screen("raid", s_raid)
-menu.register_route("rdm", Route(r_raid_mode))
+menu.register_route("rdm", Route(r_raid_mode, fresh=True))
 menu.register_hub(HubItem(32, "lk", "🔒 종류별 잠금"))
 menu.register_hub(HubItem(34, "raid", "🚨 대량 입장 방어"))

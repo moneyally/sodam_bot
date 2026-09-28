@@ -827,6 +827,17 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
     if not q.message or (q.message.chat_id != q.from_user.id and not room_card):
         await q.answer("1:1 채팅에서 열어주세요.", show_alert=True)
         return
+    if room_card and q.message.chat_id != q.from_user.id:
+        # 방에서 누르는 건 그 방에 올린 카드 토큰만 (lasting_token = DB 에 있음 + 같은 방). 1:1 메뉴 토큰(금지어 삭제 확인·
+        # 기간 부여 등)을 콜백 데이터만 바꿔 방 메시지에서 누르면 그 방 봇 글이 결제 화면 등으로 바뀌던 것 (감사 P3)
+        key = parts[1] if len(parts) > 1 else ""
+        row = await svc.db._one("SELECT chat_id FROM menu_tokens WHERE tok=?", (key,))
+        if (row and row["chat_id"] != q.message.chat_id) or (not row and key in svc.menu_tokens):
+            await q.answer("이 방의 카드가 아니에요.", show_alert=True)
+            return
+        if not row:   # 이미 누른(지운) 카드 → 만료 안내
+            await q.answer(EXPIRED.toast, show_alert=True)
+            return
     uid = q.from_user.id
     if not svc.menu_limiter.allow(("menu", uid), CALLBACK_PER_MIN):
         await q.answer("너무 빨리 누르고 있어요. 잠시 후 다시 눌러주세요.")
@@ -859,6 +870,9 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
     except TelegramError as e:
         log.warning("menu %s failed: %s", code, e)
         screen = Screen(None, toast="텔레그램 연결이 불안정해요. 잠시 후 다시 눌러주세요.", alert=True)
+    except Exception:   # DB 잠김 등: 로딩만 돌지 않게 답은 꼭 (감사 B6)
+        log.exception("menu %s failed", code)
+        screen = Screen(None, toast="잠깐 문제가 생겼어요. 잠시 후 다시 눌러주세요.", alert=True)
     await _show(bot, q, uid, screen, svc)
 
 

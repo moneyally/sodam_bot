@@ -12,7 +12,7 @@ AI 에게 말로('누가 입금 얘기하면 알려줘') 만들면 방에 확인
 """
 from __future__ import annotations
 
-from .. import cards, menu, rules
+from .. import cards, menu, persist, rules
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, fmt_time, to_int
 
@@ -148,6 +148,8 @@ async def _create(c: PanelCtx, spec: dict) -> tuple[bool, str]:
 
 
 async def r_join(c: PanelCtx) -> Screen:
+    if not await persist.claim(c.svc.db, f"rla:{c.cid}:{c.uid}", 5):   # 두 번 눌러 같은 규칙 2개 (감사 B5)
+        return Screen(None, toast="방금 만들었어요.")
     ok, text = await _create(c, {"trig": "join", "action": "dm"})
     screen = await s_list(c)
     screen.toast, screen.alert = text, not ok
