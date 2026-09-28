@@ -1,0 +1,108 @@
+"""📞 음성 소담 실제 점검 (OpenAI Realtime 실제 호출 — 비용 조금, 오너 허락 받고만).
+
+텔레그램 통화만 가짜: 멤버 목소리 = OpenAI TTS 로 만든 한국어 문장 → sodam/voice/bridge.py 에 통화처럼 10 ms 씩 흘려 넣음.
+소담이 들은 말(받아쓰기)·한 말(대본)·첫 소리까지 걸린 시간을 찍고, 소담 목소리를 WAV 로 저장.
+
+    python tools/voice_live.py [--out 파일.wav] "소담아 안녕? 오늘 기분 어때?" ["두 번째 말" …]
+키: 환경변수 OPENAI_API_KEY, 없으면 .env / .env.migrated-to-vps 의 값 (출력하지 않음).
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+import wave
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from openai import AsyncOpenAI  # noqa: E402
+
+from sodam.voice import audio  # noqa: E402
+from sodam.voice.bridge import SILENCE, Bridge  # noqa: E402
+
+MODEL = os.getenv("VOICE_MODEL", "gpt-realtime-2.1-mini")
+
+
+def _key() -> str:
+    if os.getenv("OPENAI_API_KEY"):
+        return os.environ["OPENAI_API_KEY"]
+    from dotenv import dotenv_values
+    for name in (".env", ".env.migrated-to-vps"):
+        v = dotenv_values(ROOT / name).get("OPENAI_API_KEY")
+        if v:
+            return v
+    sys.exit("OPENAI_API_KEY 없음")
+
+
+async def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("lines", nargs="*", default=["소담아 안녕? 오늘 기분 어때?", "소담아 점심 메뉴 하나만 추천해 줘."])
+    ap.add_argument("--out", default=str(ROOT / "voice_live.wav"))
+    a = ap.parse_args()
+    from sodam.panels.voice import GREET, PERSONA
+    oai = AsyncOpenAI(api_key=_key())
+
+    utter = []
+    for line in a.lines:                                   # 멤버 목소리 (남자 목소리로 구분)
+        r = await oai.audio.speech.create(model="gpt-4o-mini-tts", voice="echo", input=line, response_format="pcm")
+        utter.append(audio.up(r.content))
+
+    played: list[bytes] = []
+    marks: dict[str, float] = {}
+
+    async def play(frame: bytes) -> None:
+        if frame is not SILENCE:
+            played.append(frame)
+            marks.setdefault(f"first_audio_{marks.get('turn', 0)}", time.monotonic())
+
+    bridge = Bridge(lambda: oai.realtime.connect(model=MODEL), play, instructions=PERSONA, greet=GREET,
+                    max_sec=90, idle_sec=15)
+    t0 = time.monotonic()
+    run = asyncio.create_task(bridge.run())
+
+    async def wait_turns(n: int, limit: float) -> None:
+        end = time.monotonic() + limit
+        while bridge.result.bot_turns < n and time.monotonic() < end and not bridge.done:
+            await asyncio.sleep(0.1)
+
+    await wait_turns(1, 20)                                # 들어오자마자 인사
+    for i, pcm in enumerate(utter, 1):
+        await asyncio.sleep(1.0)
+        while bridge.out:                                  # 소담 말이 끝날 때까지 (끼어들기 시험은 아님)
+            await asyncio.sleep(0.05)
+        for j in range(0, len(pcm), audio.FRAME_BYTES):    # 통화처럼 10 ms 씩 실시간
+            bridge.feed([pcm[j:j + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0")])
+            await asyncio.sleep(0.01)
+        marks["turn"] = i
+        marks[f"said_{i}"] = time.monotonic()
+        for _ in range(150):                               # 1.5초 조용 → 서버 VAD 가 말 끝으로 봄
+            bridge.feed([SILENCE])
+            await asyncio.sleep(0.01)
+        await wait_turns(i + 1, 25)
+    while bridge.out:
+        await asyncio.sleep(0.05)
+    bridge.stop("test")
+    res = await run
+
+    print(f"\n모델 {MODEL} · 목소리 marin · {time.monotonic() - t0:.1f}초 · 끝난 이유 {res.reason}")
+    for who, text in bridge.transcript:
+        print(f"{'🗣 멤버' if who == 'user' else '👩 소담'}: {text}")
+    for i in range(1, len(utter) + 1):
+        if f"said_{i}" in marks and f"first_audio_{i}" in marks:
+            gap = marks[f"first_audio_{i}"] - marks[f"said_{i}"]
+            print(f"⏱ {i}번째 말 끝 → 소담 첫 소리 {gap:.2f}초 (말 끝 판단 0.7초 포함)")
+    print(f"토큰 {res.usage}")
+    with wave.open(a.out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(audio.TG_RATE)
+        w.writeframes(b"".join(played))
+    print(f"🔊 소담 목소리 {len(played) / 100:.1f}초 → {a.out}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
