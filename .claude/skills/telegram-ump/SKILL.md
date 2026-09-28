@@ -27,8 +27,13 @@ ffmpeg -y -loop 1 -i src -t 6 -filter_complex \
  "[0:v]scale=1280:1280:force_original_aspect_ratio=increase,crop=1280:1280,<STYLE>,format=yuv420p" \
  -an -c:v libx264 -profile:v main -preset veryfast -crf 26 -movflags +faststart out.mp4
 ```
-- **끊김 없는 반복의 핵심**: 모든 움직임을 주기 = 전체 프레임(180)인 `sin(2*PI*n/180)` 으로. 처음과 끝 값이 같아서 이어진다.
+- **끊김 없는 반복의 핵심**: 모든 움직임을 `sin(2*PI*k*n/180)` (k = 정수 바퀴)로. 처음과 끝 값이 같아서 이어진다.
   zoompan 안에서는 `on`(출력 프레임 번호), 다른 필터에선 `n` 을 쓴다.
+- **입력에도 `-framerate 30`** (사진 -loop 1 입력은 기본 25fps → n 기준 효과가 7.2초 주기가 돼 이음새 — 실제로 난 버그).
+- **날리는 것(하트·눈·별빛·방울·꽃잎)**: PIL 로 투명 타일 하나를 그리고 세로로 두 장 이어 붙임(가장자리 입자는 반대편에도 그림) →
+  두 번째 입력으로 `crop=640:640:0:'640*mod(cells*n/180,1)'` 창을 흘려 overlay. cells 정수 = 영상 한 번에 정확히 칸 단위로 흐름.
+- **사용자가 원하는 효과**: `avatar.Spec(motion × speed × color × particles)` 부품 조합. AI 는 말한 효과를 가장 가까운 부품으로
+  옮기고(없으면 무엇으로 대신했는지 한마디 + feature_request), 새 부품은 MOTIONS/COLORS/PARTICLES 에 한 줄 + 반복 테스트가 자동 검사.
 - 스타일 예: 숨쉬기 `zoompan=z='1.10+0.08*sin(2*PI*on/180)':x=…:y=…:d=1:s=640x640:fps=30` ·
   반짝임 `eq=brightness='0.07*sin(4*PI*n/180)':eval=frame` · 무지개 `hue=h='360*n/180'` · 흔들 `rotate='0.035*sin(2*PI*n/180)'`.
 - zoompan 은 확대 여유가 있어야 흔들림이 부드러움 → 먼저 출력의 2배로 키워 정사각형으로 자른다.
@@ -44,12 +49,13 @@ ffmpeg -y -loop 1 -i src -t 6 -filter_complex \
    얼굴 표정까지 움직이는 오픈소스 LivePortrait 는 GPU 필요 → 컨테이너·일반 VPS 에는 안 맞음.
 
 ## 4. 안전 규칙 (바꾸지 말 것)
-- **본인 사진만**: 요청·답장에 붙은 사진은 `vision.Attached.owner == 요청자` 일 때만, 없으면 요청자 본인 프사. 남의 사진 = 거절 (딥페이크 방지).
+- 원본: 요청·답장에 붙은 사진(**남의 사진도 됨** — 사용자 결정 2026-09-28, 하루 한도로 충분), 없으면 요청자 프사. `Attached.owner` 는 기록용.
 - 움직임·그림체는 코드의 정해진 목록(STYLES·AI_STYLES)만 — AI·사용자 글이 ffmpeg 인자에 들어가지 않게.
 - 한도: 사람마다 하루 FREE_DAILY 개, AI 그림체는 방 이미지 한도(image_daily)도 사용. 3단계(영상 API)를 넣으면 확인 카드 + 방 달러 한도.
 - ffmpeg 는 한 번에 하나(Semaphore), 60초 시간 초과.
 
 ## 5. 검증
-`python tests/run_all.py avatar` — 진짜 ffmpeg 로 스타일마다 640×640·h264·yuv420p·소리 없음·6초·2MB 이하·faststart,
-본인 사진만·하루 한도·그림체 한도·정해진 스타일만. 새 스타일을 넣으면 STYLES 에 한 줄 + 이 테스트가 자동으로 검사.
+`python tests/run_all.py avatar` — 진짜 ffmpeg 로 부품마다 640×640·h264·yuv420p·소리 없음·6초·2MB 이하·faststart,
+**끊김 없는 반복**(181번째 장을 디코드해 첫 장과 비교 — 무늬 있는 사진으로! 단색이면 확대·이동이 안 보여 검사가 무의미,
+날리는 것은 단색 배경에서 따로), 하루 한도·그림체 한도·정해진 부품만(글이 ffmpeg 인자에 못 들어감).
 눈으로 확인: 만든 mp4 를 텔레그램 프로필에 직접 올려 본다 (규격 틀리면 조용히 실패).

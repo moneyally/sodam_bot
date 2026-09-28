@@ -1,6 +1,7 @@
 """🎞️ 움프 AI 도구 make_profile_video (sodam/avatar.py 로 영상, 그림체는 llm.image 고치기).
 
-원본 = 요청자 **본인** 사진만 (요청·답장에 붙은 사진이면 올린 사람이 요청자일 때, 없으면 요청자의 지금 프사) — 남의 사진 움직이기 X.
+원본 = 요청·답장에 붙은 사진 (남의 사진도 됨 — 사용자 결정 2026-09-28, 하루 한도로 충분), 없으면 요청자의 지금 프사.
+효과 = avatar.Spec 부품 조합 (움직임·빠르기·색·날리는 것) — 사용자가 말한 효과는 AI 가 가장 가까운 부품으로 옮김.
 한도: 사람마다 하루 FREE_DAILY 개, AI 그림체는 이 방 이미지 한도(image_daily)도 같이 씀 (한 장 ≈ $0.03).
 결과는 파일(문서)로 보냄 — 동영상으로 보내면 텔레그램이 다시 압축해서 프로필 규격이 깨질 수 있음.
 """
@@ -47,14 +48,15 @@ async def _busy(ctx) -> None:
 
 
 async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
-    style, art = str(a.get("style") or "breathe"), str(a.get("art") or "none")
-    if style not in avatar.STYLES or (art != "none" and art not in avatar.AI_STYLES):
-        return f"style 은 {list(avatar.STYLES)} 중, art 는 none 또는 {list(avatar.AI_STYLES)} 중 하나."
+    spec = avatar.Spec(*(str(a.get(k) or d) for k, d in (("motion", "breathe"), ("speed", "slow"),
+                                                          ("color", "none"), ("particles", "none"))))
+    art = str(a.get("art") or "none")
+    err = spec.check() or (None if art == "none" or art in avatar.AI_STYLES else f"art 는 none 또는 {list(avatar.AI_STYLES)} 중 하나")
+    if err:
+        return err
     if not avatar.available():
         return "지금 서버에 영상 도구(ffmpeg)가 없어 움프를 못 만듦. 운영자에게 알리겠다고 짧게 안내."
     uid = ctx.caller.id
-    if ctx.image is not None and ctx.image.owner != uid:
-        return "남의 사진으로는 움프를 안 만듦 (본인 사진·본인 프사만). 본인 사진을 보내거나 '내 프사로' 라고 하라고 안내."
     src = ctx.image.data if ctx.image is not None else await _profile_photo(ctx.bot, uid)
     if not src:
         return "프사를 못 가져옴 (프사가 없거나 공개 설정이 막혀 있음). 본인 사진을 같이 보내면서 다시 부탁하라고 안내."
@@ -78,13 +80,13 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
                 return "그림 서버가 잠깐 불안정함. 잠시 후 다시 부탁하라고 안내."
             await db.bump(day, ctx.chat_id, "image")
         try:
-            mp4 = await avatar.make(src, style)
+            mp4 = await avatar.make(src, spec)
         except Exception as e:   # 이상한 사진·시간 초과
             log.warning("avatar make failed: %s", e)
             return "이 사진으로는 영상을 못 만듦 (형식 문제). 다른 사진으로 다시 부탁하라고 안내."
     finally:
         busy.cancel()
-    label = avatar.STYLES[style][0] + (f" · {avatar.AI_STYLES[art][0]}" if art != "none" else "")
+    label = spec.label() + (f" · {avatar.AI_STYLES[art][0]}" if art != "none" else "")
     name = display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)
     try:
         await ctx.bot.send_document(ctx.chat_id, InputFile(mp4, filename="sodam_ump.mp4"), parse_mode="HTML",
@@ -95,11 +97,17 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
     return "움프 파일을 방에 보냈음. 설정 방법은 파일에 적혀 있으니 한마디만 짧게."
 
 
+def _enum(table) -> dict:
+    return {"type": "string", "enum": list(table),
+            "description": " · ".join(f"{k}={v[0]}" for k, v in table.items() if v[0])}
+
+
 tools.register_tool(tools.Tool(
     "make_profile_video",
-    "요청한 사람 본인의 프사(또는 본인이 보낸 사진)로 텔레그램 '움직이는 프로필(움프)' 영상 파일을 만들어 보낸다. "
-    "'내 프사 움프로 만들어줘', '이 사진 움직이게 해줘'. 움직임 style: breathe 숨쉬기(기본)·shine 반짝임·rainbow 무지개·"
-    "sway 흔들흔들. 그림체 art: none(그대로, 무료)·anime·3d·neon·water (그림체는 이미지 한도 사용). 남의 사진은 안 됨.",
-    {"style": {"type": "string", "enum": list(avatar.STYLES)},
-     "art": {"type": "string", "enum": ["none", *avatar.AI_STYLES]}},
-    ["style"], t_make_profile_video))
+    "텔레그램 '움직이는 프로필(움프)' 영상 파일을 만들어 보낸다. 원본 = 요청에 붙었거나 답장한 사진, 없으면 요청자 프사. "
+    "'내 프사 움프로 만들어줘', '이 사진 하트 날리게 해줘', '눈 내리고 흑백으로 천천히'. 사용자가 말한 효과를 아래 부품 중 "
+    "가장 가까운 것으로 골라 조합 (없는 효과는 가까운 걸로 만들고 무엇으로 대신했는지 한마디, 꼭 원하면 feature_request). "
+    "art(그림체)는 이미지 한도를 씀.",
+    {"motion": _enum(avatar.MOTIONS), "speed": _enum(avatar.SPEEDS), "color": _enum(avatar.COLORS),
+     "particles": _enum(avatar.PARTICLES), "art": {"type": "string", "enum": ["none", *avatar.AI_STYLES]}},
+    [], t_make_profile_video))

@@ -325,8 +325,8 @@
   끄기 .env SEMSEARCH=0 · 거리 SEM_MAX_DIST(기본 0.7).
 
 ## 🎞️ 움프 (`avatar.py`, `panels/avatar.py`, 스킬 `.claude/skills/telegram-ump/SKILL.md`, tests/test_avatar.py)
-- AI 도구 make_profile_video(style breathe/shine/rainbow/sway, art none/anime/3d/neon/water): **요청자 본인 사진만**
-  (vision.Attached.owner == 요청자, 없으면 get_user_profile_photos 본인 프사) → ffmpeg(imageio-ffmpeg 정적 바이너리) 640×640·6초·
+- AI 도구 make_profile_video(motion 6 × speed 3 × color 8 × particles 6 부품 조합 avatar.Spec, art none/anime/3d/neon/water):
+  붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → ffmpeg(imageio-ffmpeg) 640×640·6초·
   h264 yuv420p·소리 없음·faststart·2MB↓ → send_document (영상으로 보내면 재압축). 움직임은 sin(2πn/180) 주기라 끊김 없이 반복.
 - 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
 
