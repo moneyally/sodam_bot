@@ -33,15 +33,19 @@ INTENT_LABEL = {"play": "재생·신청", "skip": "건너뛰기", "pause": "일�
 WIDE = ("play", "search")          # 인자 100자 + 유튜브 링크 허용 (botlink.build wide)
 SOURCE_BADGE = {"preset": "📌직접", "manual": "📌직접", "seen": "👀본 것", "helper": "🔧헬퍼", "help": "📖안내"}
 # 봇이 올린 사용법 글의 '/명령 설명' 줄 (실제 사례: 멜론봇 /help 에 /play·/skip… 이 다 있는데 /help 만 배움)
+_INVITE = re.compile(r"(으로|로)\s*\S*\s*(신청|입력|사용|요청|써|쓰|보내|이용|재생)")
 HELP_CMD = re.compile(r"(?<![\w/@])/([A-Za-z][A-Za-z0-9_]{0,31})(?![\w@])([^\n/]*)")
 
 
 def help_commands(text: str) -> list[tuple[str, str]]:
-    """사용법 글 → [(명령, 설명)]. 명령이 2개 이상 있을 때만 (명령 하나 되풀이한 답은 사용법이 아님)."""
+    """사용법 글 → [(명령, 설명)]. 명령이 2개 이상일 때, 하나뿐이면 흔한 이름(/play 등)만
+    (실제 사례: '새로운 노래는 /play 로 신청해 주세요!' 뿐인 음악봇 — 못 배워서 재생 요청이 막힘)."""
     found = {}
     for name, rest in HELP_CMD.findall(text or ""):
         found.setdefault(name.lower(), " ".join(rest.replace("—", " ").replace("-", " ").split()))
-    return list(found.items()) if len(found) >= 2 else []
+    if len(found) >= 2:
+        return list(found.items())
+    return [(n, d) for n, d in found.items() if n in _BY_NAME and _INVITE.match(d)]   # '/play 로 신청해 주세요' 꼴만
 MAX_SKILLS = 30                    # 봇마다
 MAX_HINT = 30
 LEARN_WINDOW = 10.0                # 사람 명령 → 그 봇 답장까지

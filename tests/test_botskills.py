@@ -416,3 +416,15 @@ async def queue_intent_prefers_same_name_over_remove():
     await trust(r, MELON)
     await bot_says(r, MELON, "사용법\n📜 /queue — 대기열 보기\n❌ /remove 번호 — 대기열에서 곡 빼기")
     assert (await botskills.for_intent(r.db, Room.CHAT, MELON.id, "queue"))["command"] == "/queue"
+
+
+@test
+async def single_known_command_in_bot_text_is_learned():
+    # 실제 사례(뉴월드): 음악봇 '대기열 끝 · 새로운 노래는 /play 로 신청해 주세요!' 뿐 → 못 배워서 '명령 없음' → AI 가 기록을 읽고 잠김
+    r = await blroom("interact")
+    await trust(r, YT)
+    await bot_says(r, YT, "⏹ 대기열의 모든 곡 재생이 완료되었습니다.\n새로운 노래는 /play 로 신청해 주세요!")
+    res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "유튜브", "intent": "play", "query": "최신가요"})])
+    assert "확인 버튼" in res[0], res
+    await bot_says(r, YT, "/xyzzy 로 해보세요")                           # 모르는 이름 한 개는 여전히 안 배움
+    assert "/xyzzy" not in sk_map(await botskills.skills(r.db, Room.CHAT, YT.id))
