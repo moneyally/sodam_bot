@@ -79,12 +79,15 @@ def user_client(session: str, api_id: int, api_hash: str):
 
 class Worker:
     def __init__(self, cfg, db, *, client_factory: Callable | None = None, calls_factory: Callable | None = None,
-                 realtime_connect: Callable | None = None, media: Any = None):
+                 realtime_connect: Callable | None = None, media: Any = None,
+                 web_search: Callable | None = None, svc: Any = None, bot: Any = None):
         self.cfg, self.db = cfg, db
         self.client_factory = client_factory or user_client
         self.calls_factory = calls_factory
         self.realtime_connect = realtime_connect
         self.media = media                      # py-tgcalls 형식 모음 (테스트는 가짜)
+        self.web_search = web_search            # async (query, chat_id) -> 요약 글 (채팅 소담과 같은 격리 검색·같은 예산)
+        self.svc, self.bot = svc, bot           # 채팅 소담 읽기 전용 도구용 (toolset.py) — 없으면 검색만
         self.client = None                      # 로그인된 어시스턴트
         self.calls = None                       # PyTgCalls
         self.pending = None                     # 로그인 중 (client, phone, phone_code_hash)
@@ -226,7 +229,8 @@ class Worker:
                         lambda f: self.calls.send_frame(chat_id, md.Device.MICROPHONE, f),
                         instructions=p.get("instructions") or "", voice=p.get("voice") or "marin",
                         reply=p.get("reply") or "all", greet=p.get("greet"),
-                        max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60))
+                        max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60),
+                        **(await self._toolset(chat_id, p.get("by") or 0)))
         params = md.AudioParameters(48000, 1)
         video = self.frame is not None
         try:
@@ -257,6 +261,29 @@ class Worker:
         self.bridges[chat_id] = bridge
         self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))
         return True, "started"
+
+    async def _toolset(self, chat_id: int, starter: int) -> dict:
+        """Bridge 에 줄 도구: 채팅 소담 읽기 전용 도구 + 웹 검색 (toolset.py 방어 규칙)."""
+        search = self._tools(chat_id).get("web_search")
+        if self.svc is None:
+            return {"tools": {"web_search": search} if search else {}}
+        from . import toolset
+        settings = await self.db.get_settings(chat_id)
+        specs, handlers = toolset.build(self.svc, self.bot, chat_id, starter, settings, web_search=search)
+        return {"tools": handlers, "tool_specs": specs}
+
+    def _tools(self, chat_id: int) -> dict:
+        if not self.web_search:
+            return {}
+
+        async def web_search(args: dict) -> str:
+            q = str(args.get("query") or "").strip()[:200]
+            if not q:
+                return "검색어 없음"
+            from datetime import datetime       # '오늘' 기준이 한국 날짜가 되게 (실측: 새벽에 전날 날씨를 가져옴)
+            now = datetime.now(getattr(self.cfg, "tz", None))
+            return await self.web_search(f"{q} (기준: 한국 시각 {now:%Y-%m-%d %H시})", chat_id)
+        return {"web_search": web_search}
 
     async def _video_loop(self, chat_id: int, bridge: Bridge) -> None:
         """1초에 한 번 같은 사진 (새 bytes 안 만듦). 통화가 끝나면 _run_call 이 취소."""
@@ -452,8 +479,15 @@ async def main() -> None:
     db = DB(cfg.db_path)
     await db.open()
     oai = AsyncOpenAI(api_key=cfg.openai_api_key)
+    from telegram import Bot
+
+    from .. import panels  # noqa: F401 — 채팅 소담 도구 등록 (toolset 이 읽기 전용만 골라 씀)
+    from ..__main__ import build_services
+    svc = build_services(cfg, db)                  # 같은 DB·같은 예산 (폴링 없음 — Bot API 조회만)
+    bot = Bot(cfg.telegram_token)
+    await bot.initialize()
     w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: oai.realtime.connect(model=model),
-               media=_media())
+               media=_media(), web_search=svc.llm.web_search, svc=svc, bot=bot)
     import signal
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
