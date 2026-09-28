@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from openai import BadRequestError
 
-from . import agentlog, ai_instructions, costs, memory
+from . import agentlog, ai_instructions, costs, lessons, memory
 from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import build_messages
@@ -165,11 +165,16 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     except Exception:
         log.exception("ai instructions failed")
         instructions = ""
+    try:   # 🧠 관리자가 정정해 준 일하는 법 (데이터로)
+        room_lessons = await lessons.for_prompt(svc.db, ctx.chat_id)
+    except Exception:
+        log.exception("lessons failed")
+        room_lessons = []
     messages = build_messages(
         bot_name=svc.cfg.bot_name, bot_id=ctx.bot.id, style_key=style_key, tz=svc.cfg.tz,
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
         reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, in_dm=ctx.chat_id > 0,
-        instructions=instructions, **extras)
+        instructions=instructions, lessons=room_lessons, **extras)
     tools = available(ctx.role, ctx.settings, ctx.chat_id > 0)
     if mode in ("chime", "morning"):
         tools = [t for t in tools if t.name in CHIME_TOOLS]
