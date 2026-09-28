@@ -1,5 +1,6 @@
 """에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다.
 실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import build_messages
 from .security import nonce, wrap
+from . import tools as T
 from .tools import READ_ONLY, ToolCtx, available, execute
 from .util import clip_mid
 
@@ -178,8 +180,18 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     tools = available(ctx.role, ctx.settings, ctx.chat_id > 0)
     if mode in ("chime", "morning"):
         tools = [t for t in tools if t.name in CHIME_TOOLS]
-    schemas = [t.schema() for t in tools]
     allowed = {t.name for t in tools}
+    core = [t for t in tools if t.name in T.CORE or mode in ("chime", "morning")]
+    deferred = [t for t in tools if t not in core]
+    loaded: set[str] = set()
+
+    def current_schemas() -> list[dict]:
+        """늘 보이는 도구 + 불러온 도구 전체 설명 + (남은 게 있으면) load_tools 목록."""
+        shown = [t.schema() for t in core] + [t.schema() for t in deferred if t.name in loaded]
+        rest = [t for t in deferred if t.name not in loaded]
+        return shown + ([T.loader_schema(rest)] if rest else [])
+
+    schemas = current_schemas()
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
     think = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
     run.purpose = purpose + (":think" if think else "")
@@ -232,7 +244,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             messages += [{"role": "assistant", "content": text},
                          {"role": "system", "content": NUMBER_NOTE.format(nums=", ".join(bad[:5]))}]
             continue
-        used = True
+        used = used or any(c.function.name != T.LOADER for c in calls)
         messages.append({
             "role": "assistant",
             "content": msg.content or "",
@@ -242,9 +254,16 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             **({"items": msg.items} if think else {}),   # 추론 항목을 다음 라운드로 (llm.to_input)
         })
         for c in calls:
-            if c.function.name not in allowed:  # 이번 호출에 보여주지 않은 도구
+            if c.function.name == T.LOADER and deferred:   # 접힌 도구 펼치기 (실행 아님)
+                try:
+                    names = json.loads(c.function.arguments or "{}").get("names")
+                except (json.JSONDecodeError, AttributeError):
+                    names = []
+                result = T.load(names, deferred, loaded)
+            elif c.function.name not in allowed:  # 이번 호출에 보여주지 않은 도구
                 result = "이 도구는 지금 사용할 수 없음."
             else:
+                loaded.add(c.function.name)       # 목록 이름으로 바로 부른 접힌 도구 → 다음 단계엔 전체 설명
                 result = await execute(c.function.name, c.function.arguments, ctx)
                 results.append(result)
                 read = read or c.function.name in READ_ONLY
@@ -256,6 +275,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", clip_mid(result, TOOL_RESULT_CHARS), nonce())})
+        schemas = current_schemas()
 
     # 도구 라운드·요금 상한을 다 쓰면 도구 없이 마무리 답변만 받는다 (그 사이 이어 보낸 말도 STEER_FINAL 번까지는 반영,
     # 그래도 남으면 steer.pending 에 남아 handlers 가 새 실행으로)

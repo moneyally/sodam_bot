@@ -1005,9 +1005,10 @@ TOOLS: list[Tool] = [
 _BY_NAME = {t.name: t for t in TOOLS}
 
 
-def register_tool(tool: Tool, *, read_only: bool = False) -> None:
+def register_tool(tool: Tool, *, read_only: bool = False, core: bool = False) -> None:
     """다른 모듈이 자기 파일 안에서 AI 도구를 더한다 (tools.py 수정 없이 — 여러 작업이 파일을 안 겹치게).
-    read_only = 이 서버 데이터를 읽기만 함 (방 기록을 읽은 답변에서도 쓸 수 있음, READ_ONLY)."""
+    read_only = 이 서버 데이터를 읽기만 함 (방 기록을 읽은 답변에서도 쓸 수 있음, READ_ONLY).
+    core = 늘 전체 설명을 보여줌 (자주 쓰는 도구만). 기본은 이름·한 줄만 → AI 가 load_tools 로 불러 씀."""
     if tool.name in _BY_NAME:
         if _BY_NAME[tool.name] is tool:
             return
@@ -1016,6 +1017,46 @@ def register_tool(tool: Tool, *, read_only: bool = False) -> None:
     _BY_NAME[tool.name] = tool
     if read_only:
         READ_ONLY.add(tool.name)
+    if core:
+        CORE.add(tool.name)
+
+
+# ── 도구 나중에 불러오기 (Claude Code 문서의 tool search 방식을 소담식으로) ──────────────
+# 도구 설명 전체가 요청 입력의 3/4 (관리자 ~10k 토큰, 실측 2026-09-28). 자주 쓰는 도구(7일 사용 기록)와 빨라야 하는 제재만
+# 늘 보여주고, 나머지는 load_tools 설명 안의 '이름: 한 줄' 목록 → AI 가 불러오면 다음 단계부터 전체 설명.
+CORE = {"chat_stats", "search_chat", "read_chat", "member_info", "room_rules", "make_image", "web_search", "set_my_style",
+        "greet_members", "start_game", "search_knowledge", "report_to_admin", "warn_member", "mute_member", "unmute_member",
+        "ban_member", "set_member_style", "ask_choice", "other_bot_results", "bot_command", "feature_request", "game_control",
+        "my_rooms", "owner_rooms", "owner_sanction"}
+LOADER = "load_tools"
+LOAD_MAX = 6          # 한 번에 불러올 수 있는 수 (다 불러와서 절약이 없어지지 않게)
+
+
+def summary(t: Tool) -> str:
+    """목록용 한 줄: 설명의 첫 문장 (70자)."""
+    first = re.split(r"(?<=[.다])\s", t.description.strip(), maxsplit=1)[0]
+    return first[:70]
+
+
+def loader_schema(deferred: list[Tool]) -> dict:
+    lines = "\n".join(f"- {t.name}: {summary(t)}" for t in deferred)
+    return {"type": "function", "function": {
+        "name": LOADER,
+        "description": ("도구 더 불러오기. 아래 일은 할 수 있지만 설명이 접혀 있음 → 필요한 이름을 주면 다음 단계부터 씀 "
+                        f"(한 번에 {LOAD_MAX}개까지). 목록에 있는 일을 '못 한다'고 하지 말고 불러서 할 것.\n{lines}"),
+        "parameters": {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}},
+                       "required": ["names"], "additionalProperties": False}}}
+
+
+def load(names, deferred: list[Tool], loaded: set) -> str:
+    """load_tools 실행: 이 사람이 쓸 수 있는 접힌 도구만 loaded 에 더함."""
+    can = {t.name for t in deferred}
+    asked = [str(n) for n in (names if isinstance(names, list) else [names])][:LOAD_MAX]
+    ok = [n for n in asked if n in can]
+    loaded.update(ok)
+    bad = [n for n in asked if n not in can]
+    return ((f"불러옴: {', '.join(ok)} — 이제 바로 쓸 것." if ok else "불러온 도구 없음.")
+            + (f" 목록에 없음: {', '.join(bad)}" if bad else ""))
 
 
 def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
