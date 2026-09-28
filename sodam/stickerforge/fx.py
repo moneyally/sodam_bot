@@ -176,11 +176,14 @@ def zzz(frame, t, ctx, origin=(330, 120), color=(255, 225, 120), **_):
 _YY, _XX = np.mgrid[0:S, 0:S].astype(np.float32)
 _DIAG = (_XX + _YY) / (2 * S)                                   # sweep 대각 좌표 (0~1)
 _POLAR = {}
+POLAR_MAX = 8                                                   # 중심은 AI 가 고름 → 격자(2MB) 캐시는 몇 개만
 
 
 def _polar(center):
     """rays 용 (각도, 페이드) — 중심마다 한 번만 계산."""
     if center not in _POLAR:
+        if len(_POLAR) >= POLAR_MAX:
+            _POLAR.clear()
         cx, cy = S * center[0], S * center[1]
         r = np.hypot(_XX - cx, _YY - cy)
         _POLAR[center] = (np.arctan2(_YY - cy, _XX - cx), np.clip(1 - r / (S * 0.62), 0, 1) * np.clip(r / 40, 0, 1))
