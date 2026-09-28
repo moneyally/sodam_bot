@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -200,17 +201,30 @@ def register_main(order: int, code: str, label: str, need: int | Callable = PUBL
     MAIN_ITEMS[:] = [m for m in MAIN_ITEMS if m[1] != code] + [(order, code, label, need)]
 
 
+ADMIN_GROUPS_TTL = 30   # 사람마다 목록 기억 (메뉴·도움말·복사 화면이 연달아 불러도 텔레그램에 다시 안 물음). 권한은 누를 때마다 따로 확인
+ADMIN_GROUPS_PAR = 8    # 방마다 관리자 확인을 동시에 (예전: 하나씩 → 방 72개 3.7초, 감사 S1)
+
+
 async def admin_groups(svc: Services, bot: Bot, user_id: int) -> list[tuple[int, str]]:
-    out = []
-    for chat_id in await svc.perms.candidate_chats(user_id):
-        if chat_id >= 0:
-            continue
-        try:
-            if await svc.perms.is_admin(bot, chat_id, user_id):
-                out.append((chat_id, await chat_title(svc, chat_id)))
-        except TelegramError:
-            continue  # 봇이 나간 방
-    return out
+    cache = svc.__dict__.setdefault("_admin_groups", {})
+    hit = cache.get(user_id)
+    if hit and time.monotonic() - hit[0] < ADMIN_GROUPS_TTL:
+        return list(hit[1])
+    sem = asyncio.Semaphore(ADMIN_GROUPS_PAR)
+
+    async def one(chat_id: int):
+        async with sem:
+            try:
+                if await svc.perms.is_admin(bot, chat_id, user_id):
+                    return chat_id, await chat_title(svc, chat_id)
+            except TelegramError:
+                pass   # 봇이 나간 방
+            return None
+    out = [r for r in await asyncio.gather(*(one(c) for c in await svc.perms.candidate_chats(user_id) if c < 0)) if r]
+    if len(cache) > 5000:
+        cache.clear()
+    cache[user_id] = (time.monotonic(), out)
+    return list(out)
 
 
 async def groups_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:

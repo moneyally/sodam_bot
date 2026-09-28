@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime
 
 from telegram import Message
@@ -221,7 +223,7 @@ async def _add_doc(c: PanelCtx, msg: Message) -> tuple[bool, str]:
             except TelegramError:
                 return False, "파일을 받지 못했어요. 잠시 후 다시 보내주세요."
             name = doc.file_name or "파일"
-            text, title, source = knowledge.extract_text(data, name), name, name
+            text, title, source = await asyncio.to_thread(knowledge.extract_text, data, name), name, name   # PDF(5MB) 가 봇 전체를 멈추지 않게 (감사 S3)
         else:
             text = (msg.text or msg.caption or "").strip()
             if not text:

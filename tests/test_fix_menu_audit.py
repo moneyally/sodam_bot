@@ -131,3 +131,28 @@ async def unexpected_error_still_answers():
         assert q.answers and "잠시 후" in q.answers[0][0], q.answers
     finally:
         menu.ROUTES.pop("zzboom", None)
+
+
+# ── S1: 관리자 방 목록은 동시에 묻고 잠깐 기억 ─────────────────
+@test
+async def admin_groups_parallel_and_cached():
+    db, svc, bot, _ = await setup()
+    rooms = [-1005000 - i for i in range(24)]
+    for cid in rooms:
+        await db.ensure_chat(cid, f"방{cid}")
+    asked = []
+
+    async def slow_admin(b, cid, uid):
+        asked.append(cid)
+        await asyncio.sleep(0.05)
+        return cid in rooms[:5]
+    svc.perms.is_admin = slow_admin
+
+    async def cands(uid):
+        return rooms
+    svc.perms.candidate_chats = cands
+    t = time.monotonic()
+    got = await menu.admin_groups(svc, bot, 1)
+    assert [c for c, _ in got] == rooms[:5] and time.monotonic() - t < 0.6, time.monotonic() - t   # 하나씩이면 1.2초
+    n = len(asked)
+    assert await menu.admin_groups(svc, bot, 1) == got and len(asked) == n                          # 바로 또 부르면 안 물음

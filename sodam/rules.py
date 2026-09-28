@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 import logging
 import re
 import time
@@ -349,16 +351,22 @@ async def _events(svc: Services, chat_id: int, spec: dict, since: int, now: int)
     """규칙이 걸렸을 시각들 (쿨다운·상한 적용 전). on_message·on_join·check_quiet 와 같은 조건."""
     db, trig, arg = svc.db, spec["trig"], str(spec.get("arg", ""))
     creator = spec.get("created_by")
-    if trig in ("keyword", "user"):
+    if trig == "user":   # 사람 규칙은 SQL 에서 그 사람만 (예전: 7일치 본문까지 전부 읽어 파이썬에서 비교, 감사 S3)
+        if not arg.isdecimal() or int(arg) == creator:
+            return []
+        rows = await db._all("SELECT ts FROM messages WHERE chat_id=? AND is_bot=0 AND ts>=? AND ts<=? AND user_id=? "
+                             "ORDER BY ts LIMIT 200000", (chat_id, since, now, int(arg)))
+        return [m["ts"] for m in rows]
+    if trig == "keyword":
         rows = await db._all("SELECT user_id, text, ts FROM messages WHERE chat_id=? AND is_bot=0 AND ts>=? AND ts<=? "
                              "ORDER BY ts LIMIT 200000", (chat_id, since, now))
-        rows = [m for m in rows if m["user_id"] != creator]      # 만든 사람 말은 안 울림
-        if trig == "user":
-            return [m["ts"] for m in rows if str(m["user_id"]) == arg]
         word, newbie = norm(arg), spec.get("who") == "newbie"
         joins = await _join_times(db, chat_id, since - NEWBIE_SECONDS) if newbie else {}
-        return [m["ts"] for m in rows if word in norm(m["text"]) and
-                (not newbie or any(j <= m["ts"] < j + NEWBIE_SECONDS for j in joins.get(m["user_id"], ())))]
+
+        def match() -> list[int]:   # 20만 줄 정규화 비교는 스레드에서 (이벤트 루프를 막지 않게)
+            return [m["ts"] for m in rows if m["user_id"] != creator and word in norm(m["text"]) and   # 만든 사람 말은 안 울림
+                    (not newbie or any(j <= m["ts"] < j + NEWBIE_SECONDS for j in joins.get(m["user_id"], ())))]
+        return await asyncio.to_thread(match)
     if trig == "join":
         return [t for ts in (await _join_times(db, chat_id, since)).values() for t in ts if t <= now]
     if trig == "quiet" and arg.isdecimal():
