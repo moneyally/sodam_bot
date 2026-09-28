@@ -278,7 +278,7 @@ def rays_center_cache_is_bounded():
     im = Image.new("RGBA", (fx.S, fx.S))
     for i in range(40):
         fx.rays(im, 0.1, {}, center=(0.3 + i / 1000, 0.4))
-    assert len(fx._POLAR) <= fx.POLAR_MAX
+    assert fx._polar_grid.cache_info().currsize <= fx._polar_grid.cache_info().maxsize == 8
 
 
 @test
@@ -297,7 +297,7 @@ def sprite_cache_bounded_and_every_number_param_clamped():
     from sodam.stickerforge import fx, motions
     for i in range(100):
         fx.sprite("star", 10 + i % 100, (i, 0, 0))
-    assert len(fx._CACHE) <= fx.SPRITE_MAX
+    assert fx.sprite.cache_info().currsize <= fx.sprite.cache_info().maxsize == 64
     for name, fn in [*fx.PRESETS.items(), *motions.PRESETS.items()]:      # 새 부품도 숫자 인자는 범위가 있어야 (AI 가 1e9 를 줘도)
         for p in inspect.signature(fn).parameters.values():
             if isinstance(p.default, (int, float)) and not isinstance(p.default, bool) and p.name not in ("t",):

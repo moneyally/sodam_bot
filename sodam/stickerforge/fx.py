@@ -13,6 +13,7 @@ tear everything that was drawn before them.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 import math
 import random
 
@@ -52,23 +53,14 @@ def _heart(size: int, ss: int = 6, color=(255, 92, 120)) -> Image.Image:
     return out
 
 
-_CACHE = {}
-SPRITE_MAX = 64                                                 # 크기·색은 AI 가 고름 → 캐시는 몇 개만
-
-
+@lru_cache(maxsize=64)          # 크기·색은 AI 가 고름 → 가장 오래 안 쓴 것부터 버림 (메모리 일정, 자주 쓰는 건 남음)
 def sprite(kind: str, size: int, color=None) -> Image.Image:
-    key = (kind, size, color)
-    if key not in _CACHE:
-        if len(_CACHE) >= SPRITE_MAX:
-            _CACHE.clear()
-        if kind == "star":
-            _CACHE[key] = _star(size, color=color or (255, 252, 235))
-        elif kind == "heart":
-            _CACHE[key] = _heart(size, color=color or (255, 92, 120))
-        else:
-            im = Image.open(kind).convert("RGBA")
-            _CACHE[key] = im.resize((size, int(size * im.height / im.width)), Image.LANCZOS)
-    return _CACHE[key]
+    if kind == "star":
+        return _star(size, color=color or (255, 252, 235))
+    if kind == "heart":
+        return _heart(size, color=color or (255, 92, 120))
+    im = Image.open(kind).convert("RGBA")
+    return im.resize((size, int(size * im.height / im.width)), Image.LANCZOS)
 
 
 def _fade_alpha(spr: Image.Image, a: float) -> Image.Image:
@@ -179,19 +171,17 @@ def zzz(frame, t, ctx, origin=(330, 120), color=(255, 225, 120), **_):
 
 _YY, _XX = np.mgrid[0:S, 0:S].astype(np.float32)
 _DIAG = (_XX + _YY) / (2 * S)                                   # sweep 대각 좌표 (0~1)
-_POLAR = {}
-POLAR_MAX = 8                                                   # 중심은 AI 가 고름 → 격자(2MB) 캐시는 몇 개만
-
-
 def _polar(center):
-    """rays 용 (각도, 페이드) — 중심마다 한 번만 계산."""
-    if center not in _POLAR:
-        if len(_POLAR) >= POLAR_MAX:
-            _POLAR.clear()
-        cx, cy = S * center[0], S * center[1]
-        r = np.hypot(_XX - cx, _YY - cy)
-        _POLAR[center] = (np.arctan2(_YY - cy, _XX - cx), np.clip(1 - r / (S * 0.62), 0, 1) * np.clip(r / 40, 0, 1))
-    return _POLAR[center]
+    """rays 용 (각도, 페이드). 중심은 0.02 칸으로 맞춰서(눈으론 같음) 캐시를 재사용."""
+    return _polar_grid(round(center[0] * 50), round(center[1] * 50))
+
+
+@lru_cache(maxsize=8)           # 격자 하나 2MB → 최근 8개만
+def _polar_grid(gx: int, gy: int):
+    cx, cy = S * gx / 50, S * gy / 50
+    r = np.hypot(_XX - cx, _YY - cy)
+    return np.arctan2(_YY - cy, _XX - cx), np.clip(1 - r / (S * 0.62), 0, 1) * np.clip(r / 40, 0, 1)
+
 
 def sweep(frame, t, ctx, strength=0.5, width=0.09, color=(255, 250, 225), **_):
     """대각선 광채가 한 번 지나감."""

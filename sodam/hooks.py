@@ -47,12 +47,16 @@ def add_tick_hook(fn) -> None:
 
 
 async def tick(svc, bot) -> None:
+    import logging
+    import time
     for fn in TICK_HOOKS:
+        t0 = time.monotonic()
         try:
             await fn(svc, bot)
         except Exception:
-            import logging
             logging.getLogger(__name__).exception("tick hook failed: %s", getattr(fn, "__name__", fn))
+        if time.monotonic() - t0 > 10:
+            logging.getLogger(__name__).warning("tick hook %s.%s 느림 %.1f초", fn.__module__, fn.__name__, time.monotonic() - t0)
 
 
 def add_reaction_hook(fn) -> None:
