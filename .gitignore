@@ -10,3 +10,4 @@ __pycache__/
 /VERSION
 sodam-migrate-*.enc
 *.session
+.env.migrated*
