@@ -36,6 +36,7 @@ CLAMP = {                              # (최소, 최대) — 넘으면 잘라�
     "bounces": (1, 4), "beats": (1, 3), "wiggle": (0, 6), "turns": (1, 2), "depth": (0, 0.7), "drift": (0, 80), "waves": (1, 4),
     "block": (4, 24), "gap": (2, 6), "dark": (0, 0.6), "rate": (1, 8), "spread": (10, 120), "flashes": (1, 4), "gain": (1, 1.8),
     "dx": (-30, 30), "dy": (-30, 30), "blur": (2, 16), "opacity": (0, 0.8), "length": (60, 600), "angle": (-180, 180),
+    "frames": (1, 4),
 }
 TEXT_KEYS = {"text": 8, "axis": 1}            # PIL 로만 그리는 짧은 글 (ffmpeg 인자·경로 아님). axis: x|y
 POINT_KEYS = {"points": 4}                    # [[x,y],...] 512 좌표
@@ -65,6 +66,10 @@ class Result:
     def summary(self) -> str:
         bad = [f"{n} {v}" for n, v, ok in self.rows if not ok]
         return "통과" if self.ok else ("검사 실패: " + ", ".join(bad) if bad else self.error or "실패")
+
+
+def _int(v, default: int) -> int:
+    return int(v) if _num(v) else default
 
 
 def _num(v):
@@ -117,7 +122,7 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         base = recipes.BY_NAME.get(str(raw["recipe"]))
         if not base:
             return None, f"recipe 는 {[r['name'] for r in recipes.RECIPES]} 중"
-        varied = recipes.vary(base, int(raw.get("seed", 0)))
+        varied = recipes.vary(base, _int(raw.get("seed"), 0))
         merged = {**varied, **{k: v for k, v in raw.items() if k not in ("recipe",)}}
         if "caption" in raw and isinstance(raw["caption"], (str, dict)) and "palette" not in (raw["caption"] if isinstance(raw["caption"], dict) else {}):
             cap = raw["caption"] if isinstance(raw["caption"], dict) else {"text": raw["caption"]}
@@ -132,7 +137,8 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         return None, "keying 은 auto·white·black·color·glow·none"
     spec = {"mode": mode, "keying": {"mode": kmode, "tol": int(min(max(key.get("tol", 20), 5), 60))},
             "margin": float(min(max(raw.get("margin", 0.08), 0.04), 0.18)),
-            "radius": int(min(max(raw.get("radius", 56), 8), 256)),   # 스티커는 투명 픽셀이 있어야 함(alpha_range) → 모서리 최소 8 "seed": int(raw.get("seed", 1)) % 1000,
+            "radius": int(min(max(raw.get("radius", 56), 8), 256)),   # 스티커는 투명 픽셀이 있어야 함(alpha_range) → 모서리 최소 8
+            "seed": _int(raw.get("seed"), 1) % 1000,                   # seed 가 글자면 기본값 (main 검토 수정)
             "framing": raw.get("framing") if raw.get("framing") in ("auto", "center", "top", "blur") else "auto"}
     spec["motion"], spec["fx"] = [], []
     for item in (raw.get("motion") or [{"type": "idle"}])[:MAX_MOTIONS]:
@@ -289,7 +295,10 @@ def looks_illustrated(image: bytes) -> bool:
     import io
     import numpy as np
     from PIL import Image
-    im = Image.open(io.BytesIO(image)).convert("RGB").resize((160, 160), Image.BILINEAR)
+    try:
+        im = Image.open(io.BytesIO(image)).convert("RGB").resize((160, 160), Image.BILINEAR)
+    except Exception:   # 깨진 사진 → 사진으로 취급 (뒤 단계가 형식 오류를 안내)
+        return False
     a = np.asarray(im, dtype=np.int16)
     dx = np.abs(a[:, 1:] - a[:, :-1]).max(axis=2)
     dy = np.abs(a[1:] - a[:-1]).max(axis=2)

@@ -268,3 +268,23 @@ async def profile_video_uses_sticker_engine_spec_and_skips_art_for_drawings():
 
 
 _ = SimpleNamespace
+
+
+@test
+def rays_center_cache_is_bounded():
+    """rays 중심은 AI 가 고름 (0~1 실수) → 중심마다 2MB 격자를 영원히 쌓으면 메모리가 샘."""
+    from PIL import Image
+    from sodam.stickerforge import fx
+    im = Image.new("RGBA", (fx.S, fx.S))
+    for i in range(40):
+        fx.rays(im, 0.1, {}, center=(0.3 + i / 1000, 0.4))
+    assert len(fx._POLAR) <= fx.POLAR_MAX
+
+
+@test
+def odd_seed_and_broken_image_do_not_crash():
+    import sodam.stickerforge as SF
+    from sodam.stickerforge import recipes
+    spec, err = SF.sanitize({"recipe": recipes.RECIPES[0]["name"], "seed": "abc"})
+    assert spec and not err, err
+    assert SF.looks_illustrated(b"not an image") is False

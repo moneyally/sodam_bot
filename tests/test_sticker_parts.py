@@ -126,3 +126,29 @@ async def new_parts_render_within_telegram_limits():
         res = await SF.forge(img, spec)
         assert res.ok, (raw, res.summary(), res.warnings)
         assert len(res.webm) <= 256 * 1024
+
+
+@test
+def every_numeric_param_is_clamped_and_caches_are_bounded():
+    """새 부품 규칙: AI 가 주는 숫자는 전부 범위 안으로, AI 값으로 키가 되는 캐시는 상한."""
+    import inspect
+    missing = []
+    for name, fn in list(M.PRESETS.items()) + [(n, f) for n, f in FX.PRESETS.items() if n not in SF.BLOCKED_FX]:
+        fn = {"breathe": M.idle, "float": M.float_}.get(name, fn)
+        for p, prm in inspect.signature(fn).parameters.items():
+            if p in ("frame", "t", "ctx", "_") or prm.kind == prm.VAR_KEYWORD or prm.default is prm.empty:
+                continue
+            if isinstance(prm.default, (int, float)) and not isinstance(prm.default, bool):
+                if p not in SF.CLAMP and p not in SF.SPECIAL.get(name, {}):
+                    missing.append(f"{name}.{p}")
+    assert not missing, missing
+    spec, _ = SF.sanitize({"fx": [{"type": "impact", "frames": 900}, {"type": "shadow", "dx": -999, "blur": 999}]})
+    fx = {f["type"]: f for f in spec["fx"]}
+    assert fx["impact"]["frames"] == 4 and fx["shadow"]["dx"] == -30 and fx["shadow"]["blur"] == 16
+    base = _frame()
+    for i in range(SF.CLAMP["count"][1] + 20):                                   # 색·크기가 매번 달라도
+        FX.sprite("star", 20 + i % 30, (i % 255, 10, 10))
+    assert len(FX._CACHE) <= FX.SPRITE_MAX
+    for i in range(20):
+        FX.rays(base.copy(), 0.1, _ctx(), center=(0.1 + i * 0.02, 0.4))
+    assert len(FX._POLAR) <= FX.POLAR_MAX

@@ -346,6 +346,23 @@ async def heartbeat_job_registered_and_writes_file():
         assert hb.stat().st_mtime == 0, "텔레그램에 안 닿으면 기록 안 함 (감시가 재시작하게)"
         await jobs[0].callback(SimpleNamespace(job=jobs[0], bot=SimpleNamespace(get_webhook_info=up)))
         assert time.time() - hb.stat().st_mtime < 5 and abs(int(hb.read_text()) - time.time()) < 5
+        req = app.bot._request[0]
+        assert isinstance(req, main_mod.PollRequest), "getUpdates 가 시각을 남기는 연결로"
+        os.utime(hb, (0, 0))
+        main_mod.PollRequest.last_ok = time.monotonic() - main_mod.POLL_STALE - 1   # 받기만 멈춤 (웹훅 조회는 됨)
+        await jobs[0].callback(SimpleNamespace(job=jobs[0], bot=SimpleNamespace(get_webhook_info=up)))
+        assert hb.stat().st_mtime == 0, "폴링이 멈췄으면 기록 안 함"
+
+        async def ok(*a, **kw):
+            return 200, b"{}"
+        orig = main_mod.HTTPXRequest.do_request
+        main_mod.HTTPXRequest.do_request = ok
+        try:
+            await req.do_request("u", "getUpdates")
+        finally:
+            main_mod.HTTPXRequest.do_request = orig
+        await jobs[0].callback(SimpleNamespace(job=jobs[0], bot=SimpleNamespace(get_webhook_info=up)))
+        assert time.time() - hb.stat().st_mtime < 5, "응답 오면 다시 기록"
     finally:
         await app.post_shutdown(app)
 
