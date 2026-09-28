@@ -1139,6 +1139,9 @@ async def job_name_sweep(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ── 예약 작업 ─────────────────────────────────────────────
+TICK_SLOW = 10
+
+
 async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     """30초마다: 캡차 시간 초과 처리, 예약공지 발송, 대기 중인 결제 확인."""
     svc = _svc(context)
@@ -1150,10 +1153,13 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))
     for name, fn in jobs:
+        t0 = time.monotonic()
         try:
             await fn(context.bot)
         except Exception:  # 한쪽 실패가 다른 쪽을 막지 않게
             log.exception("tick %s failed", name)
+        if time.monotonic() - t0 > TICK_SLOW:   # 30초 틱이 밀리는 원인 찾기 (재시작 직후 'skipped: maximum instances')
+            log.warning("tick %s 느림 %.1f초", name, time.monotonic() - t0)
 
 
 async def job_sports(context: ContextTypes.DEFAULT_TYPE) -> None:
