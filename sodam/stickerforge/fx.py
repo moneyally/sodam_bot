@@ -173,15 +173,32 @@ def zzz(frame, t, ctx, origin=(330, 120), color=(255, 225, 120), **_):
 
 # ---------------------------------------------------------------- light
 
+_YY, _XX = np.mgrid[0:S, 0:S].astype(np.float32)
+_DIAG = (_XX + _YY) / (2 * S)                                   # sweep 대각 좌표 (0~1)
+_POLAR = {}
+
+
+def _polar(center):
+    """rays 용 (각도, 페이드) — 중심마다 한 번만 계산."""
+    if center not in _POLAR:
+        cx, cy = S * center[0], S * center[1]
+        r = np.hypot(_XX - cx, _YY - cy)
+        _POLAR[center] = (np.arctan2(_YY - cy, _XX - cx), np.clip(1 - r / (S * 0.62), 0, 1) * np.clip(r / 40, 0, 1))
+    return _POLAR[center]
+
 def sweep(frame, t, ctx, strength=0.5, width=0.09, color=(255, 250, 225), **_):
     """Diagonal highlight crossing the silhouette once per loop (ends off-canvas)."""
     c = -0.35 + 1.7 * (t / D)
-    yy, xx = np.mgrid[0:S, 0:S]
-    band = np.exp(-(((xx + yy) / (2 * S) - c) / width) ** 2).astype(np.float32)
-    a = np.asarray(frame).astype(np.float32); al = a[..., 3:4] / 255.0
+    band = np.exp(-((_DIAG - c) / width) ** 2)          # 격자는 모듈 로드 때 한 번 (프레임마다 mgrid 는 느림)
+    hit = band > 0.004                                   # 띠 밖 픽셀은 손대지 않음 (프레임당 ~15% 만 계산)
+    if not hit.any():
+        return frame
+    a = np.array(frame, dtype=np.uint8)
+    px = a[hit].astype(np.float32); al = px[:, 3:4] / 255.0
     col = np.array(color, dtype=np.float32)
-    a[..., :3] += (col - a[..., :3]) * (band[..., None] * strength) * al
-    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
+    px[:, :3] += (col - px[:, :3]) * (band[hit][:, None] * strength) * al
+    a[hit] = np.clip(px + 0.5, 0, 255).astype(np.uint8)
+    return Image.fromarray(a, "RGBA")
 
 
 def scan(frame, t, ctx, height=70, alpha=0.45, **_):
@@ -196,12 +213,9 @@ def scan(frame, t, ctx, height=70, alpha=0.45, **_):
 
 def rays(frame, t, ctx, spokes=12, strength=0.22, color=(255, 244, 200), center=(0.5, 0.42), **_):
     """Rotating sunburst behind the silhouette (translucent outside it)."""
-    cx, cy = S * center[0], S * center[1]
-    yy, xx = np.mgrid[0:S, 0:S]
-    ang = np.arctan2(yy - cy, xx - cx) + 2 * math.pi * (t / D) / spokes
-    r = np.hypot(xx - cx, yy - cy)
+    base_ang, fade = _polar(tuple(center))
+    ang = base_ang + 2 * math.pi * (t / D) / spokes
     wedge = (np.sin(ang * spokes) > 0.55).astype(np.float32)
-    fade = np.clip(1 - r / (S * 0.62), 0, 1) * np.clip(r / 40, 0, 1)
     layer = Image.new("RGBA", frame.size, tuple(color) + (0,))
     layer.putalpha(Image.fromarray((wedge * fade * strength * 255).astype(np.uint8), "L"))
     layer.alpha_composite(frame)

@@ -19,7 +19,17 @@ description: 텔레그램 "움프"(움직이는 프로필 사진·영상 아바�
 봇은 남의 프로필을 바꿀 수 없다 → 파일을 보내고 "설정 → 프로필 사진 설정 → 이 파일" 안내.
 `bot.get_user_profile_photos(uid, limit=1)` 로 요청자 본인의 지금 프사를 가져올 수 있다 (공개 설정이 막혀 있으면 빈 값).
 
-## 2. ffmpeg 레시피 (sodam/avatar.py 가 기준)
+## 2-0. 기본 경로 = 스티커 엔진 (2026-09-29 보강)
+실제 방에서 옛 부품(흔들림 2°·확대 ±8%·색 필터)은 "약하다·별로" 였다. 지금 기본은 **스티커 엔진**(`sodam/stickerforge`):
+`make_profile_video(spec=…)` → `stickerforge.forge_video(image, spec)` → photo 모드(framing auto 로 얼굴 보존, radius 0)·
+움직임(zoom·punch·shake·pan)·효과(sweep·sparkle·glitch·rays·glow·meteors·slice_glitch)·자막까지 같은 프레임 → 640×640 H.264
+(3초 루프 두 바퀴 = 5.93초, yuv420p, 무음, faststart, 2MB↓; 512→640 lanczos+unsharp). 반복은 프레임 89 = 프레임 0.
+qc 경고(자막 겹침·잘림·밋밋/요란·하얗게 날아감)가 Result.warnings 로 오고, 도구는 경고면 안 보내고 한 번 고치게 한다.
+"글리치" = 잠깐 R/B 어긋남(glitch), "네온" = glow(color)·sweep — **전체 색조·채도 돌리기가 아님**(그게 "별로"의 원인).
+원본이 이미 그림이면 `stickerforge.looks_illustrated` 가 art(그림체) 를 건너뛴다. 명령줄: `tools/sticker_forge.py IMAGE SPEC out.mp4 --mp4`.
+아래 2~3 은 옛 부품 경로(spec 없이 부를 때 — 하트·눈·꽃잎 날리기는 아직 이쪽).
+
+## 2. ffmpeg 레시피 (sodam/avatar.py 가 기준 — 옛 부품 경로)
 ffmpeg 는 `imageio-ffmpeg` 정적 바이너리(`imageio_ffmpeg.get_ffmpeg_exe()`) → 시스템 ffmpeg 없어도 됨.
 
 ```
@@ -55,6 +65,7 @@ ffmpeg -y -loop 1 -i src -t 6 -filter_complex \
 - ffmpeg 는 한 번에 하나(Semaphore), 60초 시간 초과.
 
 ## 5. 검증
+`python tests/run_all.py avatar sticker_upgrade` (sticker_upgrade: 스티커 엔진 움프 규격·반복·경고·그림 판별)
 `python tests/run_all.py avatar` — 진짜 ffmpeg 로 부품마다 640×640·h264·yuv420p·소리 없음·6초·2MB 이하·faststart,
 **끊김 없는 반복**(181번째 장을 디코드해 첫 장과 비교 — 무늬 있는 사진으로! 단색이면 확대·이동이 안 보여 검사가 무의미,
 날리는 것은 단색 배경에서 따로), 하루 한도·그림체 한도·정해진 부품만(글이 ffmpeg 인자에 못 들어감).

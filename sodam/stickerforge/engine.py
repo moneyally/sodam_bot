@@ -7,6 +7,10 @@ Quality rules baked in here:
   * VP9 two-pass with alpha_mode=1, no alt-ref frames, and a bitrate ladder that
     walks down until the file fits (the alpha plane is not counted by -b:v, so
     transparent stickers need less than you'd guess)
+
+소담 보강: photo 모드는 피사체(얼굴) 를 고려해 자르고(focus_window / framing), 프레임은 메모리에 두고
+검수 지표(qc)·미리보기에 바로 쓰며 PNG 는 ffmpeg 입력용으로만 빠르게(compress_level 1) 쓴다.
+움프(프로필 영상)는 같은 프레임을 640 H.264 로 두 바퀴 잇는다 (encode_profile).
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ from .const import S, FPS, NF, D, MASTER, ffmpeg
 from . import motions as M
 from . import fx as FX
 from . import caption as CAP
+from . import qc
 
 LADDERS = {
     "cutout": (("460k", "28"), ("400k", "31"), ("340k", "34"), ("280k", "37"), ("220k", "40"), ("170k", "44")),
@@ -30,6 +35,8 @@ LADDERS = {
     "icon":   (("80k", "14"), ("64k", "18"), ("50k", "22"), ("40k", "26"), ("32k", "30")),
     "emoji":  (("140k", "12"), ("110k", "16"), ("90k", "20"), ("70k", "24"), ("55k", "28")),
 }
+FRAMINGS = ("auto", "center", "top", "blur")
+PROFILE_SIDE, PROFILE_LOOPS, PROFILE_MAX = 640, 2, 2 * 1024 * 1024     # 움프 규격 (avatar.py 와 같음)
 
 
 def premultiply(im):
@@ -39,10 +46,15 @@ def premultiply(im):
 
 
 def unpremultiply(im):
-    a = np.asarray(im, dtype=np.float32) / 255.0
-    al = a[..., 3:4]
-    a[..., :3] = np.where(al > 1e-4, a[..., :3] / np.maximum(al, 1e-4), 0)
-    return Image.fromarray((np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8), "RGBA")
+    """반투명 픽셀(경계) 만 나눈다 — 대부분 픽셀은 알파 0 또는 255 라 그대로 (float 변환보다 3배 빠름)."""
+    a = np.array(im, dtype=np.uint8)
+    al = a[..., 3]
+    edge = (al > 0) & (al < 255)
+    if edge.any():
+        rgb = a[edge][:, :3].astype(np.float32) * (255.0 / al[edge][:, None]) + 0.5
+        a[edge, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    a[al == 0, :3] = 0
+    return Image.fromarray(a, "RGBA")
 
 
 def prepare_cutout(im: Image.Image, margin: float, bottom_px: int = S):
@@ -63,15 +75,62 @@ def prepare_cutout(im: Image.Image, margin: float, bottom_px: int = S):
     return premultiply(c), pivot
 
 
-def prepare_photo(im: Image.Image, overscan: float = 1.06):
-    """Scale-to-cover a MASTER canvas, slightly over-scanned so pans and shakes
-    never reveal the edge."""
+def focus_window(im: Image.Image, top_bias: float = 0.35) -> tuple:
+    """정사각형 자르기 창 (x0, y0, x1, y1). 관심 영역(에지 에너지) 이 가장 많이 들어오는 위치를 고르되,
+    세로로 긴 사진은 위쪽(얼굴) 을 조금 더 쳐준다. 짧은 변이 창의 한 변."""
+    w, h = im.size
+    side = min(w, h)
+    if w == h:
+        return (0, 0, w, h)
+    m = qc.focus_map(im, 64)                                   # 64×64, 0~1
+    if h > w:                                                  # 세로: y 만 고른다
+        prof = m.sum(axis=1)                                   # 행별 에너지
+        span = max(1, round(64 * side / h))
+        best, best_s = 0, -1.0
+        for y in range(0, 64 - span + 1):
+            s = prof[y:y + span].sum() * (1 + top_bias * (1 - y / max(1, 64 - span)))
+            if s > best_s:
+                best, best_s = y, s
+        y0 = min(h - side, round(best / 64 * h))
+        return (0, y0, side, y0 + side)
+    prof = m.sum(axis=0)
+    span = max(1, round(64 * side / w))
+    best, best_s = 0, -1.0
+    for x in range(0, 64 - span + 1):
+        s = prof[x:x + span].sum()
+        if s > best_s:
+            best, best_s = x, s
+    x0 = min(w - side, round(best / 64 * w))
+    return (x0, 0, x0 + side, side)
+
+
+def prepare_photo(im: Image.Image, overscan: float = 1.06, framing: str = "auto"):
+    """정사각형으로 맞춰 MASTER 캔버스를 꽉 채운다 (pan·shake 가 가장자리를 드러내지 않게 살짝 크게).
+    framing: auto(관심 영역 우선) · center(가운데) · top(위쪽) · blur(흐린 배경 위에 전체를 담음).
+    → (master, pivot, info{window, framing})"""
     im = im.convert("RGBA")
-    sc = MASTER * overscan / min(im.width, im.height)
+    w, h = im.size
+    side = min(w, h)
+    if framing == "blur" and w != h:
+        big = max(w, h)
+        bg = im.resize((big, big), Image.BILINEAR).filter(ImageFilter.GaussianBlur(big / 24))
+        bg = Image.blend(bg, Image.new("RGBA", bg.size, (0, 0, 0, 255)), 0.25)
+        bg.alpha_composite(im, ((big - w) // 2, (big - h) // 2))
+        im, window = bg, (0, 0, big, big)
+    else:
+        if framing == "center" or w == h:
+            window = ((w - side) // 2, (h - side) // 2, (w - side) // 2 + side, (h - side) // 2 + side)
+        elif framing == "top":
+            window = ((w - side) // 2, 0, (w - side) // 2 + side, side)
+        else:
+            window = focus_window(im)
+        im = im.crop(window)
+    im.putalpha(255)
+    sc = MASTER * overscan / im.width
     im = im.resize((int(im.width * sc), int(im.height * sc)), Image.LANCZOS)
     c = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 255))
     c.alpha_composite(im, ((MASTER - im.width) // 2, (MASTER - im.height) // 2))
-    return premultiply(c), (MASTER / 2, MASTER / 2)
+    return premultiply(c), (MASTER / 2, MASTER / 2), {"window": window, "framing": framing if framing in FRAMINGS else "auto"}
 
 
 def rounded_mask(radius: int, ss: int = 4) -> Image.Image:
@@ -104,8 +163,12 @@ def hit_times(motion_specs) -> list:
     return sorted(hits)
 
 
-def build(src: Image.Image, spec: dict, outdir: str, font: str) -> dict:
-    """Render NF PNG frames into `outdir`. Returns metrics (caption info, mode)."""
+RAW = "frames.rgba"      # ffmpeg 입력: 89장 RGBA 원시 바이트 한 파일 (PNG 인코드·디코드 생략 → 그리기 1.5초·인코딩 1초 절약)
+
+
+def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
+    """NF 프레임을 그린다. outdir 가 있으면 outdir/frames.rgba (ffmpeg 입력) 로도 쓴다.
+    → {"frames": [RGBA...], "mode", "caption": cap_info, "cap_box", "subject_boxes", "focus", "hits", "framing"}"""
     mode = spec.get("mode", "cutout")
     motion = M.build(spec.get("motion"))
     apply_fx = FX.build(spec.get("fx"))
@@ -120,9 +183,11 @@ def build(src: Image.Image, spec: dict, outdir: str, font: str) -> dict:
             style.anims = tuple(style.anims)
         cap_frames, cap_info = CAP.render(cap["text"], cap.get("font") or font, style)
 
+    focus, framing = None, None
     if mode == "photo":
-        master, pivot = prepare_photo(src, spec.get("overscan", 1.06))
+        master, pivot, framing = prepare_photo(src, spec.get("overscan", 1.06), spec.get("framing", "auto"))
         mask = rounded_mask(int(spec.get("radius", 56))) if spec.get("radius", 56) > 0 else None
+        focus = qc.focus_mask_512(src.crop(framing["window"]) if framing["framing"] != "blur" else src)
     else:
         bottom = S
         if cap_info and cap.get("position", "bottom") == "bottom":
@@ -130,9 +195,13 @@ def build(src: Image.Image, spec: dict, outdir: str, font: str) -> dict:
         master, pivot = prepare_cutout(src, float(spec.get("margin", 0.08)), bottom)
         mask = None
 
-    if os.path.isdir(outdir):
-        shutil.rmtree(outdir)
-    os.makedirs(outdir)
+    raw = None
+    if outdir:
+        if os.path.isdir(outdir):
+            shutil.rmtree(outdir)
+        os.makedirs(outdir)
+        raw = open(os.path.join(outdir, RAW), "wb")
+    frames, boxes = [], []
     for n in range(NF):
         t = n / FPS
         ang, sx, sy, dx, dy = motion(t)
@@ -142,53 +211,100 @@ def build(src: Image.Image, spec: dict, outdir: str, font: str) -> dict:
         frame = unpremultiply(frame)
         if mask is not None:
             frame.putalpha(mask)
+        boxes.append(frame.getchannel("A").getbbox() if mode == "cutout" else None)   # 피사체 위치 (효과·자막 전)
         frame = apply_fx(frame, t, ctx)
         if cap_frames:
             frame.alpha_composite(cap_frames[n])
         ctx["prev"] = (ctx["prev"] + [frame])[-2:]
-        frame.save(os.path.join(outdir, f"f{n:04d}.png"))
-    return {"mode": mode, "caption": cap_info, "hits": ctx["hits"]}
+        frames.append(frame)
+        if raw:
+            raw.write(frame.tobytes())
+    if raw:
+        raw.close()
+    cap_box = None
+    if cap_info:
+        cap_box = (max(0, cap_info["left"] - 4), max(0, cap_info["band_top"]), min(S, cap_info["left"] + cap_info["width"] + 4),
+                   cap_info["band_bottom"])
+    return {"frames": frames, "mode": mode, "caption": cap_info, "cap_box": cap_box, "subject_boxes": boxes,
+            "focus": focus, "hits": ctx["hits"], "framing": framing}
+
+
+def _input(frames_dir, fps=FPS, loops=1) -> list:
+    """raw RGBA 시퀀스 입력 인자 (PNG 디렉터리도 받음 — tools/디버그용)."""
+    raw = os.path.join(frames_dir, RAW)
+    loop = ["-stream_loop", str(loops - 1)] if loops > 1 else []
+    if os.path.exists(raw):
+        return [*loop, "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{S}x{S}", "-framerate", str(fps), "-i", raw]
+    return [*loop, "-framerate", str(fps), "-i", os.path.join(frames_dir, "f%04d.png")]
 
 
 def _encode(frames_dir, out, bitrate, crf, fps=FPS, extra_vf=None):
-    args = ["-framerate", str(fps), "-i", os.path.join(frames_dir, "f%04d.png")]
+    args = _input(frames_dir, fps)
     if extra_vf:
         args += ["-vf", extra_vf]
     args += ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-metadata:s:v:0", "alpha_mode=1",
              "-b:v", bitrate, "-crf", crf, "-maxrate", "950k", "-bufsize", "1300k",
-             "-g", str(NF + 1), "-row-mt", "1", "-deadline", "good", "-cpu-used", "1",   # 소담: best/0 대비 PSNR 같고(27.47 vs 27.48) 10배 빠름 (44→4초)
+             "-g", str(NF + 1), "-row-mt", "1", "-tile-columns", "1", "-threads", "4", "-deadline", "good",
              "-auto-alt-ref", "0", "-an", "-t", str(D), "-f", "webm"]
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "pass")
-        for p, dst in (("1", os.devnull), ("2", out)):
-            subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args, "-pass", p, "-passlogfile", log, dst],
-                           check=True, timeout=120)
+        # 1차 패스는 통계만 모으므로 빠르게(cpu-used 4), 2차만 cpu-used 1 (best/0 대비 PSNR 같고 10배 빠름: 44→4초)
+        for p, dst, speed in (("1", os.devnull, "4"), ("2", out, "1")):
+            subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args, "-cpu-used", speed,
+                            "-pass", p, "-passlogfile", log, dst], check=True, timeout=120)
     return os.path.getsize(out)
 
 
 def encode_fit(frames_dir, out, ladder="cutout", limit=None, start=None):
-    """Walk the bitrate ladder until the file fits. Returns (size, bitrate, crf)."""
+    """비트레이트 사다리를 내려가며 용량 안에 넣는다. 넘치면 넘친 비율만큼 건너뛰어(대개 두 번째에 맞음) 인코딩 횟수를 아낀다.
+    → (size, bitrate, crf)"""
     limits = {"cutout": 250 * 1024, "photo": 250 * 1024, "icon": 31 * 1024, "emoji": 62 * 1024}
     limit = limit or limits[ladder]
-    steps = LADDERS[ladder]
-    if start:
-        steps = steps[[i for i, s in enumerate(steps) if s[0] == start][0]:] if any(s[0] == start for s in steps) else steps
+    steps = list(LADDERS[ladder])
+    if start and any(s[0] == start for s in steps):
+        steps = steps[[i for i, s in enumerate(steps) if s[0] == start][0]:]
     small = ladder in ("icon", "emoji")
     vf = "scale=100:100:flags=lanczos,unsharp=5:5:0.9:5:5:0.0" if small else None
     fps = 24 if ladder == "icon" else FPS
     size = br = crf = None
-    for br, crf in steps:
+    i = 0
+    while i < len(steps):
+        br, crf = steps[i]
         size = _encode(frames_dir, out, br, crf, fps=fps, extra_vf=vf)
         if size <= limit:
             break
+        want = int(br[:-1]) * limit / size * 0.92                    # 이 비율로 줄여야 들어감
+        nxt = [j for j in range(i + 1, len(steps)) if int(steps[j][0][:-1]) <= want]
+        i = nxt[0] if nxt else i + 1
     return size, br, crf
 
 
-def contact_sheet(frames_dir, out, frames=(0, 12, 24, 36, 48, 60, 72, 88), tile=200, bg=(118, 128, 142)):
-    """Preview strip on a neutral background so transparency is visible."""
-    sheet = Image.new("RGBA", (tile * 4, tile * ((len(frames) + 3) // 4)), bg + (255,))
-    for i, n in enumerate(frames):
-        f = Image.open(os.path.join(frames_dir, f"f{n:04d}.png")).convert("RGBA").resize((tile, tile), Image.LANCZOS)
-        sheet.alpha_composite(f, ((i % 4) * tile, (i // 4) * tile))
+def encode_profile(frames_dir, out, side=PROFILE_SIDE, loops=PROFILE_LOOPS, limit=PROFILE_MAX):
+    """움프: 같은 프레임을 `loops` 바퀴 이어 640×640 H.264 MP4 (알파는 검정 위에 평탄화, 소리 없음, faststart).
+    512→640 은 lanczos + 약한 unsharp. 2MB 넘으면 crf 를 올려 한 번 더. → (size, crf)"""
+    vf = f"scale={side}:{side}:flags=lanczos,unsharp=5:5:0.6:5:5:0.0,format=yuv420p"
+    size = crf = None
+    for crf in (20, 24, 28, 32):
+        subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *_input(frames_dir, FPS, loops),
+                        "-vf", vf, "-t", f"{D * loops:.4f}", "-c:v", "libx264", "-profile:v", "main", "-preset", "veryfast",
+                        "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", out],
+                       check=True, timeout=120)
+        size = os.path.getsize(out)
+        if size <= limit:
+            break
+    return size, crf
+
+
+def contact_sheet(frames, out, picks=(0, 12, 24, 36, 48, 60, 72, 88), tile=200, bg=(118, 128, 142)):
+    """Preview strip on a neutral background so transparency is visible. `frames` = 디렉터리 또는 프레임 목록."""
+    sheet = Image.new("RGBA", (tile * 4, tile * ((len(picks) + 3) // 4)), bg + (255,))
+    for i, n in enumerate(picks):
+        if isinstance(frames, list):
+            f = frames[n]
+        else:                                                   # 디렉터리: raw 파일에서 n번째 장
+            with open(os.path.join(frames, RAW), "rb") as fh:
+                fh.seek(n * S * S * 4)
+                f = Image.frombytes("RGBA", (S, S), fh.read(S * S * 4))
+        sheet.alpha_composite(f.convert("RGBA").resize((tile, tile), Image.LANCZOS), ((i % 4) * tile, (i // 4) * tile))
     sheet.convert("RGB").save(out)
     return out

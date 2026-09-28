@@ -324,18 +324,23 @@
   vec0 chat_id 파티션. 요금은 전체 예산에만 (메시지 2천 개 ≈ $0.001). search_chat(stats.search_text svc=) 결과에 뜻으로만 찾은 글은 ≈.
   끄기 .env SEMSEARCH=0 · 거리 SEM_MAX_DIST(기본 0.7).
 
-## 🎞️ 움프 (`avatar.py`, `panels/avatar.py`, 스킬 `.claude/skills/telegram-ump/SKILL.md`, tests/test_avatar.py)
-- AI 도구 make_profile_video(motion 6 × speed 3 × color 8 × particles 6 부품 조합 avatar.Spec, art none/anime/3d/neon/water):
-  붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → ffmpeg(imageio-ffmpeg) 640×640·6초·
-  h264 yuv420p·소리 없음·faststart·2MB↓ → send_document (영상으로 보내면 재압축). 움직임은 sin(2πn/180) 주기라 끊김 없이 반복.
+## 🎞️ 움프 (`avatar.py`, `panels/avatar.py`, 스킬 `.claude/skills/telegram-ump/SKILL.md`, tests/test_avatar.py·test_sticker_upgrade.py)
+- AI 도구 make_profile_video(**spec** = 스티커 엔진 spec(기본, photo·radius 0 → `stickerforge.forge_video` 640×640 H.264 5.93초 = 3초 루프×2,
+  2MB↓, qc 경고면 안 보내고 한 번 고치게) / spec 없으면 옛 부품 motion 6 × speed 3 × color 8 × particles 6 avatar.Spec, art none/anime/3d/neon/water):
+  붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → send_document (영상으로 보내면 재압축).
+- 원본이 이미 그림이면 `stickerforge.looks_illustrated`(평평한 면 + 굵은 선 + 적은 색) 가 art 를 건너뜀 (gpt-image 비용·시간 낭비 방지).
 - 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
 
-## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, 스킬 `.claude/skills/telegram-sticker-forge/`, tests/test_sticker.py)
+## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, 스킬 `.claude/skills/telegram-sticker-forge/`, tests/test_sticker.py·test_sticker_upgrade.py)
 - 사용자가 준 telegram-sticker-forge 엔진(배경 빼기·움직임 14·효과 20·타이핑 자막) → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘.
-  AI 도구 make_sticker(spec): AI 가 사진·요청을 보고 디자이너처럼 spec 을 고름(도구 설명에 매핑 요약), `sanitize` 가 이름·숫자·범위만
-  통과(rain/rise·font = 파일 경로라 막음), 검사표(크기·코덱·길이·용량·alpha_mode·alpha 범위·소리·구멍·글자 깨짐) 통과해야 전송,
-  실패면 효과 하나 덜고 한 번 더. 스티커 + 파일(재압축 막으려고 문서로) 전송, 사람마다 하루 5개, 한 번에 하나(to_thread).
-- 인코딩 good/cpu-used 1 (best/0 과 화질 같고 10배 빠름). 명령줄 `tools/sticker_forge.py` 로 직접 만들어 미리보기(8장) 확인.
+  AI 도구 `sticker_catalog(query, kind)`(읽기: 계열이 서로 다른 레시피 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings)`:
+  spec 은 `{recipe, seed}`(recipes.py 30개, vary 로 같은 계열 안 변주) 또는/그리고 motion·fx·caption·framing 직접, `sanitize` 가 이름·숫자·범위만
+  통과(rain/rise·font = 파일 경로라 막음). 검사표(규격 9항목) PASS **+ qc 경고 없음**이어야 전송 — 경고(자막 겹침·잘림·구멍·밋밋/요란·하얗게)면
+  안 보내고 고칠 방향과 함께 돌려줌(두 번째는 accept_warnings=true), 규격 실패면 효과 하나 덜고 한 번 더. 사람마다 하루 5개, 한 번에 하나(to_thread).
+- photo 모드 framing auto(에지 에너지 관심 영역·위쪽 가중 → 얼굴 안 잘림)/center/top/blur(흐린 배경 위에 전체). `engine.focus_window`.
+- 속도(4코어): 그리기 10.4→4.9초 — raw RGBA 한 파일(PNG 생략), 격자 캐시, unpremultiply 경계만, VP9 1차 패스 cpu-used 4, 사다리 건너뛰기.
+  명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]` 로 직접 만들어 미리보기(8장)·경고 확인.
+- 도구 설명은 아트 디렉터 프롬프트(①사진 읽기 ②catalog ③spec ④경고 고치기, 한국어 표현 매핑) — make_sticker+make_profile_video ≈ 1,280토큰(추정).
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
