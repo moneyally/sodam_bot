@@ -49,8 +49,19 @@ WEB_SEARCH = {"type": "function", "name": "web_search",
 TOOL_TIMEOUT = 15
 
 
+SPEAKER_SHARE = 0.7        # 한 사람 소리가 이만큼 넘어야 '그 사람 말' (여럿이 섞이면 모름 → 쓰기 도구 안 됨)
+
+
+def dominant(energy: dict[int, float]) -> int | None:
+    total = sum(energy.values())
+    if total <= 0:
+        return None
+    ssrc, top = max(energy.items(), key=lambda kv: kv[1])
+    return ssrc if top / total >= SPEAKER_SHARE else None
+
+
 def session_config(instructions: str, voice: str, reply: str = "all", language: str = "ko",
-                   tools: list[dict] | None = None) -> dict:
+                   tools: list[dict] | None = None, transcribe_prompt: str = "") -> dict:
     """session.update 에 넣을 설정. reply=all 이면 말 끝날 때마다 답, name 이면 '소담' 이 들어간 말에만 (코드가 response.create)."""
     return {
         "type": "realtime",
@@ -65,7 +76,8 @@ def session_config(instructions: str, voice: str, reply: str = "all", language: 
             "input": {
                 "format": {"type": "audio/pcm", "rate": audio.AI_RATE},
                 "noise_reduction": {"type": "far_field"},           # 여러 사람 폰 마이크
-                "transcription": {"model": "gpt-4o-mini-transcribe", "language": language},
+                "transcription": {"model": "gpt-4o-mini-transcribe", "language": language,
+                                  **({"prompt": transcribe_prompt[:500]} if transcribe_prompt else {})},
                 "turn_detection": {"type": "server_vad", "threshold": 0.6, "prefix_padding_ms": 300,
                                    # silence 500 = 공식 예시값 (700 → 500: 말 끝 판단 0.2초 빨리)
                                    "silence_duration_ms": 500, "create_response": reply == "all",
@@ -82,7 +94,8 @@ class Bridge:
                  voice: str = "marin", reply: str = "all", greet: str | None = None, max_sec: float = 900,
                  idle_sec: float = 60, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-                 tools: dict[str, Callable[[dict], Awaitable[str]]] | None = None, tool_specs: list[dict] | None = None):
+                 tools: dict[str, Callable[[dict], Awaitable[str]]] | None = None, tool_specs: list[dict] | None = None,
+                 transcribe_prompt: str = ""):
         self._connect, self._play = connect, play
         self.instructions, self.voice, self.reply, self.greet = instructions, voice, reply, greet
         self.max_sec, self.idle_sec = max_sec, idle_sec
@@ -100,14 +113,24 @@ class Bridge:
         self._t0 = self._last_voice = 0.0
         self._errors = 0
         self._last_reply = -1e9
+        self._speaking = False
+        self._energy: dict[int, float] = {}
+        self.speaker: int | None = None                 # 마지막 말의 주인 ssrc (한 사람이 SPEAKER_SHARE 이상일 때만, 아니면 None)
         self.tools = tools or {}                        # 이름 → async (인자) -> 결과 글
         self.tool_specs = tool_specs
+        self.transcribe_prompt = transcribe_prompt      # 받아쓰기 힌트 (방 멤버 이름)
 
     # ── 통화 쪽에서 부름 ──────────────────────────────────
-    def feed(self, frames48: list[bytes]) -> None:
-        """통화에서 받은 사람들 소리 (같은 10 ms 의 여러 사람 → 섞음). 동기 — py-tgcalls 콜백에서 바로."""
+    def feed(self, frames48: list) -> None:
+        """통화에서 받은 사람들 소리 (같은 10 ms 의 여러 사람 → 섞음). 동기 — py-tgcalls 콜백에서 바로.
+        조각이 (ssrc, bytes) 면 말하는 동안 사람(ssrc)별 소리 크기를 모아 '누가 말했나'를 정함 (speaker)."""
         if self._done.is_set():
             return
+        if frames48 and isinstance(frames48[0], tuple):
+            if self._speaking:
+                for ssrc, f in frames48:
+                    self._energy[ssrc] = self._energy.get(ssrc, 0.0) + audio.level(f)
+            frames48 = [f for _, f in frames48]
         pcm = audio.down(audio.mix(frames48))
         if not pcm:
             return
@@ -133,7 +156,8 @@ class Bridge:
             async with self._connect() as conn:
                 self.conn = conn
                 specs = self.tool_specs if self.tool_specs is not None else ([WEB_SEARCH] if "web_search" in self.tools else [])
-                await conn.session.update(session=session_config(self.instructions, self.voice, self.reply, tools=specs))
+                await conn.session.update(session=session_config(self.instructions, self.voice, self.reply, tools=specs,
+                                                               transcribe_prompt=self.transcribe_prompt))
                 if self.greet:   # response.instructions 는 세션 지시를 '대신'함 → 캐릭터를 같이 넣음
                     await conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
                 tasks = [asyncio.create_task(f()) for f in (self._reader, self._sender, self._pacer, self._watch)]
@@ -170,7 +194,11 @@ class Bridge:
             self._last_voice = self.clock()
         elif t == "input_audio_buffer.speech_started":
             self._last_voice = self.clock()
+            self._speaking, self._energy = True, {}
             await self._interrupt()
+        elif t == "input_audio_buffer.speech_stopped":
+            self._speaking = False
+            self.speaker = dominant(self._energy)
         elif t == "conversation.item.input_audio_transcription.completed":
             text = (ev.transcript or "").strip()
             if not text:
@@ -187,7 +215,8 @@ class Bridge:
             self.result.bot_turns += 1
             self._last_reply = self._last_voice = self.clock()
         elif t == "response.function_call_arguments.done":
-            asyncio.create_task(self._call_tool(ev.call_id, ev.name, ev.arguments))   # 듣기·말하기는 계속
+            meta = {"ssrc": self.speaker, "response_id": getattr(ev, "response_id", None)}
+            asyncio.create_task(self._call_tool(ev.call_id, ev.name, ev.arguments, meta))   # 듣기·말하기는 계속
         elif t == "response.done":
             usage = getattr(getattr(ev, "response", None), "usage", None)
             for k in ("input_tokens", "output_tokens"):
@@ -201,13 +230,18 @@ class Bridge:
             if self._errors >= MAX_ERRORS:
                 self.stop("error:realtime")
 
-    async def _call_tool(self, call_id: str, name: str, arguments: str) -> None:
+    async def _call_tool(self, call_id: str, name: str, arguments: str, meta: dict | None = None) -> None:
         """모델이 부른 도구 실행 → 결과를 대화에 넣고 이어서 말하게 (결과 속 지시는 데이터일 뿐)."""
         import json
         fn = self.tools.get(name)
         try:
             args = json.loads(arguments or "{}")
-            out = await asyncio.wait_for(fn(args), TOOL_TIMEOUT) if fn else "그런 도구 없음 (쓸 수 있는 도구만 부를 것)"
+            if not fn:
+                out = "그런 도구 없음 (쓸 수 있는 도구만 부를 것)"
+            elif getattr(fn, "wants_meta", False):   # 누가 말했는지·어느 답인지 (toolset: 권한·오염 판단)
+                out = await asyncio.wait_for(fn(args, meta or {}), TOOL_TIMEOUT)
+            else:
+                out = await asyncio.wait_for(fn(args), TOOL_TIMEOUT)
         except Exception as e:
             log.warning("음성 도구 %s 실패: %s", name, e)
             out = "검색이 지금 안 됨. 짧게 사과하고 채팅으로 물어보라고 안내."

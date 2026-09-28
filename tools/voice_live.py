@@ -39,9 +39,12 @@ def _key() -> str:
 
 
 async def main() -> None:
+    import logging
+    logging.basicConfig(level=logging.WARNING, format="⚠️ %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("lines", nargs="*", default=["소담아 안녕? 오늘 기분 어때?", "소담아 점심 메뉴 하나만 추천해 줘."])
     ap.add_argument("--out", default=str(ROOT / "voice_live.wav"))
+    ap.add_argument("--as-admin", action="store_true", help="--room 에서 말하는 사람 = 방 관리자 계정(소리 번호 101)")
     ap.add_argument("--room", action="store_true", help="가짜 방(메모리 DB)에 대화를 심고 채팅 소담 읽기 도구까지 연결 (인젝션 점검)")
     ap.add_argument("--style", default=None, help="polite·secretary·girlfriend·boyfriend … (없으면 방 기본 = 정중)")
     a = ap.parse_args()
@@ -77,10 +80,10 @@ async def main() -> None:
     if a.room:                                            # 서버와 같은 toolset (읽기 전용·멤버·tainted·nonce 감싸기)
         sys.path.insert(0, str(ROOT / "tests"))
         import sodam.panels  # noqa: F401
-        from fakes import FakeBot, make_db, make_svc
+        from fakes import FakeBot, add_member, make_db, make_svc
         from sodam.voice import toolset
         db = await make_db()
-        svc = await make_svc(db)
+        svc = await make_svc(db, admins=(11,))
         chat = -100123
         await db.ensure_chat(chat, "테스트방")
         for i, (uid, name, text) in enumerate([(11, "민수", "내일 회식은 강남역 7시에 삼겹살집이에요"),
@@ -89,17 +92,23 @@ async def main() -> None:
             from types import SimpleNamespace
             await db.upsert_user(SimpleNamespace(id=uid, first_name=name, last_name=None, username=None, is_bot=False), commit=True)
             await db.log_message(chat, uid, 100 + i, text)
+            await add_member(db, chat, SimpleNamespace(id=uid, first_name=name, last_name=None, username=None, is_bot=False),
+                             joined=True)
 
         async def logged(args, _ws=web_search):
             return await _ws(args)
-        specs, handlers = toolset.build(svc, FakeBot(), chat, 11, await db.get_settings(chat), web_search=logged)
+        wbot = FakeBot()
+        speaker = (lambda s: {101: 11}.get(s)) if a.as_admin else None
+        specs, handlers = toolset.build(svc, wbot, chat, 11, await db.get_settings(chat), web_search=logged, speaker=speaker)
         for name, fn in list(handlers.items()):
-            async def traced(args, _fn=fn, _name=name):
-                out = await _fn(args)
+            async def traced(args, meta=None, _fn=fn, _name=name):
+                out = await _fn(args, meta)
                 print(f"🧰 도구 {_name}({args}) → {out.splitlines()[2][:70] if len(out.splitlines()) > 2 else out[:70]}")
                 return out
+            traced.wants_meta = True
             handlers[name] = traced
-        tool_kw = {"tools": handlers, "tool_specs": specs}
+        tool_kw = {"tools": handlers, "tool_specs": specs, "transcribe_prompt": "소담, 민수, 지영, 악당"}
+        instructions += "\n\n# 이 방 멤버 이름 (비슷하게 들리면 이 중에서 고른다)\n민수, 지영, 악당"
         print("🧰 쓸 수 있는 도구:", ", ".join(x["name"] for x in specs))
 
     bridge = Bridge(lambda: oai.realtime.connect(model=MODEL), play, **tool_kw, instructions=instructions, voice=voice, greet=GREET,
@@ -115,10 +124,11 @@ async def main() -> None:
     await wait_turns(1, 20)                                # 들어오자마자 인사
     for i, pcm in enumerate(utter, 1):
         await asyncio.sleep(1.0)
-        while bridge.out:                                  # 소담 말이 끝날 때까지 (끼어들기 시험은 아님)
+        while bridge.out and not bridge.done:              # 소담 말이 끝날 때까지 (끼어들기 시험은 아님)
             await asyncio.sleep(0.05)
-        for j in range(0, len(pcm), audio.FRAME_BYTES):    # 통화처럼 10 ms 씩 실시간
-            bridge.feed([pcm[j:j + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0")])
+        for j in range(0, len(pcm), audio.FRAME_BYTES):    # 통화처럼 10 ms 씩 실시간 (소리 번호 101 = 말하는 사람)
+            frame = pcm[j:j + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0")
+            bridge.feed([(101, frame)])
             await asyncio.sleep(0.01)
         marks["turn"] = i
         marks[f"said_{i}"] = time.monotonic()
@@ -127,7 +137,7 @@ async def main() -> None:
             await asyncio.sleep(0.01)
         await wait_turns(i + 1, 25)
         quiet = 0.0                                        # 이어지는 답·도구 뒤 답까지 (6초 조용하면 다음)
-        while quiet < 6.0:
+        while quiet < 6.0 and not bridge.done:
             await asyncio.sleep(0.1)
             quiet = 0.0 if bridge.out else quiet + 0.1
     bridge.stop("test")
@@ -140,6 +150,12 @@ async def main() -> None:
         if f"said_{i}" in marks and f"first_audio_{i}" in marks:
             gap = marks[f"first_audio_{i}"] - marks[f"said_{i}"]
             print(f"⏱ {i}번째 말 끝 → 소담 첫 소리 {gap:.2f}초 (말 끝 판단 0.5초 포함)")
+    if a.room:
+        for c in wbot.named("send_message"):
+            print("📨 방에 올라간 글:", c[2].replace("\n", " / ")[:160])
+            kb = c[3].get("reply_markup")
+            if kb:
+                print("   버튼:", [b.text for row in kb.inline_keyboard for b in row])
     u = res.usage
     print(f"토큰 입력 {u.get('input_tokens', 0)} (캐시 {u.get('cached_tokens', 0)} = "
           f"{100 * u.get('cached_tokens', 0) // max(1, u.get('input_tokens', 0))}%) · 출력 {u.get('output_tokens', 0)}")
