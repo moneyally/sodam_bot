@@ -17,6 +17,8 @@ BOT_MESSAGE_HOOKS: list = []
 BOT_EDIT_HOOKS: list = []
 # 30초 틱(handlers.job_tick)마다: async hook(svc, bot). 하나가 터져도 나머지는 계속 (채널 예약 글·구독자 수 — sodam/channel.py)
 TICK_HOOKS: list = []
+# 메시지 반응(message_reaction 업데이트, handlers.on_any_update 에서): async hook(svc, bot, reaction) — 스티커 학습(sodam/stickerlearn.py)
+REACTION_HOOKS: list = []
 
 
 def add_group_message_hook(fn) -> None:
@@ -51,6 +53,20 @@ async def tick(svc, bot) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("tick hook failed: %s", getattr(fn, "__name__", fn))
+
+
+def add_reaction_hook(fn) -> None:
+    if fn not in REACTION_HOOKS:
+        REACTION_HOOKS.append(fn)
+
+
+async def reaction(svc, bot, mr) -> None:
+    for fn in REACTION_HOOKS:
+        try:
+            await fn(svc, bot, mr)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("reaction hook failed: %s", getattr(fn, "__name__", fn))
 
 
 def add_member_left_hook(fn) -> None:

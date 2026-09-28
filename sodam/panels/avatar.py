@@ -18,7 +18,7 @@ from telegram import InputFile
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from .. import avatar, stickerforge as SF, tools
+from .. import avatar, stickerforge as SF, stickerlearn as L, tools
 from ..llm import BudgetExceeded
 from ..util import display_name, esc
 from ..vision import Attached
@@ -31,7 +31,8 @@ DESIGN = (
     "{recipe, seed} 또는 motion(zoom·punch·shake·pan)+fx(sweep·sparkle·glitch·rays·glow·meteors·slice_glitch) 1~3개. "
     "'글리치'는 잠깐 R/B 가 어긋나는 glitch 이지 색이 도는 게 아니고, '네온'은 glow(color)·sweep 이지 채도 올리기가 아님. "
     "강렬=punch(hits 2, amount 0.08)+glitch+sparkle, 잔잔=zoom+meteors, 화사=zoom+rays+sweep. framing auto 가 얼굴을 살림. "
-    "경고(warnings)가 오면 하나만 고쳐 다시(두 번째면 accept_warnings). 원본이 이미 그림(캐릭터·일러스트)이면 art 를 쓰지 말 것."
+    "경고(warnings)가 오면 하나만 고쳐 다시(두 번째면 accept_warnings). 원본이 이미 그림(캐릭터·일러스트)이면 art 를 쓰지 말 것. "
+    "sticker_catalog(for_video=true)의 학습 레시피는 recipe 이름으로 바로. 없는 효과는 가까운 조합 + wanted(기능 요청), 새 코드·필터는 절대 안 만듦."
 )
 
 
@@ -59,10 +60,11 @@ async def _busy(ctx) -> None:
 async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
     forge_spec = None
     if a.get("spec"):
+        from .sticker import resolve_spec
         raw = dict(a["spec"]) if isinstance(a["spec"], dict) else {}
         raw.setdefault("mode", "photo")
         raw.setdefault("radius", 0)
-        forge_spec, err = SF.sanitize(raw)
+        forge_spec, err = await resolve_spec(ctx, raw, "ump")
         if err:
             return f"spec 오류: {err}. 고쳐서 다시 부를 것."
     spec = avatar.Spec(*(str(a.get(k) or d) for k, d in (("motion", "breathe"), ("speed", "slow"),
@@ -121,12 +123,17 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
     label += f" · {avatar.AI_STYLES[art][0]}" if art != "none" else ""
     name = display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)
     try:
-        await ctx.bot.send_document(ctx.chat_id, InputFile(mp4, filename="sodam_ump.mp4"), parse_mode="HTML",
-                                    caption=f"🎞️ {esc(name)}님 움프 ({esc(label)})\n{GUIDE}")
+        sent = await ctx.bot.send_document(ctx.chat_id, InputFile(mp4, filename="sodam_ump.mp4"), parse_mode="HTML",
+                                           caption=f"🎞️ {esc(name)}님 움프 ({esc(label)})\n{GUIDE}")
     except TelegramError as e:
         return f"영상은 만들었는데 전송 실패: {e.message}"
     await db.bump(day, 0, f"ava:{uid}")
+    spec_used = forge_spec or {"motion": [{"type": spec.motion}], "fx": [{"type": k} for k in (spec.color, spec.particles) if k != "none"]}
+    await L.log(db, chat_id=ctx.chat_id, user_id=uid, request=str(a.get("request") or ""), kind="photo" if forge_spec else "legacy",
+                spec=spec_used, outcome="ok", msg_id=getattr(sent, "message_id", 0), product="ump")
     note = f" (경고 안고 보냄: {'; '.join(warnings)})" if warnings else ""
+    from .sticker import note_wanted
+    note += await note_wanted(ctx, a.get("wanted") or "", label)
     return f"{skipped_art}움프 파일을 방에 보냈음{note}. 설정 방법은 파일에 적혀 있으니 한마디만 짧게."
 
 
@@ -143,5 +150,7 @@ tools.register_tool(tools.Tool(
     {"spec": {"type": "object", "description": "스티커 엔진 spec (make_sticker 와 같음; mode photo·radius 0 기본)"},
      "motion": _enum(avatar.MOTIONS), "speed": _enum(avatar.SPEEDS), "color": _enum(avatar.COLORS),
      "particles": _enum(avatar.PARTICLES), "art": {"type": "string", "enum": ["none", *avatar.AI_STYLES]},
-     "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true 로 그대로 보냄"}},
+     "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true 로 그대로 보냄"},
+     "request": {"type": "string", "description": "사용자 요청 원문 (200자, 학습 기록용)"},
+     "wanted": {"type": "string", "description": "목록에 없는 효과를 원했을 때 그 말 그대로 — 가까운 조합으로 만들고 기능 요청 접수"}},
     [], t_make_profile_video))

@@ -16,7 +16,7 @@ FAMILY = {"idle": "calm", "breathe": "calm", "float": "float", "punch": "beat", 
           "zoom": "photo", "pan": "photo", "still": "calm"}
 
 # 파라미터 변주 폭: (키, 최소, 최대). 없는 키는 그대로.
-JITTER = {"amp_rot": (0.6, 3.0), "amp_bob": (4, 16), "amount": (0.04, 0.10), "hits": (2, 3), "amp": (4, 8), "freq": (3, 6),
+JITTER = {"count": (12, 40), "amp_rot": (0.6, 3.0), "amp_bob": (4, 16), "amount": (0.04, 0.10), "hits": (2, 3), "amp": (4, 8), "freq": (3, 6),
           "cycles": (1, 2), "jumps": (1, 2), "height": (80, 120), "strength": (0.3, 0.55), "width": (3, 6),
           "bursts": (2, 3), "sway": (4, 8), "lunge": (0.08, 0.13), "kick": (18, 30)}
 PALETTES = ["gold", "silver", "ice", "fire", "pink", "neon", "white"]
@@ -95,6 +95,19 @@ RECIPES = [
       [{"type": "meteors"}, {"type": "sparkle", "subset": [1, 3, 7]}], "ice", 0.06),
     R("사진_흔들네온", ["네온", "덜덜", "두근", "강렬", "움프"], ["photo", "mono"], [{"type": "shake", "amp": 5, "freq": 5}],
       [{"type": "glow", "color": [180, 120, 255], "strength": 0.5}, {"type": "slice_glitch", "bursts": 2}, {"type": "sparkle", "subset": [2, 5, 9]}], "neon", 0.06),
+    # ── 추가 부품 (만화·밈 연출)
+    R("쾅_도장", ["쾅", "도장", "확정", "승인", "땅땅", "강렬"], ["cutout", "photo"], [{"type": "tada", "amount": 0.12}],
+      [{"type": "focus_lines", "count": 80}, {"type": "sfx_text", "text": "쾅!", "at": [390, 110]}, {"type": "impact"}], "fire", 0.10),
+    R("돈비_대박", ["돈", "대박", "부자", "입금", "수익", "쏟아"], ["cutout", "photo"], [{"type": "heart_beat", "amount": 0.12}],
+      [{"type": "money", "count": 18}, {"type": "sparkle", "subset": [0, 3, 5, 8]}, {"type": "rainbow_outline", "width": 5}], "gold", 0.10),
+    R("레이저_분노", ["레이저", "화남", "분노", "빔", "눈"], ["cutout", "photo"], [{"type": "shiver", "amp": 3}],
+      [{"type": "anger", "at": [370, 110]}, {"type": "laser", "points": [[215, 205], [300, 205]], "angle": 25}, {"type": "speedlines", "count": 60}], "fire", 0.10),
+    R("딥프라이_밈", ["밈", "웃김", "ㅋㅋ", "짤", "구려"], ["photo", "cutout"], [{"type": "jello", "amount": 14}],
+      [{"type": "deep_fry", "amount": 0.9}, {"type": "sfx_text", "text": "ㅋㅋㅋ", "at": [400, 100], "color": [255, 255, 255]}, {"type": "strobe", "flashes": 2}], "white", 0.08),
+    R("젤리_말풍선", ["귀엽", "말풍선", "안녕", "ㅎㅎ", "인사"], ["cutout"], [{"type": "jello", "amount": 10, "cycles": 2}],
+      [{"type": "bubble", "text": "안녕!", "at": [400, 90]}, {"type": "petals", "count": 16}, {"type": "sparkle", "subset": [2, 5, 9]}], "pink", 0.12),
+    R("네온_굴러옴", ["등장", "네온", "빙글", "강렬", "다르게"], ["cutout", "glow"], [{"type": "roll_in"}],
+      [{"type": "neon_edge", "color": [255, 80, 200]}, {"type": "scanlines", "dark": 0.25}], "neon", 0.10),
     R("사진_좌우드리프트", ["잔잔", "여행", "풍경", "사진", "고급"], ["photo"], [{"type": "pan", "amount": 40}],
       [{"type": "sweep", "strength": 0.35}, {"type": "sparkle", "subset": [1, 3, 7]}], "silver", 0.06),
 ]
