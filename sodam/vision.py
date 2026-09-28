@@ -22,6 +22,7 @@ IMAGE_MIME = ("image/jpeg", "image/png", "image/webp", "image/gif")   # OpenAI �
 class Attached:
     data: bytes
     mime: str
+    owner: int | None = None   # 사진을 올린 사람 (요청 글 또는 답장한 글의 작성자) — 움프는 본인 사진만 (sodam/avatar.py)
 
     def part(self) -> dict:
         """chat.completions user content 에 넣는 이미지 조각."""
@@ -49,7 +50,8 @@ def has_image(msg) -> bool:
 
 async def fetch(bot, msg) -> Attached | None:
     """요청 메시지의 사진, 없으면 답장한 메시지의 사진. 없거나 너무 크거나 못 받으면 None."""
-    found = _file_of(msg) or _file_of(getattr(msg, "reply_to_message", None))
+    src = msg if _file_of(msg) else getattr(msg, "reply_to_message", None)
+    found = _file_of(src)
     if not found:
         return None
     file_id, mime, size = found
@@ -61,4 +63,5 @@ async def fetch(bot, msg) -> Attached | None:
     except TelegramError as e:
         log.warning("photo download failed: %s", e)
         return None
-    return Attached(data, mime) if len(data) <= MAX_BYTES else None
+    who = getattr(getattr(src, "from_user", None), "id", None)
+    return Attached(data, mime, who) if len(data) <= MAX_BYTES else None

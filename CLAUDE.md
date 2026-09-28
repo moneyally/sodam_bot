@@ -324,6 +324,12 @@
   vec0 chat_id 파티션. 요금은 전체 예산에만 (메시지 2천 개 ≈ $0.001). search_chat(stats.search_text svc=) 결과에 뜻으로만 찾은 글은 ≈.
   끄기 .env SEMSEARCH=0 · 거리 SEM_MAX_DIST(기본 0.7).
 
+## 🎞️ 움프 (`avatar.py`, `panels/avatar.py`, 스킬 `.claude/skills/telegram-ump/SKILL.md`, tests/test_avatar.py)
+- AI 도구 make_profile_video(style breathe/shine/rainbow/sway, art none/anime/3d/neon/water): **요청자 본인 사진만**
+  (vision.Attached.owner == 요청자, 없으면 get_user_profile_photos 본인 프사) → ffmpeg(imageio-ffmpeg 정적 바이너리) 640×640·6초·
+  h264 yuv420p·소리 없음·faststart·2MB↓ → send_document (영상으로 보내면 재압축). 움직임은 sin(2πn/180) 주기라 끊김 없이 반복.
+- 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
+
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
