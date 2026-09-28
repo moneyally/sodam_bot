@@ -1004,3 +1004,19 @@ async def room_names_and_transcribe_hint_go_into_the_call():
     assert set(await P.room_names(db, CHAT)) == {"지영", "민수"}
     cfg = __import__("sodam.voice.bridge", fromlist=["x"]).session_config("i", "marin", transcribe_prompt="소담, 지영")
     assert cfg["audio"]["input"]["transcription"]["prompt"] == "소담, 지영"
+
+
+@test
+async def refusal_is_posted_verbatim_logged_and_owner_sees_cause():
+    db, svc, bot = await world("admin")
+    svc.perms.owner_ids = {1}
+    c = ctx(svc, bot, 1, Role.ADMIN)
+    out = await P.t_voice_call(c, {"action": "start"})
+    msg = bot.named("send_message")[-1][2]
+    assert c.quiet and "거절 안내" in out
+    assert P.RESULT_TEXT["no_assistant"] in msg and "도우미 계정 로그인: ❌" in msg and "📱 도우미 계정 연결" in msg, msg
+    row = await db._one("SELECT action, detail FROM mod_log WHERE action='voice_refused'")
+    assert row and "연결 안 됐" in row["detail"]
+    c2 = ctx(svc, bot, 5, Role.MEMBER)
+    await P.t_voice_call(c2, {"action": "start"})
+    assert "관리자만" in bot.named("send_message")[-1][2] and "🔧" not in bot.named("send_message")[-1][2]

@@ -165,6 +165,17 @@ async def precheck(svc, chat_id: int, uid: int, role: Role) -> str | None:
     return None
 
 
+async def status_line(svc) -> str:
+    """오너용 한 줄: 도우미 로그인·음성 담당 프로그램 상태 + 고치는 곳."""
+    a = await store.assistant(svc.db)
+    beat = await svc.db.get_state(0, store.WORKER_BEAT)
+    ago = int(time.time() - float(beat)) if beat else None
+    parts = [f"도우미 계정 로그인: {'✅ ' + (a.get('username') or a.get('name') or '') if a else '❌ 안 됨 → 소담 1:1 메뉴 🎙 → 📱 도우미 계정 연결'}",
+             f"음성 담당 프로그램: {'✅' if ago is not None and ago < store.WORKER_ALIVE else '❌ 꺼짐'}"
+             + (f" (마지막 신호 {ago}초 전)" if ago is not None else " (신호 없음 — 서버 sodam-voice 확인)")]
+    return " · ".join(parts)
+
+
 async def _prepare_member(bot, chat_id: int, aid: int) -> dict | str | None:
     """어시스턴트가 방에 없으면 들어갈 방법: 공개 방 = @아이디(초대 권한 불필요), 아니면 1회용 초대링크 (10분·1명).
     막혀 있으면 풀어 봄. 돌려주는 값: {} = 이미 있음 · {username|link} = join 일감 · 'banned'/'no_invite_right'."""
@@ -281,7 +292,15 @@ async def t_voice_call(ctx: tools.ToolCtx, a: dict) -> str:
         return "음성채팅에서 나가는 중. 짧게 알릴 것." if ok else "지금 음성채팅에 들어가 있지 않음."
     why = await precheck(ctx.svc, ctx.chat_id, ctx.caller.id, ctx.role)
     if why:
-        return f"못 들어감: {why} — 이 내용을 짧게 전할 것."
+        # 안내는 AI 가 바꿔 말하지 않게 그대로 방에 (실제 사례: '도우미 연결 안 됨' → AI 가 '호출 권한이 없다'로 바꿔 말함)
+        log.info("음성 부르기 거절 방=%s 사람=%s 역할=%s: %s", ctx.chat_id, ctx.caller.id, ctx.role.name, why)
+        await ctx.svc.db.audit(ctx.chat_id, ctx.caller.id, None, "voice_refused", why[:200])
+        text = why
+        if ctx.caller.id in await ctx.svc.perms.owners():    # 오너에겐 원인·고치는 곳까지
+            text += "\n\n🔧 " + await status_line(ctx.svc)
+        await ctx.bot.send_message(ctx.chat_id, text)
+        ctx.quiet = True
+        return f"거절 안내를 방에 그대로 보냈음 ({why[:60]}). 따로 답하지 않음."
     from ..styles import resolve_style
     style = resolve_style(str(a.get("style") or "")) if a.get("style") else None
     persist.spawn(start_call(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller.id, style))
