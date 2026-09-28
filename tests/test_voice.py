@@ -217,15 +217,18 @@ class FakeCalls:
     async def record(self, chat_id, stream):
         self.log.append(("record", chat_id, stream))
 
-    async def send_frame(self, chat_id, device, data):
-        self.log.append(("frame", chat_id))
+    async def send_frame(self, chat_id, device, data, info=None):
+        self.log.append(("frame", chat_id, device, len(data)))
 
     async def leave_call(self, chat_id):
         self.log.append(("leave", chat_id))
 
 
-MEDIA = SimpleNamespace(Device=SimpleNamespace(MICROPHONE="mic"), AudioParameters=lambda r, c: (r, c),
-                        MediaStream=lambda src, p: ("media", src, p), ExternalMedia=SimpleNamespace(AUDIO="ext"),
+MEDIA = SimpleNamespace(Device=SimpleNamespace(MICROPHONE="mic", CAMERA="cam"), AudioParameters=lambda r, c: (r, c),
+                        MediaStream=lambda src, p, v=None: ("media", src, p) + ((v,) if v else ()),
+                        ExternalMedia=SimpleNamespace(AUDIO=1, VIDEO=2),
+                        VideoParameters=lambda w, h, f: ("video", w, h, f),
+                        Frame=SimpleNamespace(Info=lambda width, height: ("info", width, height)),
                         GroupCallConfig=lambda auto_start: {"auto_start": auto_start},
                         RecordStream=lambda a, p: ("record", a, p))
 
@@ -270,10 +273,12 @@ async def worker_start_stop_records_call():
     row = await run_job(db, w, "start", {"instructions": "x", "max_sec": 30}, CHAT)
     assert row["result"] == "started", row["result"]
     play = next(x for x in w.calls.log if x[0] == "play")
-    assert play[3] == {"auto_start": True} and play[2] == ("media", "ext", (48000, 1))    # 음성채팅 없으면 켜기
+    assert play[3] == {"auto_start": True}                                                 # 음성채팅 없으면 켜기
+    assert play[2] == ("media", 3, (48000, 1), ("video", 640, 360, 1)), play[2]            # 소리 + 영상 칸(사진 1fps)
     assert any(x[0] == "record" for x in w.calls.log) and await store.active_call(db, CHAT)
     assert (await run_job(db, w, "start", {}, CHAT))["result"] == "already"
     await until(lambda: any(x[0] == "frame" for x in w.calls.log))
+    await until(lambda: any(x[0] == "frame" and x[2] == "cam" for x in w.calls.log))
     assert (await run_job(db, w, "stop", {}, CHAT))["result"] == "stopped"
     assert not await store.active_call(db, CHAT) and ("leave", CHAT) in w.calls.log
     [call] = await store.ended_unnotified(db)
@@ -410,3 +415,90 @@ async def call_cost_goes_into_daily_budget():
     day = time.strftime("%Y-%m-%d")
     assert micro == int(2 * store.USD_PER_MIN * 1e6)
     assert await db.counter(day, 0, costs.USD) == micro and await db.counter(day, CHAT, costs.ROOM_USD) == micro
+
+
+# ── 영상 칸 · API 키 · 안내 · 확인하기 ─────────────────────────
+from sodam.voice import video as V
+
+
+@test
+def video_frame_is_one_i420_image():
+    blank = V.to_i420(None)
+    assert len(blank) == V.W * V.H * 3 // 2
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO()
+    Image.new("RGB", (100, 300), (255, 255, 255)).save(buf, "PNG")
+    img = V.to_i420(buf.getvalue())
+    assert len(img) == len(blank) and img[V.W * (V.H // 2) + V.W // 2] > 200, "가운데 흰 사진 → 밝은 Y"
+    assert V.to_i420(b"not an image") == blank
+
+
+@test
+async def video_failure_falls_back_to_voice_only_and_frame_reused():
+    db, w, _, _ = await make_worker()
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    await run_job(db, w, "login_code", {"code": "12345"})
+    frame = w.frame
+    assert frame and len(frame) == V.W * V.H * 3 // 2
+    orig = w.calls.play
+
+    async def picky(chat_id, stream, config):
+        if len(stream) == 4:
+            raise RuntimeError("video not supported")
+        await orig(chat_id, stream, config)
+    w.calls.play = picky
+    assert (await run_job(db, w, "start", {}, CHAT))["result"] == "started"
+    play = next(x for x in w.calls.log if x[0] == "play")
+    assert len(play[2]) == 3, "영상 실패 → 소리만"
+    await run_job(db, w, "stop", {}, CHAT)
+    assert w.frame is frame, "영상 한 장은 통화마다 새로 안 만듦"
+
+
+@test
+async def worker_uses_assistant_own_api_key():
+    db, w, client, _ = await make_worker()
+    seen = []
+    w.client_factory = lambda s, i, h: (seen.append((i, h)), client)[1]
+    await run_job(db, w, "login_phone", {"phone": "+821000000000", "api_id": "7654321", "api_hash": "a" * 32})
+    from sodam.voice.worker import api_path, read_api
+    assert seen[-1] == (7654321, "a" * 32) and read_api(w.cfg) == (7654321, "a" * 32)
+    assert oct(api_path(w.cfg).stat().st_mode)[-3:] == "600"
+    row = await db._one("SELECT payload FROM voice_jobs WHERE kind='login_phone'")
+    assert row["payload"] == "{}", "키는 DB 에 안 남음"
+
+
+@test
+async def owner_api_step_then_phone():
+    db, svc, bot = await world()
+    svc.perms.owner_ids = {7}
+    c = PanelCtx(svc, bot, 7, 0, [])
+    s = await P.r_login(c)
+    assert "my.telegram.org" in s.text and svc.inputs[7].kind == "vcai"
+    m = FakeMsg(7, fake_user(7), "1234 short")
+    ok, _ = await P.i_api(c, m)
+    assert not ok and m.deleted
+    m = FakeMsg(7, fake_user(7), "12345678 " + "AB" * 16)
+    ok, _ = await P.i_api(c, m)
+    assert ok and m.deleted
+    await P.s_after(c)
+    assert svc.inputs[7].kind == "vcp"
+    w = asyncio.create_task(fake_worker(db, {"login_phone": "code_sent"}))
+    await P.i_phone(c, FakeMsg(7, fake_user(7), "+821011112222"))
+    w.cancel()
+    assert P.API_KEY not in svc.__dict__ or 7 not in svc.__dict__[P.API_KEY], "키는 메모리에서도 바로 비움"
+
+
+@test
+async def guide_and_checklist_show_what_is_missing():
+    db, svc, bot = await world()
+    await db.set_state(0, store.ASSISTANT_KEY, {"id": 4242, "name": "소담 음성", "username": "Sodam_bot2"})
+    c = PanelCtx(svc, bot, 1, CHAT, [])
+    g = await P.s_guide(c)
+    assert "@Sodam_bot2" in g.text and "음성채팅 관리" in g.text and "m:vcck" in str(g.kb)
+    bot.member_status = {(CHAT, 4242): "left"}
+    chk = await P.s_check(c)
+    assert "❌ 음성 담당" in chk.text and "❌ 도우미 @Sodam_bot2 방에 있음" in chk.text, chk.text
+    assert "✅ 음성 도우미 계정 연결" in chk.text
+    await db.set_state(0, store.WORKER_BEAT, time.time())
+    assert "✅ 음성 담당" in (await P.s_check(c)).text
