@@ -8,5 +8,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/sodam/deploy/update.sh --quiet
-TimeoutStartSec=20min
+TimeoutStartSec=45min   # 서버 전체 테스트만 ~20분 (2026-09-29 실측) — 20분이면 잘릴 수 있음
 Nice=10

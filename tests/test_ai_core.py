@@ -516,3 +516,30 @@ async def comeback_rule_all_styles_and_mirror_setting_is_third_system():
     await r.say(u, "소담아 바보야")
     assert not any("똑같이 욕으로" in (m["content"] if isinstance(m["content"], str) else "")
                    for m in r.llm.of("chat")[-1]["messages"] if m["role"] == "system")
+
+
+@test
+async def mirror_room_insult_adds_comeback_line_at_the_end_only_when_insulted():
+    """실제 사례 2026-09-29 벳블리: mirror 설정인데 '소담이 …씨발년아' 에 욕 없이 점잖게 답함 → 요청 맨 끝에 한 줄."""
+    from sodam import prompt
+    assert prompt.INSULT_RE.search("소담이 야이개쥐좆만한 이씨발년아") and prompt.INSULT_RE.search("이지랄하노")
+    assert not prompt.INSULT_RE.search("소담아 년말 정산 알려줘") and not prompt.INSULT_RE.search("소담 사랑해")
+    r = await Room().open()
+    u = fake_user(5, "카츄")
+    await r.join(u)
+
+    def last_user():
+        m = [x for x in r.llm.of("chat")[-1]["messages"] if x["role"] == "user"][-1]["content"]
+        return m if isinstance(m, str) else m[0]["text"]
+
+    await r.db.set_setting(r.CHAT, "ai_comeback", "mirror")
+    r.llm.script = [reply("야 시발 ㅋㅋ")]
+    await r.say(u, "소담이 이씨발년아")
+    assert "똑같이 욕으로" in last_user() and last_user().rstrip().endswith("금지."), last_user()[-200:]
+    r.llm.script = [reply("맑아요")]
+    await r.say(u, "소담아 오늘 날씨 어때")
+    assert "똑같이 욕으로' 설정" not in last_user()
+    await r.db.set_setting(r.CHAT, "ai_comeback", "wit")
+    r.llm.script = [reply("ㅎㅎ")]
+    await r.say(u, "소담이 병신아")
+    assert "똑같이 욕으로' 설정" not in last_user(), "센스로 설정이면 줄 없음"

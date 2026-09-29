@@ -205,3 +205,18 @@ def update_sh_writes_status_for_bot():
     assert "tests_failed" in st, (st, r.stdout, r.stderr)
     clone, r = _update_run(True)
     assert " ok " in (clone / "data" / "update.status").read_text()
+
+
+@test
+def update_sh_prints_failing_test_name_even_if_log_is_long():
+    """2026-09-29: 서버가 3번 연속 '실패 1개' 로 막혔는데 끝 40줄에 어떤 테스트인지 없었음."""
+    import subprocess
+    from test_fix_ops import _GIT, _fake_repo, _run_update
+    clone, log = _fake_repo(tests_pass=False)
+    origin = clone.parent / "origin"
+    (origin / "tests" / "run_all.py").write_text(
+        "import sys\nprint('FAIL flaky_thing')\nprint('Traceback: boom')\n"
+        "for i in range(200): print('PASS x', i)\nsys.exit(1)\n")
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qam", "fail"], check=True)
+    r = _run_update(clone, log)
+    assert r.returncode != 0 and "FAIL flaky_thing" in r.stdout + r.stderr, (r.stdout + r.stderr)[-500:]
