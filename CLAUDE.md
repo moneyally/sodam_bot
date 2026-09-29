@@ -500,6 +500,11 @@
   보낸 묶음 news_sent(방, 묶음) 먼저 기록 → 다시 안 보냄. job_news 1분(handlers). 3일 지난 기사·묶음, 7일 지난 보낸 기록 정리.
 - 허브 🌍(m:nw · nwtp 시각 프리셋 · nwc 분야 · nwp 👀 미리보기 = 누른 관리자 1:1, 사람당 60초 1번, 보낸 기록 X) · `.뉴스 [분야]`(이용 기간 방, 방마다 10분 1번,
   명령 등록은 commands.py — panels 순환) · AI 도구 news_headlines(read_only·누구나·tainted, 링크 없음, web_search 대신). 테스트는 fakes 가 오프라인.
+- 감사 수정(2026-09-30, 뮤테이션 16개): 피드는 stream 으로 받으며 MAX_BYTES 넘으면 끊음 · 피드 하나 전체 20초(FEED_TIMEOUT, httpx timeout 은 조각마다) ·
+  **네트워크는 잠금 밖**(잠금은 고르기·DB 넣기만 — 느린 피드가 .뉴스·미리보기·AI 도구·1분 job 을 막던 것) · 이미 받은 기사 주소는 닮음 비교 전에
+  한 번의 IN 조회로 거름(IDF 엔 새 기사만, 36시간 제목 낱말은 _st["tok"] 캐시) · 같은 주소가 다른 분야 피드에도 = 묶음 cats 에 더함 ·
+  ETag 는 DB 에 넣은 뒤에만 기억 · summarize 는 sum_lock 으로 한 번에 하나 · safe_url 은 '\'·공백·제어 글자·아이디/비번 거절 ·
+  미리보기는 이용 기간 방만, AI 도구는 이용 중인 방에서만 새로 가져오기·요약(끝난 방·1:1 = 모아 둔 것만, headlines(fetch=False)).
 - 유료 키 후보(오너 결정 대기): newsapi.ai $90/월(이벤트·기사 수), GNews €49.99/월, 네이버 검색 API(무료·약관 확인).
 
 ## DB 안전 규칙
