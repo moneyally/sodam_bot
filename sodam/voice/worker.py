@@ -336,9 +336,12 @@ class Worker:
             self.tasks.pop(chat_id, None)
             self.ssrc_users.pop(chat_id, None)
             await self._leave(chat_id)
-        await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns)
+        await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns, res.stats)
         await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds)
-        log.info("통화 끝 %s %.0f초 %s", chat_id, res.seconds, res.reason)
+        st = res.stats or {}
+        log.info("통화 끝 %s %.0f초 %s · 늦은 재생 %s번(최대 %sms) · 루프 지연 최대 %sms · 끼어들기 %s · 오류 %s · 재연결 %s",
+                 chat_id, res.seconds, res.reason, st.get("late_ticks"), st.get("max_late_ms"), st.get("loop_lag_max_ms"),
+                 st.get("interrupts"), st.get("rt_errors"), st.get("reconnects"))
 
     async def _leave(self, chat_id: int) -> None:
         try:
@@ -371,7 +374,7 @@ class Worker:
         async def _gone(_, update):
             b = self.bridges.get(update.chat_id)
             if b:
-                b.stop("closed")
+                b.stop("chat_closed")                  # OpenAI 연결 끊김(ws_closed)과 구분
 
         if hasattr(md.filters, "call_participant"):   # 새로 들어온·바뀐 참가자의 소리 번호 → 계정
             @self.calls.on_update(md.filters.call_participant(md.Action.JOINED | md.Action.UPDATED))

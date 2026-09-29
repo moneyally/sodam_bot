@@ -23,6 +23,11 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=sodam-voice
 UMask=0077
+# 통화는 10 ms 마다 소리를 보내야 함 → CPU 가 모자랄 때 음성 담당 먼저 (자동 갱신 테스트는 CPUWeight=20).
+# cgroup v2 에선 서비스끼리 CPU 나눔은 CPUWeight 가 정하고 Nice 는 같은 서비스 안에서만 → 둘 다 줌.
+# (systemd.resource-control(5) CPUWeight · systemd.exec(5) Nice). update.sh voice_setup 이 이 파일이 바뀌면 설치·daemon-reload.
+CPUWeight=1000
+Nice=-5
 
 NoNewPrivileges=true
 ProtectSystem=strict

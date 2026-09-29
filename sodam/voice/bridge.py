@@ -4,7 +4,10 @@
 말하기: response.output_audio.delta(24 kHz) → 48 kHz 10 ms 조각 줄 → 페이서가 절대 시각으로 10 ms 마다 play(조각) (말 없으면 무음)
 끊기:   input_audio_buffer.speech_started(누가 말 시작) → 줄 비우고 conversation.item.truncate(지금까지 실제로 들려준 ms)
         → 모델이 '끝까지 말했다'고 착각하지 않음 (OpenAI Realtime 문서의 WebSocket 끊기 방식). 응답 취소는 서버 VAD interrupt_response.
-한도:   max_sec 넘거나, idle_sec 동안 아무도(소담 포함) 말 안 하면 끝. '소담아 나가/끊어' 도 끝.
+한도:   max_sec 넘거나, idle_sec 동안 아무도(소담 포함) 말 안 하면 끝 (누가 말하는 중·소담 소리 재생 중엔 안 끝냄).
+        '소담아 나가/끊어' 도 끝. Realtime 오류는 무해한 것(이미 답하는 중 등)은 안 세고, 60초 안에 5번이면 끝.
+끊김:   OpenAI 연결이 통화 중에 끊기면 한 번만 다시 연결(session.update 다시) → 또 끊기면 ws_closed.
+계측:   stats (조각 수·늦은 재생·이벤트 루프 지연·오류 코드·끼어들기·첫 소리 지연·CPU) → voice_calls.stats (조각마다 로그 없음).
 
 연결(connect)·재생(play)·시계는 밖에서 넣는다 → 테스트는 가짜로, 실제 통화는 worker.py 가 py-tgcalls 로.
 """
@@ -12,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
+import os
 import re
 import time
 from collections import deque
@@ -27,7 +32,22 @@ SEND_MS = 100                                   # 모델에 보내는 단위 (�
 SEND_BYTES = audio.AI_RATE * 2 * SEND_MS // 1000
 SILENCE = bytes(audio.FRAME_BYTES)
 MAX_BACKLOG = 50                                # 보낼 줄이 이만큼(5초) 밀리면 오래된 것부터 버림 (네트워크 막힘)
-MAX_ERRORS = 5
+MAX_ERRORS = 5                                  # ERROR_WINDOW 초 안에 '진짜' 오류가 이만큼이면 끊음
+ERROR_WINDOW = 60.0
+# 통화를 끊을 이유가 아닌 Realtime 오류 — 세기만 하고 통화는 계속:
+#  · 이미 답하는 중에 response.create (response.done 전엔 새 답 불가 — community.openai.com/t/1005582,
+#    github.com/livekit/agents/issues/7514 'response.create 직렬화')
+#  · truncate audio_end_ms 가 실제 길이보다 큼 → 서버 오류 (developers.openai.com/api/reference/resources/realtime/client-events
+#    'If the audio_end_ms is greater than the actual audio duration, the server will respond with an error')
+#  · 빈 버퍼 commit ('This event will produce an error if the input audio buffer is empty') · 취소할 답 없음
+# 코드 이름은 문서에 목록이 없어 param/메시지(audio_end_ms)로도 봄 (benign)
+BENIGN_ERRORS = frozenset({"conversation_already_has_active_response", "response_cancel_not_active",
+                           "input_audio_buffer_commit_empty", "item_truncate_invalid_audio_end_ms",
+                           "invalid_audio_end_ms", "item_not_found"})
+MAX_RECONNECTS = 1                              # 통화 중 OpenAI 연결이 끊기면 다시 연결하는 횟수
+LOUD = 600                                      # 들어온 100 ms 소리 크기(RMS)가 이만큼이면 '누가 소리 냄' (idle 아님)
+LATE_MS = 20                                    # 재생 조각이 이만큼 늦으면 '늦음' 한 번 (계측만 — 박자는 안 바꿈)
+LAG_EVERY = 0.1                                 # 이벤트 루프 지연 재기 (0.1초마다 잠깐 깨어남)
 MAX_OUT = 600                                   # 음성 출력 토큰 ≈ 초당 30 (실측 1,070토큰/33초) → 약 20초 (400 은 도구 결과 설명이 문장 중간에 잘림 — 실측)
 BYE = re.compile(r"소담.{0,6}(나가|끊어|그만|잘\s*가|바이|종료)")
 
@@ -39,6 +59,28 @@ class Result:
     user_turns: int = 0
     bot_turns: int = 0
     usage: dict = field(default_factory=dict)        # response.done usage 합 (input/output 토큰)
+    stats: dict = field(default_factory=dict)        # 통화 계측 (voice_calls.stats — diag voice 로 봄)
+
+
+def benign(code: str, message: str = "", param: str = "") -> bool:
+    """통화를 끊을 오류가 아님 (이미 답하는 중·취소할 답 없음·truncate 범위 등)."""
+    return (code in BENIGN_ERRORS or "truncat" in code or "audio_end_ms" in param
+            or "already has an active response" in message or "audio_end_ms" in message)
+
+
+def _steal() -> int | None:
+    """/proc/stat 전체 CPU steal (가상 서버에서 다른 손님이 CPU 를 가져간 시간, 틱). 없으면 None."""
+    try:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+        return int(parts[8]) if parts[0] == "cpu" and len(parts) > 8 else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _cpu() -> float:
+    t = os.times()
+    return t.user + t.system
 
 
 # 영상대화 중 쓸 수 있는 도구 (worker 가 실제 실행 함수를 넣음 — 채팅 소담의 격리 웹 검색과 같은 것)
@@ -101,9 +143,9 @@ class Bridge:
         self.max_sec, self.idle_sec = max_sec, idle_sec
         self.clock, self.sleep = clock, sleep
         self.conn = None
-        self.out: deque[bytes] = deque()                # 들려줄 48 kHz 10 ms 조각
-        self.item: str | None = None                    # 지금 들려주는 모델 답 item_id
-        self.played_ms = 0                              # 그 item 에서 실제로 play 한 ms
+        self.out: deque[tuple[str | None, bytes]] = deque()   # 들려줄 (답 item_id, 48 kHz 10 ms 조각)
+        self.item: str | None = None                    # 지금 들려주는(마지막으로 play 한) 모델 답 item_id
+        self._played: dict[str, int] = {}               # 답 item → 실제로 play 한 ms (답마다 따로 — 두 답이 이어져도 안 섞임)
         self._inbuf = bytearray()
         self._sendq: deque[bytes] = deque(maxlen=MAX_BACKLOG)
         self._send_evt = asyncio.Event()
@@ -113,9 +155,19 @@ class Bridge:
         self.on_line = on_line                          # (who, text, ssrc) — user·sodam·tool
         self._item_ssrc: dict[str, int | None] = {}     # 말 item → 그 말의 주인 ssrc (받아쓰기는 늦게 옴)
         self._t0 = self._last_voice = 0.0
-        self._errors = 0
+        self._errors: deque[float] = deque()            # 세는 오류가 난 시각 (ERROR_WINDOW 지나면 잊음)
         self._last_reply = -1e9
         self._speaking = False
+        self._responding = False                        # 모델이 답을 만드는 중 (response.created ~ response.done)
+        self._want_reply = False                        # 답하는 중에 도구 결과가 옴 → 그 답이 끝나면 response.create
+        self._stack: contextlib.AsyncExitStack | None = None
+        self._reconnects = 0
+        self._stopped_at: float | None = None           # 말 끝(speech_stopped) 시각 → 첫 소리까지 지연
+        self._first_audio: list[float] = []
+        self._lags: list[float] = []
+        self.stats: dict = {"frames_in": 0, "frames_out_voice": 0, "frames_out_silence": 0, "send_dropped": 0,
+                            "late_ticks": 0, "max_late_ms": 0, "resyncs": 0, "interrupts": 0, "reconnects": 0,
+                            "rt_errors": {}}
         self._energy: dict[int, float] = {}
         self.speaker: int | None = None                 # 마지막 말의 주인 ssrc (한 사람이 SPEAKER_SHARE 이상일 때만, 아니면 None)
         self.tools = tools or {}                        # 이름 → async (인자) -> 결과 글
@@ -128,6 +180,7 @@ class Bridge:
         조각이 (ssrc, bytes) 면 말하는 동안 사람(ssrc)별 소리 크기를 모아 '누가 말했나'를 정함 (speaker)."""
         if self._done.is_set():
             return
+        self.stats["frames_in"] += 1
         if frames48 and isinstance(frames48[0], tuple):
             if self._speaking:
                 for ssrc, f in frames48:
@@ -138,9 +191,14 @@ class Bridge:
             return
         self._inbuf += pcm
         while len(self._inbuf) >= SEND_BYTES:
-            self._sendq.append(bytes(self._inbuf[:SEND_BYTES]))
+            chunk = bytes(self._inbuf[:SEND_BYTES])
             del self._inbuf[:SEND_BYTES]
+            if len(self._sendq) == MAX_BACKLOG:
+                self.stats["send_dropped"] += 1           # 가장 오래된 것이 버려짐 (네트워크 막힘)
+            self._sendq.append(chunk)
             self._send_evt.set()
+            if audio.level(chunk) >= LOUD:                # 100 ms 에 한 번 — 누가 소리 내는 중이면 idle 아님
+                self._last_voice = self.clock()
 
     def stop(self, reason: str) -> None:
         if not self._done.is_set():
@@ -151,55 +209,134 @@ class Bridge:
     def done(self) -> bool:
         return self._done.is_set()
 
+    @property
+    def played_ms(self) -> int:
+        """지금 들려주는 답에서 실제로 play 한 ms."""
+        return self._played.get(self.item, 0) if self.item else 0
+
     # ── 실행 ────────────────────────────────────────────
+    async def _open(self):
+        """새 Realtime 연결 + 세션 설정 (처음·다시 연결 때 같음)."""
+        stack = contextlib.AsyncExitStack()
+        try:
+            conn = await stack.enter_async_context(self._connect())
+            specs = self.tool_specs if self.tool_specs is not None else ([WEB_SEARCH] if "web_search" in self.tools else [])
+            await conn.session.update(session=session_config(self.instructions, self.voice, self.reply, tools=specs,
+                                                           transcribe_prompt=self.transcribe_prompt))
+        except BaseException:
+            await self._close(stack)
+            raise
+        return stack, conn
+
+    @staticmethod
+    async def _close(stack) -> None:
+        if stack is not None:
+            with contextlib.suppress(Exception):
+                await stack.aclose()
+
     async def run(self) -> Result:
         self._t0 = self._last_voice = self.clock()
+        cpu0, steal0 = _cpu(), _steal()
         try:
-            async with self._connect() as conn:
-                self.conn = conn
-                specs = self.tool_specs if self.tool_specs is not None else ([WEB_SEARCH] if "web_search" in self.tools else [])
-                await conn.session.update(session=session_config(self.instructions, self.voice, self.reply, tools=specs,
-                                                               transcribe_prompt=self.transcribe_prompt))
+            self._stack, self.conn = await self._open()
+            try:
                 if self.greet:   # response.instructions 는 세션 지시를 '대신'함 → 캐릭터를 같이 넣음
-                    await conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
-                tasks = [asyncio.create_task(f()) for f in (self._reader, self._sender, self._pacer, self._watch)]
+                    await self.conn.response.create(response={"instructions": f"{self.instructions}\n\n{self.greet}"})
+                tasks = [asyncio.create_task(f()) for f in (self._reader, self._sender, self._pacer, self._watch, self._lag)]
                 await self._done.wait()
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                await self._close(self._stack)
+                self._stack = None
         except Exception as e:                          # 연결 실패·끊김 — 통화는 worker 가 정리
             log.warning("음성 연결 끝남: %s", e)
             self.stop(f"error:{type(e).__name__}")
         self.result.seconds = self.clock() - self._t0
+        self.result.stats = self._summary(cpu0, steal0)
         return self.result
 
+    def _summary(self, cpu0: float, steal0: int | None) -> dict:
+        """통화 계측 한 덩어리 (끝날 때 1번 계산)."""
+        st = {**self.stats, "rt_errors": dict(self.stats["rt_errors"]), "end_reason": self.result.reason}
+        lags = sorted(self._lags)
+        if lags:
+            st["loop_lag_max_ms"] = round(lags[-1] * 1000, 1)
+            st["loop_lag_p99_ms"] = round(lags[min(len(lags) - 1, int(len(lags) * 0.99))] * 1000, 1)
+        if self._first_audio:
+            st["first_audio_ms_avg"] = round(sum(self._first_audio) / len(self._first_audio) * 1000)
+            st["first_audio_ms_max"] = round(max(self._first_audio) * 1000)
+            st["first_audio_n"] = len(self._first_audio)
+        st["cpu_sec"] = round(_cpu() - cpu0, 2)           # 이 프로세스 전체 (같이 도는 다른 통화 포함)
+        steal1 = _steal()
+        if steal0 is not None and steal1 is not None:
+            st["steal_ticks"] = steal1 - steal0
+        with contextlib.suppress(OSError, AttributeError):
+            st["loadavg"] = [round(x, 2) for x in os.getloadavg()]
+        return st
+
     async def _reader(self) -> None:
+        while True:
+            try:
+                async for ev in self.conn:
+                    await self.on_event(ev)
+                    if self._done.is_set():
+                        return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning("음성 읽기 오류: %s", e)
+            if self._done.is_set():
+                return
+            if self._reconnects >= MAX_RECONNECTS or not await self._reconnect():
+                break
+        self.stop(self.result.reason or "ws_closed")
+
+    async def _reconnect(self) -> bool:
+        """통화 중 OpenAI 연결이 끊김 → 새로 연결하고 세션 설정을 다시 보냄 (대화 맥락은 새로 시작). 통화는 그대로."""
+        self._reconnects += 1
+        self.stats["reconnects"] = self._reconnects
+        log.warning("Realtime 연결 끊김 → 다시 연결 (%d번째)", self._reconnects)
+        old = self._stack
         try:
-            async for ev in self.conn:
-                await self.on_event(ev)
-                if self._done.is_set():
-                    return
-        except asyncio.CancelledError:
-            raise
+            self._stack, self.conn = await self._open()
         except Exception as e:
-            log.warning("음성 읽기 오류: %s", e)
-        self.stop(self.result.reason or "closed")
+            log.warning("Realtime 다시 연결 실패: %s", e)
+            return False
+        finally:
+            await self._close(old)
+        self._responding = self._want_reply = False
+        # 옛 연결의 답 item 은 새 연결에 없음 → 남은 소리는 들려주되 truncate 는 안 함
+        self.out = deque((None, f) for _, f in self.out)
+        self._played.clear()
+        return True
 
     async def on_event(self, ev) -> None:
         t = getattr(ev, "type", "")
         if t == "response.output_audio.delta":
-            if ev.item_id != self.item:
-                self.item, self.played_ms = ev.item_id, 0
+            item = ev.item_id
+            if item not in self._played:
+                if len(self._played) > 50:                # 오래된 답 정리 (줄에 남은 것만 둠)
+                    keep = {it for it, _ in self.out}
+                    self._played = {k: v for k, v in self._played.items() if k in keep}
+                self._played[item] = 0
             pcm = audio.up(base64.b64decode(ev.delta))
             for i in range(0, len(pcm), audio.FRAME_BYTES):
-                self.out.append(pcm[i:i + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0"))
-            self._last_voice = self.clock()
+                self.out.append((item, pcm[i:i + audio.FRAME_BYTES].ljust(audio.FRAME_BYTES, b"\0")))
+            now = self._last_voice = self.clock()
+            if self._stopped_at is not None:              # 말 끝 → 첫 소리 지연 (계측)
+                if len(self._first_audio) < 1000:
+                    self._first_audio.append(now - self._stopped_at)
+                self._stopped_at = None
         elif t == "input_audio_buffer.speech_started":
             self._last_voice = self.clock()
             self._speaking, self._energy = True, {}
+            self._stopped_at = None
             await self._interrupt()
         elif t == "input_audio_buffer.speech_stopped":
             self._speaking = False
+            self._last_voice = self._stopped_at = self.clock()   # 방금까지 말했음 (긴 말 뒤 바로 idle 로 끊기지 않게)
             self.speaker = dominant(self._energy)
             if getattr(ev, "item_id", None) and len(self._item_ssrc) < 500:
                 self._item_ssrc[ev.item_id] = self.speaker
@@ -214,7 +351,7 @@ class Bridge:
             if BYE.search(text):
                 self.stop("bye")
             elif self.reply == "name" and ("소담" in text or self.clock() - self._last_reply < 20):
-                await self.conn.response.create()        # '소담' 을 불렀거나 방금 이어지던 대화
+                await self._reply()                      # '소담' 을 불렀거나 방금 이어지던 대화
         elif t == "response.output_audio_transcript.done":
             self.transcript.append(("sodam", ev.transcript or ""))
             self._emit("sodam", ev.transcript or "", None)
@@ -223,7 +360,16 @@ class Bridge:
         elif t == "response.function_call_arguments.done":
             meta = {"ssrc": self.speaker, "response_id": getattr(ev, "response_id", None)}
             asyncio.create_task(self._call_tool(ev.call_id, ev.name, ev.arguments, meta))   # 듣기·말하기는 계속
+        elif t == "response.created":
+            self._responding = True
         elif t == "response.done":
+            self._responding = False
+            if self._want_reply:                         # 답하는 중에 온 도구 결과 → 이제 말하게
+                self._want_reply = False
+                try:
+                    await self.conn.response.create()
+                except Exception as e:
+                    log.warning("도구 결과 뒤 답 요청 실패: %s", e)
             usage = getattr(getattr(ev, "response", None), "usage", None)
             for k in ("input_tokens", "output_tokens"):
                 self.result.usage[k] = self.result.usage.get(k, 0) + int(getattr(usage, k, 0) or 0)
@@ -231,10 +377,33 @@ class Bridge:
             self.result.usage["cached_tokens"] = (self.result.usage.get("cached_tokens", 0)
                                                   + int(getattr(det, "cached_tokens", 0) or 0))
         elif t == "error":
-            self._errors += 1
-            log.warning("Realtime 오류: %s", getattr(getattr(ev, "error", None), "message", ev))
-            if self._errors >= MAX_ERRORS:
-                self.stop("error:realtime")
+            self._on_error(getattr(ev, "error", None))
+
+    def _on_error(self, err) -> None:
+        code = str(getattr(err, "code", None) or getattr(err, "type", None) or "unknown")[:60]
+        msg = str(getattr(err, "message", None) or err or "")[:200]
+        counts = self.stats["rt_errors"]
+        if code in counts or len(counts) < 20:
+            counts[code] = counts.get(code, 0) + 1
+        if benign(code, msg, str(getattr(err, "param", None) or "")):
+            log.info("Realtime 오류(무해, 통화 계속) %s: %s", code, msg)
+            return
+        log.warning("Realtime 오류 %s: %s", code, msg)
+        now = self.clock()
+        self._errors.append(now)
+        while self._errors and now - self._errors[0] > ERROR_WINDOW:   # 오래된 오류는 잊음 (연달아 날 때만 끊음)
+            self._errors.popleft()
+        self.stats["last_error"] = code
+        if len(self._errors) >= MAX_ERRORS:
+            self.stop("error:realtime")
+
+    async def _reply(self) -> None:
+        """모델에게 말하라고 함. 이미 답하는 중이면 그 답이 끝난 뒤(response.done)로 미룸 (conversation_already_has_active_response 방지).
+        도구 결과(function_call_output) 뒤 response.create = developers.openai.com/api/docs/guides/realtime-conversations."""
+        if self._responding:
+            self._want_reply = True
+            return
+        await self.conn.response.create()
 
     def _emit(self, who: str, text: str, ssrc: int | None) -> None:
         if self.on_line and text:
@@ -265,19 +434,26 @@ class Bridge:
         try:
             await self.conn.conversation.item.create(item={"type": "function_call_output", "call_id": call_id,
                                                            "output": str(out)[:2000]})
-            await self.conn.response.create()
+            await self._reply()
         except Exception as e:
             log.warning("도구 결과 전달 실패: %s", e)
 
     async def _interrupt(self) -> None:
-        """누가 말을 시작함 → 들려주던 답을 멈추고, 모델 쪽 기록도 실제로 들려준 데까지 자름."""
-        if not self.out or not self.item:
+        """누가 말을 시작함 → 들려주던 답을 멈추고, 모델 쪽 기록도 답마다 실제로 들려준 데까지 자름."""
+        if not self.out:
             return
+        items: list[str] = []
+        for it, _ in self.out:                          # 줄에 남은 답들 (맨 앞 = 지금 들려주던 답)
+            if it is not None and it not in items:
+                items.append(it)
         self.out.clear()
-        try:
-            await self.conn.conversation.item.truncate(item_id=self.item, content_index=0, audio_end_ms=self.played_ms)
-        except Exception as e:                          # 이미 끝난 item 등 — 끊기는 됐으니 무시
-            log.debug("truncate 실패: %s", e)
+        self.stats["interrupts"] += 1
+        for it in items:
+            try:
+                await self.conn.conversation.item.truncate(item_id=it, content_index=0,
+                                                            audio_end_ms=self._played.get(it, 0))
+            except Exception as e:                      # 이미 끝난 item 등 — 끊기는 됐으니 무시
+                log.debug("truncate 실패: %s", e)
 
     async def _sender(self) -> None:
         while True:
@@ -285,18 +461,30 @@ class Bridge:
             self._send_evt.clear()
             while self._sendq:
                 chunk = self._sendq.popleft()
-                await self.conn.input_audio_buffer.append(audio=base64.b64encode(chunk).decode())
+                try:
+                    await self.conn.input_audio_buffer.append(audio=base64.b64encode(chunk).decode())
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:                  # 연결 끊김 — 이 조각은 버리고 계속 (다시 연결은 _reader 가)
+                    self.stats["send_dropped"] += 1
+                    log.debug("소리 보내기 실패: %s", e)
 
     async def _pacer(self) -> None:
         """10 ms 마다 한 조각 — 절대 시각 기준이라 느려진 만큼 다음에 덜 잠 (많이 밀리면 다시 맞춤)."""
         step = audio.FRAME_MS / 1000
         nxt = self.clock()
+        st = self.stats
         while True:
             if self.out:
-                frame = self.out.popleft()
-                self.played_ms += audio.FRAME_MS
+                item, frame = self.out.popleft()
+                self.item = item
+                if item is not None:
+                    self._played[item] = self._played.get(item, 0) + audio.FRAME_MS
+                st["frames_out_voice"] += 1
+                voiced = True
             else:
-                frame = SILENCE
+                frame, voiced = SILENCE, False
+                st["frames_out_silence"] += 1
             try:
                 await self._play(frame)
             except asyncio.CancelledError:
@@ -306,17 +494,35 @@ class Bridge:
                 self.stop("error:play")
                 return
             nxt += step
-            wait = nxt - self.clock()
+            now = self.clock()
+            if voiced:
+                self._last_voice = now                  # 소담 소리 재생 중 = 활동
+            wait = nxt - now
             if wait > 0:
                 await self.sleep(wait)
-            elif wait < -0.2:
-                nxt = self.clock()
+            else:
+                late = -wait * 1000
+                if late >= LATE_MS:                     # 계측만 (재생 박자는 그대로)
+                    st["late_ticks"] += 1
+                    if late > st["max_late_ms"]:
+                        st["max_late_ms"] = round(late)
+                if wait < -0.2:
+                    st["resyncs"] += 1
+                    nxt = self.clock()
 
     async def _watch(self) -> None:
         while True:
             now = self.clock()
             if now - self._t0 >= self.max_sec:
                 return self.stop("time")
-            if now - self._last_voice >= self.idle_sec and not self.out:
-                return self.stop("idle")
+            if now - self._last_voice >= self.idle_sec and not self.out and not self._speaking:
+                return self.stop("idle")                # 누가 말하는 중(speech_started 뒤)·재생 중엔 안 끝냄 — max_sec 가 상한
             await self.sleep(1.0)
+
+    async def _lag(self) -> None:
+        """이벤트 루프가 얼마나 늦게 깨워 주는지 (CPU 경쟁·막는 작업이 있으면 커짐 → 재생 빈틈). 통화당 최대 1만 개."""
+        while True:
+            t = self.clock()
+            await self.sleep(LAG_EVERY)
+            if len(self._lags) < 10_000:
+                self._lags.append(max(0.0, self.clock() - t - LAG_EVERY))

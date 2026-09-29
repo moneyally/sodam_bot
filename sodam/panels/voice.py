@@ -121,7 +121,8 @@ RESULT_TEXT = {
     "no_peer": "📞 음성 도우미가 이 방을 아직 못 찾았어요. 도우미가 방에 있는지 [✅ 확인하기] 로 봐 주세요.",
 }
 END_REASON = {"idle": "조용해서", "time": "시간이 다 돼서", "bye": "인사하고", "admin": "관리자가 끊어서",
-              "closed": "음성채팅이 닫혀서", "restart": "서버 업데이트로 잠깐 나왔어요 — 다시 불러 주세요", "kicked": "음성채팅에서 내보내져서", "logout": "도우미 연결이 해제돼서"}
+              "closed": "음성채팅이 닫혀서", "chat_closed": "음성채팅이 닫혀서", "ws_closed": "AI 연결이 끊겨서",
+              "error:realtime": "AI 오류가 이어져서", "error:play": "소리 보내기 오류로","restart": "서버 업데이트로 잠깐 나왔어요 — 다시 불러 주세요", "kicked": "음성채팅에서 내보내져서", "logout": "도우미 연결이 해제돼서"}
 
 
 def _result_text(res: str) -> str:
