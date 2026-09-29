@@ -48,6 +48,31 @@ async def _profile_photo(bot, uid: int) -> bytes | None:
         return None
 
 
+PHOTO_OF = {"type": "string", "description": "이 방 다른 멤버의 프사로 만들 때 그 사람 이름·@아이디·ID "
+                                            "('민수 프사로', '이 사람 프사로'+답장·태그). 붙은·답장한 사진을 쓸 땐 비움."}
+
+
+async def source_photo(ctx, a: dict) -> tuple[bytes | None, str | None]:
+    """원본 사진: photo_of(이 방 누구든 프사) > 붙은·답장한 사진(누구 것이든) > 요청자 프사.
+    누구 사진이든 됨 (오너 결정 2026-09-28·09-29 — 기능마다 달랐던 제한을 하나로). 한도는 사람·방 하루 한도."""
+    who = str(a.get("photo_of") or "").strip()
+    if who:
+        row, err = await tools._resolve(ctx, who)
+        if err:
+            return None, err
+        data = await _profile_photo(ctx.bot, row["user_id"])
+        if not data:
+            return None, (f"{tools._row_name(row)} 님 프사를 못 가져옴 (프사가 없거나 공개 설정이 막힘). "
+                          "그 사람 사진에 답장하면서 다시 부탁하라고 안내.")
+        return data, None
+    if ctx.image is not None:
+        return ctx.image.data, None
+    data = await _profile_photo(ctx.bot, ctx.caller.id)
+    if not data:
+        return None, "원본 사진이 없음: 붙은·답장한 사진이 없고 프사를 못 가져옴 (프사가 없거나 공개 설정이 막힘). 사진과 함께 또는 사진에 답장하며 다시 부탁하라고 안내."
+    return data, None
+
+
 async def _busy(ctx) -> None:
     while True:
         try:
@@ -76,9 +101,9 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
     if not avatar.available():
         return "지금 서버에 영상 도구(ffmpeg)가 없어 움프를 못 만듦. 운영자에게 알리겠다고 짧게 안내."
     uid = ctx.caller.id
-    src = ctx.image.data if ctx.image is not None else await _profile_photo(ctx.bot, uid)
+    src, err = await source_photo(ctx, a)
     if not src:
-        return "프사를 못 가져옴 (프사가 없거나 공개 설정이 막혀 있음). 본인 사진을 같이 보내면서 다시 부탁하라고 안내."
+        return err
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     db = ctx.svc.db
     if await db.counter(day, 0, f"ava:{uid}") >= FREE_DAILY:
@@ -144,10 +169,12 @@ def _enum(table) -> dict:
 
 tools.register_tool(tools.Tool(
     "make_profile_video",
-    "텔레그램 '움직이는 프로필(움프)' 영상 파일(640×640·6초)을 만들어 보낸다. 원본 = 요청에 붙었거나 답장한 사진, 없으면 요청자 프사. "
+    "텔레그램 '움직이는 프로필(움프)' 영상 파일(640×640·6초)을 만들어 보낸다. 원본 = photo_of(이 방 멤버 누구든 프사) > "
+    "붙었거나 답장한 사진(누가 올렸든) > 요청자 프사. "
     "'내 프사 움프로 만들어줘', '글리치+네온으로 강렬하게', '눈 내리고 흑백으로 천천히'. " + DESIGN +
     " spec 없이 부르면 옛 부품(motion·speed·color·particles: 색 필터·날리는 것)으로 만듦 — 하트·눈·꽃잎 날리기는 이쪽.",
     {"spec": {"type": "object", "description": "스티커 엔진 spec (make_sticker 와 같음; mode photo·radius 0 기본)"},
+     "photo_of": PHOTO_OF,
      "motion": _enum(avatar.MOTIONS), "speed": _enum(avatar.SPEEDS), "color": _enum(avatar.COLORS),
      "particles": _enum(avatar.PARTICLES), "art": {"type": "string", "enum": ["none", *avatar.AI_STYLES]},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true 로 그대로 보냄"},

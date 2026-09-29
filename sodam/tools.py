@@ -290,6 +290,12 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     if not prompt:
         return "그릴 내용이 비어 있음."
     edit = a.get("mode") == "edit"
+    if a.get("photo_of"):                          # 이 방 멤버 누구든 프사를 원본으로 (움프·스티커와 같은 규칙)
+        from .panels.avatar import source_photo
+        src, err = await source_photo(ctx, a)
+        if not src:
+            return err
+        ctx.image, edit = Attached(src, "image/jpeg", ctx.caller.id), True
     if edit and ctx.image is None:
         return "고칠 사진이 없음. 사진에 답장하면서 부탁하거나 사진과 함께 보내 달라고 안내할 것."
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
@@ -904,9 +910,11 @@ TOOLS: list[Tool] = [
           "query": {"type": "string", "description": "view=search 일 때 이름·@아이디"},
           "limit": {"type": "integer", "description": "1~10"}}, ["view"], t_room_members),
     Tool("room_rules", "이 방의 규칙/공지를 확인한다.", {}, [], t_room_rules),
-    Tool("make_image", "그림을 새로 만들거나(new) 붙은 사진을 부탁대로 고친다(edit). 결과는 방에 사진으로 간다.",
+    Tool("make_image", "그림을 새로 만들거나(new) 붙은·답장한 사진(누가 올렸든)을 부탁대로 고친다(edit). "
+         "이 방 다른 멤버 프사로 하려면 photo_of 에 그 사람 이름. 결과는 방에 사진으로 간다.",
          {"prompt": {"type": "string", "description": "원하는 그림을 구체적으로 (피사체·분위기·색·글자·구도)"},
-          "mode": {"type": "string", "enum": ["new", "edit"]}},
+          "mode": {"type": "string", "enum": ["new", "edit"]},
+          "photo_of": {"type": "string", "description": "이 방 멤버 프사를 원본으로 (이름·@아이디·ID). 있으면 edit"}},
          ["prompt", "mode"], t_make_image, setting="image_daily"),
     Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),
