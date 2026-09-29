@@ -290,7 +290,7 @@ async def subscriber_trend_and_mtproto_seam():
             self.ids = [1, 2, 3]
 
         async def participants(self, chat_id):
-            return [SimpleNamespace(id=i) for i in self.ids]
+            return [{"id": i, "first_name": "x"} for i in self.ids]   # 실제 mtproto.participants 모양 (dict)
 
         async def views(self, chat_id, msg_ids):
             return {m: 42 for m in msg_ids}

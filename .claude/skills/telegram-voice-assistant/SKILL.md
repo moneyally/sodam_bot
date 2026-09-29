@@ -1,6 +1,6 @@
 ---
 name: telegram-voice-assistant
-description: 텔레그램 그룹 음성채팅(보이스챗/비디오챗)에 소담이 들어가 실시간 AI 음성으로 대화하는 기능(sodam/voice/, panels/voice.py)을 설정·진단·고칠 때 쓴다. 도우미 사람 계정(@Sodam_bot2) 연결, api_id 발급, 권한, 음성채팅 자동 켜기, OpenAI Realtime 다리, 영상 칸 사진, 끊김·무음·입장 실패 디버깅. 트리거: 음성채팅, 보이스챗, 음성방, 통화, 전화 걸어줘, 멜론봇처럼, py-tgcalls, ntgcalls, Realtime, 도우미 계정, 음성 도우미, BOT_METHOD_INVALID, NoActiveGroupCall.
+description: '텔레그램 그룹 음성채팅(보이스챗/비디오챗)에 소담이 들어가 실시간 AI 음성으로 대화하는 기능(sodam/voice/, panels/voice.py)을 설정·진단·고칠 때 쓴다. 도우미 사람 계정(@Sodam_bot2) 연결, api_id 발급, 권한, 음성채팅 자동 켜기, OpenAI Realtime 다리, 영상 칸 사진, 끊김·무음·입장 실패 디버깅. 트리거: 음성채팅, 보이스챗, 음성방, 통화, 전화 걸어줘, 멜론봇처럼, py-tgcalls, ntgcalls, Realtime, 도우미 계정, 음성 도우미, BOT_METHOD_INVALID, NoActiveGroupCall.'
 ---
 
 # 소담 음성채팅 (도우미 계정 + OpenAI Realtime)

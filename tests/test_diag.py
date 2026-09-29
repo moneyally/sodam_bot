@@ -165,6 +165,11 @@ async def redact_hides_secret_shapes():
     s = "tok 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef12 key sk-proj-abcdefghijklmnopqrstu hash 0123456789abcdef0123456789abcdef ok"
     out = diag.redact(s)
     assert "ABCDEFGH" not in out and "sk-proj" not in out and "0123456789abcdef0123" not in out and out.endswith("ok")
+    # 실제 사례 2026-09-30: 음성 담당 httpx 로그 URL 안의 토큰 ('bot' 에 붙어서 \b 안 걸림)
+    url = 'POST https://api.telegram.org/bot8123456789:AAEexampleTOKENexampleTOKENexample12/getMe "HTTP/1.1 200 OK"'
+    out = diag.redact(url)
+    assert "AAEexample" not in out and "/bot[가림]/getMe" in out, out
+    assert diag.redact("시각 2026-09-30 12:30:45") == "시각 2026-09-30 12:30:45"
 
 
 if __name__ == "__main__":
