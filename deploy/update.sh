@@ -84,14 +84,30 @@ units() {   # 켜 둔 봇들 (딜러는 .env.dealer 가 있고 켜 둔 경우만
 }
 
 # 📞 음성 담당(sodam-voice): 본체가 뜬 뒤 따로 — 패키지·서비스 파일 설치·재시작. 실패해도 본체는 그대로 (되돌리지 않음).
+# VOICE_SETUP=auto(기본: root 설치일 때만 — RUN_AS 있음) / 1(항상, 테스트용) / 0(안 함)
+VOICE_SETUP=${VOICE_SETUP:-auto}
+VOICE_PENDING="$APP_DIR/data/voice.restart_pending"   # 통화 중이라 못 한 음성 재시작 → 다음 타이머(새 커밋 없어도)에서
 voice_setup() {
-    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-voice.service" ] || return 0
-    # 음성 관련 파일이 안 바뀌었고 이미 돌고 있으면 그대로 (재시작 = 진행 중 통화가 끊김)
-    if $SYSTEMCTL is-active -q sodam-voice 2>/dev/null && [ -n "${PREV:-}" ] \
+    case $VOICE_SETUP in
+        0) return 0 ;;
+        1) ;;
+        *) [ -n "$RUN_AS" ] || return 0 ;;
+    esac
+    [ -f "$APP_DIR/deploy/sodam-voice.service" ] || return 0
+    # 음성 관련 파일이 안 바뀌었고 이미 돌고 있으면 그대로 (재시작 = 진행 중 통화가 끊김). 미뤄 둔 재시작이 있으면 비교 안 함.
+    if [ ! -f "$VOICE_PENDING" ] && $SYSTEMCTL is-active -q sodam-voice 2>/dev/null && [ -n "${PREV:-}" ] \
         && g diff --quiet "$PREV" HEAD -- sodam/voice sodam/mtproto.py sodam/db.py sodam/config.py \
                requirements-voice.txt deploy/sodam-voice.service; then
         log "voice: 바뀐 것 없음 → 통화 유지"; return 0
     fi
+    # 테스트(약 20분) 도중 통화가 시작됐을 수 있음 → 재시작 바로 전에 다시 확인, 통화 중이면 이번엔 건너뛰고 표시만
+    if voice_busy; then
+        mkdir -p "$APP_DIR/data" 2>/dev/null || true
+        date +%s > "$VOICE_PENDING" 2>/dev/null || true
+        log "voice: 통화 중 → 음성 담당 재시작은 통화 끝난 뒤 다음 타이머로 미룸"
+        return 0
+    fi
+    rm -f "$VOICE_PENDING"
     "$PY" -m pip install -q --disable-pip-version-check -r "$APP_DIR/requirements-voice.txt" \
         || { log "voice: 패키지 설치 실패 (본체는 정상)"; return 0; }
     if ! cmp -s "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/sodam-voice.service"; then
@@ -170,6 +186,10 @@ g fetch -q origin "$BRANCH"
 NEW=$(g rev-parse FETCH_HEAD)
 if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     say "새 커밋 없음 ($(g rev-parse --short HEAD), $BRANCH)"
+    # 지난번에 통화 중이라 미룬 음성 담당 재시작 → 이제 통화가 없으면 함 (있으면 또 미룸)
+    if [ -f "$VOICE_PENDING" ]; then
+        voice_setup
+    fi
     # 점검 창구가 안 떠 있으면 10분마다 다시 설치 시도 (apt 잠금 같은 일시 실패 회복)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] && ! $SYSTEMCTL is-active -q sodam-diag 2>/dev/null; then
         diag_setup
