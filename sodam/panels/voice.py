@@ -242,6 +242,9 @@ async def start_call(svc, bot, chat_id: int, uid: int, style: str | None = None)
     if s.get("ai_comeback") == "mirror":             # 채팅과 같은 방 설정 (욕하면 똑같이)
         from ..prompt import COMEBACK_MIRROR
         block = (block + "\n\n" + COMEBACK_MIRROR).strip()
+    if s.get("ai_spicy"):
+        from ..prompt import SPICY_BANTER
+        block = (block + "\n\n" + SPICY_BANTER).strip()
     if style is None:                               # 부른 사람 말투 (.말투) > 방 기본
         member = await db.get_member(chat_id, uid)
         style = member["style"] if member and member["style"] else None

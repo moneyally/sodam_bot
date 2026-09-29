@@ -10,6 +10,7 @@ register_setting("ai_follow_up", True, "이름 없이 이어 말하기")        
 register_setting("ai_comeback", "wit", "욕 받아치기",                  # 소담이 욕받이가 되지 않게 (오너 요청 2026-09-29)
                  choices={"wit": "wit", "센스": "wit", "욕없이": "wit", "mirror": "mirror", "똑같이": "mirror", "욕으로": "mirror"},
                  choice_labels={"wit": "센스로 받아치기(욕 없이)", "mirror": "똑같이 욕으로"})
+register_setting("ai_spicy", False, "19금 드립 받아치기")               # 기본 꺼짐: 켠 방에서만 야한 드립에 은유 수준으로 (노골적 X)
 register_setting("ai_chime_in", False, "AI 먼저 끼어들기")             # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디
 register_setting("ai_chime_gap_min", 120, "끼어들기 최소 간격(분)", range_=(30, 1440))
 register_setting("ai_chime_daily", 4, "끼어들기 하루 최대", range_=(1, 20))

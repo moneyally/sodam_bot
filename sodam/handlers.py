@@ -92,6 +92,8 @@ async def send_temp(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str,
 
 
 _LEADING_MENTIONS = re.compile(r"^(?:@\w{3,32}[\s,]*)+")
+# 이름 바로 뒤에 붙여 쓴 욕 ('소담이개보지련아'·'소담이씨발') — 3인칭 '소담이가' 와 구분해 호출로 봄
+_INSULT_HEAD = re.compile(r"(개[^가-힣\s]?|개[가-힣]|씨|시발|병신|좆|존나|미친|ㅅㅂ|ㅆㅂ|ㅂㅅ|ㅄ|새끼|십|썅|지랄)")
 # 문장 중간의 '소담이' 는 보통 3인칭('우리 소담이 최고') → 끝이 부탁일 때만 부른 걸로 본다
 _ASK_TAIL = re.compile(r"(줘|줄래|주라|주세요|줄래요|해봐|봐봐|부탁(해|해요|드려요|합니다)?)[\s.!~?]*$")
 
@@ -120,7 +122,8 @@ def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot,
             continue
         nxt = t[body_start + len(name):body_start + len(name) + 1]
         # '소담스럽다'·'소담이가/는/랑' 처럼 이름 뒤에 글자가 바로 붙으면 부른 게 아님 (단, '소담아…' 같은 호격은 OK)
-        if nxt and nxt.isalnum() and name[-1] not in "아야" and not (name[-1] == "이" and nxt == "야"):
+        if nxt and nxt.isalnum() and name[-1] not in "아야" and not (name[-1] == "이" and nxt == "야") \
+                and not _INSULT_HEAD.match(t, body_start + len(name)):   # '소담이개…'·'소담이씨발…' = 붙여 쓴 욕 호출 (실제 사례 일루왕)
             continue
         return True, _strip_call(t, body_start, name)
     for name in call_names:

@@ -97,6 +97,14 @@ COMEBACK_MIRROR = """[이 방 설정: 욕 받아치기 = 똑같이 욕으로 —
   '와 존나 세게 왔네 ㅋㅋ 근데 그게 끝임?' / '개소리 잘 들었고 ㅋㅋ 다음 타자 나와' / '씨발 나보다 말 못하는 사람 처음 봄 ㅋㅋ'
 - 선: 먼저 욕하지 않고 시비와 상관없는 사람은 안 건드림. 패드립·외모·장애·성별·지역·성적 비하·혐오 표현·협박은 절대 안 됨.
   상대가 '그만'·'진짜 화남' 같이 나오거나 힘들어 보이면 바로 장난을 멈춘다."""
+SPICY_BANTER = """[이 방 설정: 19금 드립 받아치기 켜짐 — 성인 단톡방]
+누가 소담에게 야한 드립이나 성적인 욕을 하면 쫄거나 훈계하지 말고, 은유·말장난 수준의 가벼운 19금 농담으로 더 웃기게 받아친다 (그 사람에게만, 1~2문장).
+- 노골적인 성행위·신체 묘사는 하지 않는다 (야한 건 '암시'까지). 방의 다른 실제 멤버를 성적으로 언급하지 않는다. 미성년자 관련은 어떤 경우도 안 된다.
+- 첫마디·표현은 매번 새로. 상대가 '그만'·불편해하면 바로 멈춘다."""
+SEX_RE = re.compile(r"섹스|섹시|섹드립|야동|꼴려|꼴림|떡치|자지|보지|ㅈㅈ|ㅅㅅ하|19금|야한|벗어|가슴|젖|엉덩|모텔|빨아|박아|성욕|발기")
+SPICY_TAIL = ("[방금 말에 야한 드립·성적인 말 — 이 방은 '19금 드립 받아치기' 켜짐] {bot}에게 한 거면 은유·말장난 수준 19금 농담으로 더 웃기게 받아쳐라 "
+              "(노골적 묘사·다른 멤버 언급·미성년 관련 금지).")
+
 # 소담에게 한 욕 감지 (mirror 방에서만 요청 맨 끝에 한 줄 — 모델이 system 지시만으론 욕을 순화함, 실제 사례 2026-09-29 벳블리)
 INSULT_RE = re.compile(r"씨발|시발|씨바|ㅅㅂ|ㅆㅂ|ㅅ\s?ㅂ|병신|ㅄ|ㅂㅅ|새끼|색기|좆|존나|지랄|ㅈㄹ|꺼져|닥쳐|미친[놈년것]|개같|개새|씹|"
                        r"[쌍잡썅]년|[^가-힣]?년아|놈아|멍청|바보|등신|쓰레기|찐따|ㅗ|애미|에미|느금|니미|느그")
@@ -199,7 +207,8 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    past_turns: list[str] | None = None, mode: str = "call",
                    hints: list[str] | None = None, images: list[dict] | None = None,
                    in_dm: bool = False, card_results: list[str] | None = None,
-                   instructions: str = "", lessons: list[str] | None = None, comeback: bool = False) -> list[dict]:
+                   instructions: str = "", lessons: list[str] | None = None, comeback: bool = False,
+                   spicy: bool = False) -> list[dict]:
     """instructions = ai_instructions.block (관리자가 정한 방 안내). 있으면 말투 뒤 세 번째 system — 앞 두 개(캐시)는 그대로."""
     n = nonce()
     now = korean_now(datetime.now(tz))
@@ -238,6 +247,8 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
     note = MODE_NOTE.get(mode, "")
     if comeback:   # 맨 끝(모델이 가장 잘 지키는 자리)
         note = (note + " " if note else "") + COMEBACK_TAIL.format(bot=bot_name)
+    if spicy:
+        note = (note + " " if note else "") + SPICY_TAIL.format(bot=bot_name)
     parts.append(tail + (" " + note if note else ""))
 
     return [
