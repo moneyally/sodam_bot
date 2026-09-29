@@ -1,6 +1,7 @@
 """🔌 원격 점검 창구 조회 (클로드 작업 환경 → 서버, 읽기 전용). 서버 쪽은 sodam/diag.py.
 
     python tools/diag.py health
+    python tools/diag.py user q=@SAKE_LLL   (숫자 ID·@아이디·예전 @·이름 → 이름 기록·들어가 있는 방)
     python tools/diag.py rooms q=벳블리
     python tools/diag.py settings chat=벳블리
     python tools/diag.py messages chat=벳블리 hours=6 [q=소담] [user=123]

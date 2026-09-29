@@ -373,7 +373,35 @@ def r_logs(d: Diag, q: dict) -> dict:
     return {"unit": unit, "lines": lines, "stderr": p.stderr.strip()[:300]}
 
 
-ROUTES = {"/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
+def r_user(d: Diag, q: dict) -> dict:
+    """사람 찾기: q = 숫자 ID · @아이디 · 예전 @아이디 · 이름(정확히). 지금 이름·이름 변경 기록·들어가 있는 방(멤버 목록)."""
+    raw = q.get("q", "").strip()
+    if not raw:
+        raise BadRequest("q=숫자ID 또는 @아이디 또는 이름")
+    with d.db() as c:
+        if re.fullmatch(r"\d{4,15}", raw):
+            ids = [int(raw)]
+        elif raw.startswith("@") or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", raw):
+            name = raw.lstrip("@")
+            ids = [r[0] for r in c.execute("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (name,))]
+            ids += [r[0] for r in c.execute("SELECT DISTINCT user_id FROM name_history WHERE username=? COLLATE NOCASE "
+                                           "LIMIT 5", (name,)) if r[0] not in ids]
+        else:
+            ids = [r[0] for r in c.execute("SELECT user_id FROM users WHERE first_name=? LIMIT 10", (raw,))]
+        out = []
+        for uid in ids[:10]:
+            u = c.execute("SELECT user_id, first_name, last_name, username, updated_at FROM users WHERE user_id=?", (uid,)).fetchone()
+            hist = _rows(c.execute("SELECT first_name, last_name, username, ts FROM name_history WHERE user_id=? "
+                                   "ORDER BY id DESC LIMIT 30", (uid,)))
+            rooms = _rows(c.execute(
+                "SELECT m.chat_id, ch.title, m.joined_at, m.last_seen, "
+                "(SELECT COUNT(*) FROM messages x WHERE x.chat_id=m.chat_id AND x.user_id=m.user_id) AS msgs "
+                "FROM members m LEFT JOIN chats ch ON ch.chat_id=m.chat_id WHERE m.user_id=? ORDER BY m.last_seen DESC", (uid,)))
+            out.append({"user": dict(u) if u else None, "name_history": hist, "rooms": rooms})
+        return {"query": raw, "found": len(out), "people": out}
+
+
+ROUTES = {"/v1/user": r_user, "/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
           "/v1/agent_runs": r_agent_runs, "/v1/voice": r_voice, "/v1/modlog": r_modlog, "/v1/counters": r_counters,
           "/v1/tables": r_tables, "/v1/logs": r_logs}
 
