@@ -95,6 +95,17 @@ diag_setup() {
     fi
 }
 
+# 자동 갱신 유닛(시간 제한 등)이 바뀌었으면 설치 — 지금 도는 갱신은 옛 설정 그대로 끝나고 다음부터 적용
+unit_setup() {
+    [ -n "$RUN_AS" ] || return 0
+    local u
+    for u in sodam-autoupdate.service sodam-autoupdate.timer; do
+        [ -f "$APP_DIR/deploy/$u" ] || continue
+        cmp -s "$APP_DIR/deploy/$u" "$UNIT_DIR/$u" && continue
+        cp "$APP_DIR/deploy/$u" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload && log "unit: $u 갱신"
+    done
+}
+
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
 restart_and_verify() {
     local ver=$1 since u ok
@@ -141,6 +152,7 @@ as_user=()
 if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_AS" --); fi
 log "tests…"
 if ! (cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py > "$TMP/tests.log" 2>&1); then
+    { grep -B1 -A15 -E '^FAIL' "$TMP/tests.log" | head -80; } || true   # 어떤 테스트가 왜 (끝 40줄엔 안 남는 경우가 많았음)
     tail -n 40 "$TMP/tests.log"
     report update.status "tests_failed $(g rev-parse --short "$NEW"): $(grep -E '^FAIL' "$TMP/tests.log" | head -5 | tr '\n' ' ')"
     log "!! 테스트 실패 → 적용 안 함. 봇은 이전 코드($(g rev-parse --short "$PREV"))로 계속 돔"
@@ -157,6 +169,7 @@ if restart_and_verify "$VER"; then
     report update.status "ok $VER"
     voice_setup
     diag_setup
+    unit_setup
     exit 0
 fi
 
