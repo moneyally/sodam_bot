@@ -812,7 +812,7 @@ async def voice_toolset_is_read_only_member_and_wrapped():
     for bad in ("warn_member", "mute_member", "ban_member", "change_setting", "send_announcement", "save_room_rule",
                 "schedule_task", "remember", "owner_room_log", "my_rooms"):
         assert bad not in names and bad not in handlers, bad
-    assert set(names) - {"web_search"} <= tools.READ_ONLY
+    assert set(names) <= TS.PUBLIC_READ, names
     assert all(x["type"] == "function" and "parameters" in x for x in specs)
     out = await handlers["web_search"]({"query": "q"})
     assert "evil.xyz" not in out and "TSyV5" not in out and "@scammer" not in out, out
