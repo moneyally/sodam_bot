@@ -14,6 +14,7 @@ from .settings import register_setting
 PRICES: dict[str, tuple[float, float, float]] = {
     "gpt-5.4": (2.50, 0.25, 15.00),
     "gpt-5.4-mini": (0.75, 0.075, 4.50),
+    "gpt-5.4-nano": (0.20, 0.02, 1.25),   # 뉴스 요약 선택(.env NEWS_MODEL) — OpenAI 모델 문서 2026-09-29 확인
     # 이미지 모델 (OpenAI 모델 문서 2026-09-27 확인, 두 모델 같은 값): 글 입력 $5 · 캐시 $1.25, 사진 입력 $8 · 캐시 $2,
     # 이미지 출력 $30 (글 출력은 없음). 이미지 요금은 장당이 아니라 토큰. llm.image → _record 는 usage.input_tokens(글+사진 합계)·
     # 캐시·출력(total-input) 만 넘겨서 글/사진 입력을 못 나눈다 → 입력은 더 비싼 '사진 입력' 값으로 (보수적, 글 프롬프트

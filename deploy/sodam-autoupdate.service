@@ -1,5 +1,6 @@
 # (선택) GitHub 에 올라온 새 커밋을 자동 배포: install.sh --auto-update 로 켬.
 # 새 커밋이 없으면 아무 일도 안 함. 있으면 update.sh 가 테스트 통과해야만 재시작, 시작 실패면 이전 커밋으로 되돌림.
+# 통화 중이면 테스트를 다음 타이머로 미룸(최대 60분, update.sh voice_busy). 바뀌면 update.sh unit_setup 이 설치.
 [Unit]
 Description=Sodam auto update (git fetch → tests → restart)
 After=network-online.target
@@ -8,5 +9,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/sodam/deploy/update.sh --quiet
-TimeoutStartSec=45min   # 서버 전체 테스트만 ~20분 (2026-09-29 실측) — 20분이면 잘릴 수 있음
+# 서버 전체 테스트만 ~20분 (2026-09-29 실측, 1.2코어) — 1코어 제한이면 조금 더 걸려서 넉넉히
+# (systemd 값 줄 끝에 주석을 붙이면 값의 일부가 됨 → 주석은 따로)
+TimeoutStartSec=60min
+# 테스트가 음성 담당(CPUWeight=1000)·본체와 CPU 를 다투지 않게: 비중 낮게 · 최대 1코어(2 vCPU 중) · 디스크는 쉴 때만
 Nice=10
+CPUWeight=20
+CPUQuota=100%
+IOSchedulingClass=idle

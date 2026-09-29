@@ -28,7 +28,7 @@ async def guide_docs_follow_the_writing_rules():
     """조사 2026-09-29 (Diátaxis·llms.txt·토스/카카오): 한 질문 = 한 문서, 한 줄 답 맨 위, 버튼은 화면 글자 그대로, 숫자는 설정값."""
     docs = G.load()
     assert {"index", "pricing", "payment", "invite", "admin-menu", "features", "ai-chat", "modes", "memory", "voice",
-            "lookup", "games", "schedule", "alerts", "security", "commands", "privacy", "faq"} <= set(docs)
+            "lookup", "games", "schedule", "alerts", "security", "commands", "privacy", "faq", "news"} <= set(docs)
     src = "".join(p.read_text(encoding="utf-8") for p in Path(G.__file__).parents[1].rglob("*.py"))
     seen_tags = {}
     for k, d in docs.items():
@@ -66,7 +66,9 @@ EVAL = [("소담아 근데 너 결제하면 얼마야?", {"pricing", "payment"})
         ("이 사람 예전이름 어떻게 봐", {"lookup"}), ("끝말잇기 어떻게 해", {"games"}), ("포인트 돈으로 바꿀수있어?", {"games"}),
         ("매일 9시에 공지 예약하는법", {"schedule"}), ("태그알림 끄는법", {"alerts"}), ("캡차 끄는법", {"security"}),
         ("뮤트 어떻게 해", {"security"}), ("명령어 목록", {"commands"}), ("대화 기록 며칠 저장해", {"privacy"}),
-        ("너 사람이야?", {"faq"}), ("누가 만들었어", {"faq"}), ("modes", {"modes"}), ("ai-chat", {"ai-chat"})]
+        ("소담아 오늘 EPL 경기 뭐 있어?", {"sports"}), ("스포츠 알림 어떻게 받아", {"sports"}), ("야구 순위 보는법", {"sports"}),
+        ("너 사람이야?", {"faq"}), ("소담아 오늘 세계 뉴스 뭐 있어?", {"news"}),
+        ("뉴스 알림 켜는법", {"news"}), ("속보 알림 끄고 싶어", {"news"}), ("코인 뉴스도 받을 수 있어?", {"news"}), ("누가 만들었어", {"faq"}), ("modes", {"modes"}), ("ai-chat", {"ai-chat"})]
 
 
 @test

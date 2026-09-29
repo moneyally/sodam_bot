@@ -29,7 +29,6 @@ from .permissions import Role, may
 from .services import PendingAction, Services
 from .prompt import reply_mark
 from .settings import DEFAULTS, LABELS, RANGES, coerce, render
-from .sports import SPORTS_KO, SportsError
 from .styles import STYLES, resolve_style
 from .util import display_name, esc, fmt_time, human_minutes, mention, period_since
 
@@ -346,16 +345,30 @@ async def t_web_search(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_sports(ctx: ToolCtx, a: dict) -> str:
-    action = a.get("action", "today")
+    """일정·스코어·순위·팀 경기 (sodam/sports). 알림 구독은 관리자가 '.스포츠 구독' 또는 1:1 메뉴에서."""
+    from .sports import SportsError
+    from .sports import ui as sports_ui
+    if ctx.svc.sports is None:
+        return "스포츠 기능이 꺼져 있음."
+    ui = sports_ui.UI(ctx.svc.sports)
+    action = a.get("action") or "today"
+    query = str(a.get("query") or a.get("team") or a.get("sport") or "").strip()[:40]
     try:
-        if action == "today":
-            return _plain(await ctx.svc.sports.today_text(a.get("sport") or "축구"))
-        team = str(a.get("team", "")).strip()
-        if not team:
-            return "팀 이름(영어)이 필요함."
-        return _plain(await ctx.svc.sports.team_text(team, "next" if action == "team_next" else "last"))
+        if action in ("team", "team_next", "team_last"):
+            text = await ui.team_text(query) if query else "팀 이름이 필요함."
+        elif action == "standings":
+            text = await ui.standings_text(query)
+        elif action == "live":
+            text = await ui.games_text(query, live_only=True)
+        elif action == "follows":
+            text = await ui.follows_text(ctx.chat_id) if ctx.chat_id < 0 else "그룹방에서만 볼 수 있음."
+        else:
+            d = sports_ui.parse_day(str(a.get("day") or "오늘"), ui.today()) or ui.today()
+            text = await ui.games_text(query, d)
     except SportsError as e:
         return str(e)
+    from .util import html_plain
+    return html_plain(text)
 
 
 NOTE_KEYS = ["호칭", "업종", "관심사", "소개"]
@@ -918,10 +931,13 @@ TOOLS: list[Tool] = [
          ["prompt", "mode"], t_make_image, setting="image_daily"),
     Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),
-    Tool("sports", "스포츠 경기 일정/결과를 조회한다 (배당·베팅 정보 없음). 팀 이름은 영어로.",
-         {"action": {"type": "string", "enum": ["today", "team_next", "team_last"]},
-          "sport": {"type": "string", "enum": list(SPORTS_KO)},
-          "team": {"type": "string", "description": "영어 팀명 예: Tottenham, LA Dodgers"}},
+    Tool("sports", "스포츠 경기 일정·스코어·진행 중 경기·리그 순위·팀 최근/다음 경기를 조회한다 (배당·베팅 정보 없음). "
+         "query 는 리그(EPL·라리가·세리에A·분데스리가·리그1·챔스·J리그·MLB·NBA·NHL·UFC·KBO·K리그·KBL·V리그)·종목(축구·야구·농구)·"
+         "팀(한국어 '토트넘·맨유·레알·다저스·레이커스' 또는 영어) 그대로. 알림 구독은 관리자가 '.스포츠 구독 EPL' 또는 1:1 메뉴 ⚽ 스포츠 알림.",
+         {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows"],
+                     "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · follows=이 방 알림 구독"},
+          "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그)"},
+          "day": {"type": "string", "description": "today 일 때: 오늘/내일/어제 또는 MM-DD"}},
          ["action"], t_sports, setting="sports_enabled"),
     Tool("save_my_note", "말한 사람 본인의 정보(호칭, 업종, 관심사, 소개)를 기억한다. 다른 사람 정보는 저장하지 않는다.",
          {"key": {"type": "string", "enum": NOTE_KEYS}, "value": {"type": "string", "description": "50자 이내, 빈 값이면 삭제"}},

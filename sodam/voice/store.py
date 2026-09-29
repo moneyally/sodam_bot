@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS voice_jobs_status ON voice_jobs(status, id);
 CREATE TABLE IF NOT EXISTS voice_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, started_by INTEGER, start_ts INTEGER NOT NULL,
     end_ts INTEGER, seconds INTEGER NOT NULL DEFAULT 0, reason TEXT, user_turns INTEGER NOT NULL DEFAULT 0,
-    bot_turns INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0);
+    bot_turns INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, stats TEXT);
 CREATE INDEX IF NOT EXISTS voice_calls_chat ON voice_calls(chat_id, start_ts);
 CREATE TABLE IF NOT EXISTS voice_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT, call_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, ts INTEGER NOT NULL,
@@ -36,6 +36,7 @@ CREATE INDEX IF NOT EXISTS voice_lines_call ON voice_lines(call_id, id);
 CREATE INDEX IF NOT EXISTS voice_lines_ts ON voice_lines(ts);
 CREATE INDEX IF NOT EXISTS voice_lines_chat ON voice_lines(chat_id, ts);
 """, migrate={"voice_jobs": "plain", "voice_calls": "plain", "voice_lines": "plain"})
+dbm.register_columns("voice_calls", {"stats": "TEXT"})   # 통화 계측 JSON (bridge.Result.stats, diag voice 로 봄)
 LINES_KEEP_DAYS = 7          # 통화 대화(받아쓰기·소담 답·도구) 점검용 보관 (오너 결정 2026-09-29), 오너만 봄
 LINE_MAX = 500
 
@@ -108,9 +109,14 @@ async def call_started(db, chat_id: int, by: int | None) -> int:
                            (chat_id, by, int(time.time())))
 
 
-async def call_ended(db, call_id: int, seconds: float, reason: str, user_turns: int = 0, bot_turns: int = 0) -> None:
-    await db._write("UPDATE voice_calls SET end_ts=?, seconds=?, reason=?, user_turns=?, bot_turns=? WHERE id=? AND end_ts IS NULL",
-                    (int(time.time()), int(seconds), reason[:40], user_turns, bot_turns, call_id))
+async def call_ended(db, call_id: int, seconds: float, reason: str, user_turns: int = 0, bot_turns: int = 0,
+                     stats: dict | None = None) -> None:
+    """reason: idle·time(15분)·bye(멤버가 '나가')·admin·chat_closed(음성채팅 닫힘)·kicked·ws_closed(OpenAI 연결 끊김)·
+    error:realtime·error:play·error:<예외>·restart·logout."""
+    await db._write("UPDATE voice_calls SET end_ts=?, seconds=?, reason=?, user_turns=?, bot_turns=?, stats=? "
+                    "WHERE id=? AND end_ts IS NULL",
+                    (int(time.time()), int(seconds), reason[:40], user_turns, bot_turns,
+                     json.dumps(stats, ensure_ascii=False)[:4000] if stats else None, call_id))
 
 
 async def add_line(db, call_id: int, chat_id: int, who: str, user_id: int | None, text: str) -> None:
