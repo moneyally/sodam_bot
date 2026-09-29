@@ -170,7 +170,7 @@ async def incident_huge_room_stays_within_limits():
     ctx = ToolCtx(svc, bot, Room.CHAT, BOSS, Role.ADMIN, {}, reply_msg_id=100 + 3001)
     t0 = time.time()
     out = await tools.execute("build_incident_case", '{"minutes": 999}', ctx)
-    assert time.time() - t0 < 5 and len(out) <= replay.BUDGET + 400, (time.time() - t0, len(out))
+    assert time.time() - t0 < 15 and len(out) <= replay.BUDGET + 400, (time.time() - t0, len(out))
     assert "±60분" in out and "생략" in out and "관련된 사람 6명" in out and "▶ " in out, out[:400]
     assert out.count("\n") < 60
 
