@@ -465,6 +465,11 @@ async def c_sports(ctx: CmdCtx) -> None:
         await ctx.reply(esc(str(e)))
 
 
+async def c_news(ctx: CmdCtx) -> None:
+    from .panels import news as news_panel   # 늦게 import (commands → menu → panels 순환 방지). 동작은 sodam/news.py
+    await news_panel.c_news(ctx)
+
+
 async def c_about(ctx: CmdCtx) -> None:
     name = ctx.svc.cfg.bot_name
     await ctx.reply(f"🤖 저는 이 소통방 AI 비서 <b>{esc(name)}</b>{iyeyo(name)[len(name):]}.\n"
@@ -1171,6 +1176,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘 축구|팀 이름|결과 이름|구독 이름|해제 이름|목록]",
         help="경기 일정·결과·알림", group="스포츠"),
+    Cmd(("뉴스", "news", "세계뉴스"), c_news, usage="[세계|경제|기술|코인|스포츠]",
+        help="여러 해외 언론이 함께 다룬 주요 뉴스 (방마다 10분에 1번)", group="뉴스"),
     Cmd(("말투도움말", "말투설명", "말투목록"), c_style_help, help="말투 종류·예시와 방 모드(욕 받아치기·19금)"),
     Cmd(("말투", "style"), c_style, usage="[" + style_list() + "|기본]", help="나에게 쓸 봇 말투", dm_ok=True),
     Cmd(("호칭", "callme"), c_nickname, usage="부를 이름", help="봇이 부를 호칭", dm_ok=True),

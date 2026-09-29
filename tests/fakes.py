@@ -350,3 +350,10 @@ _handlers.BURST_SECONDS = 0   # 테스트는 연달아 말해도 기다리지 �
 from sodam.panels import botlink as _blpanel  # noqa: E402
 
 _blpanel.HELP_WAIT = 0.2      # 모르는 봇 /help 답 기다리기 (답하는 가짜 봇은 바로 답함)
+from sodam import news as _news  # noqa: E402
+
+
+async def _news_offline(url, headers):   # 세계 뉴스 피드: 테스트는 네트워크 없이 (tests/test_news.py 가 샘플로 바꿔 끼움)
+    raise OSError("offline test")
+
+_news.http_get = _news_offline

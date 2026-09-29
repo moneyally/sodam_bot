@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyt="http://www.nytimes.com/namespaces/rss/2.0" version="2.0">
+  <channel>
+    <title>NYT &gt; World News</title>
+    <link>https://www.nytimes.com/section/world</link>
+    <atom:link href="https://rss.nytimes.com/services/xml/rss/nyt/World.xml" rel="self" type="application/rss+xml"></atom:link>
+    <description></description>
+    <language>en-us</language>
+    <copyright>Copyright 2026 The New York Times Company</copyright>
+    <lastBuildDate>Tue, 29 Sep 2026 17:56:49 +0000</lastBuildDate>
+    <pubDate>Tue, 29 Sep 2026 17:27:20 +0000</pubDate>
+    <image>
+      <title>NYT &gt; World News</title>
+      <url>https://static01.nyt.com/images/misc/NYT_logo_rss_250x40.png</url>
+      <link>https://www.nytimes.com/section/world</link>
+    </image>
+    <item>
+      <title>Bomb by Bomb, the Slow Death of My Hometown in Ukraine</title>
+      <link>https://www.nytimes.com/2026/09/29/world/europe/ukraine-kramatorsk.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/europe/ukraine-kramatorsk.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/europe/ukraine-kramatorsk.html" rel="standout"></atom:link>
+      
+      <dc:creator>Olha Konovalova</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 09:01:15 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Russian Invasion of Ukraine (2022)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Kramatorsk (Ukraine)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Israeli Settlers Stop Soldiers From Returning Palestinians to Their Home</title>
+      <link>https://www.nytimes.com/2026/09/29/world/middleeast/west-bank-israel-settlers-attack-soldiers-palestinians.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/middleeast/west-bank-israel-settlers-attack-soldiers-palestinians.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/middleeast/west-bank-israel-settlers-attack-soldiers-palestinians.html" rel="standout"></atom:link>
+      
+      <dc:creator>Natan Odenheimer and Fatima AbdulKarim</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 16:03:12 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Israeli Settlements</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Palestinians</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Israel</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">West Bank</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Vandalism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Netanyahu, Benjamin</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Dozens Killed in Myanmar Military Bombing</title>
+      <link>https://www.nytimes.com/2026/09/29/world/asia/myanmar-airstrike-rakhine-market.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/asia/myanmar-airstrike-rakhine-market.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/asia/myanmar-airstrike-rakhine-market.html" rel="standout"></atom:link>
+      
+      <dc:creator>Tiffany May</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 15:20:14 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Arakan Army (Myanmar)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Civilian Casualties</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">War and Armed Conflicts</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Rakhine (Ethnic Group)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Coups D&#39;Etat and Attempted Coups D&#39;Etat</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Politics and Government</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Aircraft</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Myanmar</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Rakhine State (Myanmar)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>A Turkish Doughnut Maker Whose Sweets Honor the Dead</title>
+      <link>https://www.nytimes.com/2026/09/29/world/middleeast/doughnuts-istanbul.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/middleeast/doughnuts-istanbul.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/middleeast/doughnuts-istanbul.html" rel="standout"></atom:link>
+      
+      <dc:creator>Ben Hubbard and Safak Timur</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 11:58:50 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Doughnuts</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Food Trucks and Vendors</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Widows and Widowers</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Death and Dying</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Grief (Emotion)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Funerals and Memorials</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Content Type: Personal Profile</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Istanbul (Turkey)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Turkey</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Accusations of Antisemitism Hit a Star of the French Far Right</title>
+      <link>https://www.nytimes.com/2026/09/29/world/europe/bardella-antisemitism-denial-france.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/europe/bardella-antisemitism-denial-france.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/europe/bardella-antisemitism-denial-france.html" rel="standout"></atom:link>
+      
+      <dc:creator>Mark Landler and Ségolène Le Stradic</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 16:01:33 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">France</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Bardella, Jordan (1995- )</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Le Pen, Marine</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">National Front (France)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Mediapart</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Right-Wing Extremism and Alt-Right</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Anti-Semitism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Jews and Judaism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">News and News Media</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">National Rally (France)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Evicted Woman Set to Return Home as Spain Announces Plans to Fix Housing Crisis</title>
+      <link>https://www.nytimes.com/2026/09/29/world/europe/spain-housing-eviction-maricarmen-abascal-madrid-protests.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/europe/spain-housing-eviction-maricarmen-abascal-madrid-protests.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/europe/spain-housing-eviction-maricarmen-abascal-madrid-protests.html" rel="standout"></atom:link>
+      
+      <dc:creator>Jason Horowitz and Carlos Barragán</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 15:06:48 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Spain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Affordable Housing</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Evictions</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Madrid (Spain)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Sanchez Perez-Castejon, Pedro (1972- )</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Renting and Leasing (Real Estate)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Landlords</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Demonstrations, Protests and Riots</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Rubio Says Incident at UK Air Base RAF Fairford ‘Clearly Involved’ a Foreign Actor</title>
+      <link>https://www.nytimes.com/2026/09/29/world/europe/uk-raf-fairford-air-base-incident-rubio-us.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/europe/uk-raf-fairford-air-base-incident-rubio-us.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/europe/uk-raf-fairford-air-base-incident-rubio-us.html" rel="standout"></atom:link>
+      
+      <dc:creator>Michael D. Shear</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 17:27:20 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Bases and Installations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Rubio, Marco</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Fox News Channel</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Royal Air Force Fairford (Gloucestershire, England, Air Base)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Great Britain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Iran</category>
+      
+      
+      
+    </item>
+<item>
+      <title>The Rural English Villages Around RAF Fairford at the Center of a Possible Terrorist Plot</title>
+      <link>https://www.nytimes.com/2026/09/28/world/europe/uk-fairford-base-terrorist-plot.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/28/world/europe/uk-fairford-base-terrorist-plot.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/28/world/europe/uk-fairford-base-terrorist-plot.html" rel="standout"></atom:link>
+      
+      <dc:creator>Megan Specia</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 16:29:49 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">England</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Royal Air Force Fairford (Gloucestershire, England, Air Base)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Bases and Installations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Terrorism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Evacuations and Evacuees</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">United States</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Great Britain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Estonia Says Arson at Defense Company Was ‘Deliberate’ Attack by Russia</title>
+      <link>https://www.nytimes.com/2026/09/29/world/europe/estonia-russia-ukraine-milrem-fire.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/29/world/europe/estonia-russia-ukraine-milrem-fire.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/29/world/europe/estonia-russia-ukraine-milrem-fire.html" rel="standout"></atom:link>
+      
+      <dc:creator>Lynsey Chutel</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 13:39:00 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Russian Invasion of Ukraine (2022)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Arson</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Robots and Robotics</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Sabotage (Crime)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Michal, Kristen (1975- )</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Estonia</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Europe</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Russia</category>
+      <category domain="">hybrid war</category>
+    </item>
+<item>
+      <title>Over 800 Killed in Renewed Houthi-Saudi War in Yemen, W.H.O. Says</title>
+      <link>https://www.nytimes.com/2026/09/28/world/middleeast/yemen-war-800-dead.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/28/world/middleeast/yemen-war-800-dead.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/28/world/middleeast/yemen-war-800-dead.html" rel="standout"></atom:link>
+      
+      <dc:creator>Vivian Nereim</dc:creator>
+      <pubDate>Mon, 28 Sep 2026 16:20:37 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">War and Armed Conflicts</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Deaths (Fatalities)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Refugees and Displaced Persons</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Iran-Israel Proxy Conflict</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Houthis</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">World Health Organization</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Yemen</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Release of Suspects in U.K. Prompts New Questions Over Possible Terror Plot at RAF Fairford Base</title>
+      <link>https://www.nytimes.com/2026/09/28/world/europe/us-air-base-uk-terror-incident-fairford.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/28/world/europe/us-air-base-uk-terror-incident-fairford.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/28/world/europe/us-air-base-uk-terror-incident-fairford.html" rel="standout"></atom:link>
+      
+      <dc:creator>Michael D. Shear</dc:creator>
+      <pubDate>Mon, 28 Sep 2026 20:05:26 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Royal Air Force Fairford (Gloucestershire, England, Air Base)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Great Britain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">England</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Bases and Installations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Security and Warning Systems</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Terrorism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Bombs and Explosives</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Islamic Revolutionary Guards Corps</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Trump, Donald J</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Possible Terrorist Plot at RAF Fairford Air Base in U.K.: What We Know</title>
+      <link>https://www.nytimes.com/2026/09/28/world/europe/raf-fairford-incident-air-base-terrorism-uk.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/28/world/europe/raf-fairford-incident-air-base-terrorism-uk.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/28/world/europe/raf-fairford-incident-air-base-terrorism-uk.html" rel="standout"></atom:link>
+      
+      <dc:creator>Ephrat Livni and Amelia Nierenberg</dc:creator>
+      <pubDate>Tue, 29 Sep 2026 07:42:10 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Royal Air Force Fairford (Gloucestershire, England, Air Base)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Terrorism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Great Britain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Bases and Installations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">England</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Europe</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Gloucestershire (England)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">live-detached</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Trump Offered to Sell Arms to China, U.S. Ambassador Says</title>
+      <link>https://www.nytimes.com/2026/09/27/us/politics/trump-weapons-sale-china.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/27/us/politics/trump-weapons-sale-china.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/27/us/politics/trump-weapons-sale-china.html" rel="standout"></atom:link>
+      
+      <dc:creator>Edward Wong</dc:creator>
+      <pubDate>Mon, 28 Sep 2026 17:22:52 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States Politics and Government</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States International Relations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Arms Trade</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Territorial Disputes</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Communist Party of China</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Defense Department</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">State Department</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Trump, Donald J</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Xi Jinping</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">China</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Far East, South and Southeast Asia and Pacific Areas</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Taiwan</category>
+      
+      
+      
+    </item>
+<item>
+      <title>5 Arrested on Suspicion of Terrorism Near RAF Fairford Air Base in UK</title>
+      <link>https://www.nytimes.com/2026/09/27/world/europe/raf-fairford-airbase-arrests.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/27/world/europe/raf-fairford-airbase-arrests.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/27/world/europe/raf-fairford-airbase-arrests.html" rel="standout"></atom:link>
+      
+      <dc:creator>Michael D. Shear and Amelia Nierenberg</dc:creator>
+      <pubDate>Sun, 27 Sep 2026 20:20:20 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Royal Air Force Fairford (Gloucestershire, England, Air Base)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Terrorism</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">United States Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">United States Air Force</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Great Britain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">US and Israeli Attack on Iran (2026)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Military Bases and Installations</category>
+      
+      
+      
+    </item>
+<item>
+      <title>Recreational Aerial Craft Become Weapons in Myanmar’s War</title>
+      <link>https://www.nytimes.com/2026/09/27/world/asia/myanmar-light-aircraft-war-weapons.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/27/world/asia/myanmar-light-aircraft-war-weapons.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/27/world/asia/myanmar-light-aircraft-war-weapons.html" rel="standout"></atom:link>
+      
+      <dc:creator>Richard C. Paddock</dc:creator>
+      <pubDate>Sun, 27 Sep 2026 04:01:20 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Myanmar</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">War and Armed Conflicts</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Defense and Military Forces</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Gliders, Hang Gliding and Paragliding</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Bombs and Explosives</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Civilian Casualties</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">National Unity Government (Myanmar)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">People&#39;s Defense Force (Myanmar)</category>
+    </item>
+<item>
+      <title>The Raffles’ Singapore Sling Costs $40. There’s a Reason Tourists Still Love It.</title>
+      <link>https://www.nytimes.com/2026/09/27/world/asia/singapore-sling-raffles-hotel-cocktail.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/27/world/asia/singapore-sling-raffles-hotel-cocktail.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/27/world/asia/singapore-sling-raffles-hotel-cocktail.html" rel="standout"></atom:link>
+      
+      <dc:creator>Nicholas Yong and Ore Huiying</dc:creator>
+      <pubDate>Sun, 27 Sep 2026 09:11:54 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Singapore</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_org">Raffles Singapore (Singapore Hotel)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Bars and Nightclubs</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Cocktails and Mixed Drinks</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Travel and Vacations</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Hotels and Travel Lodgings</category>
+      
+      
+    </item>
+<item>
+      <title>Evicted 87-Year-Old Woman Urges Spaniards to ‘Fight’ to Avoid Same Fate</title>
+      <link>https://www.nytimes.com/2026/09/25/world/europe/spain-eviction-housing-crisis.html</link>
+      <guid isPermaLink="true">https://www.nytimes.com/2026/09/25/world/europe/spain-eviction-housing-crisis.html</guid>
+      <atom:link href="https://www.nytimes.com/2026/09/25/world/europe/spain-eviction-housing-crisis.html" rel="standout"></atom:link>
+      
+      <dc:creator>Carlos Barragán</dc:creator>
+      <pubDate>Sat, 26 Sep 2026 22:22:12 +0000</pubDate>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_geo">Spain</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/nyt_per">Sanchez Perez-Castejon, Pedro (1972- )</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Evictions</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Demonstrations, Protests and Riots</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Real Estate and Housing (Residential)</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Rent Control and Stabilization</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">Landlords</category>
+      <category domain="http://www.nytimes.com/namespaces/keywords/des">internal-open-access-from-nl</category>
+      
+      
+      
+    </item>
+  </channel>
+</rss>

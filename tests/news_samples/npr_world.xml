@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:npr="https://www.npr.org/rss/" xmlns:nprml="https://api.npr.org/nprml" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  <channel>
+    <title>NPR Topics: World</title>
+    <link>https://www.npr.org/templates/story/story.php?storyId=1004</link>
+    <description>NPR world news, international art and culture, world business and financial markets, world economy, and global trends in health, science and technology. Subscribe to the World Story of the Day podcast and RSS feed.</description>
+    <language>en</language>
+    <copyright>Copyright 2024 NPR - For Personal Use Only</copyright>
+    <generator>Story API Shim 1.2.24</generator>
+    <lastBuildDate>Tue, 29 Sep 2026 13:53:56 -0400</lastBuildDate>
+    <image>
+      <url>https://media.npr.org/images/podcasts/primary/npr_generic_image_300.jpg?s=200</url>
+      <title>NPR Topics: World</title>
+      <link>https://www.npr.org/sections/world/</link>
+    </image>
+    <item>
+      <title>Potential Taiwan tension sparked &apos;last minute&apos; change in Trump-Xi National Archives visit</title>
+      
+      <pubDate>Tue, 29 Sep 2026 13:17:04 -0400</pubDate>
+      <link>https://www.npr.org/2026/09/29/nx-s1-5984989/digital-archives-trump-xi</link>
+      <guid>https://www.npr.org/2026/09/29/nx-s1-5984989/digital-archives-trump-xi</guid>
+      
+      <dc:creator>Emily Feng</dc:creator>
+    </item>
+<item>
+      <title>Trump weakens fuel efficiency standards. And, Cornell fraternity rape case reopened</title>
+      
+      <pubDate>Tue, 29 Sep 2026 07:36:24 -0400</pubDate>
+      <link>https://www.npr.org/2026/09/29/g-s1-145422/up-first-newsletter-fuel-efficiency-standards-cornell-rape-case-terror-suspects</link>
+      <guid>https://www.npr.org/2026/09/29/g-s1-145422/up-first-newsletter-fuel-efficiency-standards-cornell-rape-case-terror-suspects</guid>
+      
+      <dc:creator>Brittney Melton</dc:creator>
+    </item>
+<item>
+      <title>As the U.S. signals a smaller Middle East footprint, Turkey is ready to step in</title>
+      
+      <pubDate>Tue, 29 Sep 2026 05:00:00 -0400</pubDate>
+      <link>https://www.npr.org/2026/09/29/nx-s1-5983685/turkey-influence</link>
+      <guid>https://www.npr.org/2026/09/29/nx-s1-5983685/turkey-influence</guid>
+      
+      <dc:creator>Hadeel Al-Shalchi</dc:creator>
+    </item>
+<item>
+      <title>British men released on bail after suspected terror plot</title>
+      
+      <pubDate>Mon, 28 Sep 2026 18:10:02 -0400</pubDate>
+      <link>https://www.npr.org/2026/09/28/nx-s1-5983550/british-men-released-on-bail-after-suspected-terror-plot</link>
+      <guid>https://www.npr.org/2026/09/28/nx-s1-5983550/british-men-released-on-bail-after-suspected-terror-plot</guid>
+      
+      <dc:creator>Lauren Frayer</dc:creator>
+    </item>
+<item>
+      <title>Eviction of 87-year-old sparks protests in Madrid over housing crisis</title>
+      
+      <pubDate>Mon, 28 Sep 2026 03:20:18 -0400</pubDate>
+      <link>https://www.npr.org/2026/09/28/nx-s1-5983303/encampment-protest-madrid-housing-crisis</link>
+      <guid>https://www.npr.org/2026/09/28/nx-s1-5983303/encampment-protest-madrid-housing-crisis</guid>
+      
+      <dc:creator>The Associated Press</dc:creator>
+    </item>
+  </channel>
+</rss>

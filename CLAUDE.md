@@ -138,7 +138,7 @@
   그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
-- **📘 소담 공식 안내서** (`sodam/guide/*.md` 18개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —
+- **📘 소담 공식 안내서** (`sodam/guide/*.md` 19개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —
   벳블리 '결제하면 얼마야?'에 '가격 자료 없음'): index.md = 목차. 문서마다 front-matter title·summary·tags·related·audience (한 줄 `키: 값`, 목록은 쉼표).
   쓰는 법: 한 질문 = 한 문서, 맨 위 `## 한 줄 답`(해요체), 버튼은 코드의 화면 글자 그대로 `[💳 구독하기]`(테스트가 코드에 있는지 검사),
   `## 소담이 하지 말 것`, 끝에 `## 관련 문서`(사람용 링크 — AI 에겐 빼고 related 로 줌). 본문 1,500자 안. 태그는 문서끼리 겹치지 않게.
@@ -470,6 +470,24 @@
   카드당 첫 누름만 처리. '✅ + 오늘은 확인 생략'(ai_approvals, 한국시간 자정까지)은 schedule_task·alert_rule·bot_command 만 — **제재는 NEVER 목록으로 절대 안 됨**.
 - 📝 AI 방 안내(`ai_instructions`): 운영자 전체(300자) → 방(500자) 층, 스타일 뒤 세 번째 system(첫 system 불변), 인젝션·링크·지갑 거절, AI 도구 set_room_instructions(카드).
 - 실측(2026-09-28): 39/39, $0.0141/요청 (프롬프트 바뀐 첫 실행이라 캐시 적중 낮음).
+
+## 🌍 세계 뉴스 알림 (`news.py`, `panels/news.py`, tests/test_news.py · 뮤테이션 8개, 2026-09-30 방 관리자 요청 '전세계뉴스 — 유명한 기사만')
+- 키 없는 해외 언론 RSS만 (BBC·NYT·가디언·알자지라·NPR·BBC코리아 + 경제·기술(BBC·NYT·가디언·NPR)·코인(코인데스크·코인텔레그래프·디크립트·가디언)·
+  스포츠(BBC·가디언·ESPN·스카이)). 피드마다 10분에 1번·조건부 GET·타임아웃 10초·UA 'sodam-news/1.0'(NPR 은 'Mozilla/5.0' 만이면 403),
+  실패한 피드는 경고 로그만. **Google 뉴스는 약관(개인·비상업) 때문에 기본 끔** — NEWS_GOOGLE=1 이면 점수 신호(+2)로만(보여주기·AI X).
+  **연합뉴스는 'AI 학습 및 활용 금지'라 안 씀.** 켠 방(news_mode≠off·이용 기간)이 하나도 없으면 가져오기·AI 0.
+- 묶기 = Event Registry 식 온라인 묶기: 새 기사를 **대표 제목**과 TF-IDF 코사인 0.3↑(겹친 낱말 2↑, 언어별) 가장 가까운 묶음에, 아니면 새 묶음
+  (합쳐 가며 비교하면 눈덩이). IDF = 최근 36시간 제목 → '러시아·우크라이나'만 겹친 건 안 묶임. 매체 수 = 서로 다른 매체(BBC 세계·경제는 1곳).
+  '유명한 기사' = news_min_sources(기본 3, 2~5)곳↑. 실측 샘플(5개 매체 122개 제목): 3곳↑ = 3개(에스토니아 방화·RAF 기지·스페인 퇴거).
+- 한국어 한 줄: 묶음마다 1번·모든 방 공용, `llm.json(purpose=news, chat_id=None → 전체 예산만, effort low)`, 모델 guard(mini) 또는 NEWS_MODEL
+  (gpt-5.4-nano 요금 등록). **제목+매체 이름만** (본문 X), nonce 태그·지시 무시, 결과는 strip_unsafe·80자·esc. 실패·예산 초과 = 영어 제목 '(영문)'.
+  링크는 코드가 피드 주소를 매체 도메인·https 로 확인(safe_url) 해서만. 방 글은 HTML·미리보기 끔.
+- 방: news_mode off/breaking/digest/both · news_times(기본 09:00,21:00, 최대 4, 지난 뒤 60분 안만·(방,날짜,시각) claim) · news_categories ·
+  news_quiet(기본 0-7, 속보는 다음 정리로 / 속보만 모드는 끝날 때 '밤사이') · news_daily_max 8 · news_digest_k 5. 속보 = 3시간 안·중요도 4↑·방마다 30분 1번.
+  보낸 묶음 news_sent(방, 묶음) 먼저 기록 → 다시 안 보냄. job_news 1분(handlers). 3일 지난 기사·묶음, 7일 지난 보낸 기록 정리.
+- 허브 🌍(m:nw · nwtp 시각 프리셋 · nwc 분야 · nwp 👀 미리보기 = 누른 관리자 1:1, 사람당 60초 1번, 보낸 기록 X) · `.뉴스 [분야]`(이용 기간 방, 방마다 10분 1번,
+  명령 등록은 commands.py — panels 순환) · AI 도구 news_headlines(read_only·누구나·tainted, 링크 없음, web_search 대신). 테스트는 fakes 가 오프라인.
+- 유료 키 후보(오너 결정 대기): newsapi.ai $90/월(이벤트·기사 수), GNews €49.99/월, 네이버 검색 API(무료·약관 확인).
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서

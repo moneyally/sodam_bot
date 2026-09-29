@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?><rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+    <channel>
+        <title><![CDATA[BBC News 코리아]]></title>
+        <description><![CDATA[BBC News 코리아 - BBC News 코리아]]></description>
+        <link>https://www.bbc.com/korean</link>
+        <generator>RSS for Node</generator>
+        <lastBuildDate>Tue, 29 Sep 2026 18:00:17 GMT</lastBuildDate>
+        <atom:link href="https://feeds.bbci.co.uk/korean/rss.xml" rel="self" type="application/rss+xml"/>
+        <copyright><![CDATA[Copyright of the British Broadcasting Corporation (British Broadcasting Corporation)]]></copyright>
+        <language><![CDATA[ko]]></language>
+        <ttl>15</ttl>
+        <item>
+            <title><![CDATA[오픈AI, '안전성 우려'… 최신 AI 모델 GPT-6.1 아스트라 출시 취소]]></title>
+            
+            <link>https://www.bbc.com/korean/articles/c3wyz05v7xrlo?at_medium=RSS&amp;at_campaign=rss</link>
+            <guid isPermaLink="false">https://www.bbc.com/korean/articles/c3wyz05v7xrlo#0</guid>
+            <pubDate>Tue, 29 Sep 2026 07:01:12 GMT</pubDate>
+            
+        </item>
+<item>
+            <title><![CDATA[미국서 '코넬대 집단 성폭행 의혹' 재수사]]></title>
+            
+            <link>https://www.bbc.com/korean/articles/c5rm9ymmkrz4o?at_medium=RSS&amp;at_campaign=rss</link>
+            <guid isPermaLink="false">https://www.bbc.com/korean/articles/c5rm9ymmkrz4o#0</guid>
+            <pubDate>Tue, 29 Sep 2026 03:43:28 GMT</pubDate>
+            
+        </item>
+<item>
+            <title><![CDATA['불안한' 중국 Z세대, 한 대학교수에 열광하는 이유는?]]></title>
+            
+            <link>https://www.bbc.com/korean/articles/ck1l638vd288o?at_medium=RSS&amp;at_campaign=rss</link>
+            <guid isPermaLink="false">https://www.bbc.com/korean/articles/ck1l638vd288o#0</guid>
+            <pubDate>Mon, 28 Sep 2026 07:12:03 GMT</pubDate>
+            
+        </item>
+    </channel>
+</rss>

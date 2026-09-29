@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, persist, raid, reports, rules, security, semsearch, social,
+from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue
@@ -1330,6 +1330,14 @@ async def job_gametime(context: ContextTypes.DEFAULT_TYPE) -> None:
     await gametime.check(_svc(context), context.bot)
 
 
+async def job_news(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """1분마다: 세계 뉴스 알림 (sodam/news.py — 켠 방이 있을 때만 10분마다 피드 가져오기, 정리 시각·속보)."""
+    try:
+        await news.run(_svc(context), context.bot)
+    except Exception:
+        log.exception("news job failed")
+
+
 async def job_disk(context: ContextTypes.DEFAULT_TYPE) -> None:
     """1시간마다: 디스크 여유 공간이 모자라면 정리·오너 알림 (sodam/diskguard.py)."""
     try:
@@ -1444,6 +1452,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
     jq.run_repeating(job_rights, interval=3600, first=600, name="rights")   # 안에서 하루 1번만 알림
     jq.run_repeating(job_gametime, interval=600, first=180, name="gametime")
+    jq.run_repeating(job_news, interval=60, first=150, name="news")
     jq.run_repeating(job_quiet_rules, interval=600, first=240, name="quiet_rules")
     jq.run_daily(job_sub_reminders, time=dtime(10, 0, tzinfo=tz), name="sub_reminders")
     jq.run_repeating(job_digest, interval=600, first=120, name="digest")  # 관리자 AI 하루 요약 (reports.py)
