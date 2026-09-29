@@ -194,3 +194,23 @@ async def vision_fetch_records_who_posted_the_photo():
     assert got and got.owner == A.id
     got = await vision.fetch(bot, FakeMsg(-1, me, "", photo=photo))                  # 본인이 올린 사진
     assert got and got.owner == 77
+
+
+@test
+async def other_members_profile_photo_via_photo_of_for_ump_sticker_and_image():
+    """오너 결정 2026-09-29: 기능마다 '여긴 되고 저긴 안 되고' 없이 — 이 방 멤버 누구 프사든 원본으로."""
+    r = await world()
+    res = await ask(r, A, [tool_call("make_profile_video", {"photo_of": BOSS.first_name})])
+    assert "보냈음" in res[0] and ("profile_photos", BOSS.id) in r.bot.calls, res
+    assert ("profile_photos", A.id) not in r.bot.calls, "요청자 프사가 아니라 지목한 사람 것"
+    res = await ask(r, A, [tool_call("make_profile_video", {"photo_of": "없는사람"})])
+    assert "찾을 수 없" in res[0] and len(docs(r)) == 1, res
+    from sodam import tools
+    from sodam.panels import avatar as P
+    for name in ("make_image", "make_sticker", "make_profile_video"):
+        assert "photo_of" in tools._BY_NAME[name].params, name
+    ctx = ToolCtx(r.svc, r.bot, r.CHAT, A, Role.MEMBER, await r.db.get_settings(r.CHAT))
+    data, err = await P.source_photo(ctx, {"photo_of": BOSS.first_name})
+    assert data == png(640, 640) and err is None
+    from sodam import prompt
+    assert "누구 것이든" in prompt.SYSTEM and "본인 것만이라고 거절하지 않는다" in prompt.SYSTEM

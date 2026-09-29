@@ -340,6 +340,9 @@
 - AI 도구 make_profile_video(**spec** = 스티커 엔진 spec(기본, photo·radius 0 → `stickerforge.forge_video` 640×640 H.264 5.93초 = 3초 루프×2,
   2MB↓, qc 경고면 안 보내고 한 번 고치게) / spec 없으면 옛 부품 motion 6 × speed 3 × color 8 × particles 6 avatar.Spec, art none/anime/3d/neon/water):
   붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → send_document (영상으로 보내면 재압축).
+- **원본 사진 규칙 하나로** (오너 결정 2026-09-29, '여긴 되고 저긴 안 되고' 없앰): `panels/avatar.source_photo` = photo_of(이 방 멤버 누구든 프사, tools._resolve)
+  > 붙은·답장한 사진(누가 올렸든) > 요청자 프사. make_image(photo_of → edit)·make_sticker·make_profile_video 공통. 프롬프트 [사진]: 본인 것만이라고 거절 X,
+  성적·잔인·사칭(그 사람인 척 속이기)만 안 됨. 한도는 사람·방 하루 한도 그대로.
 - 원본이 이미 그림이면 `stickerforge.looks_illustrated`(평평한 면 + 굵은 선 + 적은 색) 가 art 를 건너뜀 (gpt-image 비용·시간 낭비 방지).
 - 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
 - 학습은 스티커와 같은 표(product='ump'): sticker_log/sticker_recipes, `sticker_catalog(for_video=true)`, 없는 효과는 `wanted` → featreq.

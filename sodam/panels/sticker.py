@@ -20,7 +20,7 @@ from telegram.error import TelegramError
 from .. import featreq, hooks, stickerforge as SF, stickerlearn as L, tools
 from ..stickerforge import recipes
 from ..util import display_name, esc, user_name
-from .avatar import _profile_photo
+from .avatar import PHOTO_OF, source_photo
 
 log = logging.getLogger(__name__)
 FREE_DAILY = 5
@@ -125,9 +125,9 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     if not available():
         return "지금 서버에 영상 도구(ffmpeg)가 없어 스티커를 못 만듦."
     uid, db = ctx.caller.id, ctx.svc.db
-    src = ctx.image.data if ctx.image is not None else await _profile_photo(ctx.bot, uid)
+    src, err = await source_photo(ctx, a)
     if not src:
-        return "원본 사진이 없음 (붙은 사진·답장한 사진 없고 프사도 못 가져옴). 사진과 함께 다시 부탁하라고 안내."
+        return err
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     if await db.counter(day, 0, f"stk:{uid}") >= FREE_DAILY:
         return f"스티커는 한 사람 하루 {FREE_DAILY}개까지. 내일 다시 가능하다고 안내."
@@ -179,10 +179,11 @@ tools.register_tool(tools.Tool(
 
 tools.register_tool(tools.Tool(
     "make_sticker",
-    "텔레그램 움직이는 스티커(영상 스티커)를 만들어 방에 보낸다. 원본 = 붙은·답장한 사진, 없으면 요청자 프사. "
+    "텔레그램 움직이는 스티커(영상 스티커)를 만들어 방에 보낸다. 원본 = photo_of(이 방 멤버 누구든 프사) > 붙은·답장한 사진(누가 올렸든) > 요청자 프사. "
     "'이걸로 스티커 만들어줘', '배경 빼고 글리치 넣어서 출근완료', '잘자요 느낌으로 잔잔하게'. " + DESIGN,
     {"spec": {"type": "object", "description": "{recipe, seed} 또는/그리고 mode·keying·motion[{type,...}]·fx[{type,...}]·"
                                                "caption{text,palette,anims,position}·framing·margin·radius"},
+     "photo_of": PHOTO_OF,
      "icon": {"type": "boolean", "description": "팩 아이콘(100×100)도 같이 — 팩 만든다고 할 때만"},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true 로 그대로 보냄"},
      "request": {"type": "string", "description": "사용자 요청 원문 (200자, 학습 기록용)"},
