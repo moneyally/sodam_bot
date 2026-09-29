@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS voice_lines (
     who TEXT NOT NULL, user_id INTEGER, text TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS voice_lines_call ON voice_lines(call_id, id);
 CREATE INDEX IF NOT EXISTS voice_lines_ts ON voice_lines(ts);
+CREATE INDEX IF NOT EXISTS voice_lines_chat ON voice_lines(chat_id, ts);
 """, migrate={"voice_jobs": "plain", "voice_calls": "plain", "voice_lines": "plain"})
 LINES_KEEP_DAYS = 7          # 통화 대화(받아쓰기·소담 답·도구) 점검용 보관 (오너 결정 2026-09-29), 오너만 봄
 LINE_MAX = 500
@@ -129,6 +130,29 @@ async def purge_lines(db, days: int = LINES_KEEP_DAYS) -> int:
 async def call_lines(db, call_id: int, limit: int = 300) -> list:
     return await db._all("SELECT l.ts, l.who, l.user_id, l.text, u.first_name FROM voice_lines l "
                          "LEFT JOIN users u ON u.user_id=l.user_id WHERE l.call_id=? ORDER BY l.id LIMIT ?", (call_id, limit))
+
+
+LINK_GAP = 30                # 같은 통화에서 30초 안에 다른 사람이 이어 말하면 '음성으로 주고받음' 1번
+
+
+async def voice_links(db, chat_id: int, since: int, user_id: int | None = None) -> list:
+    """(from_id, to_id, n): from 이 to 의 말 바로 뒤에 이어 말한 횟수 (채팅 답장 관계의 음성판, 저장된 7일 안에서만).
+    누군지 모르는 말·소담 말·도구 줄은 빼고 사람 말끼리만."""
+    who = "" if user_id is None else "AND (from_id=? OR to_id=?) "
+    return await db._all(
+        "SELECT from_id, to_id, COUNT(*) n FROM ("
+        " SELECT user_id from_id, ts, LAG(user_id) OVER w to_id, LAG(ts) OVER w prev_ts FROM voice_lines"
+        " WHERE chat_id=? AND ts>=? AND who='user' AND user_id IS NOT NULL WINDOW w AS (PARTITION BY call_id ORDER BY id))"
+        " WHERE to_id IS NOT NULL AND to_id<>from_id AND ts-prev_ts<=? " + who +
+        "GROUP BY from_id, to_id ORDER BY n DESC LIMIT 200",
+        (chat_id, since, LINK_GAP, *(() if user_id is None else (user_id, user_id))))
+
+
+async def member_voice(db, chat_id: int, user_id: int, since: int) -> tuple[int, int]:
+    """(참여한 통화 수, 한 말 수) — 그 사람이 말한 게 확인된 것만."""
+    r = await db._one("SELECT COUNT(DISTINCT call_id) c, COUNT(*) n FROM voice_lines "
+                      "WHERE chat_id=? AND user_id=? AND who='user' AND ts>=?", (chat_id, user_id, since))
+    return (r["c"] or 0, r["n"] or 0) if r else (0, 0)
 
 
 USD_PER_MIN = float(__import__("os").getenv("VOICE_USD_PER_MIN", "0.08"))   # 추정 (Realtime mini 음성 입·출력 + 받아쓰기, 넉넉히)
