@@ -49,6 +49,7 @@ DEFAULTS = {
     "free": "{name} 나갔네. 잘 가~ 👋",
     "girlfriend": "{name} 나갔네… 다음에 또 보자 ♡",
     "boyfriend": "{name} 나갔네. 잘 지내, 또 보자.",
+    "savage": "{name} 나갔네 ㅋㅋ 잘 가라~ 가끔 생각나면 또 와 👋",
 }
 
 register_setting("farewell_mode", "off", "퇴장 인사",

@@ -46,6 +46,7 @@ LINES = {
 
 def line(style: str, bet: int, payout: int, balance_after: int) -> str:
     """결과에 맞는 딜러 한마디 (HTML)."""
+    style = "free" if style == "savage" else style      # 맞받아치기 = 반말 딜러 (게임 결과엔 욕 안 함)
     tone = LINES[style if style in ("free", "girlfriend", "boyfriend") else "polite"]
     if payout >= bet * 10:
         kind = "jackpot"

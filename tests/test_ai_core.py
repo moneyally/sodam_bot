@@ -476,3 +476,18 @@ async def unpaid_room_gets_no_background_ai():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+@test
+async def savage_style_fights_back_but_keeps_lines():
+    """오너 요청 2026-09-29(벳블리 소통방): 소담이 욕받이가 되지 않게 — 시비 건 사람에게만 장난 욕으로 받아침, 선은 유지."""
+    from sodam.prompt import style_block
+    from sodam.styles import STYLES, resolve_style
+    assert resolve_style("맞받아치기") == resolve_style("욕쟁이") == resolve_style("센언니") == "savage"
+    g = style_block("savage")
+    for must in ("먼저 욕하지 않는다", "패드립", "협박", "다른 멤버에겐 욕하지 않는다", "장난을 멈추고"):
+        assert must in g, must
+    assert "욕설" in STYLES["free"].guide, "자유분방은 여전히 욕 없음"
+    import sodam.panels  # noqa: F401
+    from sodam import tools
+    assert "savage" in tools._BY_NAME["voice_call"].params["style"]["enum"]

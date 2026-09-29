@@ -22,6 +22,7 @@ from .. import ai_instructions, cards, hooks, llm, menu, persist, settings, tool
 from ..menu import ADMIN, OWNER, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
 from ..services import PendingInput
+from ..styles import STYLES
 from ..util import esc
 from ..voice import store
 
@@ -317,7 +318,7 @@ tools.register_tool(tools.Tool(
     "노래 틀기·1:1 전화는 아님. '여친 모드로 와 줘'·'남친 목소리로'·'비서로' 처럼 말투를 말하면 style 에 넣는다 "
     "(남친 = 남자 목소리, 나머지 = 여자 비서 소담). 말 안 하면 비움 → 부른 사람·방 말투.",
     {"action": {"type": "string", "enum": ["start", "stop"]},
-     "style": {"type": "string", "enum": ["polite", "friendly", "free", "brief", "secretary", "tsundere", "girlfriend", "boyfriend"]}},
+     "style": {"type": "string", "enum": list(STYLES)}},
     ["action"], t_voice_call, where="room"))
 
 
