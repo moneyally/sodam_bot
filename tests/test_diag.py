@@ -220,3 +220,26 @@ def update_sh_prints_failing_test_name_even_if_log_is_long():
     subprocess.run(_GIT + ["-C", str(origin), "commit", "-qam", "fail"], check=True)
     r = _run_update(clone, log)
     assert r.returncode != 0 and "FAIL flaky_thing" in r.stdout + r.stderr, (r.stdout + r.stderr)[-500:]
+
+
+@test
+async def user_route_finds_by_id_at_and_old_at_with_rooms():
+    from sodam import namehist
+    db = await world()
+    await namehist.record(db, fake_user(77777, "옛날", "oldname"))
+    await namehist.record(db, fake_user(77777, "우영미", "SAKE_LLL"))
+    await db.upsert_user(fake_user(77777, "우영미", "SAKE_LLL"), commit=True)
+    await db.touch_member(CHAT, 77777)
+    s = Server(db.path)
+    tok = diag.token_path(db.path).read_text().strip()
+    try:
+        for q in ("77777", "@sake_lll", "@oldname"):
+            st, body = await call(s, f"/v1/user?q={q}", tok)
+            p = body["people"][0]
+            assert st == 200 and p["user"]["username"] == "SAKE_LLL" and p["rooms"][0]["title"] == "벳블리 소통방", (q, body)
+            assert any(h["username"] == "oldname" for h in p["name_history"])
+        st, body = await call(s, "/v1/user?q=@nobody", tok)
+        assert st == 200 and body["found"] == 0
+        assert (await call(s, "/v1/user?q=77777"))[0] == 401
+    finally:
+        s.close()
