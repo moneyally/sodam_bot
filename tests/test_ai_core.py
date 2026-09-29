@@ -543,3 +543,41 @@ async def mirror_room_insult_adds_comeback_line_at_the_end_only_when_insulted():
     r.llm.script = [reply("ㅎㅎ")]
     await r.say(u, "소담이 병신아")
     assert "똑같이 욕으로' 설정" not in last_user(), "센스로 설정이면 줄 없음"
+
+
+@test
+async def spicy_switch_off_by_default_and_adds_block_and_tail_only_when_on():
+    """오너 요청 2026-09-29: 19금 드립 받아치기 — 방마다 켜는 스위치(기본 꺼짐), 은유 수준·노골적 X."""
+    from sodam import prompt, settings as S
+    import sodam.ai_settings  # noqa: F401
+    assert S.DEFAULTS["ai_spicy"] is False
+    assert "노골적" in prompt.SPICY_BANTER and "미성년" in prompt.SPICY_BANTER
+    r = await Room().open()
+    u = fake_user(5, "송도현")
+    await r.join(u)
+
+    def msgs():
+        return r.llm.of("chat")[-1]["messages"]
+
+    r.llm.script = [reply("ㅎㅎ")]
+    await r.say(u, "소담아 오늘 밤 모텔 갈래")
+    assert not any("19금 드립" in m["content"] for m in msgs() if m["role"] == "system" and isinstance(m["content"], str))
+    await r.db.set_setting(r.CHAT, "ai_spicy", True)
+    r.llm.script = [reply("ㅋㅋ")]
+    await r.say(u, "소담아 오늘 밤 모텔 갈래")
+    assert any("19금 드립 받아치기 켜짐" in m["content"] for m in msgs() if m["role"] == "system" and isinstance(m["content"], str))
+    last = [m for m in msgs() if m["role"] == "user"][-1]["content"]
+    assert "은유·말장난 수준 19금" in (last if isinstance(last, str) else last[0]["text"])
+
+
+@test
+async def glued_insult_after_name_counts_as_call_but_third_person_does_not():
+    """실제 사례 일루왕 '소담이개보지련아' 에 답이 없었음 (이름 뒤에 글자가 붙어 3인칭으로 봄)."""
+    from types import SimpleNamespace as NS
+    from sodam.handlers import addressed_to_bot
+    bot, msg = NS(username="sodam_ai_bot", id=1), NS(reply_to_message=None)
+    names = ("소담아", "소담이", "소담")
+    for t in ("소담이개보지련아", "소담이씨발", "소담이병신"):
+        assert addressed_to_bot(msg, t, names, bot)[0], t
+    for t in ("소담이가 틀렸네", "소담이는 왜저래", "소담스럽다", "소담이랑 놀자"):
+        assert not addressed_to_bot(msg, t, names, bot)[0], t

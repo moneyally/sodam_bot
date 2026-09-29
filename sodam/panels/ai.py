@@ -26,7 +26,7 @@ menu.register_preset("reply_max_chars", [(v, f"답변 {v}자") for v in ("200", 
 menu.register_preset("user_rate_per_min", [(v, f"분당 {v}회") for v in ("2", "3", "5")], "ai")
 
 # 🧠 기억·대화 방식 (sodam/memory.py · social.py 의 설정)
-SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_chime_in"]
+SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_chime_in", "ai_spicy"]
 for _k in SOCIAL_TOGGLES:
     menu.register_toggle(_k, "aip")
 menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
@@ -44,7 +44,9 @@ async def s_ai_social(c: PanelCtx) -> Screen:
              "• <b>먼저 끼어들기</b>: 아무도 답하지 않은 질문이나 아침 인사에 가끔 먼저 한마디해요.",
              f"  (지금: {menu.human_minutes(s['ai_chime_gap_min'])}에 한 번, 하루 최대 {s['ai_chime_daily']}번)",
              "• <b>욕 받아치기</b>: 누가 소담을 욕하면 사과하지 않고 받아쳐요. "
-             "센스로 = 욕 없이 재치로 · 똑같이 욕으로 = 그 사람만큼 장난 욕으로 (패드립·비하·협박은 안 해요)."]
+             "센스로 = 욕 없이 재치로 · 똑같이 욕으로 = 그 사람만큼 장난 욕으로 (패드립·비하·협박은 안 해요).",
+             "• <b>19금 드립 받아치기</b>(기본 꺼짐): 소담에게 야한 드립·성적인 욕을 하면 은유 수준 19금 농담으로 받아쳐요. "
+             "노골적인 묘사·다른 멤버 언급은 안 해요."]
     rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES) + [menu._preset_row(s, c.cid, "ai_comeback")]
     if s["ai_chime_in"]:
         rows += [menu._preset_row(s, c.cid, "ai_chime_gap_min"), menu._preset_row(s, c.cid, "ai_chime_daily")]

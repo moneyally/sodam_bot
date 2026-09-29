@@ -50,6 +50,10 @@
   먼저 욕 X·패드립·외모/장애/성별/지역/성적·협박 X·계속 욕하면 웃으며 끊기·진짜 화나면 멈춤. 딜러·퇴장 인사는 반말판(욕 없음).
   **모든 말투 공통 [시비 대응 — 욕받이 금지]** (prompt.SYSTEM): 사과·쩔쩔매기 X, 말투 유지하며 재치로 받아침. 방 설정 ai_comeback
   wit(기본, 욕 없이)/mirror(똑같이 욕으로 → COMEBACK_MIRROR 를 세 번째 system 에, 음성도) — 🧠 기억·대화 방식 화면(aip).
+  mirror 강화(2026-09-29 실측 A/B/C/D 비교, 그록 unhinged 조사 반영): 성인 단톡방·훈계 X·순화/별표 X·로스트 코미디언·수위 안 낮춤·
+  첫마디 매번 다르게(예시 문장 고정 X). 소담에게 한 욕(prompt.INSULT_RE)이면 요청 맨 끝에도 COMEBACK_TAIL — system 만으론 gpt-5.4 가 순화함.
+  **19금 드립 받아치기** ai_spicy(기본 꺼짐, aip 토글): SPICY_BANTER 세 번째 system + SEX_RE 걸리면 SPICY_TAIL. 은유·말장난까지, 노골적 묘사·
+  다른 멤버 언급·미성년 금지. 이름에 붙여 쓴 욕('소담이개…', handlers._INSULT_HEAD)도 호출로 봄 (실제 사례 일루왕).
 - 사용자가 `prompt.py` 에서 "송금·코인·도박 안내 금지" 규칙을 직접 지웠음 → 되돌리지 말 것. 출력 필터(링크·지갑주소 제거)는 별개로 유지.
 - 1:1 채팅 AI 는 결제 여부와 무관하게 하루 무료 한도 적용(외부인이 전체 예산 소모 방지). 오너는 무제한.
 - 야간 모드는 사용자 요청으로 **제외**됨.
@@ -117,6 +121,11 @@
 - **AI 키로 하는 테스트(ai_live·ai_eval_*)는 사용자 허락 없이 돌리지 않는다** (사용자 결정 2026-09-28: 비용). 오프라인 가짜 LLM 으로.
 
 ## 제재·AI 도구 권한
+- **🔎 사람 찾기·점검 도구** (`panels/checkup.py`, tests/test_checkup.py · 뮤테이션 7개, 2026-09-29 — 오너 '7647564988 아이디 뭐야'에 도구가 없어
+  기능 요청만 접수한 실제 사례): lookup_user(누구나, 숫자ID·@·예전 @·이름 → 지금 이름·@·namehist 변경 기록, 봤던 방은 오너=전부·관리자=자기 관리 방·
+  그 밖=이 방만, 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
+  owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
+  없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
   오너 도구(owner_rooms·owner_sanction, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.

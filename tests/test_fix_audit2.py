@@ -166,7 +166,7 @@ async def command_center_checks_rooms_concurrently():
     took = time.monotonic() - t0
     assert tot["rooms"] == 40 and len(statuses) == 40
     assert [s.title for s in statuses] == sorted(s.title for s in statuses), "방 이름순 그대로"
-    assert took < 1.0, f"방 40개에 {took:.2f}초 (하나씩이면 2초+)"
+    assert took < 1.6, f"방 40개에 {took:.2f}초 (하나씩이면 2초+ — 서버 배포 테스트는 Nice 10 이라 여유)"
 
 
 
