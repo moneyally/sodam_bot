@@ -10,7 +10,7 @@ from openai import BadRequestError
 from . import agentlog, ai_instructions, costs, lessons, memory
 from .llm import BudgetExceeded
 from .permissions import Role
-from .prompt import build_messages
+from .prompt import COMEBACK_MIRROR, build_messages
 from .security import nonce, wrap
 from .tools import READ_ONLY, ToolCtx, available, execute
 from .util import clip_mid
@@ -167,6 +167,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     except Exception:
         log.exception("ai instructions failed")
         instructions = ""
+    if ctx.settings.get("ai_comeback") == "mirror":   # 방 설정: 욕하면 똑같이 욕으로 (세 번째 system — 앞 두 개 캐시 그대로)
+        instructions = (instructions + "\n\n" + COMEBACK_MIRROR).strip()
     try:   # 🧠 관리자가 정정해 준 일하는 법 (데이터로)
         room_lessons = await lessons.for_prompt(svc.db, ctx.chat_id)
     except Exception:
