@@ -126,10 +126,13 @@
   그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
-- **📘 소담 공식 안내서** (`sodam/guide/*.md` + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 3개, 2026-09-29 —
-  벳블리 '결제하면 얼마야?'에 '가격 자료 없음'): 문서마다 front-matter title·tags·related(주제끼리 연결), 숫자는 {price}{days}{trial}{voice_min}
-  → cfg/환경값으로 채움(문서에 가격 박지 말 것). pricing·invite 주제면 그룹방에 [➕ 우리 방에 소담 추가][💳 구독하기] 버튼 카드(방마다 10분 1번).
-  입금 주소는 절대 방에 안 씀. 소담 자신에 대한 새 사실은 이 문서에 추가(`.지식` 아님).
+- **📘 소담 공식 안내서** (`sodam/guide/*.md` 18개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —
+  벳블리 '결제하면 얼마야?'에 '가격 자료 없음'): index.md = 목차. 문서마다 front-matter title·summary·tags·related·audience (한 줄 `키: 값`, 목록은 쉼표).
+  쓰는 법: 한 질문 = 한 문서, 맨 위 `## 한 줄 답`(해요체), 버튼은 코드의 화면 글자 그대로 `[💳 구독하기]`(테스트가 코드에 있는지 검사),
+  `## 소담이 하지 말 것`, 끝에 `## 관련 문서`(사람용 링크 — AI 에겐 빼고 related 로 줌). 본문 1,500자 안. 태그는 문서끼리 겹치지 않게.
+  숫자는 {price}{days}{trial}{free_ai}{invoice_min}{voice_min}{call_min} → 설정값(문서에 '30 USDT' 직접 쓰면 테스트 실패). 입금 주소·링크 금지.
+  기능이 바뀌면 해당 문서도 같이 고치고 EVAL(질문→문서 평가표)에 실제 질문 추가. pricing·payment·invite 면 방에 버튼 카드(방마다 10분 1번).
+  소담 자신에 대한 새 사실은 이 문서에 추가(`.지식` 아님).
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
   오너 도구(owner_rooms·owner_sanction, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
