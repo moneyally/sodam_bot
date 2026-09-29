@@ -368,7 +368,38 @@ async def c_stop_game(ctx: CmdCtx) -> None:
     await ctx.svc.games.stop(ctx.chat_id)
 
 
+STYLE_EXAMPLES = {   # .말투 도움말 — 한 줄 맛보기 (AI 없음)
+    "polite": "안녕하세요 대표님, 무엇을 도와드릴까요?",
+    "friendly": "대표님 오셨어요? 오늘도 화이팅이에요 😊",
+    "free": "야 대표야, 오늘 뭐 했어? ㅋㅋ",
+    "savage": "시비 걸면 쫄지 않고 반말로 더 웃기게 받아침 (욕엔 장난 욕까지)",
+    "brief": "핵심만 한두 문장으로.",
+    "secretary": "네 대표님, 결론부터 말씀드리겠습니다.",
+    "tsundere": "딱히 대표님을 위해서 알려주는 건 아니에요…",
+    "girlfriend": "자기 오늘 하루 어땠어? 밥은 챙겨 먹었지? ♡",
+    "boyfriend": "오늘 고생 많았지? 힘든 일 있으면 나한테 말해.",
+}
+HELP_WORDS = ("도움말", "도움", "help", "목록", "설명", "종류", "?")
+
+
+async def c_style_help(ctx: CmdCtx) -> None:
+    from .settings import render
+    s = await ctx.svc.db.get_settings(ctx.chat_id)
+    lines = ["🎭 <b>소담 말투</b> — 나한테만: <code>.말투 이름</code> · 되돌리기: <code>.말투 기본</code>", ""]
+    for key, st in STYLES.items():
+        lines.append(f"• <b>{st.label}</b> — {STYLE_EXAMPLES.get(key, '')}")
+    lines += ["", "🏠 <b>이 방 설정</b> (관리자)",
+              f"• 방 기본 말투: {render('style', s.get('style'))} → <code>.설정변경 style 맞받아치기</code>",
+              f"• 욕 받아치기: {render('ai_comeback', s.get('ai_comeback'))} → <code>.설정변경 ai_comeback 똑같이</code> / <code>센스</code>",
+              f"• 19금 드립 받아치기: {render('ai_spicy', s.get('ai_spicy'))} → <code>.설정변경 ai_spicy on</code> / <code>off</code>",
+              "말로 해도 돼요: '소담아 욕 받아치기 똑같이로 바꿔'"]
+    await ctx.reply("\n".join(lines))
+
+
 async def c_style(ctx: CmdCtx) -> None:
+    if ctx.args and (ctx.args[0].lower() in HELP_WORDS or "도움" in ctx.argstr):
+        await c_style_help(ctx)
+        return
     if not ctx.args:
         m = await ctx.svc.db.get_member(ctx.chat_id, ctx.user.id)
         current = STYLES.get((m and m["style"]) or "")
@@ -1128,6 +1159,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘 축구|팀 이름|결과 이름|구독 이름|해제 이름|목록]",
         help="경기 일정·결과·알림", group="스포츠"),
+    Cmd(("말투도움말", "말투설명", "말투목록"), c_style_help, help="말투 종류·예시와 방 모드(욕 받아치기·19금)"),
     Cmd(("말투", "style"), c_style, usage="[" + style_list() + "|기본]", help="나에게 쓸 봇 말투", dm_ok=True),
     Cmd(("호칭", "callme"), c_nickname, usage="부를 이름", help="봇이 부를 호칭", dm_ok=True),
     Cmd(("봇정보", "about"), c_about, help="봇 소개", dm_ok=True),
