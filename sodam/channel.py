@@ -439,7 +439,8 @@ async def snapshot(svc: Services, bot) -> None:
             log.exception("mtproto participants %s failed", cid)
             users = None
         if users is not None:
-            ids = {u.id if hasattr(u, "id") else int(u) for u in users}
+            # mtproto.participants 는 dict 목록 ({id, …}) — dict 를 int() 해서 30초마다 tick 이 죽던 것 (2026-09-30 서버 로그)
+            ids = {int(u["id"]) if isinstance(u, dict) else u.id if hasattr(u, "id") else int(u) for u in users}
             prev = {x["user_id"] for x in await svc.db._all("SELECT user_id FROM channel_subs WHERE chat_id=?", (cid,))}
             joined, left = (len(ids - prev), len(prev - ids)) if prev else (None, None)
         stats = (cid, day, n, joined, left)

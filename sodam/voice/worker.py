@@ -515,6 +515,7 @@ async def main() -> None:
     from ..config import load_config
     from ..db import DB
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)   # 요청 줄에 봇 토큰이 든 URL 이 찍힘 (본체와 같게)
     cfg = load_config()
     db = DB(cfg.db_path)
     await db.open()
