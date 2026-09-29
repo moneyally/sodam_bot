@@ -469,7 +469,7 @@
   Caddyfile·ufw 80/443·유닛). 토큰 data/diag.token(0600) 을 봇이 **오너 1:1 로만**(protect_content, 지문 바뀔 때 1번, 5분 job).
   오너는 클로드 환경변수 `SODAM_DIAG_TOKEN` 에 넣음 → 클로드는 `python tools/diag.py health|rooms|settings|messages|agent_runs|voice|modlog|counters|tables|logs chat=벳블리 …`.
   틀린 토큰 IP당 10분 20번·전체 분당 120번, 조회 기록 data/diag_access.log, 비밀값 모양 가림. 오너 메인 🔌(m:dg) 끄기·토큰 바꾸기.
-  **update.sh 는 돌고 있던 옛 스크립트가 끝까지 실행** → 새 setup 단계는 그 다음 배포(아무 커밋)부터 돈다.
+  **update.sh 는 돌고 있던 옛 스크립트가 끝까지 실행** → 새 setup 단계는 그 다음 배포(아무 커밋)부터 돈다 (창구 첫 설치 = PR26 다음 커밋).
 - 서버 로그는 이제 원격 점검 창구로 (없으면 사용자가 `journalctl -u sodam -n 100` 을 보여주거나, 봇의 오너 오류 알림으로).
 
 ## 클라우드 세션 서버 실행
