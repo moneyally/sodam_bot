@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:wfw="http://wellformedweb.org/CommentAPI/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/" xmlns:slash="http://purl.org/rss/1.0/modules/slash/" xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  <channel>
+    <title>CoinDesk: Bitcoin, Ethereum, Crypto News and Price Data</title>
+    <link>https://www.coindesk.com/</link>
+    <atom:link rel="self" type="application/rss+xml" href="https://www.coindesk.com/arc/outboundfeeds/rss"/>
+    <atom:link rel="hub" href="true"/>
+    <description>Leader in cryptocurrency, Bitcoin, Ethereum, XRP, blockchain, DeFi, digital finance and Web 3.0 news with analysis, video and live price updates.</description>
+    <lastBuildDate>Tue, 29 Sep 2026 17:04:12 +0000</lastBuildDate>
+    <language>en-US</language>
+    <copyright>© 2026 CoinDesk, Inc.</copyright>
+    <generator>CoinDesk</generator>
+    <ttl>5</ttl>
+    <sy:updatePeriod>hourly</sy:updatePeriod>
+    <sy:updateFrequency>1</sy:updateFrequency>
+    <image>
+      <url>https://downloads.coindesk.com/arc/failsafe/feeds/coindesk-feed-logo.png</url>
+      <title>CoinDesk: Bitcoin, Ethereum, Crypto News and Price Data</title>
+      <link>https://www.coindesk.com/</link>
+    </image>
+    <item>
+      <title><![CDATA[Ethereum users get another way to pay privately as zk.money returns after three years]]></title>
+      <link>https://www.coindesk.com/tech/2026/09/29/embargo-12-et-ethereum-users-get-another-way-to-pay-privately-as-zk-money-returns-after-three-years</link>
+      
+      <guid isPermaLink="false">d477854d-f801-4054-bd25-323ac968793e</guid>
+      <pubDate>Tue, 29 Sep 2026 16:00:00 +0000</pubDate>
+      
+      <dc:creator>Shaurya Malwa</dc:creator>
+      <content:encoded/>
+      <dc:description/>
+      <category domain="https://www.coindesk.com/tech"><![CDATA[Tech]]></category>
+      <category domain="tag"><![CDATA[Ethereum News]]></category>
+      <category domain="https://www.coindesk.com/">News</category>
+    </item>
+<item>
+      <title><![CDATA[Democrats killed the Clarity Act]]></title>
+      <link>https://www.coindesk.com/opinion/2026/09/29/democrats-killed-the-clarity-act</link>
+      
+      <guid isPermaLink="false">4c95ef4f-466c-4d15-ac8b-c70c02e2bb86</guid>
+      <pubDate>Tue, 29 Sep 2026 14:08:18 +0000</pubDate>
+      
+      <dc:creator>Tim Scott</dc:creator>
+      <content:encoded/>
+      <dc:description/>
+      <category domain="https://www.coindesk.com/opinion"><![CDATA[Opinion]]></category>
+      <category domain="https://www.coindesk.com/">Opinion</category>
+    </item>
+<item>
+      <title><![CDATA[Bitcoin beats gold, surge to $100,000 in play]]></title>
+      <link>https://www.coindesk.com/daybook-us/2026/09/29/bitcoin-outperforms-gold-usd100-000-surge-in-play</link>
+      
+      <guid isPermaLink="false">e28854fd-f85d-40bb-a507-d9451dd19eaf</guid>
+      <pubDate>Tue, 29 Sep 2026 11:34:55 +0000</pubDate>
+      
+      <dc:creator>Omkar Godbole</dc:creator>
+      <content:encoded/>
+      <dc:description/>
+      <category domain="https://www.coindesk.com/daybook-us"><![CDATA[Crypto Daybook Americas]]></category>
+      <category domain="tag"><![CDATA[Crypto Daybook Americas]]></category>
+      <category domain="https://www.coindesk.com/">News</category>
+    </item>
+<item>
+      <title><![CDATA[Zcash developers begin moving Tachyon code into faster private-payment software]]></title>
+      <link>https://www.coindesk.com/tech/2026/09/29/zcash-s-faster-private-payment-code-is-being-rebuilt-for-its-bigger-scaling-plan</link>
+      
+      <guid isPermaLink="false">ee9e71e1-0470-411b-a814-9bbcfa41e826</guid>
+      <pubDate>Tue, 29 Sep 2026 11:15:30 +0000</pubDate>
+      
+      <dc:creator>Shaurya Malwa</dc:creator>
+      <content:encoded/>
+      <dc:description/>
+      <category domain="https://www.coindesk.com/tech"><![CDATA[Tech]]></category>
+      <category domain="https://www.coindesk.com/">News</category>
+    </item>
+  </channel>
+</rss>
