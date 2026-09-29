@@ -11,6 +11,25 @@ from telegram.error import NetworkError, TelegramError
 
 esc = html.escape
 
+# 움직이는 이모지(custom_emoji)·굵게 같은 '서식' — 이게 있으면 글자만(msg.text) 저장하면 사라짐 → 텔레그램 HTML 로 보관.
+# 봇이 움직이는 이모지를 보내려면 봇 주인이 텔레그램 프리미엄이거나(방·1:1 직접 발송) Fragment 추가 아이디 필요 (Bot API).
+RICH_ENTITIES = frozenset({"custom_emoji", "bold", "italic", "underline", "strikethrough", "spoiler", "code", "pre",
+                           "text_link", "blockquote", "expandable_blockquote"})
+_TAG = re.compile(r"<[^>]+>")
+
+
+def rich_html(msg) -> str | None:
+    """메시지 글·설명에 서식(움직이는 이모지 등)이 있으면 그 텔레그램 HTML, 없으면 None (그냥 글자)."""
+    ents = (msg.entities if msg.text else msg.caption_entities) or ()
+    if not any(e.type in RICH_ENTITIES for e in ents):
+        return None
+    return msg.text_html if msg.text else msg.caption_html
+
+
+def html_plain(s: str) -> str:
+    """텔레그램 HTML → 보이는 글자 (길이 재기·목록 표시용). 움직이는 이모지는 대신 보이는 기본 이모지로."""
+    return html.unescape(_TAG.sub("", s or ""))
+
 
 def display_name(first: str | None, last: str | None = None, username: str | None = None) -> str:
     name = " ".join(x for x in (first, last) if x).strip()

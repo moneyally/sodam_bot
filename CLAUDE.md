@@ -153,6 +153,10 @@
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
 - 예약 시각: 매일 HH:MM · 매주 월,수 HH:MM · 평일/주말 HH:MM (kind weekly, at_time '월수 10:00', `announce.is_due` 가 요일 확인) ·
   반복 N분 · N분 뒤 · 오늘/내일/MM-DD HH:MM. AI 스킬 joins = 입장·퇴장 통계(AI 없음, 지난 실행 이후·최대 31일).
+- **움직이는 이모지·서식 보관** (tests/test_rich_emoji.py · 뮤테이션 11개, 2026-09-30 — 예약공지에 넣은 움직이는 이모지가 보통 이모지로 올라감):
+  msg.text 만 저장하면 custom_emoji 엔티티가 버려짐 → `util.rich_html(msg)` 로 텔레그램 HTML(<tg-emoji>) 보관, schedules.fmt='html'
+  (예약공지 제목·내용·⏰ 알람·`.공지`). 목록·요약엔 `util.html_plain`. HTML 은 태그 중간을 자르지 말 것(길이는 보이는 글자로).
+  봇이 움직이는 이모지를 쓰려면 봇 주인 텔레그램 프리미엄(또는 Fragment 아이디) — 거절(BadRequest)되면 글자로 다시 보냄.
 - 방에 올리는 확인 카드(schedule_task·alert_rule)는 `menu.lasting_token` 으로 DB(menu_tokens)에도 저장 — 봇 재시작(배포) 뒤에도 30분 유효
   (실제 사례: OTC 방 예약 카드 → 1분 뒤 배포 재시작 → [✅ 예약] 만료). 예약 deliver room/me(만든 관리자 1:1), action post=정해진 글.
 - 메뉴 버튼은 1:1 전용이지만 방에 올리는 확인 카드(`m:k:<토큰>`)는 방에서 눌림 (2026-09-27 전엔 이것까지 막혀 방 예약·알림 카드가 안 먹혔음 — 테스트는 방에서 누를 것).
