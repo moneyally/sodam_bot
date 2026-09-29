@@ -183,10 +183,11 @@ def _fake_repo(tests_pass: bool, new_commit: bool = True) -> tuple[Path, Path]:
     return clone, log
 
 
-def _run_update(clone: Path, log: Path) -> subprocess.CompletedProcess:
+def _run_update(clone: Path, log: Path, **extra: str) -> subprocess.CompletedProcess:
     base = log.parent
     env = {**os.environ, "PY": PY, "SYSTEMCTL": str(base / "systemctl"), "JOURNALCTL": str(base / "journalctl"),
-           "RUN_AS": "", "START_WAIT": "1", "LOCK": str(base / "update.lock"), "TMPDIR": str(base), "PIP_NO_INDEX": "1"}
+           "RUN_AS": "", "START_WAIT": "1", "LOCK": str(base / "update.lock"), "TMPDIR": str(base), "PIP_NO_INDEX": "1",
+           **extra}
     return subprocess.run(["bash", str(clone / "deploy" / "update.sh")], env=env, capture_output=True, text=True,
                           timeout=120)
 

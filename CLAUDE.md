@@ -420,17 +420,21 @@
 ## 📞 음성채팅 (`sodam/voice/`, `panels/voice.py`, tests/test_voice.py · 뮤테이션 22개)
 - **통화 안정성 (2026-09-30, '렉 때문에 끊겼어요' 조사 — 운영 통화는 1건 reason=idle 뿐)**: Realtime 오류는 무해한 것
   (이미 답하는 중·취소할 답 없음·빈 commit·truncate audio_end_ms 범위, `bridge.benign`)은 세기만, 나머지 60초 안 5번이면 error:realtime ·
-  도구 결과 뒤 response.create 는 답하는 중이면 response.done 뒤로(`_reply`) · idle 은 누가 말하는 중(speech_started~stopped)·
-  들어온 소리(100ms RMS≥600)·소담 재생 중엔 안 셈 (상한은 max_sec 15분) · 재생 ms 는 답(item)마다 → truncate 가 답별 정확한 ms ·
-  OpenAI 연결이 통화 중 끊기면 **1번 다시 연결**(session.update 다시, 대화 맥락은 새로) → 또 끊기면 ws_closed.
+  도구 결과 뒤 response.create 는 답하는 중이거나 보낸 create 의 response.created 를 기다리는 중(_pending, created·error·10초에 풂)이면
+  response.done 뒤로(`_reply`/`_create`) · idle 은 누가 말하는 중(speech_started~stopped, 단 SPEAK_MAX 120초까지)·
+  들어온 소리(100ms RMS≥600, 단 말 이벤트·받아쓰기 없이 LOUD_MAX 60초까지 — 음악봇·켜 둔 마이크로 15분 꽉 차던 것)·소담 재생 중엔 안 셈
+  (상한은 max_sec 15분) · 재생 ms 는 답(item)마다 → truncate 가 답별 정확한 ms ·
+  OpenAI 연결이 통화 중 끊기면 **1번 다시 연결**(session.update 다시, 대화 맥락은 새로, 말하는 중 표시·idle 시계 초기화) → 또 끊기면 ws_closed.
   끝난 이유: idle·time·bye·admin·chat_closed(음성채팅 닫힘, 예전 closed)·kicked·ws_closed·error:realtime·error:play·restart·logout.
   **계측** voice_calls.stats(JSON): frames_in/out·send_dropped·late_ticks·max_late_ms·resyncs·loop_lag_max/p99_ms(0.1초 표본)·
   rt_errors{코드:수}·interrupts·first_audio_ms(말 끝→첫 소리)·reconnects·cpu_sec·steal_ticks·loadavg → `diag voice`(chat 없으면 모든 방 최근 통화) ·
   `diag health` voice_active_calls·loadavg. 조각마다 로그 없음, 끝날 때 한 줄.
   배포: sodam-voice CPUWeight=1000·Nice=-5, autoupdate CPUWeight=20·CPUQuota=100%·IOSchedulingClass=idle · update.sh 가 **통화 중이면
-  테스트를 다음 타이머로**(voice_calls end_ts NULL·20분 안, 처음 미룬 뒤 최대 60분 data/update.postponed, --force 는 바로).
+  테스트를 다음 타이머로**(voice_calls end_ts NULL·20분 안, 처음 미룬 뒤 최대 60분 data/update.postponed, --force 는 바로) ·
+  테스트 중 시작된 통화: voice_setup 이 재시작 바로 전에 다시 확인 → 통화 중이면 건너뛰고 data/voice.restart_pending →
+  새 커밋 없는 다음 타이머에서 통화 없으면 재시작 (테스트용 VOICE_SETUP=1).
   **라이브 통화로만 확인할 것**: 재생 여유(프리버퍼)·20ms 조각(ntgcalls 가 받는지), 에코·음악봇 끼어들기(threshold·semantic_vad·봇 ssrc 빼기),
-  ntgcalls GIL 교착(github.com/pytgcalls/ntgcalls/issues/62 — record 중 무거운 I/O), 통화 중 코드 바뀐 배포 = voice 재시작(아직 안 미룸).
+  ntgcalls GIL 교착(github.com/pytgcalls/ntgcalls/issues/62 — record 중 무거운 I/O).
 - 봇 계정은 통화(phone.*) 불가 → 음악봇(오픈소스 YukkiMusicBot 구조 참고, 코드는 새로)처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.

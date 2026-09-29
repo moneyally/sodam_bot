@@ -1181,12 +1181,13 @@ async def tool_result_waits_for_the_active_response_then_asks_once():
     assert conn.named("conversation.item.create") and not conn.named("response.create"), "답하는 중인데 또 response.create"
     await b.on_event(SimpleNamespace(type="response.done", response=None))
     assert len(conn.named("response.create")) == 1, "답 끝난 뒤 한 번 말하게"
+    await b.on_event(SimpleNamespace(type="response.created"))       # 그 답이 시작·끝남
     await b.on_event(SimpleNamespace(type="response.done", response=None))
     assert len(conn.named("response.create")) == 1
     await b._call_tool("c2", "web_search", "{}")                     # 답하는 중이 아니면 바로
     assert len(conn.named("response.create")) == 2
     b.reply = "name"                                                   # '소담' 부른 말도 같은 규칙
-    await b.on_event(SimpleNamespace(type="response.created"))
+    await b.on_event(SimpleNamespace(type="response.created"))       # (c2 뒤 보낸 create 의 답)
     await b.on_event(SimpleNamespace(type="conversation.item.input_audio_transcription.completed", transcript="소담 뭐해",
                                      item_id="u"))
     assert len(conn.named("response.create")) == 2
@@ -1312,6 +1313,103 @@ async def failed_reconnect_ends_call_as_ws_closed():
 
 
 @test
+async def reconnect_mid_speech_clears_speaking_so_idle_still_ends_the_call():
+    """감사 2026-09-30: 말하는 중(speech_started 뒤) OpenAI 연결이 끊기면 speech_stopped 는 영영 안 옴
+    → 예전엔 _speaking 이 True 로 남아 idle 이 안 와서 통화가 15분 꽉 참 (요금)."""
+    clock = [0.0]
+    b, conns, _ = _multi_bridge(1, idle_sec=60, max_sec=900)
+    b = _still(b, clock)
+    b._t0 = b._last_voice = 0.0
+    await b.on_event(SimpleNamespace(type="input_audio_buffer.speech_started", item_id="u1"))
+    clock[0] = 10.0
+    assert await b._reconnect() and b.conn is conns[0]
+    assert not b._speaking and b._energy == {} and b._last_voice == 10.0
+    clock[0] = 69.0                                                   # 다시 연결한 때부터 셈 (바로 끊지 않음)
+    assert not await _loop_once(b._watch, b), "다시 연결 직후 idle 로 끊음"
+    clock[0] = 71.0
+    assert await _loop_once(b._watch, b) and b.result.reason == "idle", "다시 연결 뒤 조용한데 안 끝남"
+
+
+async def _minutes_until_idle(b, clock, events=None, until_sec=900) -> int | None:
+    """1초마다 큰 소리 100 ms × 10 (음악·사람 소리) → idle 로 끝난 초 (안 끝나면 None). events(sec) 로 말 이벤트."""
+    for sec in range(1, until_sec):
+        clock[0] = float(sec)
+        if events:
+            for ev in events(sec):
+                await b.on_event(ev)
+        for _ in range(10):
+            b.feed([tone(10)])
+        if await _loop_once(b._watch, b):
+            return sec if b.result.reason == "idle" else None
+    return None
+
+
+@test
+async def music_or_open_mic_does_not_keep_the_call_open_for_15_minutes():
+    """감사 2026-09-30: 음악봇·켜 둔 마이크 = 100 ms 마다 큰 소리 + VAD 가 speech_stopped 를 안 보냄
+    → 예전엔 _last_voice 가 계속 새로워지고 _speaking 도 True 라 15분 내내 통화·받아쓰기 요금."""
+    clock = [0.0]
+    b = _still(make_bridge(idle_sec=60, max_sec=900)[0], clock)       # 음악 시작 → speech_started 한 번, 그 뒤 계속 큰 소리
+    b._t0 = b._last_voice = 0.0
+    await b.on_event(SimpleNamespace(type="input_audio_buffer.speech_started", item_id="m"))
+    sec = await _minutes_until_idle(b, clock)
+    assert sec is not None and sec <= 200, f"음악이 계속 나오는 통화가 안 끝남 (idle={sec})"
+
+    b = _still(make_bridge(idle_sec=60, max_sec=900)[0], clock)       # VAD 이벤트 없이 큰 소리만 (켜 둔 마이크 잡음)
+    b._t0 = b._last_voice = 0.0
+    sec = await _minutes_until_idle(b, clock)
+    assert sec is not None and sec <= 200, f"잡음만 계속인 통화가 안 끝남 (idle={sec})"
+
+    b = _still(make_bridge(idle_sec=60, max_sec=900)[0], clock)       # 진짜 대화: 20초마다 말하고 받아쓰기 → 안 끊음
+
+    def talk(sec):
+        if sec % 20 == 1:
+            yield SimpleNamespace(type="input_audio_buffer.speech_started", item_id=f"u{sec}")
+        if sec % 20 == 6:
+            yield SimpleNamespace(type="input_audio_buffer.speech_stopped", item_id=f"u{sec - 5}")
+            yield SimpleNamespace(type="conversation.item.input_audio_transcription.completed", transcript="응 그래",
+                                  item_id=f"u{sec - 5}")
+    b._t0 = b._last_voice = 0.0
+    assert await _minutes_until_idle(b, clock, talk, until_sec=600) is None, "진짜로 대화 중인데 idle 로 끊음"
+
+
+@test
+async def reply_right_after_call_word_create_waits_instead_of_double_create():
+    """감사 2026-09-30: '소담' 부른 말로 response.create 를 보낸 직후(response.created 전) 도구 결과가 오면
+    두 번째 create → conversation_already_has_active_response(무해로 무시) → 도구 결과를 영영 말 안 함."""
+    async def search(args):
+        return "맑음"
+    clock = [0.0]
+    b = _still(make_bridge(reply="name")[0], clock)
+    b.tools = {"web_search": search}
+    conn = b.conn
+    said = SimpleNamespace(type="conversation.item.input_audio_transcription.completed", transcript="소담 날씨 알려줘",
+                           item_id="u1")
+    await b.on_event(said)
+    assert len(conn.named("response.create")) == 1
+    await b._call_tool("c1", "web_search", '{"query": "날씨"}')        # created 오기 전에 도구 결과
+    assert len(conn.named("response.create")) == 1, "created 전에 두 번째 response.create"
+    await b.on_event(SimpleNamespace(type="response.created"))
+    assert len(conn.named("response.create")) == 1
+    await b.on_event(SimpleNamespace(type="response.done", response=None))
+    assert len(conn.named("response.create")) == 2, "답 끝난 뒤 도구 결과를 말하게"
+
+    b = _still(make_bridge(reply="name")[0], clock)                   # 보낸 create 가 오류로 거절 → 기다림을 풂
+    b.tools = {"web_search": search}
+    await b.on_event(said)
+    await b.on_event(_err("conversation_already_has_active_response", "Conversation already has an active response"))
+    await b._call_tool("c2", "web_search", "{}")
+    assert len(b.conn.named("response.create")) == 2, "오류 뒤에도 기다림이 남아 영영 조용함"
+
+    b = _still(make_bridge(reply="name")[0], clock)                   # created·오류 둘 다 안 옴 → 10초 뒤 잊음
+    b.tools = {"web_search": search}
+    await b.on_event(said)
+    clock[0] += 11
+    await b._call_tool("c3", "web_search", "{}")
+    assert len(b.conn.named("response.create")) == 2
+
+
+@test
 async def call_stats_are_measured_and_saved_on_the_call_row():
     import json
 
@@ -1413,3 +1511,66 @@ def update_sh_postpones_tests_during_a_call_but_not_forever():
         r = _run_update(clone, log)
         assert r.returncode == 0 and "restart sodam" in log.read_text(), (open_call, r.stdout + r.stderr)
         assert not (clone / "data" / "update.postponed").exists()
+
+
+def _voice_commit(clone, call_during_tests: bool):
+    """원격에 음성 파일이 바뀐 새 커밋. call_during_tests 면 그 커밋의 테스트(약 20분) 도중 통화가 시작됨 (DB 에 안 끝난 통화)."""
+    import subprocess
+
+    from test_fix_ops import _GIT
+    origin = clone.parent / "origin"
+    (origin / "sodam" / "voice").mkdir(parents=True, exist_ok=True)
+    (origin / "sodam" / "voice" / "bridge.py").write_text("# 바뀐 음성 코드\n")
+    (origin / "deploy" / "sodam-voice.service").write_text("[Service]\nExecStart=/bin/true\n")
+    (origin / "requirements-voice.txt").write_text("")
+    body = "import sys\n"
+    if call_during_tests:
+        body = (f"import os, sqlite3, sys, time\nos.makedirs({str(clone / 'data')!r}, exist_ok=True)\n"
+                f"c = sqlite3.connect({str(clone / 'data' / 'sodam.db')!r})\n"
+                "c.execute('CREATE TABLE IF NOT EXISTS voice_calls (id INTEGER PRIMARY KEY, chat_id INTEGER, "
+                "start_ts INTEGER, end_ts INTEGER)')\n"
+                "c.execute('INSERT INTO voice_calls(chat_id, start_ts, end_ts) VALUES(1, ?, NULL)', (int(time.time()),))\n"
+                "c.commit()\n")
+    (origin / "tests" / "run_all.py").write_text(body + "sys.exit(0)\n")
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "voice"], check=True)
+
+
+@test
+def update_sh_does_not_restart_voice_if_a_call_started_during_tests():
+    """감사 2026-09-30: 통화 확인은 테스트(약 20분) 전에만 → 테스트 중 시작된 통화가 음성 담당 재시작으로 끊김.
+    재시작 바로 전에 다시 확인 → 통화 중이면 건너뛰고 data/voice.restart_pending → 새 커밋 없는 다음 타이머에서 통화 끝나면 재시작."""
+    import sqlite3
+
+    from test_fix_ops import _fake_repo, _run_update
+
+    def restarts_voice(log):
+        return log.exists() and any(line.strip() == "restart sodam-voice" for line in log.read_text().splitlines())
+
+    clone, log = _fake_repo(tests_pass=True)                           # 대조: 통화 없으면 바로 음성 담당도 재시작
+    (log.parent / "start_ok").write_text("")
+    _voice_commit(clone, call_during_tests=False)
+    r = _run_update(clone, log, VOICE_SETUP="1", UNIT_DIR=str(log.parent))
+    assert r.returncode == 0 and restarts_voice(log), r.stdout + r.stderr + log.read_text()
+    assert not (clone / "data" / "voice.restart_pending").exists()
+
+    clone, log = _fake_repo(tests_pass=True)
+    (log.parent / "start_ok").write_text("")
+    _voice_commit(clone, call_during_tests=True)
+    env = {"VOICE_SETUP": "1", "UNIT_DIR": str(log.parent)}
+    r = _run_update(clone, log, **env)
+    pending = clone / "data" / "voice.restart_pending"
+    assert r.returncode == 0 and "restart sodam" in log.read_text(), r.stdout + r.stderr   # 본체는 새 버전으로
+    assert not restarts_voice(log), "테스트 중 시작된 통화를 음성 담당 재시작으로 끊음"
+    assert pending.exists() and "통화 중" in r.stdout, r.stdout
+
+    r = _run_update(clone, log, **env)                                 # 새 커밋 없음 + 아직 통화 중 → 또 미룸
+    assert r.returncode == 0 and not restarts_voice(log) and pending.exists(), r.stdout + r.stderr
+
+    c = sqlite3.connect(clone / "data" / "sodam.db")                  # 통화 끝남 → 다음 타이머가 재시작
+    c.execute("UPDATE voice_calls SET end_ts=?", (int(time.time()),))
+    c.commit()
+    c.close()
+    r = _run_update(clone, log, **env)
+    assert r.returncode == 0 and restarts_voice(log), r.stdout + r.stderr + log.read_text()
+    assert not pending.exists()
