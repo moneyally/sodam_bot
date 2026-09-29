@@ -235,6 +235,11 @@ MEDIA = SimpleNamespace(Device=SimpleNamespace(MICROPHONE="mic", CAMERA="cam"), 
                         RecordStream=lambda a, p: ("record", a, p))
 
 
+import sodam.voice.worker as _W
+VIDEO_DEFAULT = _W.VIDEO          # 기본값(소리만) — 아래 영상 칸 시험은 켜고 돌림
+_W.VIDEO = True
+
+
 async def make_worker(need_pw=False):
     db = await make_db()
     d = tempfile.mkdtemp()
@@ -477,7 +482,9 @@ async def owner_api_step_then_phone():
     db, svc, bot = await world()
     svc.perms.owner_ids = {7}
     c = PanelCtx(svc, bot, 7, 0, [])
-    s = await P.r_login(c)
+    s = await P.r_login(c)                                     # 기본: 바로 전화번호 (키 단계 없음)
+    assert svc.inputs[7].kind == "vcp" and "m:vcla" in str(s.kb) and "my.telegram.org" not in s.text
+    s = await P.r_login_api(c)                                 # 고급: 전용 키부터
     assert "my.telegram.org" in s.text and svc.inputs[7].kind == "vcai"
     m = FakeMsg(7, fake_user(7), "1234 short")
     ok, _ = await P.i_api(c, m)
@@ -1020,3 +1027,9 @@ async def refusal_is_posted_verbatim_logged_and_owner_sees_cause():
     c2 = ctx(svc, bot, 5, Role.MEMBER)
     await P.t_voice_call(c2, {"action": "start"})
     assert "관리자만" in bot.named("send_message")[-1][2] and "🔧" not in bot.named("send_message")[-1][2]
+
+
+
+@test
+def voice_only_by_default():
+    assert VIDEO_DEFAULT is False, "오너 결정: 기본은 소리만 (영상 칸 사진은 VOICE_VIDEO=1)"

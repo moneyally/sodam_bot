@@ -394,7 +394,8 @@
   하루 AI 예산 counters 에 더함 → 예산 다 차면 못 부름.
 - **실제 통화 확인은 VPS 에서만** (컨테이너는 UDP·MTProto 막힘). 테스트는 가짜 Realtime·py-tgcalls.
 - 도우미 계정 = **@Sodam_bot2** (사람 계정, 2026-09-29 오너가 만듦). 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
-  영상 칸 = 도우미 프사 I420 한 장(video.py, 로그인 때 1번 변환·1fps 재전송, 실패면 소리만). 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
+  **기본 소리만**(오너 결정 2026-09-29, VOICE_VIDEO=1 이면 영상 칸에 도우미 프사 I420 — video.py). 오너 연결은 **전화번호 → 코드** 두 단계
+  (서버 MTPROTO 키 사용, 전용 키는 [🔑 고급] m:vcla). 멜론봇과 같음: 오너 한 번 로그인 → 방 관리자는 권한만 주고 '소담아 음성방 들어와'. 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
   스킬 `.claude/skills/telegram-voice-assistant/SKILL.md`. 봇 계정으로 음성채팅 제한을 우회·탐색하지 않음 (정책·토큰 위험).
 - 말투별 목소리(voice_setup): 부른 사람 .말투 > 방 기본 말투, AI 도구 style 인자('여친 모드로 와 줘'). 남친 = 남자 캐릭터·voice_male(기본 cedar),
   나머지 = 여자 비서 소담·voice_female(기본 marin). 🎙 화면에서 10개 중 선택(다음 통화부터). 한 답 max_output_tokens 400 + '최대 2문장'.
