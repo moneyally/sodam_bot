@@ -15,7 +15,6 @@ from .permissions import Role, may, no_right_text
 from .services import Services
 from .security import normalize_domain
 from .settings import DEFAULTS, LABELS, coerce, render
-from .sports import SportsError
 from .styles import STYLES, resolve_style, style_list
 from .games import GAME_LIST
 from .ai_settings import ROOM_TOKENS_MAX
@@ -426,43 +425,9 @@ async def c_nickname(ctx: CmdCtx) -> None:
 
 
 async def c_sports(ctx: CmdCtx) -> None:
-    sp, db = ctx.svc.sports, ctx.svc.db
-    sub = ctx.args[0] if ctx.args else "오늘"
-    rest = " ".join(ctx.args[1:])
-    try:
-        if sub in ("오늘", "today"):
-            await ctx.reply(await sp.today_text(rest or "축구"))
-        elif sub in ("팀", "다음", "next"):
-            await ctx.reply(await sp.team_text(rest, "next") if rest else "사용법: <code>.스포츠 팀 Tottenham</code>")
-        elif sub in ("결과", "last"):
-            await ctx.reply(await sp.team_text(rest, "last") if rest else "사용법: <code>.스포츠 결과 Tottenham</code>")
-        elif sub in ("구독", "알림", "sub"):
-            if ctx.role < Role.ADMIN:
-                await ctx.reply("알림 구독은 관리자만 설정할 수 있어요.")
-                return
-            team = await sp.find_team(rest) if rest else None
-            if not team:
-                await ctx.reply("팀을 못 찾았어요. 영어 팀명으로 해주세요 (예: <code>.스포츠 구독 Tottenham</code>)")
-                return
-            await db.set_sports_sub(ctx.chat_id, team["idTeam"], team["strTeam"], True)
-            await ctx.reply(f"🔔 {esc(team['strTeam'])} 경기 시작 전·결과 알림을 켰어요.")
-        elif sub in ("해제", "unsub"):
-            if ctx.role < Role.ADMIN:
-                await ctx.reply("알림 해제는 관리자만 할 수 있어요.")
-                return
-            for s in await db.sports_subs(ctx.chat_id):
-                if s["name"].lower() == rest.lower():
-                    await db.set_sports_sub(ctx.chat_id, s["team_id"], s["name"], False)
-                    await ctx.reply(f"🔕 {esc(s['name'])} 알림을 껐어요.")
-                    return
-            await ctx.reply("구독 중인 팀이 아니에요. <code>.스포츠 목록</code> 으로 확인해보세요.")
-        elif sub in ("목록", "list"):
-            subs = await db.sports_subs(ctx.chat_id)
-            await ctx.reply("🔔 알림 팀: " + (", ".join(esc(s["name"]) for s in subs) if subs else "없음"))
-        else:
-            await ctx.reply(await sp.today_text(sub))
-    except SportsError as e:
-        await ctx.reply(esc(str(e)))
+    """일정·스코어·순위·팀·알림 구독 (sodam/sports/ui.py). 배당·베팅 정보는 없음."""
+    from .sports import ui as sports_ui
+    await ctx.reply(await sports_ui.command(ctx.svc, ctx.chat_id, ctx.user.id, ctx.role >= Role.ADMIN, ctx.args))
 
 
 async def c_news(ctx: CmdCtx) -> None:
@@ -1174,8 +1139,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("게임", "game"), c_game, usage="[종류]", help="게임 시작", group="게임"),
     Cmd(("게임종료", "stopgame"), c_stop_game, help="게임 끝내기", group="게임"),
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
-    Cmd(("스포츠", "sports"), c_sports, usage="[오늘 축구|팀 이름|결과 이름|구독 이름|해제 이름|목록]",
-        help="경기 일정·결과·알림", group="스포츠"),
+    Cmd(("스포츠", "sports"), c_sports, usage="[오늘|내일 리그|라이브|순위 리그|팀 이름|구독 리그·팀|해제|목록]",
+        help="경기 일정·스코어·순위·자동 알림", group="스포츠"),
     Cmd(("뉴스", "news", "세계뉴스"), c_news, usage="[세계|경제|기술|코인|스포츠]",
         help="여러 해외 언론이 함께 다룬 주요 뉴스 (방마다 10분에 1번)", group="뉴스"),
     Cmd(("말투도움말", "말투설명", "말투목록"), c_style_help, help="말투 종류·예시와 방 모드(욕 받아치기·19금)"),

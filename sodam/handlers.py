@@ -1445,7 +1445,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     hh, mm = map(int, backup_time.split(":"))
     jq.run_repeating(job_tick, interval=30, first=10, name="tick")
     jq.run_repeating(job_name_sweep, interval=60, first=90, name="name_sweep")
-    jq.run_repeating(job_sports, interval=600, first=60, name="sports")
+    jq.run_repeating(job_sports, interval=30, first=45, name="sports")   # 리그별로 60초(경기 중)·6시간(일정)만 실제로 받음 (sports/alerts.py)
     jq.run_daily(job_daily_report, time=dtime(23, 50, tzinfo=tz), name="daily_report")
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")

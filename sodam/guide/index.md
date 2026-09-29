@@ -33,6 +33,7 @@ type: index
 - [태그 알림·알림 규칙](alerts.md)
 - [세계 뉴스 알림](news.md): 여러 해외 언론이 함께 다룬 큰 뉴스만 한국어 한 줄로
 - [게임](games.md)
+- [스포츠 경기·순위·자동 알림](sports.md)
 - [명령어 모음](commands.md)
 
 ## 그 밖

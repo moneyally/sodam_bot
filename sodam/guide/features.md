@@ -2,7 +2,7 @@
 title: 소담이 하는 일
 summary: 소담은 텔레그램 소통방 AI 비서예요. 대화·검색·요약, 방 관리, 이름 기록, 예약공지, 게임, 음성채팅을 해요.
 tags: 기능, 뭐해, 뭘할수, 할수있는, 뭐할수, 소개, 정체, 너누구, 뭐하는봇, 할줄아는
-related: ai-chat, security, lookup, schedule, games, voice, pricing, news
+related: ai-chat, security, lookup, schedule, games, sports, voice, pricing, news
 audience: 모두
 type: reference
 ---
@@ -19,6 +19,7 @@ type: reference
 | 예약·알림 | 예약공지, 알람, 알림 규칙, AI 하루 요약 | 이용 기간 |
 | 세계 뉴스 | 여러 해외 언론이 함께 다룬 큰 뉴스만 한국어 한 줄 + 원문 링크 (`.뉴스`, 자동 알림) | 이용 기간 |
 | 게임 | 끝말잇기, 포인트 게임(`!`) | 이용 기간 |
+| 스포츠 | 경기 일정·스코어·순위, 리그·팀 구독 자동 알림 | 알림은 이용 기간 |
 | 음성 | 음성채팅에 들어와 목소리로 대화 | 이용 기간 |
 | 말투 | 말투 9가지, 욕·19금 드립 받아치기 | 이용 기간 |
 
@@ -31,4 +32,4 @@ type: reference
 - 목록에 없는 기능을 "된다"고 하지 않는다 → "기능 제안으로 접수할게요".
 
 ## 관련 문서
-- [소담 부르는 법](ai-chat.md) · [캡차·스팸·경고·제재](security.md) · [사람 찾기](lookup.md) · [예약공지](schedule.md) · [게임](games.md) · [음성채팅](voice.md) · [세계 뉴스](news.md) · [요금](pricing.md)
+- [소담 부르는 법](ai-chat.md) · [캡차·스팸·경고·제재](security.md) · [사람 찾기](lookup.md) · [예약공지](schedule.md) · [게임](games.md) · [음성채팅](voice.md) · [스포츠](sports.md) · [세계 뉴스](news.md) · [요금](pricing.md)
