@@ -32,6 +32,7 @@ type: index
 - [예약공지·알람·하루 요약](schedule.md)
 - [태그 알림·알림 규칙](alerts.md)
 - [게임](games.md)
+- [스포츠 경기·순위·자동 알림](sports.md)
 - [명령어 모음](commands.md)
 
 ## 그 밖

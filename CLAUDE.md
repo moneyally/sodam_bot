@@ -526,3 +526,23 @@
   예외·answer 1회·64바이트·HTML·권한 누출을 검사 (`tests/test_harness.py`). 화면 확인: `python tools/render_screens.py` → docs/SCREENS.md.
   패널별 하네스 데이터는 `tests/seed_<이름>.py` 에서 `harness.SEEDERS.append(async fn(svc))` (자동 로드) → 깊은 화면까지 누른다.
 - 테스트 러너는 `tests/test_*.py` 자동 발견. `python tests/run_all.py [모듈명]`.
+
+## ⚽ 스포츠 (`sodam/sports/`, `panels/sports.py`, tests/test_sports.py · 뮤테이션 18개, 2026-09-30)
+- 실제 요청: '스포츠봇 되긴 하는데 축구만 돼서' (TheSportsDB 무료 키 123 = 검색 1개·일정 3개·영어만) + 방 관리자 자동 알림.
+  **배당·베팅 기능은 만들지 않음.**
+- 소스(providers.py, 파싱은 전부 tests/fixtures/sports 의 실제 응답 기준): **ESPN**(키 없음, 해외 기본: EPL·라리가·세리에A·분데스·리그1·챔스·유로파·
+  J리그·MLB·NBA·NHL·UFC, 비공식 → 실패하면 다음 소스) · **네이버**(국내 KBO·K리그·KBL·WKBL·V리그·NPB, robots·약관상 자동 수집 금지라
+  **기본 꺼짐 `SPORTS_NAVER=1`** — 오너 결정 대기) · TheSportsDB(`SPORTSDB_KEY` 가 123 이 아닐 때만) · API-Sports(`APISPORTS_KEY`, 자리만 —
+  실제 응답 샘플 받은 뒤 구현, 추측 파싱 금지). ESPN 함정: dates 는 미국 동부 날짜·하루씩(범위 400) → 한국 하루 = 두 번 요청 ·
+  순위는 /apis/v2/ · 상태 이름(POSTPONED 등)이 state 보다 우선. 네이버: categoryId 만(upperCategoryId 붙이면 농구·배구 0건) ·
+  statusCode BEFORE/READY/STARTED/ENDED/RESULT + cancel/suspended.
+- 리그·팀 한국어 별칭은 leagues.py 표 하나 (리그 code 는 DB 에 저장되니 바꾸지 말 것). 팀 표시도 이 표로 한국어.
+- 명령 `.스포츠 [오늘|내일|어제] [리그/종목/팀]` · `라이브` · `순위 리그` · `팀 이름` · (관리자) `구독/해제 리그·팀` · `목록` · `알림종류` · `조용`.
+  AI 도구 sports(action today/live/standings/team/follows, query 한국어 그대로). 1:1 허브 [⚽ 스포츠 알림](m:spt) + 🧩 기능 화면에 바로가기.
+- 알림(alerts.py): (리그, 날짜) 공유 캐시(feed.py) — **방마다 안 부름**. 30초 job 이 리그마다 경기 [시작 15분 전, 끝]이면 60초, 아니면 6시간마다 일정만
+  (라이브 땐 진행 중 경기가 있는 ESPN 날짜만 다시). 스냅샷(메모리) 비교 → 시작·골(축구·하키, ESPN 득점자)·득점 취소·점수(야구·농구·배구는
+  '점수까지' 고른 방만)·종료·취소/연기/중단. 재시작 뒤 처음 본 경기는 조용히 저장만(폭탄 없음, 대신 꺼져 있던 동안 끝난 경기는 빠짐).
+  중복 = sports_alert_sent(방, 경기, 종류+점수, sent_at) 14일. 방마다 한 틱 = 한 메시지, 시간당 12통, 조용한 시간 sports_quiet(기본 01-07 KST):
+  시작·골 버림, 종료·취소는 sports_held → 끝나면 '밤사이 경기 결과'. sports_enabled + 이용 중인 방(paid_features)만.
+  알림 종류 sports_alerts final/basic/goals(기본)/all. 옛 표 sports_subs/sports_sent 는 안 씀(구독 0건이었음).
+- 네이버를 켜면 guide/sports.md 의 '국내 리그 준비 중' 문장도 같이 고칠 것.

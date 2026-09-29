@@ -2,7 +2,7 @@
 title: 소담이 하는 일
 summary: 소담은 텔레그램 소통방 AI 비서예요. 대화·검색·요약, 방 관리, 이름 기록, 예약공지, 게임, 음성채팅을 해요.
 tags: 기능, 뭐해, 뭘할수, 할수있는, 뭐할수, 소개, 정체, 너누구, 뭐하는봇, 할줄아는
-related: ai-chat, security, lookup, schedule, games, voice, pricing
+related: ai-chat, security, lookup, schedule, games, sports, voice, pricing
 audience: 모두
 type: reference
 ---
@@ -18,6 +18,7 @@ type: reference
 | 이름 기록 | 이름·@아이디 변경 추적, 사람 찾기 | 무료 |
 | 예약·알림 | 예약공지, 알람, 알림 규칙, AI 하루 요약 | 이용 기간 |
 | 게임 | 끝말잇기, 포인트 게임(`!`) | 이용 기간 |
+| 스포츠 | 경기 일정·스코어·순위, 리그·팀 구독 자동 알림 | 알림은 이용 기간 |
 | 음성 | 음성채팅에 들어와 목소리로 대화 | 이용 기간 |
 | 말투 | 말투 9가지, 욕·19금 드립 받아치기 | 이용 기간 |
 
