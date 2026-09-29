@@ -397,7 +397,7 @@ async def s_room(c: PanelCtx) -> Screen:
     lines = ["🎙 <b>음성채팅 소담</b>",
              "방 음성채팅에 소담이 들어가서 목소리로 실시간 대화해요. 채팅으로 <code>소담아 음성방 들어와</code>.",
              f"지금: <b>{'통화 중 📞' if live else '쉬는 중'}</b> · 이번 달 {used // 60}/{MONTH_MIN}분",
-             f"한 번에 최대 {CALL_MAX_SEC // 60}분, {IDLE_SEC}초 조용하면 스스로 나와요. 대화 내용은 저장 안 해요."]
+             f"한 번에 최대 {CALL_MAX_SEC // 60}분, {IDLE_SEC}초 조용하면 스스로 나와요. 대화는 점검용으로 {store.LINES_KEEP_DAYS}일 보관(운영자만)."]
     if not a:
         lines.append("\n⚠️ 음성 도우미 계정이 아직 연결 안 됐어요 (운영자 설정).")
     kb = [[B(("● " if who == k else "") + v, f"m:vcw:{c.cid}:{k}") for k, v in (("admin", "관리자만"), ("all", "누구나"))],
@@ -470,7 +470,7 @@ async def s_guide(c: PanelCtx) -> Screen:
              "<b>⑤ 끝내기</b>",
              f"  <code>소담아 나가</code> · [📴 지금 끊기] · {IDLE_SEC}초 조용하면 스스로 · 한 번에 최대 {CALL_MAX_SEC // 60}분.",
              "",
-             f"대화 내용은 저장 안 해요. 방마다 한 달 {MONTH_MIN}분까지, 요금은 AI 사용 한도에 같이 들어가요.",
+             f"대화 내용은 점검용으로 {store.LINES_KEEP_DAYS}일만 보관하고 운영자만 봐요. 방마다 한 달 {MONTH_MIN}분까지, 요금은 AI 사용 한도에 같이 들어가요.",
              "막히면 [✅ 확인하기] 를 눌러 보세요 — 빠진 권한을 알려 줘요."]
     return Screen("\n".join(lines), menu._kb([[B("✅ 확인하기", f"m:vcck:{c.cid}")], [B("⬅️ 음성채팅", f"m:vcr:{c.cid}")]]))
 
@@ -577,8 +577,51 @@ async def s_owner(c: PanelCtx) -> Screen:
              f"도우미 계정: <b>{esc(a['name']) + (' @' + esc(a['username']) if a.get('username') else '') if a else '연결 안 됨'}</b>",
              f"음성 담당 프로세스: <b>{'켜짐 ✅' if alive else '꺼짐 ⚠️'}</b>",
              f"최근 30일: 통화 {n}번 · {secs // 60}분 · 방마다 한 달 {MONTH_MIN}분 한도"]
-    kb = [[B("🔌 연결 해제", "m:vco")] if a else [B("📱 도우미 계정 연결", "m:vcl")], [B("⬅️ 처음으로", "m:home")]]
+    kb = [[B("🔌 연결 해제", "m:vco")] if a else [B("📱 도우미 계정 연결", "m:vcl")],
+          [B(f"🗒 통화 기록 ({store.LINES_KEEP_DAYS}일)", "m:vclg")], [B("⬅️ 처음으로", "m:home")]]
     return Screen("\n".join(lines), menu._kb(kb))
+
+
+async def s_call_list(c: PanelCtx) -> Screen:
+    """최근 통화 (오너만) → 누르면 그 통화 대화."""
+    if not await _is_owner(c):
+        return NOT_OWNER
+    from ..util import fmt_time
+    rows = await c.svc.db._all(
+        "SELECT v.id, v.chat_id, v.start_ts, v.seconds, v.reason, c.title, "
+        "(SELECT COUNT(*) FROM voice_lines l WHERE l.call_id=v.id) n FROM voice_calls v LEFT JOIN chats c ON c.chat_id=v.chat_id "
+        "WHERE v.start_ts>? ORDER BY v.id DESC LIMIT 15", (int(time.time()) - store.LINES_KEEP_DAYS * 86400,))
+    lines = [f"🗒 <b>최근 통화 기록</b> ({store.LINES_KEEP_DAYS}일 보관 · 오너만)", ""]
+    kb = []
+    for r in rows:
+        t = fmt_time(r["start_ts"], c.svc.cfg.tz)
+        lines.append(f"• {t} {esc((r['title'] or str(r['chat_id']))[:20])} · {r['seconds'] // 60}분 {r['seconds'] % 60}초 · {r['n']}줄")
+        if r["n"]:
+            kb.append([B(f"{t} {(r['title'] or '')[:14]}", f"m:vclv:{r['id']}")])
+    if not rows:
+        lines.append("아직 통화가 없어요.")
+    kb.append([B("⬅️ 음성채팅 설정", "m:vc")])
+    return Screen("\n".join(lines), menu._kb(kb))
+
+
+WHO_MARK = {"user": "🗣", "sodam": "🤖 소담", "tool": "🧰"}
+
+
+async def s_call_view(c: PanelCtx) -> Screen:
+    if not await _is_owner(c):
+        return NOT_OWNER
+    from ..util import fmt_time, to_int
+    call_id = to_int(c.arg(0))
+    out = []
+    for r in await store.call_lines(c.svc.db, call_id or 0):
+        who = WHO_MARK.get(r["who"], r["who"])
+        if r["who"] == "user":
+            who += " " + (f"{r['first_name'] or '?'}({r['user_id']})" if r["user_id"] else "(누군지 모름)")
+        out.append(f"[{fmt_time(r['ts'], c.svc.cfg.tz, '%H:%M:%S')}] {esc(who)}: {esc(r['text'][:300])}")
+    text = "\n".join(out) or "기록이 없어요."
+    if len(text) > 3600:
+        text = "… (앞부분 생략)\n" + text[-3600:]
+    return Screen(f"🗒 <b>통화 #{call_id}</b>\n\n{text}", menu._kb([[B("⬅️ 통화 기록", "m:vclg")]]))
 
 
 API_GUIDE = ("🔑 <b>1단계: 도우미 계정 전용 API 키</b>\n"
@@ -723,7 +766,8 @@ async def s_after(c: PanelCtx) -> Screen:
 
 menu.register_main(93, "vc", "🎙 음성채팅", OWNER)
 for _code, _fn in (("vc", s_owner), ("vcl", r_login), ("vcla", r_login_api), ("vco", r_logout_ask), ("vcoy", r_logout),
-                   ("vcai", s_owner), ("vcp", s_owner), ("vcc", s_owner), ("vcpw", s_owner)):
+                   ("vcai", s_owner), ("vcp", s_owner), ("vcc", s_owner), ("vcpw", s_owner),
+                   ("vclg", s_call_list), ("vclv", s_call_view)):
     menu.register_route(_code, Route(_fn, OWNER, scoped=False))
 menu.register_input("vcai", "", "vc", i_api, s_after, need=OWNER)
 menu.register_input("vcp", "", "vc", i_phone, s_after, need=OWNER)

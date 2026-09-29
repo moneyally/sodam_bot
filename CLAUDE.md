@@ -383,7 +383,7 @@
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.
 - 별도 프로세스 `python -m sodam.voice.worker`(systemd sodam-voice, update.sh 가 본체 재시작 성공 뒤 패키지 requirements-voice.txt·서비스 설치/재시작,
-  실패해도 본체 안 되돌림). 봇 ↔ worker 는 DB voice_jobs(1초 폴링, 120초 안 가져가면 no_worker)·voice_calls(시간·이유만, 대화 저장 안 함)·
+  실패해도 본체 안 되돌림). 봇 ↔ worker 는 DB voice_jobs(1초 폴링, 120초 안 가져가면 no_worker)·voice_calls(시간·이유)·voice_lines(통화 대화 받아쓰기·소담 답·도구 결과, **7일 보관·오너만** 🎙→🗒 m:vclg, 오너 결정 2026-09-29)·
   chat_state(0) voice_assistant / voice_worker_beat.
 - 부르기: AI 도구 voice_call(start|stop, 방) 또는 허브 🎙(m:vcr). voice_who 관리자만(기본)/누구나 · voice_reply 항상/'소담' 부를 때만.
   봇이 1회용 초대링크(1명·10분)로 도우미를 넣고, promote(can_manage_video_chats) 시도 → py-tgcalls play(auto_start) 가 음성채팅이 없으면 직접 켬
@@ -414,6 +414,8 @@
   기존 확인 카드(pending_actions·menu_tokens 가 DB 라 음성 담당이 만든 카드를 봇이 눌러도 됨), 카드 없는 관리자 도구(설정·말투·교훈·게임 알림)는
   🎙 음성 요청 카드(vcard_ok/no, 요청자만·누를 때 권한 재확인). 모름·겹침 = 읽기만. 같은 답에서 읽기 도구 뒤 쓰기 = 거절.
   음성 도구 25개만·설명 260자(전부 = 입력 14k·2.3초). 호칭만 떼고 정확 일치(tools._resolve, 채팅에도 적용), 못 찾으면 자모 비슷한 후보를 되물음.
+  **읽기 도구도 역할로** (실제 사례 2026-09-29: 일반 멤버가 음성으로 통계를 들음): 통계·대화 읽기/검색·멤버 정보·포인트 순위 =
+  말한 사람이 확인된 관리자만(ADMIN_ONLY/UNKNOWN), 누구나 = 방 규칙·자료·웹 검색(PUBLIC_READ). 도구마다 서버 로그 '음성 도구 방=… 말한사람=…'.
   방 멤버 이름을 지시문 끝·받아쓰기 prompt 로 → 실측 '지연님' 으로 들렸어도 '지영' 카드. 거절 안내는 그대로 방에 + voice_refused 기록 + 오너에겐 상태.
 
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)

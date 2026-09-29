@@ -2,7 +2,7 @@
 
 voice_jobs  봇이 넣고 worker 가 1초마다 가져감: join(초대링크로 방 들어가기)·start(통화 시작)·stop·login_phone/login_code/login_pw/logout.
             결과(status done/failed + result 글)를 봇이 30초 틱에서 읽어 안내. 로그인 코드·비밀번호는 처리 즉시 payload 를 지움.
-voice_calls 통화 한 번 = 한 줄 (시간·끝난 이유·말 횟수). 대화 내용은 저장 안 함.
+voice_calls 통화 한 번 = 한 줄 (시간·끝난 이유·말 횟수). voice_lines 대화(받아쓰기·소담 답·도구) = 점검용 7일, 오너만 봄.
 chat_state(0, voice_assistant) = 로그인된 어시스턴트 {id, name, username} (worker 가 씀).
 """
 from __future__ import annotations
@@ -29,7 +29,14 @@ CREATE TABLE IF NOT EXISTS voice_calls (
     end_ts INTEGER, seconds INTEGER NOT NULL DEFAULT 0, reason TEXT, user_turns INTEGER NOT NULL DEFAULT 0,
     bot_turns INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS voice_calls_chat ON voice_calls(chat_id, start_ts);
-""", migrate={"voice_jobs": "plain", "voice_calls": "plain"})
+CREATE TABLE IF NOT EXISTS voice_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, call_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, ts INTEGER NOT NULL,
+    who TEXT NOT NULL, user_id INTEGER, text TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS voice_lines_call ON voice_lines(call_id, id);
+CREATE INDEX IF NOT EXISTS voice_lines_ts ON voice_lines(ts);
+""", migrate={"voice_jobs": "plain", "voice_calls": "plain", "voice_lines": "plain"})
+LINES_KEEP_DAYS = 7          # 통화 대화(받아쓰기·소담 답·도구) 점검용 보관 (오너 결정 2026-09-29), 오너만 봄
+LINE_MAX = 500
 
 
 async def add_job(db, chat_id: int, kind: str, payload: dict | None = None, by: int | None = None) -> int | None:
@@ -103,6 +110,25 @@ async def call_started(db, chat_id: int, by: int | None) -> int:
 async def call_ended(db, call_id: int, seconds: float, reason: str, user_turns: int = 0, bot_turns: int = 0) -> None:
     await db._write("UPDATE voice_calls SET end_ts=?, seconds=?, reason=?, user_turns=?, bot_turns=? WHERE id=? AND end_ts IS NULL",
                     (int(time.time()), int(seconds), reason[:40], user_turns, bot_turns, call_id))
+
+
+async def add_line(db, call_id: int, chat_id: int, who: str, user_id: int | None, text: str) -> None:
+    """who = user(멤버 말)·sodam(소담 답)·tool(도구 이름·결과 앞부분)."""
+    text = (text or "").strip()
+    if text:
+        await db._write("INSERT INTO voice_lines(call_id, chat_id, ts, who, user_id, text) VALUES(?,?,?,?,?,?)",
+                        (call_id, chat_id, int(time.time()), who[:8], user_id, text[:LINE_MAX]))
+
+
+async def purge_lines(db, days: int = LINES_KEEP_DAYS) -> int:
+    cur = await db.conn.execute("DELETE FROM voice_lines WHERE ts<?", (int(time.time()) - days * 86400,))
+    await db.conn.commit()
+    return cur.rowcount or 0
+
+
+async def call_lines(db, call_id: int, limit: int = 300) -> list:
+    return await db._all("SELECT l.ts, l.who, l.user_id, l.text, u.first_name FROM voice_lines l "
+                         "LEFT JOIN users u ON u.user_id=l.user_id WHERE l.call_id=? ORDER BY l.id LIMIT ?", (call_id, limit))
 
 
 USD_PER_MIN = float(__import__("os").getenv("VOICE_USD_PER_MIN", "0.08"))   # 추정 (Realtime mini 음성 입·출력 + 받아쓰기, 넉넉히)

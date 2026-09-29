@@ -261,9 +261,22 @@ class Worker:
         except Exception:
             await self._leave(chat_id)
             raise
+        bridge.on_line = self._recorder(chat_id, call_id)
         self.bridges[chat_id] = bridge
         self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))
         return True, "started"
+
+    def _recorder(self, chat_id: int, call_id: int):
+        """통화 대화 → voice_lines (7일, 오너만 봄). 말한 사람은 소리 번호 → 계정 표로."""
+        users = self.ssrc_users.setdefault(chat_id, {})
+        bg = self.__dict__.setdefault("_line_tasks", set())
+
+        def record(who: str, text: str, ssrc: int | None) -> None:
+            uid = users.get(ssrc) if ssrc is not None else None
+            t = asyncio.create_task(store.add_line(self.db, call_id, chat_id, who, uid, text))
+            bg.add(t)
+            t.add_done_callback(bg.discard)
+        return record
 
     async def _toolset(self, chat_id: int, starter: int) -> dict:
         """Bridge 에 줄 도구: 채팅 소담 읽기 전용 도구 + 웹 검색 (toolset.py 방어 규칙)."""
@@ -413,6 +426,10 @@ class Worker:
             t.add_done_callback(self.jobs.discard)
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
+            try:
+                await store.purge_lines(self.db)          # 통화 대화 7일 지나면 지움
+            except Exception as e:
+                log.warning("음성 기록 정리 실패: %s", e)
             await self.health()
 
     async def drain(self) -> None:

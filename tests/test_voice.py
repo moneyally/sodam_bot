@@ -1052,3 +1052,27 @@ async def refusal_is_posted_verbatim_logged_and_owner_sees_cause():
 @test
 def voice_only_by_default():
     assert VIDEO_DEFAULT is False, "오너 결정: 기본은 소리만 (영상 칸 사진은 VOICE_VIDEO=1)"
+
+
+@test
+async def call_lines_are_kept_7_days_with_speaker():
+    """오너 결정 2026-09-29: 점검용으로 통화 대화(말한 사람·소담 답·도구)를 7일 보관, 오너만 봄."""
+    db, w, _, conn = await make_worker()
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    await run_job(db, w, "login_code", {"code": "12345"})
+    assert (await run_job(db, w, "start", {"instructions": "x", "max_sec": 30}, CHAT))["result"] == "started"
+    w.ssrc_users[CHAT][7] = 5                                     # 소리 7 = 계정 5
+    b = w.bridges[CHAT]
+    b._energy = {7: 900.0}
+    conn.push(type="input_audio_buffer.speech_stopped", audio_end_ms=0, item_id="u1")
+    conn.push(type="conversation.item.input_audio_transcription.completed", transcript="오늘 통계 알려줘", item_id="u1")
+    conn.push(type="response.output_audio_transcript.done", transcript="관리자만 들을 수 있어요")
+    [call] = await db._all("SELECT id FROM voice_calls")
+    await until(lambda: len(w.__dict__.get("_line_tasks", ())) == 0 and b.result.bot_turns == 1)
+    await asyncio.sleep(0.05)
+    rows = await store.call_lines(db, call["id"])
+    assert [(r["who"], r["user_id"], r["text"]) for r in rows] == [("user", 5, "오늘 통계 알려줘"), ("sodam", None, "관리자만 들을 수 있어요")], rows
+    await run_job(db, w, "stop", {}, CHAT)
+    await db._write("UPDATE voice_lines SET ts=ts-8*86400 WHERE who='user'")
+    assert await store.purge_lines(db) == 1
+    assert [r["who"] for r in await store.call_lines(db, call["id"])] == ["sodam"]
