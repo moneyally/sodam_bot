@@ -3,7 +3,8 @@ data/
 __pycache__/
 *.pyc
 .venv/
-.claude/
+.claude/*
+!.claude/skills/
 .env.dealer
 .env.*.local
 /backups/

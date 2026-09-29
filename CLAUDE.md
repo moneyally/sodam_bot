@@ -15,6 +15,11 @@
 - 텔레그램 업자 소통방 운영자. 봇을 여러 방 관리자(대표님들)에게 **방당 월 30 USDT(TRC20) 구독**으로 판매하려 함.
 - GroupHelp / SangMata 같은 **버튼식 UX**를 원함. 결제 정보는 방에 절대 노출하지 말고 관리자 1:1에서만.
 - PC방에서 작업하는 경우가 많음 → 로컬 파일은 사라진다고 가정하고, 중요한 건 GitHub 에 푸시.
+- **영어를 모름 — 설명·보고는 전부 한국어.** 확인 안 한 걸 "했다/배포됐다"고 하지 말 것 (서버 버전을 직접 확인한 것만 완료, 아니면 "미확인").
+  버그 감사는 할 일을 다 끝낸 뒤 마지막에. 모르면 추측 말고 직접 검색·실측 조사.
+- 이 저장소 전용 스킬 (`.claude/skills/`): `sodam-deploy`(배포·서버 반영 확인 `scripts/wait_deploy.py`) · `sodam-diag`(원격 점검 실측) ·
+  `sodam-mutation-test`(테스트·뮤테이션 `scripts/mutate.sh`) · `sodam-guide-docs`(안내서 문서) · `sodam-research`(직접 조사) ·
+  telegram-voice-assistant · telegram-ump · telegram-sticker-forge.
 
 ## 프로젝트 요약
 - Python 3.11+, python-telegram-bot 21 (`concurrent_updates=True`), OpenAI SDK 3.x (chat.completions + responses web_search), SQLite(aiosqlite, WAL).

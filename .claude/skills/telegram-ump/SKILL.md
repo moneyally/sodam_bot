@@ -1,6 +1,6 @@
 ---
 name: telegram-ump
-description: 텔레그램 "움프"(움직이는 프로필 사진·영상 아바타)를 사진 한 장으로 만드는 방법과 소담 봇 기능(sodam/avatar.py, panels/avatar.py)을 고치거나 새 움직임 스타일·그림체·영상 API를 더할 때 쓴다. 트리거: 움프, 움직이는 프로필, 프로필 영상, video avatar, profile video, 프사 영상, ffmpeg 루프 영상, 사진→영상.
+description: '텔레그램 "움프"(움직이는 프로필 사진·영상 아바타)를 사진 한 장으로 만드는 방법과 소담 봇 기능(sodam/avatar.py, panels/avatar.py)을 고치거나 새 움직임 스타일·그림체·영상 API를 더할 때 쓴다. 트리거: 움프, 움직이는 프로필, 프로필 영상, video avatar, profile video, 프사 영상, ffmpeg 루프 영상, 사진→영상.'
 ---
 
 # 텔레그램 움프 만들기
