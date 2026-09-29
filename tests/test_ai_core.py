@@ -491,3 +491,28 @@ async def savage_style_fights_back_but_keeps_lines():
     import sodam.panels  # noqa: F401
     from sodam import tools
     assert "savage" in tools._BY_NAME["voice_call"].params["style"]["enum"]
+
+
+@test
+async def comeback_rule_all_styles_and_mirror_setting_is_third_system():
+    """오너 요청 2026-09-29: 모든 말투에서 욕받이 금지(센스로 받아치기), 방 설정 mirror 면 똑같이 욕으로."""
+    from sodam import prompt, settings as S
+    import sodam.ai_settings  # noqa: F401
+    sysp = prompt.static_system("소담")
+    assert "욕받이 금지" in sysp and "사과하거나 쩔쩔매지 않는다" in sysp and "패드립" in sysp
+    assert S.DEFAULTS["ai_comeback"] == "wit" and S.CHOICES["ai_comeback"]["똑같이"] == "mirror"
+    r = await Room().open()
+    u = fake_user(5, "철수")
+    await r.join(u)
+    await r.db.set_setting(r.CHAT, "ai_comeback", "mirror")
+    r.llm.script = [reply("ㅋㅋ 너나 잘해")]
+    await r.say(u, "소담아 멍청아")
+    msgs = r.llm.of("chat")[-1]["messages"]
+    systems = [m["content"] for m in msgs if m["role"] == "system"]
+    assert systems[0] == sysp, "첫 system(캐시) 그대로"
+    assert any("똑같이 욕으로" in x for x in systems[2:]), systems[2:]
+    await r.db.set_setting(r.CHAT, "ai_comeback", "wit")
+    r.llm.script = [reply("그 말 그대로 돌려드릴게요 ㅎㅎ")]
+    await r.say(u, "소담아 바보야")
+    assert not any("똑같이 욕으로" in (m["content"] if isinstance(m["content"], str) else "")
+                   for m in r.llm.of("chat")[-1]["messages"] if m["role"] == "system")

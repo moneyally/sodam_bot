@@ -30,6 +30,7 @@ SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_chime_in"]
 for _k in SOCIAL_TOGGLES:
     menu.register_toggle(_k, "aip")
 menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
+menu.register_preset("ai_comeback", [("wit", "😏 센스로(욕 없이)"), ("mirror", "🥊 똑같이 욕으로")], "aip")
 menu.register_preset("ai_chime_daily", [(v, f"하루 {v}번") for v in ("2", "4", "8")], "aip")
 
 
@@ -41,8 +42,10 @@ async def s_ai_social(c: PanelCtx) -> Screen:
              "• <b>방 흐름 기억</b>: 요즘 방에서 오가는 이야기를 짧게 요약해 두고 참고해요.",
              "• <b>이어 말하기</b>: 방금 소담과 얘기한 사람이 이어서 물으면 이름을 안 불러도 답해요.",
              "• <b>먼저 끼어들기</b>: 아무도 답하지 않은 질문이나 아침 인사에 가끔 먼저 한마디해요.",
-             f"  (지금: {menu.human_minutes(s['ai_chime_gap_min'])}에 한 번, 하루 최대 {s['ai_chime_daily']}번)"]
-    rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES)
+             f"  (지금: {menu.human_minutes(s['ai_chime_gap_min'])}에 한 번, 하루 최대 {s['ai_chime_daily']}번)",
+             "• <b>욕 받아치기</b>: 누가 소담을 욕하면 사과하지 않고 받아쳐요. "
+             "센스로 = 욕 없이 재치로 · 똑같이 욕으로 = 그 사람만큼 장난 욕으로 (패드립·비하·협박은 안 해요)."]
+    rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES) + [menu._preset_row(s, c.cid, "ai_comeback")]
     if s["ai_chime_in"]:
         rows += [menu._preset_row(s, c.cid, "ai_chime_gap_min"), menu._preset_row(s, c.cid, "ai_chime_daily")]
     rows.append(menu._back(c.cid, "ai"))
