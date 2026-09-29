@@ -76,7 +76,9 @@ async def r_cat(c: PanelCtx) -> Screen:
 
 
 async def r_preview(c: PanelCtx) -> Screen:
-    """지금 뽑힐 뉴스를 누른 관리자 1:1 로 (방엔 안 보내고, 보낸 기록에도 안 남김)."""
+    """지금 뽑힐 뉴스를 누른 관리자 1:1 로 (방엔 안 보내고, 보낸 기록에도 안 남김). 이용 기간 중인 방만 (가져오기·AI 요약 비용)."""
+    if not await c.svc.paid_features(c.cid):
+        return Screen(None, toast="🌍 세계 뉴스는 이용 기간(구독·체험) 중인 방에서만 볼 수 있어요.", alert=True)
     if not await persist.claim(c.svc.db, f"news:pv:{c.uid}", news.PREVIEW_GAP):
         return Screen(None, toast="방금 보냈어요. 잠시 뒤에 다시 눌러 주세요.", alert=True)
     s = await c.svc.db.get_settings(c.cid)
@@ -133,7 +135,9 @@ async def c_news(ctx) -> None:
 async def t_news_headlines(ctx: ToolCtx, args: dict) -> str:
     cat = news.CAT_ALIASES.get(str(args.get("category") or "world").strip().lower(), "world")
     limit = max(1, min(8, to_int(str(args.get("limit") or 5)) or 5))
-    rows = await news.headlines(ctx.svc, [cat], news.min_sources(ctx.settings or {}), limit)
+    # 이용 기간 중인 방에서만 새로 가져오기·AI 요약. 끝난 방·1:1 은 이미 모아 둔 것만 (비용이 안 드는 캐시)
+    live = ctx.chat_id < 0 and await ctx.svc.paid_features(ctx.chat_id)
+    rows = await news.headlines(ctx.svc, [cat], news.min_sources(ctx.settings or {}), limit, fetch=live)
     ctx.tainted = True   # 해외 기사 제목 = 바깥 글 → 이후 읽기 도구만
     if not rows:
         return f"{news.CATS[cat]} 분야에 지금 여러 매체가 함께 다룬 큰 뉴스가 없음 (결과 없음)."

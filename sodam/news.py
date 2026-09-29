@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS news_sent (
 
 FETCH_EVERY = 600          # 초. 피드 하나당 10분에 한 번
 TIMEOUT = 10
+FEED_TIMEOUT = 20          # 피드 하나 전체(연결~다 받기) 상한
 MAX_BYTES = 3_000_000
 MAX_AGE = 36 * 3600        # 이보다 오래된 기사는 안 받음
 KEEP = 3 * 86400           # 묶음·기사 보관
@@ -175,7 +176,8 @@ clock = time.time   # 지금 시각 (테스트가 저장된 샘플 시각으로 
 def reset() -> None:
     """프로세스 상태 초기화 (테스트)."""
     _st.clear()
-    _st.update(fetched={}, last_prune=0.0, etag={}, failed=[], lock=asyncio.Lock(), client=None)
+    _st.update(fetched={}, last_prune=0.0, etag={}, failed=[], lock=asyncio.Lock(), sum_lock=asyncio.Lock(),
+               client=None, tok={})
 
 
 reset()
@@ -255,6 +257,9 @@ def safe_url(url: str, outlet: str) -> str | None:
         return None
     host = (u.hostname or "").lower()
     domains = OUTLETS.get(outlet, ("", ()))[1]
+    # 브라우저는 '\' 를 '/' 로 읽음 → 'https://evil.com\@www.bbc.com/x' 는 evil.com 으로 감. 아이디·비번·공백·제어 글자도 거절
+    if re.search(r"[\\\s\x00-\x1f\x7f]", url) or u.username is not None or u.password is not None:
+        return None
     if u.scheme != "https" or len(url) > 400 or not any(host == d or host.endswith("." + d) for d in domains):
         return None
     return url
@@ -289,28 +294,37 @@ def parse_feed(data: bytes, src: Source, now: int | None = None) -> list[Item]:
     return out
 
 
-async def http_get(url: str, headers: dict) -> tuple[int, bytes, dict]:
-    """테스트가 바꿔 끼우는 곳 (tests/fakes.py 가 오프라인으로)."""
+async def stream_get(url: str, headers: dict) -> tuple[int, bytes, dict]:
+    """실제 HTTP: 받으면서 MAX_BYTES 넘으면 바로 끊음 (r.content 는 다 받은 뒤에야 자름 → 큰 피드에 메모리·시간)."""
     client = _st.get("client")
     if client is None:
         client = _st["client"] = httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True, headers={"User-Agent": UA})
-    r = await client.get(url, headers=headers)
-    return r.status_code, r.content[:MAX_BYTES], dict(r.headers)
+    async with client.stream("GET", url, headers=headers) as r:
+        body = bytearray()
+        if r.status_code == 200:
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > MAX_BYTES:
+                    raise ValueError(f"피드가 너무 큼 ({MAX_BYTES}바이트 넘음)")
+        return r.status_code, bytes(body), dict(r.headers)
 
 
-async def _fetch(src: Source, now: int) -> list[Item]:
+http_get = stream_get   # 테스트가 바꿔 끼우는 곳 (tests/fakes.py 가 오프라인으로)
+
+
+async def _fetch(src: Source, now: int) -> tuple[list[Item], dict]:
+    """(기사, 조건부 GET 헤더). 헤더는 DB 에 넣는 데 성공한 뒤에 기억 (먼저 기억하면 넣다 실패해도 다음엔 304 → 기사 잃음)."""
     headers = dict(_st["etag"].get(src.url, {}))   # 조건부 GET (바뀐 게 없으면 304)
-    status, body, h = await http_get(src.url, headers)
+    # httpx timeout 은 조각마다라 조금씩 흘려 보내는 피드는 끝없이 걸림 → 피드 하나 전체에 상한
+    status, body, h = await asyncio.wait_for(http_get(src.url, headers), FEED_TIMEOUT)
     if status == 304:
-        return []
+        return [], {}
     if status != 200:
         raise ValueError(f"HTTP {status}")
     items = parse_feed(body, src, now)
     cond = {k: v for k, v in (("If-None-Match", h.get("etag") or h.get("ETag")),
                               ("If-Modified-Since", h.get("last-modified") or h.get("Last-Modified"))) if v}
-    if cond:
-        _st["etag"][src.url] = cond
-    return items
+    return items, cond
 
 
 def sources_for(cats: set[str]) -> list[Source]:
@@ -361,17 +375,50 @@ def similarity(a: frozenset[str], b: frozenset[str], idf=None) -> float:
 SAME_STORY = 0.3   # 2026-09-29 샘플 5개 매체 122개 제목에서: 0.3 = Estonia 4곳·RAF 4곳·스페인 3곳 묶고 '러시아·우크라이나'만 겹친 건 0.2
 
 
+def _tok(title: str) -> frozenset[str]:
+    """tokens() 캐시 (DB 스레드에서만 부름). 36시간 제목을 10분마다 다시 쪼개지 않게 — _ingest 가 지금 쓰는 것만 남김."""
+    cache = _st["tok"]
+    tk = cache.get(title)
+    if tk is None:
+        tk = cache[title] = tokens(title)
+    return tk
+
+
 def _ingest(c: sqlite3.Connection, items: list[Item], now: int) -> int:
-    """DB 스레드에서 한 번에: 새 기사만 → 대표 제목이 가장 닮은 최근 묶음에 넣거나 새 묶음. 새 기사 수."""
+    """DB 스레드에서 한 번에: 새 기사만 → 대표 제목이 가장 닮은 최근 묶음에 넣거나 새 묶음. 새 기사 수.
+    이미 받은 기사(같은 주소)는 닮음 비교 전에 한 번의 조회로 걸러냄 (10분마다 피드 전체 × 36시간 묶음을 비교해 공유 DB 스레드를 막던 것).
+    같은 기사가 다른 분야 피드에도 있으면 그 분야를 묶음에 더함."""
+    keyed = [(it, None if it.outlet == "google" else safe_url(it.url, it.outlet)) for it in items]
+    keys = sorted({url_key(u) for _, u in keyed if u})
+    known: dict[str, int] = {}   # 이미 있는 기사 주소 → 묶음
+    for i in range(0, len(keys), 500):
+        part = keys[i:i + 500]
+        known.update(c.execute(f"SELECT ukey, cluster_id FROM news_items WHERE ukey IN ({','.join('?' * len(part))})",
+                               part).fetchall())
+    extra_cats: dict[int, set[str]] = {}
+    fresh = []
+    for it, url in keyed:
+        if url and url_key(url) in known:
+            extra_cats.setdefault(known[url_key(url)], set()).add(it.cat)
+        elif url or it.outlet == "google":
+            fresh.append((it, url, _tok(it.title)))
     rows = c.execute("SELECT id, lang, tokens, sources, cats, first_seen, last_seen FROM news_clusters "
                      "WHERE last_seen >= ?", (now - MAX_AGE,)).fetchall()
     clusters = {r[0]: {"lang": r[1], "tk": frozenset(r[2].split()), "src": set(r[3].split(",")),
                        "cats": set(r[4].split(",")), "first": r[5], "last": r[6], "dirty": False} for r in rows}
-    recent = [tokens(r[0]) for r in c.execute("SELECT title FROM news_items WHERE ts >= ?", (now - MAX_AGE,))]
-    idf = idf_table(recent + [tokens(i.title) for i in items])
+    idf = None
+    if fresh:
+        titles = [r[0] for r in c.execute("SELECT title FROM news_items WHERE ts >= ?", (now - MAX_AGE,))]
+        recent = [_tok(t) for t in titles]
+        idf = idf_table(recent + [tk for _, _, tk in fresh])   # 새 기사만 더함 (이미 있는 기사는 recent 에 있음)
+        keep = set(titles) | {it.title for it, _, _ in fresh}
+        _st["tok"] = {t: v for t, v in _st["tok"].items() if t in keep}   # 캐시 = 지금 36시간 제목만
     new = 0
-    for it in sorted(items, key=lambda i: i.ts):
-        tk = tokens(it.title)
+    for it, url, tk in sorted(fresh, key=lambda x: x[0].ts):
+        key = url_key(url) if url else ""
+        if key in known:     # 이번 묶음 안에서 같은 기사가 두 피드(세계·경제)에
+            extra_cats.setdefault(known[key], set()).add(it.cat)
+            continue
         best, score = None, 0.0
         for cid, cl in clusters.items():
             s = similarity(tk, cl["tk"], idf) if cl["lang"] == it.lang else 0.0
@@ -381,11 +428,7 @@ def _ingest(c: sqlite3.Connection, items: list[Item], now: int) -> int:
             if best is not None:
                 c.execute("UPDATE news_clusters SET google=1 WHERE id=?", (best,))
             continue
-        url = safe_url(it.url, it.outlet)
-        if not url or len(tk) < 2:
-            continue
-        key = url_key(url)
-        if c.execute("SELECT 1 FROM news_items WHERE ukey=?", (key,)).fetchone():
+        if len(tk) < 2:
             continue
         if best is None:
             ko = it.title[:80] if it.lang == "ko" else None
@@ -402,33 +445,44 @@ def _ingest(c: sqlite3.Connection, items: list[Item], now: int) -> int:
             cl["first"], cl["last"], cl["dirty"] = min(cl["first"], it.ts), max(cl["last"], it.ts), True
         c.execute("INSERT INTO news_items(ukey, outlet, cat, title, url, ts, cluster_id) VALUES(?,?,?,?,?,?,?)",
                   (key, it.outlet, it.cat, it.title, url, it.ts, best))
+        known[key] = best
         new += 1
     for cid, cl in clusters.items():
         if cl["dirty"]:
             c.execute("UPDATE news_clusters SET sources=?, cats=?, n_sources=?, first_seen=?, last_seen=? WHERE id=?",
                       (",".join(sorted(cl["src"])), ",".join(sorted(cl["cats"])), len(cl["src"]), cl["first"], cl["last"], cid))
+    for cid, more in extra_cats.items():
+        row = c.execute("SELECT cats FROM news_clusters WHERE id=?", (cid,)).fetchone()
+        if row and not more <= set(row[0].split(",")):
+            c.execute("UPDATE news_clusters SET cats=? WHERE id=?", (",".join(sorted(set(row[0].split(",")) | more)), cid))
     return new
 
 
 async def refresh(svc: Services, cats: set[str] | None = None, *, force: bool = False, now: int | None = None) -> int:
-    """피드 가져와 묶기 (피드마다 10분에 한 번, 모든 방 공용). 새 기사 수. 피드 하나가 실패해도 나머지는 계속."""
+    """피드 가져와 묶기 (피드마다 10분에 한 번, 모든 방 공용). 새 기사 수. 피드 하나가 실패해도 나머지는 계속.
+    네트워크는 잠금 밖에서 (느린 피드가 .뉴스·미리보기·AI 도구·1분 job 을 막지 않게), 잠금은 고를 때·DB 에 넣을 때만."""
+    now = now or int(clock())
     async with _st["lock"]:
-        now = now or int(clock())
         t = time.monotonic()
         srcs = [x for x in sources_for(set(cats or CATS)) if force or t - _st["fetched"].get(x.url, -1e9) >= FETCH_EVERY]
         if not srcs:
             return 0
         _st["fetched"].update((x.url, t) for x in srcs)   # 실패한 피드도 10분 뒤에 다시 (매분 두드리지 않게)
-        results = await asyncio.gather(*(_fetch(s, now) for s in srcs), return_exceptions=True)
-        items, failed = [], []
-        for src, res in zip(srcs, results):
-            if isinstance(res, BaseException):
-                failed.append(src.url)
-                log.warning("뉴스 피드 실패 %s: %s", src.url, str(res)[:120] or type(res).__name__)
-                continue
-            items += [i for i in res if now - MAX_AGE <= i.ts <= now + 3600]
+    results = await asyncio.gather(*(_fetch(s, now) for s in srcs), return_exceptions=True)
+    items, failed, conds = [], [], {}
+    for src, res in zip(srcs, results):
+        if isinstance(res, BaseException):
+            failed.append(src.url)
+            log.warning("뉴스 피드 실패 %s: %s", src.url, str(res)[:120] or type(res).__name__)
+            continue
+        got, cond = res
+        items += [i for i in got if now - MAX_AGE <= i.ts <= now + 3600]
+        if cond:
+            conds[src.url] = cond
+    async with _st["lock"]:
         _st["failed"] = failed
         new = await svc.db.atomic(lambda c: _ingest(c, items, now))
+        _st["etag"].update(conds)   # DB 에 들어간 뒤에만 (넣다 실패하면 다음엔 조건 없이 다시 받음)
         if now - _st["last_prune"] > 3600:
             _st["last_prune"] = now
             cut = now - KEEP
@@ -448,11 +502,16 @@ def _outlets(sources: str) -> list[str]:
 
 
 async def summarize(svc: Services, *, need: int = MIN_POSSIBLE, now: int | None = None) -> int:
-    """아직 한국어 줄이 없는 묶음(매체 need곳↑)을 한 번의 mini JSON 호출로. 제목·매체 이름만 보냄. 채운 수."""
+    """아직 한국어 줄이 없는 묶음(매체 need곳↑)을 한 번의 mini JSON 호출로. 제목·매체 이름만 보냄. 채운 수.
+    한 번에 하나만 (1분 job 과 .뉴스·미리보기가 겹치면 같은 묶음을 두 번 요약 → AI 요금 두 배·tries 두 번 깎임)."""
     llm = svc.llm
     if llm is None or not getattr(llm, "enabled", True):
         return 0
-    now = now or int(clock())
+    async with _st["sum_lock"]:
+        return await _summarize(svc, llm, need, now or int(clock()))
+
+
+async def _summarize(svc: Services, llm, need: int, now: int) -> int:
     rows = await svc.db._all(
         "SELECT id, rep_title, sources, cats FROM news_clusters WHERE ko_line IS NULL AND lang='en' AND tries < ? "
         "AND n_sources >= ? AND last_seen >= ? ORDER BY n_sources DESC, last_seen DESC LIMIT ?",
@@ -621,13 +680,15 @@ async def run(svc: Services, bot: Bot, now: int | None = None) -> None:
             log.exception("뉴스 방 처리 실패 %s", chat_id)
 
 
-async def headlines(svc: Services, cats: list[str], need: int, limit: int = 5) -> list:
-    """지금 주요 뉴스 (.뉴스·AI 도구·미리보기 공용). 필요하면 가져오기·요약 (10분 캐시). need 곳 묶음이 없으면 2곳까지 낮춤."""
-    try:
-        await refresh(svc, set(cats))
-        await summarize(svc, need=min(need, MIN_POSSIBLE))
-    except Exception:
-        log.exception("뉴스 가져오기 실패")
+async def headlines(svc: Services, cats: list[str], need: int, limit: int = 5, *, fetch: bool = True) -> list:
+    """지금 주요 뉴스 (.뉴스·AI 도구·미리보기 공용). 필요하면 가져오기·요약 (10분 캐시). need 곳 묶음이 없으면 2곳까지 낮춤.
+    fetch=False = 이미 모아 둔 것만 (이용 기간 아닌 방·1:1 은 새로 가져오거나 AI 요약을 부르지 않음)."""
+    if fetch:
+        try:
+            await refresh(svc, set(cats))
+            await summarize(svc, need=min(need, MIN_POSSIBLE))
+        except Exception:
+            log.exception("뉴스 가져오기 실패")
     rows = await top(svc.db, cats, need, limit=limit)
     return rows or await top(svc.db, cats, MIN_POSSIBLE, limit=limit)
 

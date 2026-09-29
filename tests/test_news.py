@@ -462,6 +462,200 @@ async def ai_tool_reads_shared_cache_without_links():
     assert "결과 없음" in out
 
 
+# ── 감사 수정 (2026-09-30) ────────────────────────────────
+@test
+async def fetch_streams_and_stops_past_max_bytes():
+    """r.content[:MAX_BYTES] 는 다 받은 뒤에야 자름 → 받으면서 넘으면 끊기."""
+    import httpx
+    sent = []
+
+    async def body():
+        for _ in range(1000):
+            sent.append(1)
+            yield b"x" * 100
+
+    def handler(request):
+        if request.url.path == "/big":
+            return httpx.Response(200, content=body())
+        return httpx.Response(200, content=b"<rss/>", headers={"ETag": '"e"'})
+    old = news.MAX_BYTES
+    news.reset()
+    news.MAX_BYTES = 1000
+    news._st["client"] = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        status, data, h = await news.stream_get("https://feeds.bbci.co.uk/ok", {})
+        assert status == 200 and data == b"<rss/>" and h.get("etag") == '"e"'
+        try:
+            await news.stream_get("https://feeds.bbci.co.uk/big", {})
+            raise AssertionError("너무 큰 피드인데 끊지 않음")
+        except ValueError:
+            pass
+        assert len(sent) <= 12, f"받으면서 끊어야 함 (받은 조각 {len(sent)})"
+    finally:
+        news.MAX_BYTES = old
+        await news._st["client"].aclose()
+        news.reset()
+
+
+@test
+async def slow_feed_times_out_and_network_runs_outside_the_lock():
+    """느린 피드가 잠금을 쥔 채 멈추면 .뉴스·미리보기·AI 도구·1분 job 이 다 막힘 → 네트워크는 잠금 밖·피드마다 전체 상한."""
+    import asyncio
+    db, svc, bot = await world()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(url, headers):
+        if url == news.SOURCES[1].url:
+            started.set()
+            await release.wait()
+        return await feeds(url, headers)
+    news.http_get = slow
+    task = asyncio.ensure_future(news.refresh(svc, {"world"}, now=NOW))
+    await asyncio.wait_for(started.wait(), 5)
+    assert not news._st["lock"].locked(), "피드 받는 동안 잠금을 쥐고 있음"
+    rows = await asyncio.wait_for(news.headlines(svc, ["world"], 3), 3)   # 막히지 않고 바로 돌아옴
+    assert rows == []
+    release.set()
+    assert await asyncio.wait_for(task, 5) > 10
+    old = news.FEED_TIMEOUT
+    news.FEED_TIMEOUT = 0.2
+    release.clear()
+    try:
+        await asyncio.wait_for(news.refresh(svc, {"world"}, force=True, now=NOW), 5)
+    finally:
+        news.FEED_TIMEOUT = old
+        release.set()
+    assert news._st["failed"] == [news.SOURCES[1].url], news._st["failed"]
+
+
+@test
+async def known_items_are_skipped_before_similarity_and_titles_are_cached():
+    """10분마다 피드 전체 × 36시간 묶음을 비교하던 것 → 이미 받은 기사는 한 번의 조회로 거르고, 제목 낱말은 캐시."""
+    db, svc, bot = await world()
+    await news.refresh(svc, {"world"}, now=NOW)
+    n_items = len(await db._all("SELECT 1 FROM news_items"))
+    calls = {"sim": 0, "tok": 0, "idf": []}
+    sim, tok, idf = news.similarity, news.tokens, news.idf_table
+
+    def spy_sim(*a, **k):
+        calls["sim"] += 1
+        return sim(*a, **k)
+
+    def spy_tok(t):
+        calls["tok"] += 1
+        return tok(t)
+
+    def spy_idf(titles):
+        calls["idf"].append(len(titles))
+        return idf(titles)
+    news.similarity, news.tokens, news.idf_table = spy_sim, spy_tok, spy_idf
+    try:
+        assert await news.refresh(svc, {"world"}, force=True, now=NOW) == 0
+        assert calls == {"sim": 0, "tok": 0, "idf": []}, calls
+        one = [news.Item("bbc", "world", "Volcano erupts near Naples forcing mass evacuation", "https://www.bbc.co.uk/v9", NOW)]
+        await db.atomic(lambda c: news._ingest(c, one, NOW))
+        assert calls["tok"] == 1, "36시간 제목은 캐시 — 새 제목만 쪼갬"
+        assert calls["idf"] == [n_items + 1], ("IDF 는 있던 기사 + 새 기사만", calls["idf"], n_items)
+        assert 0 < calls["sim"] <= len(await db._all("SELECT 1 FROM news_clusters"))
+    finally:
+        news.similarity, news.tokens, news.idf_table = sim, tok, idf
+
+
+@test
+async def concurrent_summarize_calls_the_llm_once():
+    """1분 job 과 .뉴스 가 겹치면 같은 묶음을 두 번 요약 (AI 요금 두 배·tries 두 번)."""
+    import asyncio
+
+    class Slow(NewsLLM):
+        async def json(self, system, user, **kw):
+            await asyncio.sleep(0.05)
+            return await super().json(system, user, **kw)
+    llm = Slow()
+    db, svc, bot = await world(llm=llm)
+    await news.refresh(svc, {"world"}, now=NOW)
+    a, b = await asyncio.gather(news.summarize(svc, now=NOW), news.summarize(svc, now=NOW))
+    assert len(llm.calls) == 1 and a + b >= 5 and 0 in (a, b), (len(llm.calls), a, b)
+    assert not await db._all("SELECT 1 FROM news_clusters WHERE tries > 1")
+
+
+@test
+async def backslash_userinfo_and_spaces_in_links_are_rejected():
+    for bad in ("https://evil.com\\@www.bbc.com/x", "https://evil.com\\www.bbc.co.uk/x", "https://user:pw@www.bbc.co.uk/x",
+                "https://evil@www.bbc.co.uk/x", "https://www.bbc.co.uk/a b", "https://www.bbc.co.uk/a\tb",
+                "https://www.bbc.co.uk/a\nb"):
+        assert news.safe_url(bad, "bbc") is None, bad
+    assert news.safe_url("https://www.bbc.co.uk/news/world-1?at_campaign=x&y=1", "bbc")
+
+
+@test
+async def expired_room_preview_and_ai_tool_do_not_fetch_or_summarize():
+    db, svc, bot = await world()
+    await news.refresh(svc, {"world"}, now=NOW)
+    await news.summarize(svc, now=NOW)
+    n_llm = len(svc.llm.calls)
+    hits = []
+
+    async def spy(url, headers):
+        hits.append(url)
+        return await feeds(url, headers)
+    news.http_get = spy
+    news._st["fetched"] = {}
+
+    async def inactive(cid):
+        return False
+    svc.billing = SimpleNamespace(active=inactive, enabled=True)
+    q = await press(svc, bot, ADMIN, f"m:nwp:{CHAT}")
+    assert q.answers[-1][1] and "이용 기간" in q.answers[-1][0] and not bot.named("send_message"), q.answers
+    ctx = ToolCtx(svc, bot, CHAT, fake_user(MEMBER, "철수"), Role.MEMBER, await db.get_settings(CHAT))
+    out = await P.t_news_headlines(ctx, {"category": "world"})
+    assert "Estonia" in out, "끝난 방도 이미 모아 둔 건 보여 줌"
+    assert not hits and len(svc.llm.calls) == n_llm, "끝난 방에서 새로 가져오기·AI 요약 X"
+    svc.billing = None                                          # 결제 꺼짐 = 모든 방 이용 중
+    dm = ToolCtx(svc, bot, MEMBER, fake_user(MEMBER, "철수"), Role.MEMBER, {})
+    assert "Estonia" in await P.t_news_headlines(dm, {"category": "world"})
+    assert not hits, "1:1 은 캐시만"
+    await P.t_news_headlines(ctx, {"category": "world"})
+    assert hits, "이용 중인 방은 가져옴"
+
+
+@test
+async def etag_kept_only_after_ingest_and_duplicate_url_adds_category():
+    db, svc, bot = await world()
+    seen = []
+
+    async def spy(url, headers):
+        seen.append(dict(headers))
+        return await feeds(url, headers)
+    news.http_get = spy
+    real = news._ingest
+
+    def boom(c, items, now):
+        raise RuntimeError("disk full")
+    news._ingest = boom
+    try:
+        await news.refresh(svc, {"world"}, now=NOW)
+        raise AssertionError("넣기 실패가 안 올라옴")
+    except RuntimeError:
+        pass
+    finally:
+        news._ingest = real
+    assert not news._st["etag"], "DB 에 못 넣었는데 ETag 를 기억함 → 다음엔 304 로 기사 잃음"
+    seen.clear()
+    assert await news.refresh(svc, {"world"}, force=True, now=NOW) > 10
+    assert seen and not any(seen), "조건 없이 다시 받음"
+    assert news._st["etag"], "넣은 뒤엔 기억"
+    # 같은 기사가 두 분야 피드에: 같은 묶음 안 · 다음 묶음 둘 다 분야 더함
+    it = news.Item("bbc", "world", "Central bank raises interest rates sharply today", "https://www.bbc.co.uk/n/r1", NOW)
+    both = [it, news.Item("bbc", "economy", it.title, it.url, NOW)]
+    await db.atomic(lambda c: news._ingest(c, both, NOW))
+    rate = await cluster_of(db, "Central bank")
+    assert set(rate["cats"].split(",")) == {"world", "economy"}, rate["cats"]
+    assert len(await db._all("SELECT 1 FROM news_items WHERE cluster_id=?", (rate["id"],))) == 1
+    later = [news.Item("bbc", "tech", it.title, it.url + "/", NOW)]
+    assert await db.atomic(lambda c: news._ingest(c, later, NOW)) == 0
+    assert set((await cluster_of(db, "Central bank"))["cats"].split(",")) == {"world", "economy", "tech"}
+
+
 async def run_all():
     try:
         return await _run()
