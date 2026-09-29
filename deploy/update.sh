@@ -26,6 +26,13 @@ done
 [ -z "$RUN_AS" ] || [ "$(id -u)" -eq 0 ] || { echo "root 로 실행하세요 (sudo sodam-update)." >&2; exit 1; }
 
 say() { [ "$QUIET" -eq 1 ] || echo "$@"; }
+# 결과 한 줄 → data/*.status (봇이 5분마다 읽어 실패면 오너 1:1 로 — sodam/diag.py report_server_status)
+report() {   # report 파일이름 내용…
+    local f="$APP_DIR/data/$1"; shift
+    mkdir -p "$APP_DIR/data" 2>/dev/null || return 0
+    printf '%s %s\n' "$(date '+%F %T')" "$*" > "$f" 2>/dev/null || return 0
+    [ -z "$RUN_AS" ] || chown "$RUN_AS:" "$f" 2>/dev/null || true
+}
 log() { echo "$(date '+%F %T') [update] $*"; }
 g() { git -C "$APP_DIR" "$@"; }
 
@@ -60,13 +67,14 @@ voice_setup() {
 DIAG_PORT=${DIAG_PORT:-8787}
 diag_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] || return 0
-    if ! command -v caddy >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -q caddy >/dev/null 2>&1 \
-            || { log "diag: caddy 설치 실패 (본체는 정상)"; return 0; }
+    local apt=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -y -q)
+    if ! command -v caddy >/dev/null 2>&1; then   # 자동 보안 업데이트가 잠금을 잡고 있으면 기다림 · 목록이 오래됐으면 update 뒤 한 번 더
+        "${apt[@]}" install caddy >/dev/null 2>&1 || { "${apt[@]}" update >/dev/null 2>&1 && "${apt[@]}" install caddy >/dev/null 2>&1; } \
+            || { log "diag: caddy 설치 실패 (본체는 정상)"; report diag_setup.status "diag_fail caddy 설치 실패"; return 0; }
     fi
     local ip host conf
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
-    [ -n "$ip" ] || { log "diag: 공인 IP 를 모름"; return 0; }
+    [ -n "$ip" ] || { log "diag: 공인 IP 를 모름"; report diag_setup.status "diag_fail 공인 IP 모름"; return 0; }
     host="${ip//./-}.sslip.io"
     conf=$(mktemp)
     printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$host" "$DIAG_PORT" > "$conf"
@@ -80,7 +88,11 @@ diag_setup() {
         cp "$APP_DIR/deploy/sodam-diag.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
     fi
     $SYSTEMCTL is-enabled -q sodam-diag 2>/dev/null || $SYSTEMCTL enable -q sodam-diag
-    $SYSTEMCTL restart sodam-diag && log "diag: 점검 창구 재시작" || log "diag: 재시작 실패 (journalctl -u sodam-diag)"
+    if $SYSTEMCTL restart sodam-diag; then
+        log "diag: 점검 창구 재시작"; report diag_setup.status "diag_ok https://$host"
+    else
+        log "diag: 재시작 실패 (journalctl -u sodam-diag)"; report diag_setup.status "diag_fail sodam-diag 시작 실패"
+    fi
 }
 
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
@@ -108,6 +120,10 @@ g fetch -q origin "$BRANCH"
 NEW=$(g rev-parse FETCH_HEAD)
 if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     say "새 커밋 없음 ($(g rev-parse --short HEAD), $BRANCH)"
+    # 점검 창구가 안 떠 있으면 10분마다 다시 설치 시도 (apt 잠금 같은 일시 실패 회복)
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] && ! $SYSTEMCTL is-active -q sodam-diag 2>/dev/null; then
+        diag_setup
+    fi
     exit 0
 fi
 if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
@@ -126,6 +142,7 @@ if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_
 log "tests…"
 if ! (cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py > "$TMP/tests.log" 2>&1); then
     tail -n 40 "$TMP/tests.log"
+    report update.status "tests_failed $(g rev-parse --short "$NEW"): $(grep -E '^FAIL' "$TMP/tests.log" | head -5 | tr '\n' ' ')"
     log "!! 테스트 실패 → 적용 안 함. 봇은 이전 코드($(g rev-parse --short "$PREV"))로 계속 돔"
     exit 1
 fi
@@ -137,6 +154,7 @@ VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then
     log "ok: 버전 $VER 실행 중"
+    report update.status "ok $VER"
     voice_setup
     diag_setup
     exit 0
@@ -150,6 +168,7 @@ g reset -q --hard "$PREV"
 VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then
+    report update.status "rollback $VER (새 버전 시작 확인 실패 → 되돌림)"
     log "되돌림 완료: 버전 $VER 실행 중 (실패한 커밋은 GitHub 에서 고친 뒤 다시 sodam-update)"
 else
     log "!! 되돌린 버전도 시작 확인 실패 — journalctl -u sodam -n 100 확인 필요"

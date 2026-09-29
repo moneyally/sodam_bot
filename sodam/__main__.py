@@ -228,6 +228,10 @@ def build_app(cfg: Config, db: DB) -> Application:
                 await diag.notify_token(svc, app.bot)
             except Exception as e:
                 logging.info("점검 토큰 알림 실패: %s", e)
+            try:   # 서버 갱신·창구 설치 실패는 서버 로그에만 남던 것 → 오너 1:1 로
+                await diag.report_server_status(svc, app.bot)
+            except Exception as e:
+                logging.info("갱신 결과 알림 실패: %s", e)
         if cfg.bot_role != "dealer":
             jq.run_repeating(_diag_token, interval=300, first=20, name="diag_token")
 

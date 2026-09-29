@@ -120,6 +120,37 @@ async def notify_token(svc, bot, *, force: bool = False) -> bool:
     return sent
 
 
+# ── 서버 갱신 결과 (deploy/update.sh report → data/*.status) → 실패면 오너 1:1 ─────────
+STATUS_FILES = {"update.status": "🛠 서버 갱신", "diag_setup.status": "🔌 원격 점검 설치"}
+FAIL_MARKS = ("tests_failed", "rollback", "diag_fail")
+
+
+async def report_server_status(svc, bot) -> int:
+    """갱신·설치가 **실패**했으면 그 줄을 오너에게 한 번 (같은 줄은 다시 안 보냄). 성공은 조용히. 보낸 건수."""
+    from .util import esc
+    sent = 0
+    for name, label in STATUS_FILES.items():
+        p = data_dir(svc.cfg.db_path) / name
+        try:
+            line = p.read_text(encoding="utf-8", errors="replace").strip()[:600]
+        except OSError:
+            continue
+        key = f"status_seen:{name}"
+        if not line or await svc.db.get_state(0, key) == line:
+            continue
+        await svc.db.set_state(0, key, line)
+        if not any(m in line for m in FAIL_MARKS):
+            continue
+        for uid in sorted(await svc.perms.owners()):
+            try:
+                await bot.send_message(uid, f"{label} 실패\n<code>{esc(redact(line))}</code>\n"
+                                            "봇은 이전 버전으로 계속 돌아요. 클로드에게 이 메시지를 보여 주세요.", parse_mode="HTML")
+                sent += 1
+            except Exception as e:
+                log.info("갱신 실패 알림 전송 실패 %s: %s", uid, e)
+    return sent
+
+
 # ── 창구 (별도 프로세스, 표준 라이브러리만) ────────────────────────
 class Diag:
     def __init__(self, db_path: str, app_dir: Path = ROOT, run=subprocess.run):

@@ -169,3 +169,39 @@ async def redact_hides_secret_shapes():
 
 if __name__ == "__main__":
     run_all()
+
+
+@test
+async def server_update_failures_reach_owner_once_success_stays_quiet():
+    db = await world()
+    svc = await make_svc(db)
+    svc.perms.owner_ids = {7}
+    bot = FakeBot()
+    d = diag.data_dir(db.path)
+    (d / "update.status").write_text("2026-09-29 10:00:00 ok abc123\n")
+    assert await diag.report_server_status(svc, bot) == 0 and not bot.named("send_message")
+    (d / "update.status").write_text("2026-09-29 10:10:00 tests_failed def456: FAIL test_x FAIL test_y\n")
+    (d / "diag_setup.status").write_text("2026-09-29 10:11:00 diag_fail caddy 설치 실패\n")
+    assert await diag.report_server_status(svc, bot) == 2
+    texts = [c[2] for c in bot.named("send_message")]
+    assert any("test_x" in t for t in texts) and any("caddy" in t for t in texts)
+    assert await diag.report_server_status(svc, bot) == 0, "같은 줄은 한 번만"
+
+
+def _update_run(tests_pass):
+    import subprocess
+    from test_fix_ops import _fake_repo, _run_update
+    clone, log = _fake_repo(tests_pass=tests_pass)
+    if tests_pass:
+        (log.parent / "start_ok").write_text("")
+    r = _run_update(clone, log)
+    return clone, r
+
+
+@test
+def update_sh_writes_status_for_bot():
+    clone, r = _update_run(False)
+    st = (clone / "data" / "update.status").read_text()
+    assert "tests_failed" in st, (st, r.stdout, r.stderr)
+    clone, r = _update_run(True)
+    assert " ok " in (clone / "data" / "update.status").read_text()
