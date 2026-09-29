@@ -261,10 +261,11 @@ async def diff_detects_kickoff_goal_final_postpone():
     assert e.kind == "start" and "경기 시작 [EPL] 토트넘 vs 아스널" in e.text
     one = game("in", 1, 0, goals=[("57'", "home", "Son Heung-min", "")])
     [e] = diff(snap(live0), one)
-    assert e.kind == "goal" and e.dedupe == "goal:1-0" and "토트넘 1-0 아스널" in e.text and "57' Son Heung-min" in e.text, e
+    assert e.kind == "goal" and e.dedupe == "goal:1-0:0" and "토트넘 1-0 아스널" in e.text and "57' Son Heung-min" in e.text, e
     assert diff(snap(one), one) == [], "같은 상태는 이벤트 없음"
-    [e] = diff(snap(one), game("in", 0, 0))
-    assert e.kind == "undo" and "득점 취소" in e.text
+    assert diff(snap(one), game("in", 0, 0)) == [], "줄어든 점수 한 틱은 보류 (ESPN 이 잠깐 틀리게 줄 때)"
+    [e] = diff(Snap("in", 1, 0, 1, 0, (0, 0)), game("in", 0, 0))
+    assert e.kind == "undo" and "득점 취소" in e.text and e.dedupe == "undo:0-0:1"
     [e] = diff(snap(one), game("post", 2, 1))
     assert e.kind == "final" and "경기 종료 [EPL] 토트넘 2-1 아스널" in e.text, "종료는 골보다 종료 한 줄"
     [e] = diff(snap(pre), game("postponed"))
@@ -290,7 +291,7 @@ class Script(Provider):
         self.calls = []
 
     def supports(self, lg):
-        return lg.code in ("epl", "kbo", "mlb")
+        return lg.code in ("epl", "kbo", "mlb", "ucl")
 
     async def day(self, lg, d, only=None):
         self.calls.append((lg.code, d, frozenset(only) if only else None))
@@ -341,7 +342,7 @@ async def engine_seeds_then_alerts_kickoff_goal_final_once():
     await e.sp.run_alerts(e.bot)
     assert "🏁 경기 종료 [EPL] 토트넘 1-0 아스널" in msgs(e)[-1] and len(msgs(e)) == 3
     rows = await e.db._all("SELECT kind FROM sports_alert_sent WHERE chat_id=? ORDER BY kind", (CHAT,))
-    assert [r["kind"] for r in rows] == ["final", "goal:1-0", "start"]
+    assert [r["kind"] for r in rows] == ["final", "goal:1-0:0", "start"]
 
 
 @test
@@ -357,35 +358,102 @@ async def restart_seeds_silently_and_dedupe_survives():
     again = Sports("123", e.db, e.svc.cfg.tz, fetch=FakeFetch(), clock=e.clock)   # 봇 재시작
     again.feed.providers = [e.src]
     await again.run_alerts(e.bot)
+    for sc in ((1, 0), (2, 0)):                            # ESPN 이 한 틱만 1-0 으로 틀리게 줌 → 아무 알림 없음
+        e.clock.t += 60
+        e.src.games["epl"] = [game("in", *sc, start=KICK)]
+        await again.run_alerts(e.bot)
+    assert len(msgs(e)) == 1, msgs(e)
     e.clock.t += 60
-    e.src.games["epl"] = [game("in", 1, 0, start=KICK)]    # 득점 취소
+    e.src.games["epl"] = [game("in", 2, 0, start=KICK)]
     await again.run_alerts(e.bot)
-    e.clock.t += 60
-    e.src.games["epl"] = [game("in", 2, 0, start=KICK)]    # 다시 2-0 → 이미 보낸 골
-    await again.run_alerts(e.bot)
+    assert len(msgs(e)) == 1, "이미 보낸 골은 재시작 뒤에도 한 번 (DB 중복 방지)"
+
+
+@test
+async def rescored_same_score_after_confirmed_undo_alerts_again():
+    """감사 2026-09-30: 1-1 골 → VAR 취소 1-0 → 다시 1-1 이면 두 번째 골도 알림 (예전엔 goal:1-1 중복으로 버림)."""
+    e = await engine(KICK + 60)
+    e.src.games["epl"] = [game("in", 1, 0, start=KICK)]
+    await e.sp.run_alerts(e.bot)
+    for sc in ((1, 1), (1, 0), (1, 0), (1, 1)):
+        e.clock.t += 60
+        e.src.games["epl"] = [game("in", *sc, start=KICK)]
+        await e.sp.run_alerts(e.bot)
     texts = msgs(e)
-    assert sum("골!" in t for t in texts) == 1 and any("득점 취소" in t for t in texts), texts
+    assert sum("골!" in t for t in texts) == 2 and sum("득점 취소" in t for t in texts) == 1, texts
+
+
+@test
+async def missing_score_tick_keeps_previous_score():
+    """점수가 빈 채로 온 틱 뒤에도 그 사이 골을 알림 (예전엔 스냅샷에 None 이 들어가 골이 영영 안 감)."""
+    e = await engine(KICK + 60)
+    e.src.games["epl"] = [game("in", 0, 0, start=KICK)]
+    await e.sp.run_alerts(e.bot)
+    import dataclasses
+    blank = dataclasses.replace(game("in", 0, 0, start=KICK), home_score=None, away_score=None)
+    for g in (blank, game("in", 1, 0, start=KICK)):
+        e.clock.t += 60
+        e.src.games["epl"] = [g]
+        await e.sp.run_alerts(e.bot)
+    assert any("골!" in t and "1-0" in t for t in msgs(e)), msgs(e)
+
+
+@test
+async def hourly_cap_keeps_final_for_later_and_team_follow_sees_cups():
+    e = await engine(KICK + 60, follows=((CHAT, "epl", "Tottenham Hotspur"),))
+    q = e.sp.alerts.sent_times.setdefault(CHAT, alerts.deque())
+    q.extend([e.clock.t] * alerts.MAX_PER_HOUR)                              # 이번 시간 상한 다 참
+    e.src.games["ucl"] = [game("in", 1, 0, league="ucl", start=KICK)]       # 토트넘 챔스 경기
+    await e.sp.run_alerts(e.bot)
+    e.clock.t += 60
+    e.src.games["ucl"] = [game("post", 1, 0, league="ucl", start=KICK)]
+    await e.sp.run_alerts(e.bot)
+    assert not msgs(e), "상한에 걸려 못 보냄"
+    held = await e.db._all("SELECT * FROM sports_held WHERE chat_id=?", (CHAT,))
+    assert len(held) == 1 and "경기 종료" in held[0]["text"], "결과는 버리지 않고 모아 둠"
+    e.clock.t += 3700                                                       # 한 시간 지나 상한 풀림
+    await e.sp.run_alerts(e.bot)
+    assert any("경기 종료" in t and "챔스" in t for t in msgs(e)), msgs(e)
+    assert not await e.db._all("SELECT * FROM sports_held WHERE chat_id=?", (CHAT,)), "보낸 뒤에만 지움"
+
+
+@test
+async def failed_schedule_fetch_backs_off():
+    e = await engine(KICK - 6 * 3600)
+
+    async def boom(lg, d, only=None):
+        e.src.calls.append((lg.code, d, None))
+        raise alerts.SportsError("down")
+    e.src.day = boom
+    for _ in range(6):                                                     # 30초 틱 6번 = 3분
+        await e.sp.run_alerts(e.bot)
+        e.clock.t += 30
+    assert len(e.src.calls) == 1, f"장애 때 30초마다 두드리지 않음: {len(e.src.calls)}"
+    e.clock.t += alerts.RETRY_EVERY
+    await e.sp.run_alerts(e.bot)
+    assert len(e.src.calls) == 2
 
 
 @test
 async def one_fetch_per_league_for_many_rooms_and_cadence():
     e = await engine(KICK - 6 * 3600, follows=((CHAT, "epl", ""), (CHAT2, "epl", ""), (CHAT2, "epl", "Tottenham Hotspur")))
     e.src.games["epl"] = [game(start=KICK)]
+    epl = lambda: [c for c in e.src.calls if c[0] == "epl"]   # 팀 구독은 챔스도 따로 받음 → epl 요청만 셈
     await e.sp.run_alerts(e.bot)
-    assert len(e.src.calls) == 1, "두 방 + 팀 구독이어도 리그 한 번"
+    assert len(epl()) == 1, "두 방 + 팀 구독이어도 리그 한 번"
     e.clock.t += 30
     await e.sp.run_alerts(e.bot)
     e.clock.t = KICK - 20 * 60         # 경기 20분 전: 아직 일정 모드
     await e.sp.run_alerts(e.bot)
-    assert len(e.src.calls) == 1, "경기 없는 시간엔 6시간마다만"
+    assert len(epl()) == 1, "경기 없는 시간엔 6시간마다만"
     e.clock.t = KICK - 10 * 60         # 15분 전 창 → 60초 폴링
     await e.sp.run_alerts(e.bot)
     e.clock.t += 30
     await e.sp.run_alerts(e.bot)
     e.clock.t += 31
     await e.sp.run_alerts(e.bot)
-    assert len(e.src.calls) == 3, e.src.calls
-    assert e.src.calls[-1][2] == frozenset({"20260929"}), "라이브 땐 경기가 있는 요청만"
+    assert len(epl()) == 3, epl()
+    assert epl()[-1][2] == frozenset({"20260929"}), "라이브 땐 경기가 있는 요청만"
     e.src.games["epl"] = [game("in", 0, 0, start=KICK)]
     e.clock.t += 61
     await e.sp.run_alerts(e.bot)

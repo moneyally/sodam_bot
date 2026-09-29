@@ -39,6 +39,14 @@ MAX_GAME_LEN = 6 * 3600    # 이보다 오래 '시작 전/진행 중'이면 멈�
 MAX_PER_HOUR = 12          # 방마다 시간당 알림 메시지
 KEEP_DAYS = 14
 MAX_FOLLOWS = 20
+MAX_LINES = 40             # 한 메시지 줄 수 (넘치는 결과는 다음 틱으로)
+RETRY_EVERY = 300          # 일정 받기 실패 뒤 다시 시도 간격
+EURO_LEAGUES = {"epl", "laliga", "seriea", "bundesliga", "ligue1"}
+
+
+def cups_for(league: str) -> tuple[str, ...]:
+    """팀 구독이 같이 보는 대회."""
+    return tuple(c for c in ("ucl", "uel") if c in LEAGUES) if league in EURO_LEAGUES else ()
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS sports_follow (
@@ -99,6 +107,22 @@ class Snap:
     hs: int | None
     as_: int | None
     ngoals: int
+    gen: int = 0                      # 득점 취소가 확정될 때마다 +1 → 같은 점수로 다시 넣은 골도 알림 (감사 2026-09-30)
+    drop: tuple | None = None         # 점수가 줄어든 걸 한 번 봄 (두 번 연속이어야 취소 확정 — ESPN 이 한 틱 틀리게 줄 때 가짜 취소 X)
+
+
+def next_snap(prev: Snap | None, g: Game) -> Snap:
+    """다음 스냅샷. 점수가 비어 온 틱은 이전 점수 유지, 점수가 줄면 한 번은 보류(drop) 후 두 번째에 확정(gen+1)."""
+    if prev is None:
+        return Snap(g.state, g.home_score, g.away_score, len(g.goals))
+    if not g.scored or g.home_score is None or g.away_score is None:
+        return Snap(g.state, prev.hs, prev.as_, max(prev.ngoals, len(g.goals)), prev.gen, prev.drop)
+    cur = (g.home_score, g.away_score)
+    if prev.hs is not None and prev.as_ is not None and sum(cur) < prev.hs + prev.as_:
+        if prev.drop != cur:
+            return Snap(g.state, prev.hs, prev.as_, prev.ngoals, prev.gen, cur)     # 보류 (아직 알림 X)
+        return Snap(g.state, *cur, len(g.goals), prev.gen + 1)                       # 확정된 취소
+    return Snap(g.state, *cur, len(g.goals), prev.gen)
 
 
 @dataclass
@@ -139,22 +163,26 @@ def diff(prev: Snap | None, g: Game) -> list[Event]:
         elif g.state in fmt.STATE_KO:
             icon = {"cancel": "🚫", "postponed": "📅", "suspended": "⏸"}[g.state]
             return [Event(g, "cancel", g.state, f"{icon} 경기 {fmt.STATE_KO[g.state]} {tag} {fmt.matchup(g, score=g.state == 'suspended')}")]
-    if g.state == "in" and g.scored and prev.hs is not None and prev.as_ is not None:
+    if g.state == "in" and g.scored and g.home_score is not None and g.away_score is not None \
+            and prev.hs is not None and prev.as_ is not None:
         before, now = prev.hs + prev.as_, g.home_score + g.away_score
+        if now < before and prev.drop != (g.home_score, g.away_score):
+            return out                     # 줄어든 점수는 한 틱 더 보고 확정 (next_snap 이 보류)
+        gen = prev.gen + (1 if now < before else 0)
         if now != before or (g.home_score, g.away_score) != (prev.hs, prev.as_):
             if sport in GOAL_SPORTS:
                 if now > before:
                     who = _scorers(g, g.goals[prev.ngoals:]) if len(g.goals) > prev.ngoals else ""
-                    out.append(Event(g, "goal", f"goal:{_score(g)}",
+                    out.append(Event(g, "goal", f"goal:{_score(g)}:{gen}",
                                      f"{em} 골! {tag} {fmt.matchup(g)}" + (f" · {who}" if who else "")))
                 else:
-                    out.append(Event(g, "undo", f"undo:{_score(g)}", f"↩️ 득점 취소 {tag} {fmt.matchup(g)}"))
+                    out.append(Event(g, "undo", f"undo:{_score(g)}:{gen}", f"↩️ 득점 취소 {tag} {fmt.matchup(g)}"))
             else:
                 detail = f" ({esc(g.detail)})" if g.detail else ""
-                out.append(Event(g, "score", f"score:{_score(g)}", f"{em} {tag} {fmt.matchup(g)}{detail}"))
+                out.append(Event(g, "score", f"score:{_score(g)}:{gen}", f"{em} {tag} {fmt.matchup(g)}{detail}"))
     elif g.state == "in" and g.scored and prev.state == "pre" and sport in GOAL_SPORTS and (g.home_score or g.away_score):
         # 시작 전 → (한 틱 사이) 이미 골: 시작과 골을 같이
-        out.append(Event(g, "goal", f"goal:{_score(g)}", f"{em} 골! {tag} {fmt.matchup(g)}"))
+        out.append(Event(g, "goal", f"goal:{_score(g)}:{prev.gen}", f"{em} 골! {tag} {fmt.matchup(g)}"))
     return out
 
 
@@ -210,7 +238,9 @@ class Alerts:
             days.insert(0, yday)
         cached = [g for d in days for g in (self.feed.cached_day(lg, d) or [])]
         live = [g for g in cached if self._window(g, now)]
-        sched_due = now - self.last_sched.get(code, 0) >= SCHEDULE_EVERY or self.feed.cached_day(lg, today) is None
+        # 일정이 비었을 때도 최소 5분 간격 (ESPN 장애 때 30초 틱마다 두드리지 않게 — 감사 2026-09-30)
+        sched_due = now - self.last_sched.get(code, 0) >= SCHEDULE_EVERY or (
+            self.feed.cached_day(lg, today) is None and now - self.last_fetch.get(code, 0) >= RETRY_EVERY)
         live_due = bool(live) and now - self.last_fetch.get(code, 0) >= LIVE_EVERY
         if not (sched_due or live_due):
             return []
@@ -226,6 +256,8 @@ class Alerts:
                         games += await self.feed.day(lg, d, only=only)
         except SportsError as e:
             log.warning("sports poll %s: %s", code, e)
+            if sched_due:   # 실패해도 다음 일정 받기는 RETRY_EVERY 뒤로
+                self.last_sched[code] = now - SCHEDULE_EVERY + RETRY_EVERY
             return []
         if sched_due:
             self.last_sched[code] = now
@@ -243,33 +275,43 @@ class Alerts:
             if s.get("sports_enabled") and (is_active is None or await is_active(cid)):
                 active[cid] = (s, fl)
         events: list[Event] = []
-        for code in sorted({f["league"] for _, fl in active.values() for f in fl if f["league"] in LEAGUES}):
+        codes = {f["league"] for _, fl in active.values() for f in fl if f["league"] in LEAGUES}
+        codes |= {c for _, fl in active.values() for f in fl if f["team"] for c in cups_for(f["league"])}
+        for code in sorted(codes):
             for g in await self._poll_league(code, now):
                 prev = self.snap.get(g.key)
                 events += diff(prev, g)
-                self.snap[g.key] = Snap(g.state, g.home_score, g.away_score, len(g.goals))
+                self.snap[g.key] = next_snap(prev, g)
         sent = 0
         hour = datetime.fromtimestamp(now, KST).hour
         for cid, (s, fl) in active.items():
             quiet = in_quiet(s.get("sports_quiet", "01-07"), hour)
             mine = [e for e in events if self._wants(fl, s, e)]
-            lines = []
+            fresh = []
             for e in mine:
-                if not await self._claim(cid, e, now):
+                if not await self._claim(cid, e, now):      # 이미 보냈거나 모아 둔 것
                     continue
                 if quiet:
                     if e.kind in HOLD_KINDS:
-                        await self.db._write("INSERT OR IGNORE INTO sports_held VALUES(?, ?, ?, ?, ?)",
-                                             (cid, e.game.key, e.dedupe, e.text, int(now)))
+                        await self._hold(cid, e, now)
                     continue
-                lines.append(e.text)
-            if not quiet:
-                held = await self.db._all("SELECT * FROM sports_held WHERE chat_id=? ORDER BY created", (cid,))
-                if held:
-                    await self.db._write("DELETE FROM sports_held WHERE chat_id=?", (cid,))
-                    lines = ["🌙 <b>밤사이 경기 결과</b>"] + [h["text"] for h in held] + ([""] + lines if lines else [])
-            if lines and await self._send(bot, cid, "\n".join(lines[:40]), now):
+                fresh.append(e)
+            held = [] if quiet else await self.db._all(
+                "SELECT * FROM sports_held WHERE chat_id=? ORDER BY created LIMIT ?", (cid, MAX_LINES - 1))
+            lines = (["🌙 <b>밤사이 경기 결과</b>"] + [h["text"] for h in held] + ([""] if fresh else [])) if held else []
+            room = MAX_LINES - len(lines)
+            now_lines, later = fresh[:room], fresh[room:]
+            lines += [e.text for e in now_lines]
+            ok = bool(lines) and await self._send(bot, cid, "\n".join(lines), now)
+            if ok:
                 sent += 1
+                for h in held:   # 보낸 뒤에만 지움 (상한·오류면 다음 틱에 다시 — 감사 2026-09-30)
+                    await self.db._write("DELETE FROM sports_held WHERE chat_id=? AND game=? AND kind=?",
+                                         (cid, h["game"], h["kind"]))
+            # 못 보낸 결과·취소는 버리지 않고 모아 둠 (상한에 걸려 '경기 종료'가 사라지던 문제). 골·시작은 늦으면 의미 없어 버림
+            for e in (later if ok else now_lines + later):
+                if e.kind in HOLD_KINDS:
+                    await self._hold(cid, e, now)
         if now - self.last_prune > 3600:
             self.last_prune = now
             await self.prune(now)
@@ -278,13 +320,18 @@ class Alerts:
                 self.snap.pop(k, None)
         return sent
 
+    async def _hold(self, cid: int, e: Event, now: float) -> None:
+        await self.db._write("INSERT OR IGNORE INTO sports_held VALUES(?, ?, ?, ?, ?)",
+                             (cid, e.game.key, e.dedupe, e.text, int(now)))
+
     def _wants(self, follows: list, s: dict, e: Event) -> bool:
         level = LEVELS.get(s.get("sports_alerts") or "goals", LEVELS["goals"])[1]
         if e.kind not in level:
             return False
         g = e.game
         for f in follows:
-            if f["league"] != g.league:
+            # 팀 구독은 그 팀이 나가는 유럽 대항전(챔스·유로파) 경기도 (감사 2026-09-30: 토트넘 구독인데 챔스 알림 없음)
+            if f["league"] != g.league and not (f["team"] and g.league in cups_for(f["league"])):
                 continue
             if not f["team"] or same_team(g.home, f["team"]) or same_team(g.away, f["team"]):
                 return True
