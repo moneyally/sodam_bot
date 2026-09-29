@@ -91,6 +91,14 @@ def muted_notice(text: str, user_id: int) -> Notice:
     return n
 
 
+class StillBanned(TelegramError):
+    """밴된 사람에게 '제한 풀기'(restrict 전부 허용)를 하면 텔레그램이 밴까지 풀어 버림 → 막고 알림.
+    실제 사례 2026-09-30 백악관: 오너 밴 3분 뒤 다른 관리자 .free → 기록엔 unmute 만, 영미 재입장."""
+
+    def __init__(self) -> None:
+        super().__init__("밴된 사람이라 밴은 그대로 뒀어요 (풀려면 .밴해제)")
+
+
 class Moderator:
     def __init__(self, cfg: Config, db: DB, perms: Permissions):
         self.cfg = cfg
@@ -114,6 +122,9 @@ class Moderator:
     async def unmute(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
         # 모든 권한 True = 개인 제한 해제 (이후 방 기본 권한을 따름).
         # 방의 현재 권한을 복사해 넣으면, 방이 잠겨 있을 때 그 상태로 개인에게 고정되는 문제가 있다.
+        # 밴된 사람(kicked)에게 하면 밴이 풀림 → 밴 해제는 .밴해제(unban)로만.
+        if getattr(await bot.get_chat_member(chat_id, user_id), "status", "") == "kicked":
+            raise StillBanned()
         await bot.restrict_chat_member(chat_id, user_id, ChatPermissions.all_permissions())
         await self.db.delete_captcha(chat_id, user_id)
         await self.db.log_mod(chat_id, actor_id, user_id, "unmute")
