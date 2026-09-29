@@ -272,6 +272,15 @@ def r_health(d: Diag, q: dict) -> dict:
         for key in ("voice_worker_beat", "voice_assistant"):
             r = c.execute("SELECT value FROM chat_state WHERE chat_id=0 AND key=?", (key,)).fetchone()
             out[key] = ("있음" if key == "voice_assistant" and r else (r["value"] if r else None))
+        try:   # 진행 중 통화 (update.sh 가 이게 있으면 무거운 테스트를 미룸)
+            out["voice_active_calls"] = c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
+                                                  (int(time.time()) - 1200,)).fetchone()[0]
+        except sqlite3.Error:
+            out["voice_active_calls"] = None
+    try:
+        out["loadavg"] = [round(x, 2) for x in os.getloadavg()]
+    except (OSError, AttributeError):
+        out["loadavg"] = None
     out["db_mb"] = round(Path(d.db_path).stat().st_size / 1e6, 1)
     return out
 
@@ -321,12 +330,29 @@ def r_agent_runs(d: Diag, q: dict) -> dict:
         return {"chat_id": cid, "runs": _rows(cur)}
 
 
+def _call_stats(call: dict) -> dict:
+    """voice_calls.stats(JSON 글) → dict (통화 계측: 늦은 재생·루프 지연·오류 코드·끼어들기·CPU — bridge.Bridge._summary)."""
+    raw = call.get("stats")
+    if isinstance(raw, str):
+        try:
+            call["stats"] = json.loads(raw)
+        except ValueError:
+            pass
+    return call
+
+
 def r_voice(d: Diag, q: dict) -> dict:
+    """chat= 있으면 그 방 통화 + 대화, 없으면 모든 방 최근 통화(계측만, 대화 없음)."""
     limit = _int(q, "calls", 3, 1, 20)
     with d.db() as c:
+        if not q.get("chat", "").strip():
+            calls = _rows(c.execute("SELECT v.*, ch.title FROM voice_calls v LEFT JOIN chats ch ON ch.chat_id=v.chat_id "
+                                    "ORDER BY v.id DESC LIMIT ?", (_int(q, "calls", 10, 1, 50),)))
+            return {"calls": [_call_stats(x) for x in calls]}
         cid = d.chat_id(c, q)
         calls = _rows(c.execute("SELECT * FROM voice_calls WHERE chat_id=? ORDER BY id DESC LIMIT ?", (cid, limit)))
         for call in calls:
+            _call_stats(call)
             call["lines"] = _rows(c.execute("SELECT ts, who, user_id, text FROM voice_lines WHERE call_id=? ORDER BY id",
                                             (call["id"],)))
         return {"chat_id": cid, "calls": calls}

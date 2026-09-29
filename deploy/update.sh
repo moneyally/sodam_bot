@@ -39,6 +39,45 @@ g() { git -C "$APP_DIR" "$@"; }
 exec 9>"$LOCK"
 flock -n 9 || { say "다른 갱신이 진행 중"; exit 0; }
 
+# 📞 진행 중 통화가 있나 (DB 읽기 전용). 20분 넘은 '안 끝난' 줄은 유령(통화 최대 15분)이라 무시.
+VOICE_POSTPONE_MAX=${VOICE_POSTPONE_MAX:-3600}   # 통화 때문에 미루는 최대 시간(초) — 업데이트가 영영 막히지 않게
+db_file() {
+    local rel=""
+    [ -f "$APP_DIR/.env" ] && rel=$(sed -n 's/^DB_PATH=//p' "$APP_DIR/.env" | tail -1 | tr -d "\"'\r ")
+    rel=${rel:-data/sodam.db}
+    case $rel in /*) echo "$rel" ;; *) echo "$APP_DIR/$rel" ;; esac
+}
+voice_busy() {
+    local db n
+    db=$(db_file)
+    [ -f "$db" ] || return 1
+    n=$("$PY" - "$db" 2>/dev/null <<'PYEOF'
+import sqlite3, sys, time
+try:
+    c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=5)
+    print(c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
+                    (int(time.time()) - 1200,)).fetchone()[0])
+except sqlite3.Error:
+    print(0)
+PYEOF
+) || return 1
+    [ "${n:-0}" -gt 0 ] 2>/dev/null
+}
+# 통화 중이면 0 (= 미룸). 처음 미룬 시각을 data/update.postponed 에 두고 VOICE_POSTPONE_MAX 가 지나면 그냥 진행.
+postpone_for_call() {
+    local f="$APP_DIR/data/update.postponed" now first
+    if [ "$FORCE" -eq 1 ] || ! voice_busy; then rm -f "$f"; return 1; fi
+    now=$(date +%s)
+    mkdir -p "$APP_DIR/data" 2>/dev/null || true
+    [ -f "$f" ] || echo "$now" > "$f"
+    first=$(cat "$f" 2>/dev/null); first=${first:-$now}
+    if [ $((now - first)) -ge "$VOICE_POSTPONE_MAX" ]; then
+        log "voice: 통화 때문에 $(( (now - first) / 60 ))분 미뤘음 → 더 안 미루고 진행"
+        rm -f "$f"; return 1
+    fi
+    return 0
+}
+
 units() {   # 켜 둔 봇들 (딜러는 .env.dealer 가 있고 켜 둔 경우만)
     echo sodam
     if [ -f "$APP_DIR/.env.dealer" ] && $SYSTEMCTL is-enabled -q sodam-dealer 2>/dev/null; then echo sodam-dealer; fi
@@ -142,6 +181,12 @@ if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
     exit 1
 fi
 log "$(g rev-parse --short "$PREV") → $(g rev-parse --short "$NEW") ($BRANCH)"
+
+# 0) 음성 통화 중이면 무거운 테스트(약 20분·1코어)를 다음 타이머(10분 뒤)로 — 통화 소리가 끊기지 않게 (최대 60분, --force 는 바로)
+if postpone_for_call; then
+    log "voice: 통화 중 → 테스트·재시작을 다음 타이머로 미룸 (바로 하려면 sodam-update --force)"
+    exit 0
+fi
 
 # 1) 새 코드를 임시 폴더에 풀어 테스트 (실제 폴더·data·.env 는 안 건드림, 네트워크·AI 호출 없음)
 TMP=$(mktemp -d "${TMPDIR:-/var/tmp}/sodam-test.XXXXXX")
