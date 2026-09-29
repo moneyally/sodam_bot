@@ -464,7 +464,13 @@
 - 컨테이너 → VPS SSH 는 막힘 (egress 프록시가 TLS 만 통과). 서버 조작은 Hetzner Cloud API(HTTPS, 토큰은 사용자에게) 또는
   사용자가 PowerShell `ssh root@IP`. 이사는 cloud-init user_data 부트스트랩 + 텔레그램 오너 1:1 **고정 메시지를 우편함**으로
   (#ready → #bundle 암호화 꾸러미 → #done) 했음 — getUpdates 는 안 부름. 같은 방식으로 다시 할 수 있음.
-- 서버 로그는 컨테이너에서 못 봄 → 사용자가 `journalctl -u sodam -n 100` 을 보여주거나, 봇의 오너 오류 알림으로.
+- **🔌 원격 점검 창구 (2026-09-29, 오너 결정)**: 클로드가 서버 DB·로그를 **읽기만**. `sodam/diag.py`(별도 프로세스 sodam-diag, 127.0.0.1:8787,
+  표준 라이브러리, DB mode=ro+query_only, 정해진 조회 ROUTES 만) ← Caddy https://178-104-55-232.sslip.io (update.sh diag_setup: caddy 설치·
+  Caddyfile·ufw 80/443·유닛). 토큰 data/diag.token(0600) 을 봇이 **오너 1:1 로만**(protect_content, 지문 바뀔 때 1번, 5분 job).
+  오너는 클로드 환경변수 `SODAM_DIAG_TOKEN` 에 넣음 → 클로드는 `python tools/diag.py health|rooms|settings|messages|agent_runs|voice|modlog|counters|tables|logs chat=벳블리 …`.
+  틀린 토큰 IP당 10분 20번·전체 분당 120번, 조회 기록 data/diag_access.log, 비밀값 모양 가림. 오너 메인 🔌(m:dg) 끄기·토큰 바꾸기.
+  **update.sh 는 돌고 있던 옛 스크립트가 끝까지 실행** → 새 setup 단계는 그 다음 배포(아무 커밋)부터 돈다.
+- 서버 로그는 이제 원격 점검 창구로 (없으면 사용자가 `journalctl -u sodam -n 100` 을 보여주거나, 봇의 오너 오류 알림으로).
 
 ## 클라우드 세션 서버 실행
 - 봇은 커밋된 코드만 `/home/user/sodam_run` 에 풀어서 실행 (작업 중 파일이 서버에 섞이지 않게). data·.env 는 원본 폴더를 링크.

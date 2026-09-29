@@ -10,7 +10,7 @@ from telegram.error import NetworkError, TelegramError
 from telegram.ext import Application, ApplicationBuilder, ContextTypes
 from telegram.request import HTTPXRequest
 
-from . import handlers
+from . import diag, handlers
 from .announce import Announcer
 from .backup import Backup
 from .billing import Billing
@@ -222,6 +222,14 @@ def build_app(cfg: Config, db: DB) -> Application:
         async def _started(_ctx) -> None:
             await notify_owner(app, f"▶️ {esc(cfg.bot_name)} 시작{esc(vtag)}")
         jq.run_once(_started, 1, name="start_notice")
+
+        async def _diag_token(_ctx) -> None:   # 🔌 원격 점검 창구가 토큰을 만들었으면(설치됨) 오너 1:1 로 한 번 (sodam/diag.py)
+            try:
+                await diag.notify_token(svc, app.bot)
+            except Exception as e:
+                logging.info("점검 토큰 알림 실패: %s", e)
+        if cfg.bot_role != "dealer":
+            jq.run_repeating(_diag_token, interval=300, first=20, name="diag_token")
 
     async def post_stop(app: Application) -> None:
         # post_shutdown 때는 봇 연결이 이미 닫혀 있어서 여기서 보냄

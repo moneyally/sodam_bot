@@ -55,6 +55,34 @@ voice_setup() {
     $SYSTEMCTL restart sodam-voice && log "voice: 음성 담당 재시작" || log "voice: 재시작 실패 (journalctl -u sodam-voice)"
 }
 
+# 🔌 원격 점검 창구(sodam-diag) + Caddy(https://<공인IP>.sslip.io, 인증서 자동) + 방화벽 80·443. 실패해도 본체는 그대로.
+# 창구는 읽기 전용·토큰 필수 (sodam/diag.py). 토큰은 봇이 오너 1:1 로만 보냄.
+DIAG_PORT=${DIAG_PORT:-8787}
+diag_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] || return 0
+    if ! command -v caddy >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q caddy >/dev/null 2>&1 \
+            || { log "diag: caddy 설치 실패 (본체는 정상)"; return 0; }
+    fi
+    local ip host conf
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    [ -n "$ip" ] || { log "diag: 공인 IP 를 모름"; return 0; }
+    host="${ip//./-}.sslip.io"
+    conf=$(mktemp)
+    printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$host" "$DIAG_PORT" > "$conf"
+    if ! cmp -s "$conf" /etc/caddy/Caddyfile; then
+        cp "$conf" /etc/caddy/Caddyfile && $SYSTEMCTL reload-or-restart caddy && log "diag: Caddy → https://$host"
+    fi
+    rm -f "$conf"
+    $SYSTEMCTL is-enabled -q caddy 2>/dev/null || $SYSTEMCTL enable -q caddy
+    if command -v ufw >/dev/null 2>&1; then ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; fi
+    if ! cmp -s "$APP_DIR/deploy/sodam-diag.service" "$UNIT_DIR/sodam-diag.service"; then
+        cp "$APP_DIR/deploy/sodam-diag.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q sodam-diag 2>/dev/null || $SYSTEMCTL enable -q sodam-diag
+    $SYSTEMCTL restart sodam-diag && log "diag: 점검 창구 재시작" || log "diag: 재시작 실패 (journalctl -u sodam-diag)"
+}
+
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
 restart_and_verify() {
     local ver=$1 since u ok
@@ -110,6 +138,7 @@ echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then
     log "ok: 버전 $VER 실행 중"
     voice_setup
+    diag_setup
     exit 0
 fi
 

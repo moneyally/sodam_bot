@@ -1,0 +1,46 @@
+# /etc/systemd/system/sodam-diag.service — 🔌 원격 점검 창구 (sodam/diag.py, docs: CLAUDE.md '원격 점검').
+# 127.0.0.1:8787 에서 읽기 전용 조회만. 밖에서는 Caddy(https://<IP>.sslip.io)를 거쳐서만. deploy/update.sh diag_setup 이 설치.
+# 로그: journalctl -u sodam-diag -f · 조회 기록: /opt/sodam/data/diag_access.log
+[Unit]
+Description=Sodam read-only diagnostics endpoint
+After=network-online.target sodam.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam.diag
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-diag
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=256M
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
