@@ -116,7 +116,7 @@ async def ledger_consistent(env):
 async def finish(env, game):
     r = multi.current(CHAT, game)
     env.clock.go.set()
-    await asyncio.wait_for(r.task, 5)
+    await asyncio.wait_for(r.task, 60)          # GIF 그리기(스레드)는 실제 시간 — 서버 Nice 10 에선 5초 넘을 때 있음 (2026-09-30 배포 막힘)
     return r
 
 
