@@ -95,7 +95,7 @@ class Bridge:
                  idle_sec: float = 60, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
                  tools: dict[str, Callable[[dict], Awaitable[str]]] | None = None, tool_specs: list[dict] | None = None,
-                 transcribe_prompt: str = ""):
+                 transcribe_prompt: str = "", on_line: Callable[[str, str, int | None], Any] | None = None):
         self._connect, self._play = connect, play
         self.instructions, self.voice, self.reply, self.greet = instructions, voice, reply, greet
         self.max_sec, self.idle_sec = max_sec, idle_sec
@@ -109,7 +109,9 @@ class Bridge:
         self._send_evt = asyncio.Event()
         self._done = asyncio.Event()
         self.result = Result()
-        self.transcript: list[tuple[str, str]] = []     # (who, text) — 메모리만, 저장 안 함
+        self.transcript: list[tuple[str, str]] = []     # (who, text) — 저장은 on_line 이 (worker → voice_lines 7일)
+        self.on_line = on_line                          # (who, text, ssrc) — user·sodam·tool
+        self._item_ssrc: dict[str, int | None] = {}     # 말 item → 그 말의 주인 ssrc (받아쓰기는 늦게 옴)
         self._t0 = self._last_voice = 0.0
         self._errors = 0
         self._last_reply = -1e9
@@ -199,12 +201,15 @@ class Bridge:
         elif t == "input_audio_buffer.speech_stopped":
             self._speaking = False
             self.speaker = dominant(self._energy)
+            if getattr(ev, "item_id", None) and len(self._item_ssrc) < 500:
+                self._item_ssrc[ev.item_id] = self.speaker
         elif t == "conversation.item.input_audio_transcription.completed":
             text = (ev.transcript or "").strip()
             if not text:
                 return
             self._last_voice = self.clock()
             self.transcript.append(("user", text))
+            self._emit("user", text, self._item_ssrc.pop(getattr(ev, "item_id", None), self.speaker))
             self.result.user_turns += 1
             if BYE.search(text):
                 self.stop("bye")
@@ -212,6 +217,7 @@ class Bridge:
                 await self.conn.response.create()        # '소담' 을 불렀거나 방금 이어지던 대화
         elif t == "response.output_audio_transcript.done":
             self.transcript.append(("sodam", ev.transcript or ""))
+            self._emit("sodam", ev.transcript or "", None)
             self.result.bot_turns += 1
             self._last_reply = self._last_voice = self.clock()
         elif t == "response.function_call_arguments.done":
@@ -230,6 +236,13 @@ class Bridge:
             if self._errors >= MAX_ERRORS:
                 self.stop("error:realtime")
 
+    def _emit(self, who: str, text: str, ssrc: int | None) -> None:
+        if self.on_line and text:
+            try:
+                self.on_line(who, text, ssrc)
+            except Exception as e:                       # 기록 실패해도 통화는 계속
+                log.warning("음성 기록 실패: %s", e)
+
     async def _call_tool(self, call_id: str, name: str, arguments: str, meta: dict | None = None) -> None:
         """모델이 부른 도구 실행 → 결과를 대화에 넣고 이어서 말하게 (결과 속 지시는 데이터일 뿐)."""
         import json
@@ -246,6 +259,9 @@ class Bridge:
             log.warning("음성 도구 %s 실패: %s", name, e)
             out = "검색이 지금 안 됨. 짧게 사과하고 채팅으로 물어보라고 안내."
         self.result.usage["tool_calls"] = self.result.usage.get("tool_calls", 0) + 1
+        shown = str(out)
+        shown = shown[shown.find("<tool_result"):] if "<tool_result" in shown else shown   # 앞 안내문은 빼고 결과만
+        self._emit("tool", f"{name} {str(arguments or '')[:120]} → {shown[:300]}", (meta or {}).get("ssrc"))
         try:
             await self.conn.conversation.item.create(item={"type": "function_call_output", "call_id": call_id,
                                                            "output": str(out)[:2000]})
