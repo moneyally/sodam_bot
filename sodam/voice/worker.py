@@ -29,7 +29,7 @@ log = logging.getLogger("sodam.voice")
 
 MODEL = os.getenv("VOICE_MODEL", "gpt-realtime-2.1-mini")
 POLL = 1.0
-VIDEO = os.getenv("VOICE_VIDEO", "1") != "0"             # 영상 칸에 도우미 계정 프사 (끄기: VOICE_VIDEO=0)
+VIDEO = os.getenv("VOICE_VIDEO", "0") == "1"             # 기본 소리만 (오너 결정 2026-09-29). 영상 칸에 프사: VOICE_VIDEO=1
 MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 

@@ -463,7 +463,7 @@ async def s_guide(c: PanelCtx) -> Screen:
              "<b>④ 대화</b>",
              "  음성채팅에서 그냥 말하면 소담이 목소리로 답해요. 말하는 중에 끼어들면 멈추고 들어요.",
              "  사람이 많으면 [’소담’ 부를 때만]으로 바꾸면 '소담아 …' 할 때만 대답해요.",
-             "  영상 칸엔 소담 사진이 떠요 (소리 위주, 영상통화처럼 움직이진 않아요).",
+             "  소담은 소리로만 참여해요 (영상 칸 없음).",
              "",
              "<b>⑤ 끝내기</b>",
              f"  <code>소담아 나가</code> · [📴 지금 끊기] · {IDLE_SEC}초 조용하면 스스로 · 한 번에 최대 {CALL_MAX_SEC // 60}분.",
@@ -589,6 +589,18 @@ API_GUIDE = ("🔑 <b>1단계: 도우미 계정 전용 API 키</b>\n"
 
 
 async def r_login(c: PanelCtx) -> Screen:
+    """오너 한 번만: 전화번호 → 코드 (API 키는 서버 것을 씀 — 전용 키는 [🔑 고급]에서 선택)."""
+    if not await _is_owner(c):
+        return NOT_OWNER
+    c.svc.inputs[c.uid] = PendingInput("vcp", 0)
+    return Screen("📱 <b>음성 도우미 계정 연결 (오너 한 번만)</b>\n"
+                  "도우미 계정 전화번호를 보내 주세요 (예: <code>+821012345678</code>, 맨 앞 0 빼고).\n"
+                  "다음에 그 계정 텔레그램 앱으로 온 코드를 띄어서 보내면 끝이에요. 보낸 메시지는 바로 지워요.\n\n"
+                  "이후엔 방 관리자들이 권한만 주면 <code>소담아 음성방 들어와</code> 로 바로 불러요.",
+                  menu._kb([[B("🔑 고급: 전용 API 키부터", "m:vcla")], [B("❌ 취소", "m:vc")]]))
+
+
+async def r_login_api(c: PanelCtx) -> Screen:
     if not await _is_owner(c):
         return NOT_OWNER
     c.svc.inputs[c.uid] = PendingInput("vcai", 0)
@@ -708,7 +720,7 @@ async def s_after(c: PanelCtx) -> Screen:
 
 
 menu.register_main(93, "vc", "🎙 음성채팅", OWNER)
-for _code, _fn in (("vc", s_owner), ("vcl", r_login), ("vco", r_logout_ask), ("vcoy", r_logout),
+for _code, _fn in (("vc", s_owner), ("vcl", r_login), ("vcla", r_login_api), ("vco", r_logout_ask), ("vcoy", r_logout),
                    ("vcai", s_owner), ("vcp", s_owner), ("vcc", s_owner), ("vcpw", s_owner)):
     menu.register_route(_code, Route(_fn, OWNER, scoped=False))
 menu.register_input("vcai", "", "vc", i_api, s_after, need=OWNER)
