@@ -143,3 +143,17 @@ async def greet_never_mentions_the_requester():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+@test
+async def style_help_lists_examples_and_room_modes():
+    """실제 사례 2026-09-29 벳블리: '.말투 도움말' → '도움말' 을 말투 이름으로 보고 목록만 줌."""
+    r = await Room().open(admins=(BOSS.id,), settings={"captcha_enabled": False, "ai_comeback": "mirror"})
+    await r.join(BOSS)
+    n = len(r.llm.of("chat"))
+    for cmd in (".말투 도움말", ".말투도움말"):
+        m = await r.say(BOSS, cmd)
+        text = m.replies[-1]
+        assert "맞받아치기" in text and "욕 받아치기: 똑같이 욕으로" in text and "ai_spicy" in text, text
+    assert len(r.llm.of("chat")) == n, "AI 안 부름"
+    assert not (await r.db.get_member(r.CHAT, BOSS.id))["style"], "말투는 안 바뀜"
