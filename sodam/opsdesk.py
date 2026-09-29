@@ -27,6 +27,7 @@ from . import anomaly, costs, reports, scamguard, tools  # noqa: F401  anomaly_a
 from .db import register_schema
 from .permissions import Role
 from .tools import Tool, ToolCtx
+from .util import html_plain
 
 log = logging.getLogger(__name__)
 
@@ -175,12 +176,13 @@ async def _record_items(svc, cid: int, uid: int, now: int) -> list[Item]:
                         f"m:sg:{cid}"))
     for r in await db._all(
             "SELECT e.ref, e.id, e.kind, e.ts, (SELECT COUNT(*) FROM ops_events x WHERE x.chat_id=e.chat_id AND "
-            "x.ref=e.ref AND x.kind LIKE 'sched!_%' ESCAPE '!' AND x.ts>=?) AS n, s.title, s.text, s.id AS sid "
+            "x.ref=e.ref AND x.kind LIKE 'sched!_%' ESCAPE '!' AND x.ts>=?) AS n, s.title, s.text, s.fmt, s.id AS sid "
             "FROM ops_events e LEFT JOIN schedules s ON s.id=e.ref AND s.chat_id=e.chat_id "
             "WHERE e.chat_id=? AND e.kind LIKE 'sched!_%' ESCAPE '!' AND e.ts>=? AND e.id=(SELECT MAX(y.id) FROM "
             "ops_events y WHERE y.chat_id=e.chat_id AND y.ref=e.ref AND y.kind LIKE 'sched!_%' ESCAPE '!')",
             (since, cid, since)):
-        name = (r["title"] or (r["text"] or "")[:20] or "(내용 없음)") if r["sid"] else "(지금은 지워진 예약)"
+        title, text = (html_plain(r["title"] or ""), html_plain(r["text"] or "")) if r["fmt"] == "html" else (r["title"], r["text"])
+        name = (title or (text or "")[:20] or "(내용 없음)") if r["sid"] else "(지금은 지워진 예약)"
         why = SCHED_WHY.get(r["kind"][6:], r["kind"])
         more = f" · 최근 7일 {r['n']}번" if r["n"] > 1 else ""
         out.append(Item(f"f{r['id']}", cid, "sched", f"#{r['ref']} {name}: {why}{more}", r["ts"],
