@@ -26,6 +26,17 @@ def rich_html(msg) -> str | None:
     return msg.text_html if msg.text else msg.caption_html
 
 
+def html_balanced(s: str) -> bool:
+    """여는·닫는 태그 짝이 맞는지 (잘린 HTML 을 그대로 저장하지 않게)."""
+    stack = []
+    for close, name in re.findall(r"<(/?)([a-z-]+)[^>]*>", s or ""):
+        if not close:
+            stack.append(name)
+        elif not stack or stack.pop() != name:
+            return False
+    return not stack
+
+
 def html_plain(s: str) -> str:
     """텔레그램 HTML → 보이는 글자 (길이 재기·목록 표시용). 움직이는 이모지는 대신 보이는 기본 이모지로."""
     return html.unescape(_TAG.sub("", s or ""))

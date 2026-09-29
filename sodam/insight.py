@@ -28,7 +28,7 @@ from .permissions import Role
 from .reports import MOD_ITEMS
 from .security import find_links
 from .tools import Tool, ToolCtx
-from .util import display_name, esc, fmt_time
+from .util import display_name, esc, fmt_time, html_plain
 
 log = logging.getLogger(__name__)
 
@@ -475,9 +475,10 @@ async def room_changes(svc: Services, bot, chat_id: int, period: str = "today") 
     div = 1 if daily else 7
     rc.base_leaves, rc.base_joins = len(base) / div, base_joins / div
 
-    for s in await db._all("SELECT id, title, text, last_sent FROM schedules WHERE chat_id=? AND last_sent>=?",
+    for s in await db._all("SELECT id, title, text, fmt, last_sent FROM schedules WHERE chat_id=? AND last_sent>=?",
                            (chat_id, since)):
-        title = (s["title"] or s["text"] or f"#{s['id']}")[:20]
+        plain = html_plain if s["fmt"] == "html" else (lambda v: v)   # 움직이는 이모지 공지는 태그 빼고
+        title = (plain(s["title"] or "") or plain(s["text"] or "") or f"#{s['id']}")[:20]
         rc.announces.append((s["last_sent"], title))
         ev = b(s["last_sent"]).events
         ev["예약 공지"] = ev.get("예약 공지", 0) + 1

@@ -584,7 +584,8 @@ class Announcer:
                 await self._finish(bot, draft, f"예약공지는 방당 {MAX_PER_CHAT}개까지예요. 저장하지 않았어요.")
                 return
             sid = await db.add_schedule(draft.chat_id, created_by=draft.user_id, **fields)
-        await db.log_mod(draft.chat_id, draft.user_id, None, "schedule", f"#{sid} {draft.title}")
+        await db.log_mod(draft.chat_id, draft.user_id, None, "schedule",
+                         f"#{sid} {html_plain(draft.title) if draft.fmt == 'html' else draft.title}")
         when = describe_when(draft.kind, draft.at_time, draft.interval_min)
         await self._finish(bot, draft, f"✅ 예약공지 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
                                        f"{when}{' · 📌' if draft.pin else ''} "

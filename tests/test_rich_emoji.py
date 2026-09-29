@@ -146,5 +146,28 @@ async def alarm_and_notice_keep_animated_emoji():
     assert sent == f"📢 <b>공지</b>\n오늘 {EMO} 필독", sent
 
 
+@test
+async def alarm_all_bold_is_not_cut_mid_tag_and_lists_hide_tags():
+    """감사 2026-09-30: 글 전체가 굵게면 '|' 가 <b> 안에 있어 자르면 </b> 만 남음 → 그땐 글자만 저장.
+    목록·운영 인박스·기록엔 태그 대신 보이는 글자."""
+    db, svc, bot = await setup()
+    c = SimpleNamespace(svc=svc, bot=bot, cid=CHAT, uid=ADMIN)
+    m = rich_msg(ADMIN, "30분 뒤 | 회의 🔥", f"<b>30분 뒤 | 회의 {EMO}</b>")
+    ok, _ = await panel._input("remind", None)(c, m)
+    [row] = await db.schedules(CHAT)
+    assert ok and row["fmt"] == "" and row["text"] == "회의 🔥", dict(row)
+    from sodam.util import html_balanced
+    assert html_balanced(f"<b>a</b>{EMO}") and not html_balanced("a</b>") and not html_balanced("<b>a")
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title=f"{EMO} 필독",
+                                text="x", media_type=None, media_id=None, pin=False, created_by=ADMIN, fmt="html")
+    from sodam import opsdesk
+    import time as _t
+    await db._write("INSERT INTO ops_events(chat_id, kind, ref, ts) VALUES(?, 'sched_send', ?, ?)", (CHAT, sid, int(_t.time())))
+    items = await opsdesk._record_items(svc, CHAT, ADMIN, int(_t.time()))
+    texts = [i.text for i in items if i.kind == "sched"]
+    assert texts and all("tg-emoji" not in t and "🔥 필독" in t for t in texts), texts
+    await db.close()
+
+
 if __name__ == "__main__":
     run_all()

@@ -70,7 +70,8 @@ async def free_or_unmute_on_banned_member_keeps_the_ban():
     r.bot.member_status = {(Room.CHAT, SPAM.id): "kicked"}
     cmd = await r.say(ADMIN, ".free", reply_to=r.msg(SPAM, "대상"))
     assert await free.is_free(r.db, Room.CHAT, SPAM.id) and not perms_given(r, SPAM.id, OPEN), "밴이 풀리면 안 됨"
-    assert "밴은 그대로" in cmd.replies[-1] and ".밴해제" in cmd.replies[-1] and "권한을 확인" not in cmd.replies[-1], cmd.replies
+    assert "밴은 그대로" in cmd.replies[-1] and ".밴해제" in cmd.replies[-1] and "권한을 확인" not in cmd.replies[-1] \
+        and "채팅 금지·경고를 풀었고" not in cmd.replies[-1], cmd.replies   # 밴은 그대로인데 풀었다고 하지 않음
     cmd = await r.say(ADMIN, f".뮤트해제 {SPAM.id}")
     assert not perms_given(r, SPAM.id, OPEN) and "밴은 그대로" in cmd.replies[-1], cmd.replies
     assert not [x for x in await r.db.recent_mod_log(Room.CHAT, 10) if x["action"] == "unmute"]

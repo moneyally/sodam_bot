@@ -20,7 +20,7 @@ from telegram.error import TelegramError
 from .. import cards, cron, menu, persist
 from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
-from ..util import esc, html_plain, rich_html
+from ..util import esc, html_balanced, html_plain, rich_html
 
 PREVIEW_CHARS = 300
 
@@ -228,7 +228,10 @@ def _input(action: str, skill: str | None):
             return False, "<code>언제 | 내용</code> 형식으로 보내주세요. 예: <code>매일 22:00 | 핵심 3줄로</code>"
         rich = rich_html(msg) if action == "remind" else None   # 알람 내용의 움직이는 이모지·서식 보관
         if rich is not None and "|" in rich and len(text.strip()) <= 500:
-            return await _save(c, action, skill, when_raw.strip(), rich.partition("|")[2].strip(), fmt="html")
+            head, _, body = rich.partition("|")
+            # 글 전체에 굵게 등이 걸려 '|' 가 태그 안에 있으면 자르면 태그가 깨짐 → 그땐 글자만 (감사 2026-09-30)
+            if "<" not in head and html_balanced(body):
+                return await _save(c, action, skill, when_raw.strip(), body.strip(), fmt="html")
         return await _save(c, action, skill, when_raw.strip(), text.strip())
     return handle
 

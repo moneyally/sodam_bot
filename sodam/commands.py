@@ -544,14 +544,14 @@ async def c_free(ctx: CmdCtx) -> None:
     await free.add(ctx.svc.db, ctx.chat_id, uid, ctx.user.id)
     await ctx.svc.db.clear_warnings(ctx.chat_id, uid)
     await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "free", "지정")
-    note = ""
+    note, lifted = "", "걸려 있던 채팅 금지·경고를 풀었고, "
     try:
         await ctx.svc.mod.unmute(ctx.bot, ctx.chat_id, uid, ctx.user.id)
     except StillBanned as e:
-        note = f"\n⚠️ {e.message}"
+        note, lifted = f"\n⚠️ {e.message}", "경고를 지웠고, "     # 밴은 그대로라 '채팅 금지를 풀었다' 고 하지 않음
     except TelegramError as e:
         note = f"\n(채팅 금지는 못 풀었어요: {esc(e.message)} — 봇의 '사용자 차단' 권한을 확인해주세요)"
-    await ctx.reply(f"🕊️ {mention(uid, name)}님을 자유 멤버로 지정했어요. 걸려 있던 채팅 금지·경고를 풀었고, "
+    await ctx.reply(f"🕊️ {mention(uid, name)}님을 자유 멤버로 지정했어요. {lifted}"
                     "앞으로 도배·링크·금지어·잠금·캡차 같은 자동 통제를 받지 않아요. (관리자 권한은 아니에요)" + note)
 
 
