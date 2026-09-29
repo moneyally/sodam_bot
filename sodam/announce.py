@@ -19,12 +19,12 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
 from . import persist
 from .db import register_schema
 from .settings import parse_hhmm
-from .util import esc
+from .util import esc, html_plain, rich_html
 
 if TYPE_CHECKING:
     from .services import Services
@@ -150,12 +150,21 @@ def is_due(row, now_ts: int, tz) -> bool:
     return now_ts - (row["last_sent"] or 0) >= (row["interval_min"] or MAX_INTERVAL) * 60
 
 
-def render(title: str, text: str, *, has_media: bool, rules: str, tz) -> str:
+def render(title: str, text: str, *, has_media: bool, rules: str, tz, fmt: str = "") -> str:
     """HTML 본문. 사용자 입력은 전부 escape 하고 자리표시자만 치환.
-    길이는 escape '전' 글자를 줄여서 맞춘다 (escape 후에 자르면 &amp; 같은 기호가 반쯤 잘려 발송이 실패함)."""
-    raw = text.replace("{규칙}", rules or "(등록된 규칙이 없어요)")
-    raw = raw.replace("{날짜}", datetime.now(tz).strftime("%Y-%m-%d (%a)"))
+    길이는 escape '전' 글자를 줄여서 맞춘다 (escape 후에 자르면 &amp; 같은 기호가 반쯤 잘려 발송이 실패함).
+    fmt='html': 제목·내용이 이미 텔레그램 HTML (움직이는 이모지·굵게 보관) → escape 안 함. 넘치면 서식 빼고 글자로."""
+    rules_txt = rules or "(등록된 규칙이 없어요)"
+    today = datetime.now(tz).strftime("%Y-%m-%d (%a)")
     limit = CAPTION_LIMIT if has_media else TEXT_LIMIT
+    if fmt == "html":
+        body = text.replace("{규칙}", esc(rules_txt)).replace("{날짜}", today)
+        out = (f"📢 <b>{title}</b>\n\n{body}" if title else f"📢 {body}").strip()
+        if len(html_plain(out)) <= limit:
+            return out
+        title, text = html_plain(title), html_plain(text)
+    raw = text.replace("{규칙}", rules_txt)
+    raw = raw.replace("{날짜}", today)
 
     def build(body_raw: str) -> str:
         body = esc(body_raw)
@@ -179,6 +188,7 @@ class Draft:
     text: str = ""
     media_type: str | None = None
     media_id: str | None = None
+    fmt: str = ""                 # 'html' = 제목·내용이 텔레그램 HTML (움직이는 이모지·서식 보관)
     kind: str | None = None
     at_time: str | None = None
     interval_min: int | None = None
@@ -254,10 +264,23 @@ class Announcer:
         return (await self.svc.db.get_settings(chat_id))["rules"]
 
     async def send(self, bot: Bot, chat_id: int, *, title: str, text: str, media_type: str | None,
-                   media_id: str | None, reply_markup=None, rules_chat: int | None = None) -> Message:
-        """chat_id 로 보낸다. {규칙} 은 rules_chat(기본 chat_id) 방의 규칙 (1:1 미리보기용)."""
+                   media_id: str | None, reply_markup=None, rules_chat: int | None = None, fmt: str = "") -> Message:
+        """chat_id 로 보낸다. {규칙} 은 rules_chat(기본 chat_id) 방의 규칙 (1:1 미리보기용).
+        서식(fmt=html)이 거절되면(움직이는 이모지를 못 쓰는 봇 등) 글자만으로 한 번 더 — 공지가 안 올라가는 것보단 낫다."""
         rules = await self._rules(rules_chat if rules_chat is not None else chat_id)
-        html = render(title, text, has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz)
+        html = render(title, text, has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz, fmt=fmt)
+        try:
+            return await self._send_html(bot, chat_id, html, media_type, media_id, reply_markup)
+        except BadRequest as e:
+            if fmt != "html":
+                raise
+            log.warning("announce rich send refused, plain retry: %s", e)
+            plain = render(html_plain(title), html_plain(text), has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz)
+            return await self._send_html(bot, chat_id, plain, media_type, media_id, reply_markup)
+
+    @staticmethod
+    async def _send_html(bot: Bot, chat_id: int, html: str, media_type: str | None, media_id: str | None,
+                         reply_markup) -> Message:
         kw = {"parse_mode": "HTML", "reply_markup": reply_markup}
         if media_type == "photo":
             return await bot.send_photo(chat_id, media_id, caption=html, **kw)
@@ -287,7 +310,7 @@ class Announcer:
         msg_id = None
         try:
             sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                   media_type=row["media_type"], media_id=row["media_id"])
+                                   media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
             msg_id = sent.message_id
             await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
             if row["pin"]:
@@ -322,7 +345,8 @@ class Announcer:
         for r in rows:
             flags = ("📌" if r["pin"] else "") + (f"[{MEDIA_LABEL[r['media_type']]}]" if r["media_type"] else "")
             state = "" if r["enabled"] else " (꺼짐)"
-            name = r["title"] or (r["text"][:20] + ("…" if len(r["text"]) > 20 else "")) or "(내용 없음)"
+            title, body = (html_plain(r["title"]), html_plain(r["text"])) if r["fmt"] == "html" else (r["title"], r["text"])
+            name = title or (body[:20] + ("…" if len(body) > 20 else "")) or "(내용 없음)"
             lines.append(f"<code>#{r['id']}</code> {describe_when(r['kind'], r['at_time'], r['interval_min'])} "
                          f"{flags} {esc(name)}{state}")
         lines.append("\n수정 <code>.예약공지 수정 ID</code> · 미리보기 <code>.예약공지 미리보기 ID</code> · "
@@ -368,6 +392,7 @@ class Announcer:
             for k in ("title", "text", "media_type", "media_id", "kind", "at_time", "interval_min"):
                 setattr(draft, k, edit_row[k])
             draft.pin = bool(edit_row["pin"])
+            draft.fmt = edit_row["fmt"] or ""
         if trigger_msg_id is not None:
             draft.cleanup.append(trigger_msg_id)
         if draft.in_dm:  # 1:1 에선 입력 흐름을 하나만 (메뉴 글자 입력과 서로 취소)
@@ -378,7 +403,8 @@ class Announcer:
         self.drafts[draft.key] = draft
         head = f"✏️ 예약공지 #{draft.edit_id} 수정" if draft.edit_id else "🗓️ 예약공지 만들기"
         room = f"\n💬 올릴 방: <b>{esc(where)}</b>" if where else ""
-        keep = f"\n(지금: {esc(draft.title) or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
+        now_title = draft.title if draft.fmt == "html" else esc(draft.title)
+        keep = f"\n(지금: {now_title or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
                                     f"<b>1/4 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
         self._saved(draft.key)
@@ -391,6 +417,20 @@ class Announcer:
             return await self._handle_message(bot, msg)
         finally:
             self._saved((msg.chat_id, msg.from_user.id))
+
+    @staticmethod
+    def _take(draft: Draft, text: str, rich: str | None, field_name: str) -> str:
+        """입력 한 칸(제목/내용) 보관. 서식(움직이는 이모지 등)이 있으면 HTML 로 — 그때 이미 받은 다른 칸도 HTML 로 바꿔
+        제목·내용이 같은 형식이 되게 (fmt 하나로)."""
+        if rich is not None and draft.fmt != "html":
+            other = "text" if field_name == "title" else "title"
+            setattr(draft, other, esc(getattr(draft, other)))
+            draft.fmt = "html"
+        if draft.fmt == "html":
+            if rich is not None and field_name == "title" and len(html_plain(rich)) > 100:
+                return esc(text)         # 제목이 넘치면 서식 빼고 (태그 중간을 자르지 않게)
+            return (rich or esc(text)).strip()
+        return text
 
     async def _handle_message(self, bot: Bot, msg: Message) -> bool:
         draft = self._get(msg.chat_id, msg.from_user.id)
@@ -411,7 +451,7 @@ class Announcer:
                 await self._say(bot, draft, "제목은 글자로 보내주세요. (없으면 <code>없음</code>)")
                 return True
             if not (editing and text in KEEP):
-                draft.title = "" if text in ("없음", "-") else text[:100]
+                draft.title = "" if text in ("없음", "-") else self._take(draft, text[:100], rich_html(msg), "title")
             draft.step = "body"
             keep = " · 그대로 두려면 <code>그대로</code>" if editing else ""
             await self._say(bot, draft,
@@ -430,11 +470,12 @@ class Announcer:
                     await self._say(bot, draft, "글이나 사진·영상·GIF·파일을 보내주세요.")
                     return True
                 limit = CAPTION_LIMIT - 150 if media_id else TEXT_LIMIT - 150
-                if len(text) > limit:
+                if len(text) > limit:   # 보이는 글자 수 (서식 태그는 안 셈)
                     await self._say(bot, draft, f"내용이 너무 길어요. {limit}자 이내로 줄여주세요"
                                                 f"{' (사진·영상 설명은 텔레그램 제한이 1024자예요)' if media_id else ''}.")
                     return True
-                draft.text, draft.media_type, draft.media_id = text, media_type, media_id
+                draft.text = self._take(draft, text, rich_html(msg), "text")
+                draft.media_type, draft.media_id = media_type, media_id
             draft.step = "when"
             now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                    f"<code>그대로</code>)") if editing else ""
@@ -501,7 +542,7 @@ class Announcer:
             try:
                 preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
                                           media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
-                                          rules_chat=draft.chat_id)
+                                          rules_chat=draft.chat_id, fmt=draft.fmt)
                 draft.cleanup.append(preview.message_id)
             except TelegramError as e:
                 again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
@@ -532,7 +573,7 @@ class Announcer:
             return
         fields = dict(kind=draft.kind, at_time=draft.at_time, interval_min=draft.interval_min,
                       title=draft.title, text=draft.text, media_type=draft.media_type,
-                      media_id=draft.media_id, pin=int(draft.pin))
+                      media_id=draft.media_id, pin=int(draft.pin), fmt=draft.fmt)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
                 await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")
@@ -546,7 +587,8 @@ class Announcer:
         await db.log_mod(draft.chat_id, draft.user_id, None, "schedule", f"#{sid} {draft.title}")
         when = describe_when(draft.kind, draft.at_time, draft.interval_min)
         await self._finish(bot, draft, f"✅ 예약공지 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
-                                       f"{when}{' · 📌' if draft.pin else ''} {esc(draft.title)}")
+                                       f"{when}{' · 📌' if draft.pin else ''} "
+                                       f"{draft.title if draft.fmt == 'html' else esc(draft.title)}")
 
     async def _cleanup(self, bot: Bot, draft: Draft) -> None:
         if draft.cleanup:

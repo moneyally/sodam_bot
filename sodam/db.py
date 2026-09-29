@@ -306,7 +306,8 @@ class DB:
         wanted = {"schedules": {"title": "TEXT NOT NULL DEFAULT ''", "media_type": "TEXT", "media_id": "TEXT",
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
                                 "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
-                                "deliver": "TEXT NOT NULL DEFAULT 'room'"},   # room 방에 / me 만든 관리자 1:1
+                                "deliver": "TEXT NOT NULL DEFAULT 'room'",    # room 방에 / me 만든 관리자 1:1
+                                "fmt": "TEXT NOT NULL DEFAULT ''"},           # html = 제목·내용이 텔레그램 HTML (움직이는 이모지)
                   "messages": {"reply_to_msg_id": "INTEGER", "reply_to_user": "INTEGER"},  # 답장 관계
                   "knowledge_docs": {"updated_at": "INTEGER"}}   # 자료 고친 시각 (예전 자료는 NULL → ts)
         for table, cols in EXTRA_COLUMNS.items():
@@ -730,19 +731,22 @@ class DB:
         return await self._all("SELECT * FROM captcha WHERE expires_at<=?", (now_ts,))
 
     # ── 예약 공지 ─────────────────────────────────────────
-    SCHEDULE_FIELDS = {"kind", "at_time", "interval_min", "title", "text", "media_type", "media_id", "pin"}
+    SCHEDULE_FIELDS = {"kind", "at_time", "interval_min", "title", "text", "media_type", "media_id", "pin", "fmt"}
 
     async def add_schedule(self, chat_id: int, *, kind: str, at_time: str | None, interval_min: int | None,
                            title: str, text: str, media_type: str | None, media_id: str | None,
                            pin: bool, created_by: int, action: str = "post", skill: str | None = None,
-                           at_ts: int | None = None, deliver: str = "room") -> int:
+                           at_ts: int | None = None, deliver: str = "room", fmt: str = "") -> int:
+        html_fmt = fmt == "html"   # HTML 은 태그 중간을 자르면 발송 실패 → 길이는 마법사가 보이는 글자로 이미 확인
         return await self._write(
             "INSERT INTO schedules(chat_id, kind, at_time, interval_min, title, text, media_type, media_id, "
-            "pin, created_by, last_sent, action, skill, at_ts, deliver) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "pin, created_by, last_sent, action, skill, at_ts, deliver, fmt) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             # 반복 공지는 등록 시점부터 간격을 센다 (등록하자마자 올라가지 않게)
-            (chat_id, kind, at_time, interval_min, title[:100], text[:3500], media_type, media_id,
+            (chat_id, kind, at_time, interval_min, title if html_fmt else title[:100],
+             text if html_fmt else text[:3500], media_type, media_id,
              int(pin), created_by, now() if kind == "interval" else None, action, skill, at_ts,
-             "me" if deliver == "me" else "room"))
+             "me" if deliver == "me" else "room", "html" if html_fmt else ""))
 
     async def update_schedule(self, chat_id: int, sid: int, **fields: Any) -> bool:
         fields = {k: v for k, v in fields.items() if k in self.SCHEDULE_FIELDS}

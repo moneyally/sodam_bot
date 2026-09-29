@@ -20,15 +20,21 @@ from telegram.error import TelegramError
 from .. import cards, cron, menu, persist
 from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
-from ..util import esc
+from ..util import esc, html_plain, rich_html
 
 PREVIEW_CHARS = 300
 
 
+def _plain(row, key: str) -> str:
+    """제목·내용 보이는 글자 (fmt=html 이면 태그 빼고 — 움직이는 이모지는 기본 이모지로 보임)."""
+    v = row[key] or ""
+    return html_plain(v) if row["fmt"] == "html" else v
+
+
 def _name(row) -> str:
     if row["title"]:
-        return row["title"]
-    text = (row["text"] or "").replace("\n", " ")
+        return _plain(row, "title")
+    text = _plain(row, "text").replace("\n", " ")
     return (text[:20] + ("…" if len(text) > 20 else "")) or "(내용 없음)"
 
 
@@ -83,7 +89,7 @@ async def s_item(c: PanelCtx) -> Screen:
         screen.toast = GONE
         return screen
     tz = c.svc.cfg.tz
-    body = (r["text"] or "").strip()
+    body = _plain(r, "text").strip()
     if len(body) > PREVIEW_CHARS:
         body = body[:PREVIEW_CHARS] + "…"
     media = f"[{MEDIA_LABEL.get(r['media_type'], '파일')}] " if r["media_type"] else ""
@@ -91,7 +97,7 @@ async def s_item(c: PanelCtx) -> Screen:
     lines = [f"🗓️ <b>예약공지 #{r['id']}</b>",
              f"상태: {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}",
              f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else ""),
-             f"제목: {esc(r['title']) if r['title'] else '(없음)'}",
+             f"제목: {esc(_plain(r, 'title')) if r['title'] else '(없음)'}",
              f"최근 발송: {last}",
              f"내용:\n<blockquote>{media}{esc(body) if body else '(글 없음)'}</blockquote>"]
     sid = r["id"]
@@ -120,8 +126,12 @@ async def r_preview(c: PanelCtx) -> Screen:
 
         async def run() -> None:   # AI 작업은 오래 걸려 버튼 답(15초 제한)을 먼저 하고 뒤에서 (감사 B3)
             try:
-                out = r["text"] if r["action"] == "remind" else await cron.run_skill(c.svc, r)
-                text = f"👀 미리보기 ({cron.describe(r)})\n\n{esc(out or '(결과 없음)')[:3500]}"
+                if r["action"] == "remind" and r["fmt"] == "html":   # 움직이는 이모지 그대로 보여 주기
+                    shown = r["text"] or "(결과 없음)"
+                else:
+                    out = r["text"] if r["action"] == "remind" else await cron.run_skill(c.svc, r)
+                    shown = esc(out or "(결과 없음)")[:3500]
+                text = f"👀 미리보기 ({cron.describe(r)})\n\n{shown}"
             except Exception as e:   # AI 한도·연결 오류도 알려 줌
                 text = f"👀 미리보기 실패: {esc(str(e)[:120])}"
             try:
@@ -132,7 +142,7 @@ async def r_preview(c: PanelCtx) -> Screen:
         return Screen(None, toast="👀 만드는 중… 곧 아래에 보내요.")
     try:  # 패널은 그대로 두고 1:1 에 새 메시지로 (닫기 버튼으로 지움)
         await c.svc.announcer.send(c.bot, c.uid, title=r["title"], text=r["text"], media_type=r["media_type"],
-                                   media_id=r["media_id"], reply_markup=CLOSE_KB, rules_chat=c.cid)
+                                   media_id=r["media_id"], reply_markup=CLOSE_KB, rules_chat=c.cid, fmt=r["fmt"] or "")
     except TelegramError as e:
         return Screen(None, toast=f"미리보기를 보내지 못했어요: {e.message[:80]}", alert=True)
     return Screen(None, toast="👀 아래에 미리보기를 보냈어요.")
@@ -196,7 +206,8 @@ async def s_skills(c: PanelCtx) -> Screen:
     return Screen("\n".join(lines), menu._kb(rows + [[B("⬅️ 뒤로", f"m:sc:{c.cid}")]]))
 
 
-async def _save(c: PanelCtx, action: str, skill: str | None, when_raw: str, text: str) -> tuple[bool, str]:
+async def _save(c: PanelCtx, action: str, skill: str | None, when_raw: str, text: str,
+                fmt: str = "") -> tuple[bool, str]:
     try:
         when = parse_time(when_raw, c.svc.cfg.tz)
     except ValueError as e:
@@ -205,7 +216,8 @@ async def _save(c: PanelCtx, action: str, skill: str | None, when_raw: str, text
         return False, "AI 작업은 1시간 이상 간격으로만 반복할 수 있어요."
     if len(await c.svc.db.schedules(c.cid)) >= MAX_PER_CHAT:
         return False, f"예약은 방마다 {MAX_PER_CHAT}개까지예요."
-    [sid] = await cron.create(c.svc, [c.cid], uid=c.uid, when=when, action=action, skill=skill, text=text[:500])
+    [sid] = await cron.create(c.svc, [c.cid], uid=c.uid, when=when, action=action, skill=skill,
+                              text=text if fmt == "html" else text[:500], fmt=fmt)
     return True, f"✅ 예약했어요 (#{sid} · {describe_when(*when[:3])})"
 
 
@@ -214,6 +226,9 @@ def _input(action: str, skill: str | None):
         when_raw, _, text = (msg.text or "").partition("|")
         if not text.strip() and skill != "stats":
             return False, "<code>언제 | 내용</code> 형식으로 보내주세요. 예: <code>매일 22:00 | 핵심 3줄로</code>"
+        rich = rich_html(msg) if action == "remind" else None   # 알람 내용의 움직이는 이모지·서식 보관
+        if rich is not None and "|" in rich and len(text.strip()) <= 500:
+            return await _save(c, action, skill, when_raw.strip(), rich.partition("|")[2].strip(), fmt="html")
         return await _save(c, action, skill, when_raw.strip(), text.strip())
     return handle
 
@@ -275,7 +290,8 @@ async def r_copy(c: PanelCtx) -> Screen:
         sid = await c.svc.db.add_schedule(g, kind=r["kind"], at_time=r["at_time"], interval_min=r["interval_min"],
                                           title=r["title"], text=r["text"], media_type=r["media_type"],
                                           media_id=r["media_id"], pin=bool(r["pin"]), created_by=c.uid,
-                                          action=r["action"], skill=r["skill"], at_ts=r["at_ts"], deliver=r["deliver"])
+                                          action=r["action"], skill=r["skill"], at_ts=r["at_ts"], deliver=r["deliver"],
+                                          fmt=r["fmt"] or "")
         await c.svc.db.log_mod(g, c.uid, None, "schedule", f"#{sid} ← {c.cid}#{r['id']} 복사")
     screen = await s_item(c)
     screen.toast = f"📤 {len(ids)}개 방에 만들었어요"

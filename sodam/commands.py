@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Awaitable, Callable
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
 from . import fedban, free, knowledge, menu, namehist, persist, stats, subscription
 from .moderation import StillBanned
@@ -21,7 +21,7 @@ from .games import GAME_LIST
 from .ai_settings import ROOM_TOKENS_MAX
 from .llm import ROOM_TOKENS
 from .util import (_DURATION, display_name, esc, fmt_time, human_minutes, iyeyo, mention, parse_duration, to_int,
-                   user_name)
+                   rich_html, user_name)
 
 log = logging.getLogger(__name__)
 
@@ -950,8 +950,17 @@ async def c_notice(ctx: CmdCtx) -> None:
     if not ctx.argstr:
         await ctx.reply("사용법: <code>.공지 내용</code> (봇이 올리고 고정해요)")
         return
+    body = esc(ctx.argstr)
+    rich = rich_html(ctx.msg)   # 움직이는 이모지·굵게 등 서식 보관 (명령어 뒤 부분만)
+    if rich is not None and len(parts := rich.split(None, 1)) == 2:
+        body = parts[1]
     try:
-        sent = await ctx.bot.send_message(ctx.chat_id, f"📢 <b>공지</b>\n{esc(ctx.argstr)}", parse_mode="HTML")
+        try:
+            sent = await ctx.bot.send_message(ctx.chat_id, f"📢 <b>공지</b>\n{body}", parse_mode="HTML")
+        except BadRequest:
+            if body == esc(ctx.argstr):
+                raise
+            sent = await ctx.bot.send_message(ctx.chat_id, f"📢 <b>공지</b>\n{esc(ctx.argstr)}", parse_mode="HTML")
         await ctx.bot.pin_chat_message(ctx.chat_id, sent.message_id, disable_notification=False)
     except TelegramError as e:
         await ctx.reply(f"공지 실패: {esc(e.message)}")

@@ -14,13 +14,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
 from . import stats
 from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import NO_PREVIEW, filter_output, nonce, wrap
-from .util import esc, mention
+from .util import esc, html_plain, mention
 
 if TYPE_CHECKING:
     from .services import Services
@@ -115,11 +115,13 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
         if to_me:
             from .subscription import chat_title  # 늦게 import (순환 방지)
             title = (title + " · " if title else "") + esc(await chat_title(svc, cid))
+        # 알람 내용: fmt=html 이면 움직이는 이모지·서식 그대로 (announce 와 같은 방식)
+        said = (row["text"] if row["fmt"] == "html" else esc(row["text"] or "")) or "알람이에요"
         if row["action"] == "remind" and to_me:
-            body = f"⏰ <b>{title}</b>\n{esc(row['text'] or '알람이에요')}"
+            body = f"⏰ <b>{title}</b>\n{said}"
         elif row["action"] == "remind":
             name = await svc.db.first_name(creator) or "관리자"
-            body = f"⏰ {mention(creator, name)} {esc(row['text'] or '알람이에요')}"
+            body = f"⏰ {mention(creator, name)} {said}"
         else:
             out = (await run_skill(svc, row)).strip()
             if not out:
@@ -127,7 +129,13 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
             usernames = {r["username"].lower() for r in await svc.db.member_names(cid) if r["username"]}
             body = f"🤖 <b>{title or SKILLS[row['skill']].label}</b>\n" + esc(
                 filter_output(out, max_chars=MAX_OUT, allowed_usernames=usernames))
-        await bot.send_message(creator if to_me else cid, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
+        try:
+            await bot.send_message(creator if to_me else cid, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
+        except BadRequest:
+            if row["fmt"] != "html":
+                raise
+            body = body.replace(said, esc(html_plain(said)))   # 서식이 거절되면(움직이는 이모지 못 쓰는 봇) 글자로
+            await bot.send_message(creator if to_me else cid, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
         return True
     except BudgetExceeded:
         log.info("cron #%s skipped: AI budget", row["id"])
@@ -156,7 +164,7 @@ def describe(row) -> str:
 
 
 async def create(svc: Services, chat_ids: list[int], *, uid: int, when: tuple, action: str, skill: str | None,
-                 text: str, title: str = "", deliver: str = "room") -> list[int]:
+                 text: str, title: str = "", deliver: str = "room", fmt: str = "") -> list[int]:
     """같은 예약을 여러 방에 (방마다 한 줄). 방당 한도는 부르는 쪽이 확인."""
     kind, at_time, interval, at_ts = when
     ids = []
@@ -164,7 +172,8 @@ async def create(svc: Services, chat_ids: list[int], *, uid: int, when: tuple, a
         sid = await svc.db.add_schedule(cid, kind=kind, at_time=at_time, interval_min=interval, title=title,
                                         text=text, media_type=None, media_id=None, pin=False, created_by=uid,
                                         action=action, skill=skill if action == "ai" else None, at_ts=at_ts,
-                                        deliver=deliver)
-        await svc.db.log_mod(cid, uid, None, "schedule", f"#{sid} {action}/{skill or '-'} {text[:60]}")
+                                        deliver=deliver, fmt=fmt if action == "remind" else "")
+        await svc.db.log_mod(cid, uid, None, "schedule",
+                             f"#{sid} {action}/{skill or '-'} {(html_plain(text) if fmt == 'html' else text)[:60]}")
         ids.append(sid)
     return ids
