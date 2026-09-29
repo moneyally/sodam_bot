@@ -102,3 +102,21 @@ async def rule8_tries_similar_tools_before_giving_up():
 
 if __name__ == "__main__":
     run_all()
+
+
+@test
+async def shared_rooms_visible_and_owner_can_grant_full_view():
+    db, svc, bot = await world()
+    await add_member(db, B, fake_user(MEMBER, "철수"))            # 철수도 SECOND 에 있음 → 겹방
+    out = await C.t_lookup_user(ctx(svc, bot, MEMBER, Role.MEMBER, MEMBER), {"who": str(LOVE)})
+    assert "SECOND" in out, out
+    OTHER = 90000009
+    await db.ensure_chat(-100333, "비밀방")
+    await add_member(db, -100333, fake_user(LOVE, "love", "lovesic3"))
+    assert "비밀방" not in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})
+    assert "grant_lookup" in {t.name for t in tools.available(Role.OWNER, {}, True)}
+    assert "grant_lookup" not in {t.name for t in tools.available(Role.ADMIN, {}, True)}
+    await C.t_grant_lookup(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(OTHER)})
+    assert "비밀방" in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})
+    await C.t_grant_lookup(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(OTHER), "on": False})
+    assert "비밀방" not in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})

@@ -123,7 +123,7 @@
 ## 제재·AI 도구 권한
 - **🔎 사람 찾기·점검 도구** (`panels/checkup.py`, tests/test_checkup.py · 뮤테이션 7개, 2026-09-29 — 오너 '7647564988 아이디 뭐야'에 도구가 없어
   기능 요청만 접수한 실제 사례): lookup_user(누구나, 숫자ID·@·예전 @·이름 → 지금 이름·@·namehist 변경 기록, 봤던 방은 오너=전부·관리자=자기 관리 방·
-  그 밖=이 방만, 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
+  그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,

@@ -4,7 +4,8 @@
 소담을 '아무 조회나 되는 손'으로 풀지 않고, 정해진 안전한 조회만 더한다 (자유 SQL 없음).
 
 권한
-- lookup_user: 누구나 (이름·아이디 기록은 원래 누구나 조회 — namehist). '어느 방에서 봤는지'는 오너=전부, 관리자=자기가 관리자인 방만, 멤버=이 방만.
+- lookup_user: 누구나 (이름·아이디 기록은 원래 누구나 조회 — namehist). '어느 방에서 봤는지'는 오너·grant_lookup 받은 사람=전부,
+  그 밖=내가 들어가 있는 방(겹방)·내가 관리자인 방·지금 방만 (오너 결정 2026-09-29).
 - room_checkup: 방 텔레그램 관리자·오너 — 그 방 소담 설정·이용 기간·오늘 AI 한도 %·봇 권한·최근 AI 실패. 금액은 안 보임.
 - owner_server_status · owner_room_view: 오너 1:1 만 — 서버 버전·프로세스·예산, 다른 방 설정·최근 대화·AI 기록·통화.
 멤버가 쓴 글(이름·대화)이 섞이는 결과는 ctx.tainted → 그 답변에선 이후 읽기 도구만.
@@ -56,16 +57,26 @@ async def _resolve_who(ctx: ToolCtx, who: str) -> tuple[int | None, str]:
     return None, f"'{who}' 이름을 못 찾음. 숫자 ID 나 @아이디로 물어보라고 안내."
 
 
+TRUSTED_KEY = "lookup_trusted"   # chat_state(0): 오너가 '사람 찾기 전체 권한'을 준 사람 ID 목록
+
+
+async def trusted(db) -> set[int]:
+    raw = await db.get_state(0, TRUSTED_KEY)
+    return {int(x) for x in raw} if isinstance(raw, list) else set()
+
+
 async def _seen_rooms(ctx: ToolCtx, uid: int) -> str:
-    """오너 = 전부 · 관리자 = 자기가 관리자인 방만 · 그 밖 = 지금 방만."""
+    """오너·전체 권한 받은 사람 = 전부 · 그 밖 = 내가 들어가 있는 방(겹방) + 내가 관리자인 방 + 지금 방."""
     db = ctx.svc.db
     rows = await db._all("SELECT m.chat_id, c.title, m.last_seen FROM members m LEFT JOIN chats c USING(chat_id) "
                          "WHERE m.user_id=? AND m.chat_id<0 ORDER BY m.last_seen DESC LIMIT 50", (uid,))
-    if ctx.role >= Role.OWNER:
+    if ctx.role >= Role.OWNER or ctx.caller.id in await trusted(db):
         allowed = None
     else:
         from .. import menu
         allowed = {cid for cid, _ in await menu.admin_groups(ctx.svc, ctx.bot, ctx.caller.id)}
+        allowed |= {r["chat_id"] for r in await db._all("SELECT chat_id FROM members WHERE user_id=? AND chat_id<0",
+                                                         (ctx.caller.id,))}
         if ctx.chat_id < 0:
             allowed.add(ctx.chat_id)
     shown = [r for r in rows if allowed is None or r["chat_id"] in allowed]
@@ -94,6 +105,19 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
     cur = f"{display_name(row['first_name'], row['last_name'], None)}" + (f" @{row['username']}" if row["username"] else " (아이디 없음)")
     hist = _strip_html(await namehist.history_text(db, uid, ctx.svc.cfg.tz)) if not remote else ""
     return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), hist, await _seen_rooms(ctx, uid)) if x)
+
+
+async def t_grant_lookup(ctx: ToolCtx, a: dict) -> str:
+    """오너 1:1: 특정 사람에게 '사람 찾기 전체 방 보기' 권한 주기/빼기."""
+    uid, note = await _resolve_who(ctx, str(a.get("who", "")))
+    if not uid:
+        return note
+    cur = await trusted(ctx.svc.db)
+    on = a.get("on", True) is not False
+    new = (cur | {uid}) if on else (cur - {uid})
+    await ctx.svc.db.set_state(0, TRUSTED_KEY, sorted(new) or None)
+    await ctx.svc.db.log_mod(0, ctx.caller.id, uid, "lookup_trust", "on" if on else "off")
+    return (f"ID {uid} 에게 사람 찾기 전체 방 보기 권한을 {'줬음' if on else '뺐음'}. 지금 권한 받은 사람 {len(new)}명.")
 
 
 # ── 방 점검 (관리자) ───────────────────────────────────────
@@ -222,6 +246,9 @@ CHECKUP_TOOLS = [
     (Tool("lookup_user", "숫자 ID·@아이디·이름으로 사람 찾기: 지금 이름·@아이디, 이름·아이디 변경 기록, 본 방(권한 따라). "
           "'7647564988 누구야?', '@abc 예전 이름 뭐야?' 같은 질문에.",
           {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"}}, ["who"], t_lookup_user), True),
+    (Tool("grant_lookup", "[오너] 사람 찾기에서 모든 방을 볼 수 있는 권한을 특정 사람에게 주거나(on=true) 뺀다(on=false). "
+          "'○○한테 사람 찾기 전체 권한 줘'.", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
+                                                 "on": {"type": "boolean"}}, ["who"], t_grant_lookup, Role.OWNER, where="owner_dm"), False),
     (Tool("room_checkup", "[관리자] 방 소담 점검: 설정(말투·욕 받아치기·19금·음성 등)·이용 기간·오늘 AI 한도 %·봇 권한·최근 AI 문제. "
           "'소담 왜 답 안 해?', '우리 방 설정 뭐야?' 같은 질문에. 1:1 에선 room 필요.",
           {"room": ROOM}, [], t_room_checkup, Role.ADMIN), True),
