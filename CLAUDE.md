@@ -259,6 +259,21 @@
   thinking 은 소담이 말이 올라갈 때까지 · 차례 안내는 pace 뒤 그때 차례로(seq, 머리글 합침), 타이머는 안내 직전 ·
   차례 모드 버튼 `wc:j:<gid>`/`wc:go:<gid>` (지난 판 버튼 거절).
 
+## 🧭 하이브리드 모델 라우팅 · 캐시 (`route.py`, `agent._attempt`, tests/test_route.py · 뮤테이션 15개, 2026-10-01, 설계 docs/COST_ROUTING.md)
+- 오너 결정: 비용 절감 — 잡담은 작은 모델, 일은 큰 모델. 실측 09-30 하루 $11.9 (gpt-5.4 784번, 입력 1,118만, 캐시 79%), 한 호출 입력 ~2.2만 중 도구 설명 ~1.5만.
+- 길 3개 (코드 판정, 돈 0, `route.SIGNALS` 신호 함수 목록 — 새 신호는 함수 하나): heavy(사진·1:1 관리자/오너·실행 말·분석·여러 단계·140자↑·3줄↑·링크 →
+  지금까지와 같음, 관리자·오너는 추론) / banter(mirror·19금 방에서 소담에게 욕·드립 → 큰 모델, 추론 X) / light(나머지 → AGENT_LIGHT_MODEL 기본 gpt-5.4-mini, 추론 X).
+- light 안전망: light 가 쓰기 도구(READ_ONLY·LIGHT_EXTRA 밖)나 `ask_senior` 를 부르면 그 라운드 도구는 **실행 안 하고** base 메시지부터 heavy 로 한 번(:escalated).
+  light 는 base 복사본으로 돎(올려 보낼 때 light 흔적 없음 — 뮤테이션으로 잡은 실제 버그).
+- 오너 `.AI모델 나눠|절약|최고 [방ID|전체]` (chat_state ai_route: hybrid 기본·saver=말싸움도 작은 모델·best=전부 큰 모델). AGENT_LIGHT_MODEL 비면 기능 끔.
+  Config 직접 만들면(테스트) light_model="" → 기존 테스트는 heavy 그대로.
+- 기록: agent_runs.purpose ':light'·':banter'·':escalated', counters prompt:/cached: 도 길별.
+- **캐시: 도구 목록은 방 설정과 무관하게 같게** (`tools.offered`), 방 설정으로 꺼진 도구(image_daily 0·games·sports·video)는 OpenAI `allowed_tools` 로 호출만 막음
+  (예전: 목록에서 빼서 그 뒤 도구 ~13k 토큰 캐시가 깨짐). 불러도 agent 가 '이 방에서는 꺼져 있는 기능' 결과. 캐시 키 = 싣는 도구 이름 지문(`_ToolSet.key`)
+  → 오너·관리자, 방·1:1 이 같은 목록이면 같이 씀. API 가 allowed_tools 를 거절하면 그 프로세스는 `llm.allowed_off` → 예전처럼 목록 줄이기(AI 답 안 멈춤).
+- 캐시 보관: OPENAI_CACHE_RETENTION 빈 값 = 코드 기본 24h (config._retention). 점검 창구 health.ai_config 로 서버 .env 의 비밀 아닌 AI 설정 확인.
+- 방마다 캐시 키 나누기는 안 함 (공식 가이드: 같은 키 분당 ~15요청 넘을 때만 의미, 우리는 1 미만 — 조사 2026-10-01).
+
 ## AI 비용·작업 기록 (관측, tests/test_budget.py · test_agentlog.py · 뮤테이션 17개)
 - 하루 예산은 **달러**: `llm._record` 가 요금(`costs.usd_micro`, 정수 마이크로달러, 요금표에 없는 모델은 기본 모델 요금 → 그것도 없으면
   가장 비싼 요금)을 counters `usd_micro`(chat_id=0 전체)·`room_usd_micro`(방·1:1) 에 셈. 한 번의 `db.atomic` 으로 모든 카운터를 같이.
@@ -470,6 +485,13 @@
   실패·시간 초과는 그 글을 이유로 고침, 요금·개수 안 셈 (Veo 는 막힌 영상 청구 안 함). 재시작되면 만들던 영상은 잃음(재개 없음).
 - 원본 사진(mode=image): photo_of > 붙은·답장한 사진 > 요청자 프사 (panels/avatar.source_photo 규칙을 videogen 에 복사 — avatar 는 다른 작업이 고치는 중이었음).
 - 점검(room_checkup) '영상 이번 주 n/한도개' (+키 없으면 표시) · 안내서 `guide/video.md` · 프롬프트 규칙 9 = 도구가 없을 때만 '영상 생성 안 됨'. 음성 도구엔 안 넣음.
+
+## 🎞️ 움프 vs 🎬 AI 영상 의도 (`mediaintent.py`, tests/test_mediaintent.py · 뮤테이션 7개, 2026-10-01 오너 '복불복으로 만들어줌')
+- 실제 사례: '원형테두리 없애주고 영상으로 움직이게'(움프 고치던 중) → AI 영상(주 한도), '움직이는영상프로필' → 사람이 '프로필말고 영상' 다시.
+- `classify(request, reply_to)` 코드 판정: '~말고' 부정 먼저 → 움프 말(프사·프로필·gif·테두리·효과 이름)만 = ump · 영상 말(영상 제작·장면·동작·소리)만 = video ·
+  둘 다면 실제 동작(춤·걷기·말하기·담배…)이 있으면 video('프사로 춤추는 영상'), 아니면 프로필 말이 있으면 ump · '움직이게'만 = ambiguous(답장 대상이 움프 얘기면 ump).
+- agent._run 이 ctx.media_intent 에 넣고, AI 영상 도구가 없는 방은 ambiguous → ump. make_video / make_profile_video 가 판정과 다르면 실행 안 하고
+  `redirect` 결과로 돌려보냄, ambiguous + make_video = ask_choice 버튼([🎞️ 움프][🎬 AI 영상]) — 추측으로 주 한도를 쓰지 않게. 선택 뒤 '(선택: …)' 도 classify.
 
 ## 📓 소담이 일기 (`diary.py`, `panels/diary.py`, tests/test_diary.py · 뮤테이션 2개)
 - 매일 밤(diary_time 21:00/22:00/23:00/23:30, 기본 23:30) 오너 채널에 '📓 소담이의 메모장 #N' (#1 은 사람이 직접). 30초 틱 + 날짜 claim → 하루 한 번.

@@ -23,7 +23,7 @@ from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
+from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue, apikeys
@@ -363,11 +363,22 @@ async def _bot_removed(context: ContextTypes.DEFAULT_TYPE, cmu) -> None:
 async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """'OO님이 나갔습니다' 메시지 (관리 권한 없는 방에서도 옴) → 멤버 목록에서 뺌."""
     msg = update.message
-    if msg and msg.left_chat_member and not msg.left_chat_member.is_bot:
-        svc = _svc(context)
+    if not msg or not msg.left_chat_member:
+        return
+    svc = _svc(context)
+    # 🧹 멤버 정리가 낸 퇴장: '~님을 내보냄' 서비스 메시지는 지우고 작별 인사는 건너뜀 (봇 계정을 내보낸 것도)
+    by_job = await cleanup.job_leave(svc, msg.chat_id, msg.left_chat_member.id,
+                                     getattr(msg.from_user, "id", None), context.bot.id)
+    if by_job:
+        try:
+            await msg.delete()
+        except TelegramError:
+            pass
+    if not msg.left_chat_member.is_bot:
         hooks.member_left(svc, msg.chat_id, msg.left_chat_member.id)
         await members_panel.mark(svc.db, msg.chat_id, msg.left_chat_member.id, left=True)
-        await farewell.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)   # 👋 스스로 나간 사람만
+        if not by_job:
+            await farewell.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)   # 👋 스스로 나간 사람만
 
 
 async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -403,8 +414,10 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
         hooks.member_left(svc, cmu.chat.id, new.user.id)
         await members_panel.mark(svc.db, cmu.chat.id, new.user.id, left=True)
-        await farewell.on_leave(context, cmu.chat.id, new.user, getattr(cmu, "from_user", None),  # cancel 전에 (캡차 대기 확인)
-                                kicked=new.status == ChatMemberStatus.BANNED)
+        by = getattr(cmu, "from_user", None)
+        if not await cleanup.job_leave(svc, cmu.chat.id, new.user.id, getattr(by, "id", None), context.bot.id):
+            await farewell.on_leave(context, cmu.chat.id, new.user, by,  # cancel 전에 (캡차 대기 확인)
+                                    kicked=new.status == ChatMemberStatus.BANNED)
         await svc.captcha.cancel(context.bot, cmu.chat.id, new.user.id)
 
 

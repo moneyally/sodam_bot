@@ -23,7 +23,7 @@ from telegram import ReplyParameters
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from .. import agentlog, costs, memory, persist, tools, video
+from .. import agentlog, costs, mediaintent, memory, persist, tools, video
 from ..llm import BudgetExceeded
 from ..permissions import Role
 from ..settings import OWNER_CAP, RANGES
@@ -130,6 +130,8 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
     prov = video.active()
     if prov is None:
         return NO_KEY
+    if back := mediaintent.redirect(getattr(ctx, "media_intent", None), "make_video"):
+        return back
     if ctx.chat_id > 0:
         return "영상은 그룹방에서만 만들 수 있음. 그룹방에서 '소담아 …영상 만들어줘' 하라고 안내."
     if not await ctx.svc.paid_features(ctx.chat_id):

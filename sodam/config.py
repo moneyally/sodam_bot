@@ -54,6 +54,9 @@ class Config:
     # 그 요청은 Responses API 로 추론+도구를 같이 씀 (chat.completions 는 도구와 추론을 같이 못 씀). 멤버 잡담은 예전 방식(싸게)
     agent_think: str = "auto"
     agent_think_effort: str = "low"
+    # 🧭 하이브리드 라우팅 (sodam/route.py): 잡담·조회는 이 작은 모델, 일은 model. 빈 값이면 전부 model (기능 끔).
+    # 기본값은 .env 읽을 때(AGENT_LIGHT_MODEL, 기본 gpt-5.4-mini) — Config 를 직접 만드는 곳(테스트)은 끔
+    light_model: str = ""
     # MTProto 도우미 (sodam/mtproto.py, 선택): my.telegram.org 에서 받은 API ID/HASH. 비우면 꺼짐
     mtproto_api_id: int = 0
     mtproto_api_hash: str = ""
@@ -109,6 +112,7 @@ def load_config() -> Config:
         bot_role=_role(os.getenv("BOT_ROLE", "")),
         agent_think=_choice("AGENT_THINK", "auto", ("off", "auto", "always")),
         agent_think_effort=_choice("AGENT_THINK_EFFORT", "low", ("low", "medium", "high")),
+        light_model=os.getenv("AGENT_LIGHT_MODEL", "gpt-5.4-mini").strip(),
         mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
         mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
     )

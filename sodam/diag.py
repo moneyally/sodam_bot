@@ -282,7 +282,27 @@ def r_health(d: Diag, q: dict) -> dict:
     except (OSError, AttributeError):
         out["loadavg"] = None
     out["db_mb"] = round(Path(d.db_path).stat().st_size / 1e6, 1)
+    out["ai_config"] = ai_config(d.app_dir / ".env")
     return out
+
+
+# 서버 .env 중 비밀이 아닌 AI 설정만 (키·토큰은 이름부터 안 읽음). 비어 있으면 코드 기본값이 쓰임 → "(기본)"
+AI_CONFIG_KEYS = ("OPENAI_MODEL", "OPENAI_GUARD_MODEL", "AGENT_LIGHT_MODEL", "OPENAI_CACHE_RETENTION", "AGENT_THINK",
+                  "AGENT_THINK_EFFORT", "OPENAI_REASONING_EFFORT", "DAILY_USD_BUDGET", "VIDEO_PROVIDER", "VIDEO_MODEL")
+
+
+def ai_config(env: Path) -> dict | None:
+    try:
+        lines = env.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    vals: dict[str, str] = {}
+    for line in lines:
+        k, sep, v = line.strip().partition("=")
+        k = k.strip().removeprefix("export ").strip()
+        if sep and k in AI_CONFIG_KEYS:
+            vals[k] = v.strip().strip("'\"")[:40]
+    return {k: (vals.get(k) or "(기본)") for k in AI_CONFIG_KEYS}
 
 
 def r_rooms(d: Diag, q: dict) -> dict:
@@ -429,7 +449,38 @@ def r_user(d: Diag, q: dict) -> dict:
         return {"query": raw, "found": len(out), "people": out}
 
 
-ROUTES = {"/v1/user": r_user, "/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
+def r_cleanup(d: Diag, q: dict) -> dict:
+    """🧹 멤버 정리 마지막 스캔 요약 — 분류별 인원·접속 상태 종류 분포·보호 인원·작업 진행 숫자만 (사람 이름·ID 없음,
+    실패도 이유별 수만 — fail_ids 는 안 읽음).
+    chat= 없으면 스캔한 모든 방. 봇 세션에 접속 상태(status)가 실제로 오는지 여기 분포로 확인한다."""
+    def one(c: sqlite3.Connection, r) -> dict:
+        out = {"chat_id": r["chat_id"], "ts": r["ts"], "total": r["total"], "partial": bool(r["partial"]),
+               "rec_since": r["rec_since"]}
+        for k in ("counts", "prot", "dist"):
+            try:
+                out[k] = json.loads(r[k] or "{}")
+            except ValueError:
+                out[k] = {}
+        job = c.execute("SELECT state, why, total, kicked, gone, skipped, failed, fails, created, ended FROM cleanup_jobs "
+                        "WHERE chat_id=?", (r["chat_id"],)).fetchone()
+        if job:
+            out["job"] = {k: job[k] for k in job.keys()}
+            out["job"]["left"] = c.execute("SELECT COUNT(*) FROM cleanup_queue WHERE chat_id=?", (r["chat_id"],)).fetchone()[0]
+        try:   # 밴 풀기 대기 (영구 밴으로 남지 않게 틱이 다시 푸는 중인 사람 수)
+            out["unban_wait"] = c.execute("SELECT COUNT(*) FROM cleanup_banning WHERE chat_id=? AND stage='unban'",
+                                          (r["chat_id"],)).fetchone()[0]
+        except sqlite3.Error:
+            out["unban_wait"] = None
+        return out
+    with d.db() as c:
+        if q.get("chat", "").strip():
+            cid = d.chat_id(c, q)
+            r = c.execute("SELECT * FROM cleanup_scans WHERE chat_id=?", (cid,)).fetchone()
+            return {"chat_id": cid, "scan": one(c, r) if r else None}
+        return {"scans": [one(c, r) for r in c.execute("SELECT * FROM cleanup_scans ORDER BY ts DESC LIMIT ?", (MAX_ROWS,))]}
+
+
+ROUTES = {"/v1/cleanup": r_cleanup, "/v1/user": r_user, "/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
           "/v1/agent_runs": r_agent_runs, "/v1/voice": r_voice, "/v1/modlog": r_modlog, "/v1/counters": r_counters,
           "/v1/tables": r_tables, "/v1/logs": r_logs}
 

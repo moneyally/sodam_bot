@@ -153,8 +153,10 @@ async def image_tool_hidden_when_disabled():
     await r.db.set_setting(r.CHAT, "image_daily", 0)
     r.llm.script = ["네"]
     await say(r, group_msg(r, text="소담아 그림 그려줘"))
-    names = [t["function"]["name"] for t in r.llm.of("chat")[0]["tools"]]
-    assert "make_image" not in names
+    call = r.llm.of("chat")[0]
+    # 목록엔 남기고(방마다 같은 목록 → 프롬프트 캐시 유지) 부를 수 있는 목록(allowed_tools)에서만 뺌
+    assert "make_image" in [t["function"]["name"] for t in call["tools"]]
+    assert call["allowed"] is not None and "make_image" not in call["allowed"]
 
 
 @test

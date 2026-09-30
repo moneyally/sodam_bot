@@ -53,6 +53,7 @@ class ToolCtx:
     reply_msg_id: int | None = None  # 요청이 답장한 메시지 ID (handlers.reply_ref) → 사건 재현 기준 (AI 가 고르지 않음)
     name_notes: list[str] = field(default_factory=list)  # _resolve 가 예전 이름으로 찾았을 때 → execute 가 도구 결과 끝에 붙임
     request_msg: object | None = None  # 이 요청 메시지 (handlers) → point_game 이 ! 명령처럼 그 메시지에 답장
+    media_intent: str | None = None  # 🎞️/🎬 mediaintent.classify (agent._run) → make_video·make_profile_video 가 다른 쪽이면 돌려보냄
 
 
 @dataclass
@@ -1150,8 +1151,13 @@ def register_tool(tool: Tool, *, read_only: bool = False) -> None:
 
 def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
     """이 사람·이 대화에서 쓸 수 있는 도구 = AI 가 할 수 있는 일의 전부 (안 되는 도구는 아예 안 보여 '된다'고 못 함)."""
-    return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))
-            and (t.enabled is None or t.enabled())
+    return [t for t in offered(role, in_dm) if not t.setting or settings.get(t.setting)]
+
+
+def offered(role: Role, in_dm: bool = False) -> list[Tool]:
+    """역할·대화 종류로만 정한 도구 목록 (방 설정과 무관 → 모델에 싣는 목록이 방마다 같아 프롬프트 캐시가 안 깨짐).
+    방 설정으로 꺼진 도구는 목록엔 남기고 호출만 allowed_tools 로 막는다 (OpenAI 캐싱 가이드: 도구 목록은 요청마다 같게)."""
+    return [t for t in TOOLS if role >= t.min_role and (t.enabled is None or t.enabled())
             and not (t.where == "room" and in_dm) and not (t.where in ("dm", "owner_dm") and not in_dm)
             and not (t.room_role is not None and not in_dm and role < t.room_role)]
 

@@ -76,6 +76,9 @@ async def _busy(ctx) -> None:
 
 async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
     from .sticker import lighter, note_wanted, resolve_spec, same_as_last  # noqa: F401 (순환 import 피해 함수 안에서)
+    from .. import mediaintent
+    if back := mediaintent.redirect(getattr(ctx, "media_intent", None), "make_profile_video"):
+        return back
     legacy = None
     if a.get("spec"):
         raw = dict(a["spec"]) if isinstance(a["spec"], dict) else {}

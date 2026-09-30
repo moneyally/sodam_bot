@@ -523,7 +523,10 @@ def reasoning_effort_off_with_tools():
     assert llm._extra("gpt-5.4", has_tools=True) == {"reasoning_effort": "none"}
     assert llm._extra("gpt-5.4", has_tools=False) == {"reasoning_effort": "low"}
     assert llm._extra("gpt-4.1", has_tools=True) == {}
-    assert LLM(cfg(reasoning_effort=""), None)._extra("gpt-5.4", has_tools=True) == {}
+    # 빈 값이어도 도구 + gpt-5 는 none (작은 모델 기본 medium → 400, 2026-10-01) · 'off' = 아예 안 보냄 (비상 탈출구)
+    assert LLM(cfg(reasoning_effort=""), None)._extra("gpt-5.4", has_tools=True) == {"reasoning_effort": "none"}
+    assert LLM(cfg(reasoning_effort=""), None)._extra("gpt-5.4", has_tools=False) == {}
+    assert LLM(cfg(reasoning_effort="off"), None)._extra("gpt-5.4", has_tools=True) == {}
     assert LLM(cfg(openai_api_key=""), None).enabled is False
 
 
