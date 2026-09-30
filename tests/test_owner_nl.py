@@ -248,7 +248,7 @@ async def room_setting_card_validates_with_live_defaults_and_coerce():
     assert "없는 설정" in await OT.t_room_setting(c, {"room": str(CHAT), "key": "nope", "value": "1"})
     assert "못 바꾸는" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "gt_setter", "value": "5"})
     assert "값이 안 맞음" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "ai_spicy", "value": "maybe"})
-    assert "줄이기만" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "image_daily", "value": "20"})
+    assert "줄이기만" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "ai_chime_daily", "value": "20"})
     assert "이미 그 값" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "ai_spicy", "value": "off"})
     assert not cards_to(bot, OWNER)
     keys = tools._BY_NAME["owner_room_setting"].schema()["function"]["parameters"]["properties"]["key"]["enum"]
@@ -261,18 +261,19 @@ async def room_setting_card_validates_with_live_defaults_and_coerce():
     await press(svc, bot, OWNER, btn(card[3]["reply_markup"], "바꾸기"))
     assert (await db.get_settings(CHAT))["ai_spicy"] is True
     assert [r for r in await mod_actions(db, CHAT, "setting") if r["detail"].startswith("ai_spicy=True")]
-    # 줄이기는 됨
-    assert "확인 버튼" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "image_daily", "value": "2"})
+    # 줄이기는 됨 · 이미지 한도는 방 관리자가 못 올리니 오너는 카드로 올릴 수 있음 (settings.OWNER_CAP, 2026-09-30)
+    assert "확인 버튼" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "ai_chime_daily", "value": "2"})
+    assert "확인 버튼" in await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "image_daily", "value": "11"})
 
 
 @test
 async def room_setting_press_rechecks_value():
     db, svc, bot = await world()
-    await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "image_daily", "value": "2"})
+    await OT.t_room_setting(octx(svc, bot), {"room": str(CHAT), "key": "ai_chime_daily", "value": "2"})
     ok = btn(cards_to(bot, OWNER)[-1][3]["reply_markup"], "바꾸기")
-    await db.set_setting(CHAT, "image_daily", 1)              # 누르기 전에 방 관리자가 더 줄임 → 2 는 올리기가 됨
+    await db.set_setting(CHAT, "ai_chime_daily", 1)           # 누르기 전에 방 관리자가 더 줄임 → 2 는 올리기가 됨
     q = await press(svc, bot, OWNER, ok)
-    assert (await db.get_settings(CHAT))["image_daily"] == 1 and "그대로" in q.edits[-1][0], q.edits
+    assert (await db.get_settings(CHAT))["ai_chime_daily"] == 1 and "그대로" in q.edits[-1][0], q.edits
 
 
 # ── 6. 요금제 ──────────────────────────────────────────────

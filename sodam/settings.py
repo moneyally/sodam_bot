@@ -130,6 +130,19 @@ def parse_hhmm(raw: str) -> str:
     return f"{int(m.group(1)):02d}:{m.group(2)}"
 
 
+# 비용이 바로 늘어나는 한도: 방 관리자는 기본값까지만(줄이기만), 그 위로는 오너만.
+# 실제 사례 2026-09-30: 오너가 "관리자가 이미지 한도를 20 으로 올려 악용하면?" — 이미지·웹검색은 한 번마다 요금.
+OWNER_CAP: dict[str, int] = {"image_daily": 5, "web_search_daily": 30}
+
+
+def over_cap(key: str, value: Any) -> str | None:
+    """방 관리자가 못 넘는 값이면 안내 문구, 아니면 None (오너는 부르지 말 것)."""
+    cap = OWNER_CAP.get(key)
+    if cap is not None and isinstance(value, int) and not isinstance(value, bool) and value > cap:
+        return f"{LABELS.get(key, key)}은(는) 비용 때문에 방 관리자는 {cap}까지만 정할 수 있어요 (더 올리는 건 봇 오너만)."
+    return None
+
+
 def coerce(key: str, raw: str) -> Any:
     """문자열 입력을 기본값 타입에 맞게 변환. 잘못되면 ValueError."""
     if key not in DEFAULTS:
