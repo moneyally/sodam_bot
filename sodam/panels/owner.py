@@ -237,17 +237,23 @@ async def s_grant_ask(c: PanelCtx) -> Screen:
     return Screen(text, menu._kb([[B(f"✅ {days}일 부여", f"m:k:{tok}"), B("취소", f"m:oc:{cid}:{page}")]]))
 
 
+async def apply_grant(c: PanelCtx, days: int, source: str) -> int:
+    """기간 부여 실행 (오너 메뉴 버튼·AI 1:1 확인 카드 공통 — 부르는 쪽이 오너·방 확인을 끝낸 뒤). → 새 만료 시각.
+    남은 기간(유료·체험 중 늦은 쪽) 뒤로 이어서. SQL 한 문장이라 결제 연장과 동시에 돌아도 안 덮어씀."""
+    until = await c.svc.db.extend_paid(c.cid, days * 86400, int(time.time()))
+    title = (await room(c, c.cid))["title"] or str(c.cid)
+    await c.svc.db.log_mod(c.cid, c.uid, None, "sub_grant", f"{days}일 ({source})")
+    await c.svc.mod.report(c.bot, f"[기간 부여] {esc(source)}에서 결제 없이\n{esc(title)} (<code>{c.cid}</code>) "
+                                  f"+{days}일 → {_date(c, until, '%Y-%m-%d %H:%M')} 까지")
+    return until
+
+
 async def t_grant(c: PanelCtx, arg) -> Screen:
     """1회용 토큰으로만 도착 (오너·새 권한 확인은 r_token 이 TOKEN_NEED=OWNER 로 이미 함)."""
     days, page = arg
-    if days not in GRANT_DAYS or not await c.svc.db.has_chat(c.cid):
+    if days not in GRANT_DAYS or c.cid >= 0 or not await c.svc.db.has_chat(c.cid):
         return Screen(None, toast="없는 그룹이에요.", alert=True)
-    # 남은 기간(유료·체험 중 늦은 쪽) 뒤로 이어서. SQL 한 문장이라 결제 연장과 동시에 돌아도 안 덮어씀
-    until = await c.svc.db.extend_paid(c.cid, days * 86400, int(time.time()))
-    title = (await room(c, c.cid))["title"] or str(c.cid)
-    await c.svc.db.log_mod(c.cid, c.uid, None, "sub_grant", f"{days}일 (오너 메뉴)")
-    await c.svc.mod.report(c.bot, f"[기간 부여] 오너 메뉴에서 결제 없이\n{esc(title)} (<code>{c.cid}</code>) "
-                                  f"+{days}일 → {_date(c, until, '%Y-%m-%d %H:%M')} 까지")
+    until = await apply_grant(c, days, "오너 메뉴")
     screen = await _room_screen(c, c.cid, page)
     screen.toast = f"✅ {days}일 부여 → {_date(c, until)} 까지"
     return screen

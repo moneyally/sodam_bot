@@ -720,6 +720,7 @@ async def t_owner_rooms(ctx: ToolCtx, a: dict) -> str:
     rows = await _owner_rooms(ctx)
     if not rows:
         return "봇이 들어가 있는 방이 없음."
+    ctx.tainted = True   # 방 이름 = 그 방 관리자가 정한 글 (숨은 지시가 같은 답변의 쓰기 도구로 이어지지 않게)
     lines = []
     for r in rows:
         ok = await ctx.svc.perms.bot_can_moderate(ctx.bot, r["chat_id"])
@@ -727,27 +728,38 @@ async def t_owner_rooms(ctx: ToolCtx, a: dict) -> str:
     return "봇이 있는 방:\n" + "\n".join(lines)
 
 
-async def _find_room(ctx: ToolCtx, q: str) -> tuple[dict | None, str]:
-    """방 ID·이름으로 봇이 있는 방 하나를 찾는다. 못 찾거나 여러 개면 (None, 되물을 안내)."""
+async def _match_rooms(ctx: ToolCtx, q: str) -> tuple[list, list]:
+    """방 ID·이름에 맞는 봇이 있는 방들 (맞은 것, 전체)."""
     rows = await _owner_rooms(ctx)
     qn = _norm_title(q)   # '𝐅𝐈𝐑𝐒𝐓' ↔ 'first', 'First그룹방' ↔ 'FIRST' (방 이름이 말 안에 들어 있거나 그 반대)
     tn = {r["chat_id"]: _norm_title(r["title"]) for r in rows}   # ID → 정확히 같은 이름 → 포함 (한 글자 방 이름은 포함 안 씀)
     hit = ([r for r in rows if str(r["chat_id"]) == q] or [r for r in rows if qn and tn[r["chat_id"]] == qn] or
            [r for r in rows if qn and (t := tn[r["chat_id"]]) and (qn in t or (len(t) > 1 and t in qn))])
+    return hit, rows
+
+
+async def _find_room(ctx: ToolCtx, q: str) -> tuple[dict | None, str]:
+    """방 ID·이름으로 봇이 있는 방 하나를 찾는다. 못 찾거나 여러 개면 (None, 되물을 안내)."""
+    hit, rows = await _match_rooms(ctx, q)
     if len(hit) != 1:
         names = ", ".join(f"{r['title']}({r['chat_id']})" for r in (hit or rows)) or "없음"
+        ctx.tainted = True   # 방 이름 목록 = 방 관리자가 정한 글 → 이 답변에선 이후 읽기 도구만 (owner_rooms 와 같음)
         return None, f"'{q}' 방을 {'여러 개 찾음' if hit else '못 찾음'}. 봇이 있는 방: {names}. 어느 방인지 물어볼 것."
     return hit[0], ""
 
 
 async def t_owner_sanction(ctx: ToolCtx, a: dict) -> str:
-    """오너가 1:1 에서 '○○방 □□ 30분 뮤트'. 확인 카드는 이 1:1 에 (누를 때 다시 오너·권한 확인)."""
+    """오너가 1:1 에서 '○○방 □□ 30분 뮤트'. 확인 카드는 이 1:1 에 (누를 때 다시 오너·권한 확인).
+    unmute/unban(풀기)은 panels/ownertools.py 의 확인 카드로."""
+    if str(a.get("action", "")) in ("unmute", "unban"):
+        from .panels import ownertools   # 늦게 import (panels → tools)
+        return await ownertools.t_release(ctx, a)
     room, err = await _find_room(ctx, str(a.get("room", "")).strip())
     if not room:
         return err + " (확인 버튼 안 보냄)"
     kind = str(a.get("action", ""))
     if kind not in SANCTION_LABEL:
-        return "action 은 warn / mute / ban 중 하나."
+        return "action 은 warn / mute / ban / unmute / unban 중 하나."
     minutes = max(1, min(int(a.get("minutes", 30)), 7 * 1440)) if kind == "mute" else 0
     room_ctx = replace(ctx, chat_id=room["chat_id"], settings=await ctx.svc.db.get_settings(room["chat_id"]))
     result = await _ask_sanction(room_ctx, kind, a, minutes, card_chat=ctx.chat_id, room_title=room["title"])
@@ -1101,9 +1113,10 @@ TOOLS: list[Tool] = [
          where="dm"),
     Tool("owner_rooms", "[오너] 봇이 들어가 있는 방 목록과 방마다 봇 제재 권한 여부.", {}, [], t_owner_rooms, Role.OWNER,
          where="owner_dm"),
-    Tool("owner_sanction", "[오너] 1:1 에서 다른 방의 멤버를 경고·뮤트·밴한다 (이 1:1 에 확인 버튼 한 장, 눌러야 실행). "
-         "room 은 방 이름(일부) 또는 ID. 대상은 그 방 멤버 이름·@아이디·ID.",
-         {"room": {"type": "string"}, "action": {"type": "string", "enum": ["warn", "mute", "ban"]},
+    Tool("owner_sanction", "[오너] 1:1 에서 다른 방의 멤버를 경고·뮤트·밴하거나 뮤트 해제(unmute)·밴 해제(unban)한다 "
+         "(이 1:1 에 확인 버튼 한 장, 눌러야 실행). room 은 방 이름(일부) 또는 ID. 대상은 그 방 멤버 이름·@아이디·ID "
+         "(밴 해제는 숫자 ID 도 됨).",
+         {"room": {"type": "string"}, "action": {"type": "string", "enum": ["warn", "mute", "ban", "unmute", "unban"]},
           **NAMES_PARAM, "minutes": {"type": "integer", "description": "뮤트 분 (1~10080)"},
           "reason": {"type": "string"}}, ["room", "action", "names", "reason"], t_owner_sanction, Role.OWNER,
          where="owner_dm"),

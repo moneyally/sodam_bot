@@ -1100,6 +1100,9 @@ async def c_grant(ctx: CmdCtx) -> None:
     if chat_id >= 0 or not 1 <= days <= 3650:
         await ctx.reply("방 ID(음수)와 1~3650 일수를 확인해주세요.")
         return
+    if not await ctx.svc.db.has_chat(chat_id):   # 오타 ID 에 구독 줄을 만들고 '연장했어요' 하던 것 (오너 메뉴 _room_cid 와 같게)
+        await ctx.reply(f"❌ 봇이 모르는 방 ID 예요: <code>{chat_id}</code>\n그 방에서 <code>.내아이디</code> 로 확인해주세요.")
+        return
     until = await ctx.svc.billing.extend(chat_id, days)
     await ctx.svc.db.log_mod(chat_id, ctx.user.id, None, "sub_grant", f"{days}일")
     await ctx.reply(f"✅ {chat_id} 방 이용 기간을 {fmt_time(until, ctx.svc.cfg.tz, '%Y-%m-%d')} 까지로 연장했어요.")

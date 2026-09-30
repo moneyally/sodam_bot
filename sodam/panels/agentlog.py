@@ -230,15 +230,23 @@ async def s_plan(c: PanelCtx) -> Screen:
     return await _plan_screen(c, cid)
 
 
+async def set_plan(svc, cid: int, uid: int, cents: int, source: str) -> bool:
+    """방 하루 요금제 저장 (오너 버튼·AI 1:1 확인 카드 공통 — 부르는 쪽이 오너·값을 확인한 뒤). 바뀌었으면 True.
+    같은 값이면 기록 안 남김 (같은 버튼 재전송)."""
+    if await svc.db.get_state(cid, costs.PLAN_KEY) == cents:
+        return False
+    await svc.db.set_state(cid, costs.PLAN_KEY, cents)
+    await svc.db.log_mod(cid, uid, None, "setting", f"AI 하루 요금제 → {costs.plan_label(cents)} ({source})")
+    return True
+
+
 @_owner_only
 async def r_set_plan(c: PanelCtx) -> Screen:
     cid = await _room_cid(c, c.arg(0))
     cents = to_int(c.arg(1))
     if cid is None or cents not in costs.PLAN_CENTS:   # 정해진 값만 (위조 콜백 방지)
         return Screen(None, toast="없는 그룹이나 값이에요.", alert=True)
-    if await c.svc.db.get_state(cid, costs.PLAN_KEY) != cents:   # 같은 버튼 재전송은 기록 안 남김
-        await c.svc.db.set_state(cid, costs.PLAN_KEY, cents)
-        await c.svc.db.log_mod(cid, c.uid, None, "setting", f"AI 하루 요금제 → {costs.plan_label(cents)} (오너)")
+    await set_plan(c.svc, cid, c.uid, cents, "오너")
     screen = await _plan_screen(c, cid)
     screen.toast = f"✅ 하루 요금제 {costs.plan_label(cents)}"
     return screen
