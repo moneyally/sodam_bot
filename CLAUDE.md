@@ -634,6 +634,13 @@
   오너는 클로드 환경변수 `SODAM_DIAG_TOKEN` 에 넣음 → 클로드는 `python tools/diag.py health|rooms|settings|messages|agent_runs|voice|modlog|counters|tables|logs chat=벳블리 …`.
   틀린 토큰 IP당 10분 20번·전체 분당 120번, 조회 기록 data/diag_access.log, 비밀값 모양 가림. 오너 메인 🔌(m:dg) 끄기·토큰 바꾸기.
   **update.sh 는 돌고 있던 옛 스크립트가 끝까지 실행** → 새 setup 단계는 그 다음 배포(아무 커밋)부터 돈다 (창구 첫 설치 = PR26 다음 커밋).
+- **🔐 SSH 웹소켓 다리 (2026-10-01, 오너 결정 '지금 방식 너무 불편')**: 작업 환경은 밖으로 HTTPS 만 나감(22번 막힘, wss 는 됨 — 실측).
+  Caddy https://<IP>.sslip.io/sshws → `sodam/sshws.py`(sodam-sshws, 127.0.0.1:8023, websockets) → 127.0.0.1:22 바이트 그대로.
+  3중: ① 다리 = 점검 토큰(Authorization: Bearer, IP당 10분 10번·전체 분당 60번, data/sshws_access.log) ② sshd 끝에 Match Address 127.0.0.1 →
+  비밀번호 로그인 금지·root 는 키만(표시 # >>> sodam-sshws, `sshd -t` 통과해야 적용) ③ 클로드 키 `deploy/claude_ssh.pub` = authorized_keys 에
+  from="127.0.0.1,::1" 로만. 전부 update.sh `sshws_setup` 이 설치(새 update.sh 가 도는 다음 타이머부터, 안 떠 있으면 10분마다 재시도).
+  클로드 쪽: `python tools/ssh_ws.py "명령"` / `--put 로컬 원격` / `--get 원격 로컬` (paramiko, 환경 비밀값 SODAM_SSH_KEY = 개인키 PEM · SODAM_DIAG_TOKEN).
+  끄기: 서버에서 `systemctl disable --now sodam-sshws`. 테스트 tests/test_sshws.py (로컬 paramiko 서버로 끝까지 확인함).
 - 서버 로그는 이제 원격 점검 창구로 (없으면 사용자가 `journalctl -u sodam -n 100` 을 보여주거나, 봇의 오너 오류 알림으로).
 
 ## 클라우드 세션 서버 실행

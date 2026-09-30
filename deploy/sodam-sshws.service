@@ -1,0 +1,45 @@
+# /etc/systemd/system/sodam-sshws.service — 🔐 SSH 웹소켓 다리 (sodam/sshws.py, CLAUDE.md '🔐 SSH 다리').
+# 127.0.0.1:8023 에서만 듣고, Caddy https://<IP>.sslip.io/sshws 를 거쳐서만 들어옴 → 127.0.0.1:22 로 바이트 그대로.
+# 문 열기 = 점검 창구 토큰(data/diag.token). 끄기: systemctl disable --now sodam-sshws · 기록: /opt/sodam/data/sshws_access.log
+[Unit]
+Description=Sodam SSH-over-WebSocket bridge (token-gated)
+After=network-online.target ssh.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam.sshws
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-sshws
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=128M
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
