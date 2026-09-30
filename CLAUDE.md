@@ -1,7 +1,7 @@
 # 소담(sodam) 봇 — Claude 작업 인수인계
 
 이 파일은 Claude 세션이 바뀌어도(다른 PC, Claude 클라우드) 맥락을 이어가기 위한 메모다. 새 세션은 이 파일부터 읽는다.
-다음 작업 계획은 `docs/NEXT.md`.
+다음 작업 계획은 `docs/NEXT.md`. **오너가 나중에 하자고 미뤄 둔 일은 `docs/LATER.md`** (요청이 오면 그 문서부터 읽는다).
 
 ## ⚠️ 제일 먼저: 사용자와 말하는 법 (사용자 지시 2026-09-30, 여러 번 화냄)
 - **한국어만.** 답·중간 진행 설명·표·보고·에이전트 결과 전달까지 전부 한국어. 영어 문장 한 줄도 섞지 말 것 (사용자는 영어를 모름 —
@@ -9,6 +9,14 @@
 - **반말, 친구처럼.** "~했어", "~할게", "ㄱㄱ" 톤. 존댓말·격식체 X. 짧게, 결론 먼저.
 - **안 되면 되게끔 사례를 웹 검색한다.** "안 돼"로 끝내기 전에 같은 문제를 푼 사례를 먼저 찾는다 — 웹 검색·공식 문서·GitHub 이슈/코드·논문 (아래 교훈, `sodam-research` 스킬).
 - **한 것만 했다고.** 서버에서 직접 확인한 것만 "완료", 나머지는 "아직/미확인".
+
+## ⚠️ 교훈: 고정 목록(하드코딩) 말고 프레임워크로 (사용자 지시 2026-09-30)
+- 기능은 "정해진 몇 개 중 고르기"로 만들지 말고 **부품 + 값(파라미터)을 조합하는 틀**로 만든다. 실제로 뭘 만들지는 사용자가 말로 요청하고,
+  AI 가 그 말을 부품 조합으로 옮긴다. (사례: 움프 효과가 코드에 박힌 목록이라 "쌍절곤 휘둘러"·"타서 없어지게"를 달라 해도 매번
+  "줌+네온+별빛"만 나옴 — 최근 3일 17건 중 8건 같은 조합.)
+- 부품은 넓고 일반적으로(아무 모양·색·방향·속도·개수), 값은 안전 범위로만 자르고(서버 파일 경로·무한 반복 금지), 새 효과가 필요하면
+  목록에 이름 하나 더 박지 말고 기존 부품의 값으로 되는지부터 본다.
+- 모르는 기법은 추측 말고 검색(공식 문서·GitHub·논문)으로 찾아서 쓴다 (`sodam-research` 스킬).
 
 ## ⚠️ 교훈: '안 된다'로 멈추지 않는다 (사용자 지시 2026-09-29)
 - 사용자에게 "안 돼요 / 그 방법뿐이에요" 라고 하기 전에 **먼저 전부 찾아본다**: 공식 문서·변경 기록(Bot API changelog, core.telegram.org 스키마)·
@@ -133,9 +141,13 @@
 - **AI 키로 하는 테스트(ai_live·ai_eval_*)는 사용자 허락 없이 돌리지 않는다** (사용자 결정 2026-09-28: 비용). 오프라인 가짜 LLM 으로.
 
 ## 제재·AI 도구 권한
+- **🔑 API 키 넣기 (SSH 없이)** (`sodam/apikeys.py`, tests/test_apikeys.py, 2026-09-30): 오너가 소담 1:1 에 키를 그대로 붙이거나
+  `.키 이름 값` → 메시지 즉시 삭제, `data/keys.env`(600) 저장 + os.environ 바로 적용, 봇 시작 때 config 가 .env 다음에 읽음(이쪽 우선).
+  허용 이름만(XAI_API_KEY·GEMINI_API_KEY·NEWSAPI_AI_KEY·APISPORTS_KEY·SPORTSDB_KEY). 오너 아니면 지우기만. 방에 붙인 키도 기록 전에 지움.
+  서비스는 ProtectSystem=strict 라 data/ 에만 쓸 수 있음. 음성 담당 등 다른 프로세스는 재시작해야 새 키를 읽음.
 - **비용 한도는 오너만 올림** (`settings.OWNER_CAP` · `over_cap`, tests/test_owner_cap.py, 2026-09-30 오너 "관리자가 이미지 한도 올려 악용하면?"):
   이미지·웹검색 하루 횟수는 방 관리자가 기본값(5·30)까지만 — `.설정변경`·말로(change_setting)·✏️ 숫자 입력·버튼(menu._set) 전부 막힘.
-  오너는 방에서 `.설정변경`·✏️ 숫자 입력, 1:1 에선 owner_room_setting(확인 카드)로 올림. 새 비용 설정을 만들면 여기 넣을 것.
+  오너는 방에서 `.설정변경`·✏️ 숫자 입력, 1:1 에선 owner_room_setting(확인 카드)로 올림. 영상(video_weekly 6·video_seconds 6)도 여기. 새 비용 설정을 만들면 여기 넣을 것.
 - **🔎 사람 찾기·점검 도구** (`panels/checkup.py`, tests/test_checkup.py · 뮤테이션 7개, 2026-09-29 — 오너 '7647564988 아이디 뭐야'에 도구가 없어
   기능 요청만 접수한 실제 사례): lookup_user(누구나, 숫자ID·@·예전 @·이름 → 지금 이름·@·namehist 변경 기록, 봤던 방은 오너=전부·관리자=자기 관리 방·
   그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted, 2026-09-30부터 오너 1:1 확인 카드), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
@@ -423,6 +435,27 @@
 - photo 모드 framing auto(에지 에너지 관심 영역·위쪽 가중)/center/top/blur. 속도(4코어): 그리기 10.4→4.9초 (raw RGBA, 격자 캐시, 경계만 unpremultiply,
   VP9 1차 패스 cpu-used 4, 사다리 건너뛰기). 명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]`.
 - 도구 설명은 아트 디렉터 프롬프트(①사진 읽기 ②catalog ③spec ④경고 고치기, 한국어 표현 매핑). 카탈로그 본문은 도구 결과라 매 호출에 안 붙음.
+
+## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
+- 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
+  길이 video_seconds(4~8, 기본 6). 둘 다 settings.OWNER_CAP (관리자는 줄이기만). 오너는 개수 한도 무시(요금은 셈).
+- **.env 키가 있을 때만 켜짐** (없으면 Tool.enabled 로 도구 숨김, 부르면 '영상 AI 키가 아직 설정 안 됨 (운영자)'):
+  `GEMINI_API_KEY`(aistudio.google.com, 결제 연결 필요 — Veo 무료 등급 없음) → 기본 `veo-3.1-lite-generate-preview` 720p $0.05/초 소리 포함 ·
+  `XAI_API_KEY`(console.x.ai) → `grok-imagine-video` $0.05/초(-1.5 는 $0.08). 둘 다면 `VIDEO_PROVIDER=gemini|xai`, 모델은 `VIDEO_MODEL`(그 회사 이름일 때만).
+  env 는 부를 때마다 읽음 → 키 넣고 재시작만. 6초 영상 1개 $0.30 → 한 주 6개 = $1.80, 한 달(약 26개) ≈ $7.8/방.
+- API 모양은 공식 문서 그대로(추측 X, video.py 머리말에 주소): Veo = POST models/{m}:predictLongRunning(x-goog-api-key) → GET operations 10초마다
+  → generateVideoResponse.generatedSamples[0].video.uri 내려받기(리다이렉트는 직접 따라가며 다른 호스트엔 키 안 보냄), 이미지 = bytesBase64Encoded·
+  mimeType(공식 python-genai SDK 와 같음), image-to-video 는 personGeneration allow_adult, durationSeconds 4/6/8 정수, 비율 16:9·9:16 만.
+  xAI = POST /v1/videos/generations → GET /v1/videos/{id} status pending/done/failed/expired, 사진은 data URI, 1:1 도 됨.
+  막힘: Veo raiMediaFilteredCount/Reasons·400 safety, xAI respect_moderation=false·error invalid_argument → '🙅 영상 AI 쪽 정책으로 거절됐어요'. 키는 redact.
+- **내용 규칙 (오너 결정 2026-09-30)**: 우리 낱말 필터 없음 — 성인 내용은 영상 AI(xAI·Veo) 정책이 판단. 코드가 막는 건 두 가지만(`videogen.hard_line`):
+  ① 미성년 + 성적 내용 ② 실제 사람 사진(프사·붙은 사진) + 성적·노출. 한국어는 뜻이 분명한 말만('귤 껍질 벗기기'·'노출 과다 야경' 통과).
+- 흐름: 도구가 이용 기간·그룹방·두 선(hard_line)·한 답변 1개·방마다 동시 1개(RUNNING — 검사 바로 뒤 await 없이 자리 잡고 거절·실패면 finally 로 풂, 리뷰: 동시 두 요청 7/6)·주 한도·요금 미리 검사(`llm.can_spend` = 전체·방 하루 달러에
+  이 영상 값을 더해 넘으면 거절, OpenAI 키 무관) → 방에 '🎬 영상 만드는 중…' 답장 + ctx.quiet → persist.spawn 뒤 작업(최대 VIDEO_TIMEOUT_SEC 300초,
+  영상 올리는 중 표시) → 성공이면 `llm.charge`(방·전체 달러) + 주 개수 + counters video_sec:<모델> → send_video(요청에 답장) · 만드는 중 글 지움.
+  실패·시간 초과는 그 글을 이유로 고침, 요금·개수 안 셈 (Veo 는 막힌 영상 청구 안 함). 재시작되면 만들던 영상은 잃음(재개 없음).
+- 원본 사진(mode=image): photo_of > 붙은·답장한 사진 > 요청자 프사 (panels/avatar.source_photo 규칙을 videogen 에 복사 — avatar 는 다른 작업이 고치는 중이었음).
+- 점검(room_checkup) '영상 이번 주 n/한도개' (+키 없으면 표시) · 안내서 `guide/video.md` · 프롬프트 규칙 9 = 도구가 없을 때만 '영상 생성 안 됨'. 음성 도구엔 안 넣음.
 
 ## 📓 소담이 일기 (`diary.py`, `panels/diary.py`, tests/test_diary.py · 뮤테이션 2개)
 - 매일 밤(diary_time 21:00/22:00/23:00/23:30, 기본 23:30) 오너 채널에 '📓 소담이의 메모장 #N' (#1 은 사람이 직접). 30초 틱 + 날짜 claim → 하루 한 번.

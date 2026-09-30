@@ -64,7 +64,7 @@ async def _input_rules(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 NUM_GROUPS: dict[str, tuple[str, list[str]]] = {
     "sec": ("🛡️ 보안", ["flood_count", "flood_seconds", "flood_mute_minutes", "dup_limit", "newbie_link_hours"]),
     "wl": ("⚠️ 경고 단계", ["warn_mute_at", "warn_mute_minutes", "warn_ban_at"]),
-    "ai": ("🤖 AI", ["reply_max_chars", "user_rate_per_min", "room_rate_per_min", "web_search_daily", "image_daily"]),
+    "ai": ("🤖 AI", ["reply_max_chars", "user_rate_per_min", "room_rate_per_min", "web_search_daily", "image_daily", "video_weekly", "video_seconds"]),
 }
 GROUP_OF = {k: g for g, (_, keys) in NUM_GROUPS.items() for k in keys}
 NUM_KEYS = [k for k in GROUP_OF if k in RANGES]   # 범위가 정해진 정수 설정만

@@ -144,6 +144,21 @@ class LLM:
                 "INSERT INTO counters(day, chat_id, key, n) VALUES(?, ?, ?, ?) "
                 "ON CONFLICT(day, chat_id, key) DO UPDATE SET n=n+excluded.n", [(day, *r) for r in rows]))
 
+    async def can_spend(self, chat_id: int | None, micro: int) -> None:
+        """값을 미리 아는 작업(영상 = 초당 요금): 이만큼 더 쓰면 하루 전체 예산·방 달러 한도를 넘는지. 넘으면 BudgetExceeded.
+        OpenAI 키와 무관 (다른 회사 API 라서 _check_budget 의 AIUnavailable 을 안 탐)."""
+        day = self._today()
+        if self.usd_budget > 0 and await self.db.counter(day, 0, costs.USD) + micro > int(self.usd_budget * costs.MICRO):
+            raise BudgetExceeded("usd")
+        if not chat_id or (chat_id > 0 and (chat_id in self.cfg.owner_ids or chat_id in await self.db.owner_ids())):
+            return
+        if await self.db.counter(day, chat_id, costs.ROOM_USD) + micro > await costs.room_cap_micro(self.db, chat_id):
+            raise BudgetExceeded("room_usd")
+
+    async def charge(self, chat_id: int | None, micro: int, purpose: str, model: str) -> None:
+        """토큰이 아닌 요금(영상 초당)을 방·전체 하루 달러에 더함 (_record 와 같은 atomic·agentlog)."""
+        await self._record(None, chat_id, purpose, model, extra_micro=micro)
+
     async def embed(self, texts: list[str], *, dims: int, model: str, purpose: str = "embed") -> list[list[float]]:
         """의미 검색용 임베딩 (sodam/semsearch.py). 전체 하루 예산 안에서, 요금은 전체로만 셈 (방 한도엔 안 넣음)."""
         await self._check_budget(None)

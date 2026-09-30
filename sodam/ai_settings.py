@@ -21,3 +21,6 @@ register_setting("ai_room_daily_tokens", ROOM_TOKENS_MAX, "방 하루 AI 토큰 
 register_setting("web_search_daily", 30, "하루 웹검색 한도", range_=(0, 100))
 register_setting("room_rate_per_min", 20, "방 분당 AI 호출", range_=(1, 60))
 register_setting("image_daily", 5, "하루 이미지 만들기(장)", range_=(0, 20))   # 0 = 끔. 한 장이 대화 수십 번 값
+# AI 영상 (sodam/video.py · panels/videogen.py): 방마다 한 주(한국시간 월요일 0시 초기화) 개수 · 한 개 길이(초). 0 = 끔. 비용 → settings.OWNER_CAP
+register_setting("video_weekly", 6, "한 주 영상 만들기(개)", range_=(0, 50))
+register_setting("video_seconds", 6, "영상 길이(초)", range_=(4, 8))

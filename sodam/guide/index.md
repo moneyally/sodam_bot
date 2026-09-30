@@ -25,6 +25,7 @@ type: index
 - [말투·욕 받아치기·19금](modes.md)
 - [기억·학습 자료](memory.md)
 - [음성채팅](voice.md)
+- [AI 영상 만들기](video.md): 소리까지 있는 짧은 영상, 방마다 한 주 한도
 
 ## 방 관리
 - [캡차·스팸·경고·제재](security.md)

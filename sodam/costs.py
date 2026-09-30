@@ -25,6 +25,21 @@ PRICES: dict[str, tuple[float, float, float]] = {
 }
 IMAGE_PREFIX = "gpt-image"
 WEB_SEARCH_PER_CALL = 0.01       # 웹 검색 도구 1번 ($10 / 1천 번)
+# 영상 모델: 초당 $ (sodam/video.py). Veo https://ai.google.dev/gemini-api/docs/pricing (720p, 소리 포함, 만들어진 것만 청구) ·
+# xAI https://docs.x.ai/developers/models/grok-imagine-video(-1.5) — 2026-09-30 확인. 모르는 영상 모델 = 이 표의 가장 비싼 값.
+VIDEO_PER_SEC: dict[str, float] = {
+    "veo-3.1-lite-generate-preview": 0.05,
+    "veo-3.1-fast-generate-preview": 0.10,
+    "veo-3.1-generate-preview": 0.40,
+    "grok-imagine-video": 0.05,
+    "grok-imagine-video-1.5": 0.08,
+}
+
+
+def video_usd_micro(model: str, seconds: int) -> int:
+    """영상 한 개 요금 (정수 마이크로달러) = 초당 요금 × 초."""
+    per = VIDEO_PER_SEC.get(model, max(VIDEO_PER_SEC.values()))
+    return math.ceil(round(per * max(0, seconds) * MICRO, 6))
 
 
 def price_of(model: str) -> tuple[float, float, float] | None:

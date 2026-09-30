@@ -132,7 +132,8 @@ def parse_hhmm(raw: str) -> str:
 
 # 비용이 바로 늘어나는 한도: 방 관리자는 기본값까지만(줄이기만), 그 위로는 오너만.
 # 실제 사례 2026-09-30: 오너가 "관리자가 이미지 한도를 20 으로 올려 악용하면?" — 이미지·웹검색은 한 번마다 요금.
-OWNER_CAP: dict[str, int] = {"image_daily": 5, "web_search_daily": 30}
+# 영상(video_weekly·video_seconds, 2026-09-30 오너: 방마다 한 주 6개)도 같은 규칙 — sodam/panels/videogen.py
+OWNER_CAP: dict[str, int] = {"image_daily": 5, "web_search_daily": 30, "video_weekly": 6, "video_seconds": 6}
 
 
 def over_cap(key: str, value: Any) -> str | None:
