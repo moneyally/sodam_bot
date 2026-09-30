@@ -613,7 +613,7 @@ async def c_ban(ctx: CmdCtx) -> None:
     if t:
         uid, name, rest = t
         await _safe(ctx, ctx.svc.mod.ban(ctx.bot, ctx.chat_id, uid, ctx.user.id, " ".join(rest) or "관리자 판단"),
-                    f"🚫 {mention(uid, name)}님을 내보냈어요.")
+                    f"🚫 {mention(uid, name)}님을 밴(영구 추방)했어요. (풀려면 <code>.밴해제</code>)")
 
 
 async def c_unban(ctx: CmdCtx) -> None:

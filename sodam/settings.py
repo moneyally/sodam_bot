@@ -2,6 +2,7 @@
 import re
 from typing import Any, Callable
 
+from .security import normalize_domain
 from .styles import STYLES, resolve_style
 
 DEFAULTS: dict[str, Any] = {
@@ -111,6 +112,10 @@ RANGES: dict[str, tuple[int, int]] = {
 
 # 특수한 값의 표시 방법 (목록 안에 목록 등). register_setting(render_fn=…) 로 추가
 RENDERERS: dict[str, Callable[[Any], str]] = {}
+# 형식 검사가 따로 필요한 값 (글자 → 저장값, 틀리면 ValueError). register_setting(validator=…) / register_validator 로 추가.
+# .설정변경·AI change_setting 이 같은 coerce 를 거치므로 여기서 막으면 둘 다 막힘 (실제 버그: 허용 도메인에 URL 이 그대로 저장)
+VALIDATORS: dict[str, Callable[[str], Any]] = {}
+MAX_DOMAINS = 50
 
 _TRUE = {"on", "true", "1", "yes", "켜기", "켬", "예", "ㅇ"}
 _FALSE = {"off", "false", "0", "no", "끄기", "끔", "아니오", "ㄴ"}
@@ -141,6 +146,8 @@ def coerce(key: str, raw: str) -> Any:
         if not value:
             raise ValueError(" / ".join(sorted(set(CHOICES[key]))) + " 중에서 골라주세요")
         return value
+    if key in VALIDATORS:
+        return VALIDATORS[key](raw)
     if key in TIME_KEYS:
         return parse_hhmm(raw)
     if isinstance(default, bool):
@@ -181,11 +188,43 @@ def render(key: str, value: Any) -> str:
     return text if len(text) <= 40 else text[:40] + "…"
 
 
+def domains_value(raw: str) -> list[str]:
+    """허용 도메인 목록 글자('youtube.com, https://www.Naver.com/x') → 정규화된 도메인 목록.
+    도메인이 아닌 게 섞이면 ValueError (예전: URL 이 그대로 저장돼 security.link_allowed 와 절대 안 맞았음)."""
+    items = [x.strip() for x in re.split(r"[,\s]+", raw) if x.strip()]
+    good = [normalize_domain(x) for x in items]
+    if bad := [x for x, d in zip(items, good) if not d]:
+        raise ValueError(f"도메인 형식이 아니에요: {', '.join(bad[:3])} (예: youtube.com)")
+    out = list(dict.fromkeys(d for d in good if d))
+    if len(out) > MAX_DOMAINS:
+        raise ValueError(f"허용 도메인은 {MAX_DOMAINS}개까지예요")
+    return out
+
+
+def max_text(limit: int) -> Callable[[str], str]:
+    """글자 수 한도 검사기 (인사말 편집기와 같은 한도)."""
+    def check(raw: str) -> str:
+        if len(raw) > limit:
+            raise ValueError(f"{limit}자까지예요 (보낸 글: {len(raw)}자)")
+        return raw
+    return check
+
+
+VALIDATORS["whitelist_domains"] = domains_value
+
+
+def register_validator(key: str, fn: Callable[[str], Any]) -> None:
+    VALIDATORS[key] = fn
+
+
 def register_setting(key: str, default: Any, label: str, *, range_: tuple[int, int] | None = None,
                      choices: dict[str, str] | None = None, choice_labels: dict[str, str] | None = None,
-                     render_fn: Callable[[Any], str] | None = None) -> None:
+                     render_fn: Callable[[Any], str] | None = None,
+                     validator: Callable[[str], Any] | None = None) -> None:
     """기능 모듈이 자기 설정 키를 추가한다 (settings.py 를 직접 고치지 않게). import 시점에 호출."""
     DEFAULTS.setdefault(key, default)
+    if validator:
+        VALIDATORS[key] = validator
     LABELS.setdefault(key, label)
     if range_:
         RANGES[key] = range_

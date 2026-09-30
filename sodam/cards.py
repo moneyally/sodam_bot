@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS ai_approvals (
 
 # 확인 생략을 줄 수 있는 도구 (되돌리기 쉽고 사람에게 직접 영향 없는 것). 도구 이름 → 사람이 읽는 이름
 LOW_RISK = {"schedule_task": "예약", "alert_rule": "알림 규칙", "bot_command": "다른 봇 명령"}
-NEVER = frozenset({"warn", "mute", "ban", "kick", "warn_member", "mute_member", "ban_member", "owner_sanction"})
+NEVER = frozenset({"warn", "mute", "ban", "kick", "warn_member", "mute_member", "ban_member", "owner_sanction",
+                   "kick_member", "member_action", "room_control"})
 DAY_LABEL = "✅ + 오늘은 확인 생략"
 DAY = "_day"               # 확인 생략 버튼의 토큰 동작 = <ok 동작>_day (패널이 같은 함수로 등록 — 📥 인박스는 ok 동작만 셈)
 CARD_KEEP = 86400          # ai_cards 정리
