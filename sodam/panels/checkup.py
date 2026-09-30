@@ -6,7 +6,7 @@
 권한
 - lookup_user: 누구나 (이름·아이디 기록은 원래 누구나 조회 — namehist). '어느 방에서 봤는지'는 오너·grant_lookup 받은 사람=전부,
   그 밖=내가 들어가 있는 방(겹방)·내가 관리자인 방·지금 방만 (오너 결정 2026-09-29).
-- room_checkup: 방 텔레그램 관리자·오너 — 그 방 소담 설정·이용 기간·오늘 AI 한도 %·봇 권한·최근 AI 실패. 금액은 안 보임.
+- room_checkup: 방 텔레그램 관리자·오너 — 그 방 소담 설정·이용 기간·오늘 AI 한도 %·이미지/웹검색 오늘 횟수·봇 권한·최근 AI 실패. 금액은 안 보임.
 - owner_server_status · owner_room_view: 오너 1:1 만 — 서버 버전·프로세스·예산, 다른 방 설정·최근 대화·AI 기록·통화.
 멤버가 쓴 글(이름·대화)이 섞이는 결과는 ctx.tainted → 그 답변에선 이후 읽기 도구만.
 """
@@ -179,6 +179,9 @@ async def t_room_checkup(ctx: ToolCtx, a: dict) -> str:
     used = await svc.db.counter(day, cid, "room_usd_micro")
     cap = await costs.room_cap_micro(svc.db, cid)
     out.append(f"오늘 AI 한도 사용: {used * 100 // cap if cap else 0}%")
+    s = await svc.db.get_settings(cid)   # 이미지·웹검색 오늘 쓴 횟수 / 하루 한도 (2026-09-30 벳블리: "점검에 사진 횟수가 안 떠")
+    out.append(f"오늘 이미지 {await svc.db.counter(day, cid, 'image')}/{s['image_daily']}장 · "
+               f"웹검색 {await svc.db.counter(day, cid, 'web_search')}/{s['web_search_daily']}번")
     try:
         me = await ctx.bot.get_chat_member(cid, ctx.bot.id)
         miss = [label for attr, label in RIGHTS if not getattr(me, attr, False)]
@@ -263,7 +266,7 @@ CHECKUP_TOOLS = [
     (Tool("grant_lookup", "[오너] 사람 찾기에서 모든 방을 볼 수 있는 권한을 특정 사람에게 주거나(on=true) 뺀다(on=false). "
           "'○○한테 사람 찾기 전체 권한 줘'. 이 1:1 에 확인 버튼을 보냄 (오너가 눌러야 저장).", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
                                                  "on": {"type": "boolean"}}, ["who"], t_grant_lookup, Role.OWNER, where="owner_dm"), False),
-    (Tool("room_checkup", "[관리자] 방 소담 점검: 설정(말투·욕 받아치기·19금·음성 등)·이용 기간·오늘 AI 한도 %·봇 권한·최근 AI 문제. "
+    (Tool("room_checkup", "[관리자] 방 소담 점검: 설정(말투·욕 받아치기·19금·음성 등)·이용 기간·오늘 AI 한도 %·이미지/웹검색 오늘 쓴 횟수와 한도·봇 권한·최근 AI 문제. "
           "'소담 왜 답 안 해?', '우리 방 설정 뭐야?' 같은 질문에. 1:1 에선 room 필요.",
           {"room": ROOM}, [], t_room_checkup, Role.ADMIN), True),
     (Tool("owner_server_status", "[오너] 서버 상태: 버전·봇 신호·음성 담당·원격 점검·오늘 AI 요금·마지막 서버 갱신 결과.",

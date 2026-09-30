@@ -71,10 +71,16 @@ async def unknown_id_asks_telegram_once_and_says_so():
 async def room_checkup_is_admin_only_and_hides_money():
     db, svc, bot = await world()
     await db.set_setting(A, "ai_comeback", "mirror")
+    await db.set_setting(A, "image_daily", 10)
+    from datetime import datetime
+    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+    for _ in range(6):
+        await db.bump(day, A, "image")
     assert "room_checkup" not in {t.name for t in tools.available(Role.MEMBER, {}, False)}
     out = await C.t_room_checkup(ctx(svc, bot, ADMIN, Role.ADMIN, A), {})
     assert "벳블리" in out and "똑같이 욕으로" in out and "봇 권한" in out and "$" not in out, out
     assert "관리자 추가" in out, "봇에 없는 권한(관리자 추가·음성채팅 관리)을 짚어 줌"
+    assert "오늘 이미지 6/10장" in out and "웹검색 0/30번" in out, "점검에 이미지·웹검색 횟수 (2026-09-30 벳블리)"
 
 
 @test
