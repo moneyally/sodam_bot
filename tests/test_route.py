@@ -26,6 +26,8 @@ TABLE = [
     ("내 포인트 몇 점이야", "light"), ("이 방 규칙이 뭐야?", "light"), ("오늘 경기 결과 알려줘", "light"),
     ("너 누가 만들었어?", "light"), ("사랑해", "light"), ("피곤하다", "light"), ("ㅇㅈ", "light"),
     ("오늘 몇 명 들어왔어?", "light"), ("노래 추천 좀", "light"),
+    ("벤츠 샀어", "light"), ("밴드 공연 가자", "light"), ("영상 재밌더라", "light"), ("통화 중이야", "light"),
+    ("안내 고마워", "light"), ("그림 잘 그리네", "light"), ("기분 틀어졌어", "light"), ("저장해둘게", "light"),
     # 일·분석·여러 단계 → heavy
     ("박준호 10분 뮤트해줘", "heavy"), ("도배 기준 엄격으로 바꿔줘", "heavy"), ("공지 올려줘", "heavy"),
     ("매일 밤 11시에 요약 올려줘", "heavy"), ("고양이 그림 그려줘", "heavy"), ("내 프사로 움프 만들어줘", "heavy"),
@@ -33,6 +35,8 @@ TABLE = [
     ("영상 만들어줘 바닷가 노을", "heavy"), ("금지어에 먹튀 추가해줘", "heavy"), ("말투 친근하게 바꿔줘", "heavy"),
     ("이거 영어로 번역해줘", "heavy"), ("음성방 들어와", "heavy"), ("캡차 켜줘", "heavy"),
     ("A랑 B 둘 다 비교해서 뭐가 나은지 판단해줘", "heavy"),
+    ("조용히 시켜", "heavy"), ("스팸 막아줘", "heavy"), ("광고 금지해줘", "heavy"), ("ban 해", "heavy"), ("캡챠 활성화", "heavy"),
+    ("입장 인사 켜봐", "heavy"), ("쫓아내", "heavy"), ("킥해", "heavy"), ("짭리 벤해줘", "heavy"), ("노래 틀어줘", "heavy"),
     ("우리 방 이벤트를 다음 주에 하려고 하는데 참여율 높이려면 어떤 방식이 좋을지, 보상은 얼마가 적당한지, "
      "공지는 언제 올리는 게 좋은지 한 번에 정리해서 알려줄 수 있을까? 작년엔 사람이 적게 왔거든 그래서 고민이야 진짜로",
      "heavy"),
@@ -145,6 +149,62 @@ async def escalation_after_read_round_starts_clean():
         assert len(heavy) == 1
         assert not any(m.get("role") in ("tool", "assistant") for m in heavy[0]["messages"])
         assert (await _last_run(r))["purpose"] == "agent:admin:escalated"
+    finally:
+        restore_timers(old)
+
+
+@test
+async def escalation_resets_light_reads_and_reports_done_writes():
+    old = fast_timers()
+    try:
+        # light 가 사람 찾기(tainted 켜짐) 뒤 설정 바꾸기 → heavy 의 설정 바꾸기는 '방 기록 읽음' 으로 막히면 안 됨 (리뷰 재현)
+        llm = ScriptedLLM([tool_call("lookup_user", {"who": "박준호"}),
+                           tool_call("change_setting", {"key": "warn_ban_at", "value": "3"}, "c2"),
+                           tool_call("change_setting", {"key": "warn_ban_at", "value": "3"}, "c3"), reply("바꿨어요")])
+        r = await _room(llm)
+        await r.join(JUNHO)
+        await r.say(BOSS, "소담아 ㅋㅋ 요즘 방 분위기 어때")
+        heavy = llm.of("chat", "agent:admin")
+        tool_out = [m["content"] for m in heavy[-1]["messages"] if m.get("role") == "tool"]
+        assert tool_out and "보안" not in tool_out[-1] and "읽은 답변" not in tool_out[-1], tool_out
+        assert (await r.db.get_settings(r.CHAT))["warn_ban_at"] == 3                  # heavy 의 설정 바꾸기가 실제로 됨
+        steps = (await _last_run(r))["steps"] or ""
+        assert "lookup_user" in steps                                                  # light 가 실제로 찾기를 했음 (경로 확인)
+
+        # light 가 인사(가벼운 쓰기)를 한 뒤 올려 보내면 heavy 에 '이미 한 일' 이 들어감 (두 번 인사 X)
+        llm = ScriptedLLM([tool_call("greet_members", {"names": ["박준호"]}),
+                           tool_call("change_setting", {"key": "flood_limit", "value": "3"}, "c2"), reply("네")])
+        r = await _room(llm)
+        await r.say(BOSS, "소담아 ㅋㅋ 준호 왔네")
+        heavy = llm.of("chat", "agent:admin")[0]["messages"]
+        assert any(m["role"] == "system" and m["content"].startswith("(이미 한 일)") and "greet_members" in m["content"] for m in heavy)
+    finally:
+        restore_timers(old)
+
+
+@test
+async def light_rounds_capped_and_continuation_goes_heavy():
+    old = fast_timers()
+    try:
+        from sodam import agent
+        # 작은 모델이 도구 라운드 LIGHT_MAX_STEPS 번을 다 쓰고도 더 찾으면 = 여러 단계 일 → 큰 모델로 (대충 마무리 X)
+        script = [tool_call("room_rules", {}, f"c{i}") for i in range(agent.LIGHT_MAX_STEPS)] + [reply("큰 모델 답")]
+        llm = ScriptedLLM(script)
+        r = await _room(llm)
+        await r.say(JUNHO, "소담아 규칙이 뭐였지")
+        assert len(llm.of("chat", "agent:member:light")) == agent.LIGHT_MAX_STEPS
+        assert len(llm.of("chat", "agent:member")) == 1 and (await _last_run(r))["purpose"] == "agent:member:escalated"
+
+        # 끼어들기(chime)엔 ask_senior 를 안 붙임
+        from sodam import route as rt
+        assert rt.decide(rt.Req("안녕", mode="chime"), light_model=LIGHT).lane == "light"
+
+        # 5분 안 큰 모델 일의 이어짐('하나 더') = 처음부터 큰 모델 (작은 모델 → 올려 보내기 두 번 호출 방지)
+        llm = ScriptedLLM([reply("공지 올릴게요"), reply("하나 더 올릴게요")])
+        r = await _room(llm)
+        await r.say(BOSS, "소담아 공지 올려줘")
+        await r.say(BOSS, "소담아 하나 더")
+        assert len(llm.of("chat", "agent:admin")) == 2 and not llm.of("chat", "agent:admin:light")
     finally:
         restore_timers(old)
 
@@ -307,6 +367,26 @@ async def llm_sends_allowed_tools_and_cache_key():
     sent.clear()
     await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=["read_chat"])
     assert len(sent) == 1 and [t["function"]["name"] for t in sent[0][1]["tools"]] == ["read_chat"]
+
+    # 도구와 무관한 400(길이 초과 등)은 예전 방식으로 바꾸지 않음 (캐시 효과 유지)
+    llm.allowed_off = False
+
+    async def too_long(**kw):
+        raise BadRequestError("context_length_exceeded", response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+                              body=None)
+    llm.client.chat.completions.create = too_long
+    try:
+        await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=["read_chat"])
+        raise AssertionError("다시 던져야 함")
+    except BadRequestError:
+        pass
+    assert not llm.allowed_off
+
+    # .env OPENAI_REASONING_EFFORT 가 비어도 gpt-5 + 도구 = 'none' (작은 모델 기본 medium → 400 방지)
+    import dataclasses as dc
+    llm.cfg = dc.replace(llm.cfg, reasoning_effort="")
+    assert llm._extra("gpt-5.4-mini", has_tools=True) == {"reasoning_effort": "none"}
+    assert llm._extra("gpt-5.4-mini", has_tools=False) == {}
 
 
 @test

@@ -197,6 +197,10 @@ class LLM:
         # 도구 호출이 아닌 가벼운 뒷작업(기억 정리·끼어들기 판단)은 호출하는 쪽이 낮은 추론을 지정 → 비용 절감
         if effort and not has_tools:
             return {"reasoning_effort": effort}
+        # 도구 + gpt-5.x 는 .env 값과 무관하게 늘 'none' (빈 값이면 모델 기본값 medium 이 적용돼 400 — gpt-5.4-mini 기본 medium,
+        # 2026-10-01 라우팅 리뷰: 작은 모델을 도구와 함께 chat 으로 부르는 첫 경로라 .env 가 비면 light 가 전부 실패할 뻔)
+        if has_tools and model.startswith("gpt-5"):
+            return {"reasoning_effort": "none"}
         if not self.cfg.reasoning_effort:  # .env 에서 비우면 안 보냄
             return {}
         # gpt-5.x 는 chat.completions 에서 도구와 추론을 같이 못 씀 → 도구 호출 땐 'none' 이어야 함
@@ -239,13 +243,19 @@ class LLM:
         try:
             resp = await self.client.chat.completions.create(**kwargs)
         except BadRequestError as e:
-            if not isinstance(kwargs.get("tool_choice"), dict):
+            if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
                 raise
             self._allowed_rejected(e)
             kwargs["tools"], kwargs["tool_choice"] = _narrow(tools, allowed), "auto"
             resp = await self.client.chat.completions.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
         return resp.choices[0].message
+
+    @staticmethod
+    def _about_tool_choice(e: Exception) -> bool:
+        """이 400 이 allowed_tools/tool_choice 때문인지 (그때만 예전 방식으로 — 이미지·길이 오류로 캐시 효과를 끄지 않게)."""
+        text = str(e).lower()
+        return "tool_choice" in text or "allowed_tools" in text
 
     def _allowed_rejected(self, e: Exception) -> None:
         """allowed_tools 를 API 가 안 받으면 이 프로세스에선 끄고 예전 방식(목록 줄이기)으로 — AI 답이 멈추면 안 됨."""
@@ -283,7 +293,7 @@ class LLM:
         try:
             resp = await self.client.responses.create(**kwargs)
         except BadRequestError as e:
-            if not isinstance(kwargs.get("tool_choice"), dict):
+            if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
                 raise
             self._allowed_rejected(e)
             kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in _narrow(tools, allowed)]

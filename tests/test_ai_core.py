@@ -457,7 +457,7 @@ async def room_daily_token_cap():
     await llm._check_budget()                                                 # 방 지정 없는 호출도 그대로
     assert await db.counter(llm._today(), -5, ROOM_TOKENS) == 1200
     assert llm._extra("gpt-5.4-mini", effort="low") == {"reasoning_effort": "low"}
-    assert llm._extra("gpt-5.4", has_tools=True, effort="low") == {}          # 도구 호출은 기존 규칙 그대로
+    assert llm._extra("gpt-5.4", has_tools=True, effort="low") == {"reasoning_effort": "none"}   # 도구 + gpt-5 는 .env 와 무관하게 none (2026-10-01)
     assert LLM(cfg(db.path, reasoning_effort="high"), db)._extra("gpt-5.4", has_tools=True) == {"reasoning_effort": "none"}
 
 

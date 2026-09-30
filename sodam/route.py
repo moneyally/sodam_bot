@@ -26,10 +26,12 @@ DEFAULT_MODE = "hybrid"
 
 # light 에서 실행해도 되는 도구 = 이 서버 데이터 읽기(tools.READ_ONLY, 실행 때 합침) + 바깥 조회만.
 # 이 밖의 도구(제재·설정·전송·그림·영상·게임·기억 저장…)를 부르면 heavy 로 올려 보냄.
-LIGHT_EXTRA = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user",
-                         # 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건)
-                         "greet_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
-                         "feature_request", "tag_alerts", "my_ids", "point_game"})
+LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user", "my_ids"})
+# 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건).
+# light 가 이걸 실행한 뒤 올려 보내면 heavy 에 '이미 한 일' 로 알림 (agent.DONE_NOTE — 두 번 하지 않게)
+LIGHT_WRITE = frozenset({"greet_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
+                         "feature_request", "tag_alerts", "point_game"})
+LIGHT_EXTRA = LIGHT_READ | LIGHT_WRITE
 ESCALATE_TOOL = "ask_senior"
 ESCALATE_SCHEMA = {"type": "function", "function": {
     "name": ESCALATE_TOOL,
@@ -41,11 +43,15 @@ ESCALATE_SCHEMA = {"type": "function", "function": {
 # ── 신호 (전부 코드, 돈 0) ─────────────────────────────────
 # 일(실행) 말: 바꾸기·제재·보내기·만들기 동사. '해줘' 같은 흔한 꼬리는 안 봄 (잡담에도 많음).
 _DO = re.compile(
-    r"설정|바꿔|바꾸|변경|켜\s?(줘|주|라|기)|꺼\s?(줘|주|라|기)|끄\s?(고|기)|밴|뮤트|경고|강퇴|추방|내보내|차단|해제|"
-    r"공지|고정|예약|알람|알림\s?(설정|걸|켜|꺼|규칙)|규칙\s?(저장|추가|바꿔|정해)|삭제|지워|청소|등록|저장해|"
-    r"그려|그림|이미지|스티커|움프|프사|영상|동영상|보내\s?(줘|주|라)|올려\s?(줘|주|라)|초대|음성방|통화|들어와|"
-    r"잠금|잠가|캡차|말투|추가해|추가\s?해|빼\s?(줘|주)|지급|포인트\s?(줘|주)|구독|결제|연장|번역|"
-    r"벤|처리해|없애|풀어|데려와|안내|전화|신청곡|틀어|play|완장|생성|만들어\s?(줘|주|봐)|해\s?달래|수정해|다시\s?(해|만들|그려)")
+    r"설정|바꿔|바꾸|변경|켜\s?(줘|주|라|기|봐)|꺼\s?(줘|주|라|기|봐)|끄\s?(고|기)|활성화|비활성|"
+    r"밴(?!드)|뮤트|경고(?!등)|강퇴|추방|내보내|쫓아내|차단|해제|막아|금지|킥|조용히\s?시켜|입\s?(좀\s?)?막|"
+    r"(?<![A-Za-z])(ban|mute|kick)(?![A-Za-z])|벤\s?(해|하|시켜|먹|때려)|"
+    r"공지|고정|예약|알람|알림\s?(설정|걸|켜|꺼|규칙)|규칙\s?(저장|추가|바꿔|정해)|삭제|지워|청소|등록|저장해\s?(줘|주)|"
+    r"그려|그림\s?(그려|만들|좀|하나|으로)|이미지|스티커|움프|프사|영상\s?(만들|제작|생성|찍|으로)|동영상|"
+    r"보내\s?(줘|주|라)|올려\s?(줘|주|라)|초대|음성방|통화\s?(해|걸|하자|들어)|전화|들어와|"
+    r"잠금|잠가|캡차|캡챠|말투|추가해|추가\s?해|빼\s?(줘|주)|지급|포인트\s?(줘|주)|구독|결제|연장|번역|"
+    r"처리해|없애|풀어\s?(줘|주)|데려와|안내\s?(해|적용|올려|문구|설정)|신청곡|틀어\s?(줘|주)|play|완장|생성|"
+    r"만들어\s?(줘|주|봐)|해\s?달래|수정해|다시\s?(해|만들|그려)", re.I)
 # 분석·판단 (agent._WHY 와 같은 뜻 + 계획)
 _THINK = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)|계획|전략|추천해|정리해\s?줘|요약")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각")
@@ -63,12 +69,14 @@ class Req:
     has_media: bool = False
     settings: dict = field(default_factory=dict)
     lines: int = 1
+    recent_heavy: bool = False   # 같은 사람이 5분 안에 큰 모델로 한 일의 이어짐 ('하나 더'·'다시'·'그거 말고') → 두 번 부르지 않게
 
 
 # (이름, 판정 함수, 길) — 위에서부터 처음 걸린 것
 Signal = tuple[str, Callable[[Req], bool], str]
 SIGNALS: list[Signal] = [
     ("media", lambda r: r.has_media, "heavy"),
+    ("continue", lambda r: r.recent_heavy and len(r.request) <= 40, "heavy"),
     ("choice", lambda r: r.request.startswith("(선택"), "heavy"),              # 선택 버튼으로 이어진 일 (askchoice)
     ("dm_manage", lambda r: r.in_dm and r.role >= Role.ADMIN, "heavy"),       # 1:1 관리자·오너 = 운영 일
     ("do", lambda r: bool(_DO.search(r.request)), "heavy"),
@@ -94,7 +102,7 @@ def decide(r: Req, *, mode: str = DEFAULT_MODE, light_model: str = "") -> Route:
         return Route("heavy", "off" if not light_model else "best")
     raw = r.request or ""
     r = Req(" ".join(raw.split()), r.role, r.mode, r.in_dm, r.has_media, r.settings,
-            lines=len([x for x in raw.splitlines() if x.strip()]))
+            lines=len([x for x in raw.splitlines() if x.strip()]), recent_heavy=r.recent_heavy)
     if r.mode in ("chime", "morning"):
         return Route("light", "chime")
     for name, fn, lane in SIGNALS:
@@ -108,6 +116,20 @@ def decide(r: Req, *, mode: str = DEFAULT_MODE, light_model: str = "") -> Route:
 def light_ok(tool_name: str, read_only: set[str] | frozenset[str]) -> bool:
     """light 길에서 실행해도 되는 도구인지 (아니면 올려 보냄)."""
     return tool_name in read_only or tool_name in LIGHT_EXTRA
+
+
+CONTINUE_SEC = 300
+
+
+async def recent_heavy(db, chat_id: int, user_id: int, now: float) -> bool:
+    """이 사람의 바로 전 AI 실행이 5분 안이고 큰 모델(light 아님)이었는지. 조회 실패 = False."""
+    try:
+        row = await db._one("SELECT purpose, ts FROM agent_runs WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 1",
+                            (chat_id, user_id))
+    except Exception:
+        return False
+    return bool(row and now - (row["ts"] or 0) <= CONTINUE_SEC and ":light" not in (row["purpose"] or "")
+                and ":chime" not in (row["purpose"] or "") and (row["purpose"] or "").startswith("agent:"))
 
 
 async def room_mode(db, chat_id: int) -> str:

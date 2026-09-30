@@ -198,7 +198,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     lane = route.Route("heavy", "off")
     if light_model:   # 🧭 하이브리드: 코드 판정(돈 0) → light 면 작은 모델, 쓰기 도구·ask_senior 면 heavy 로 한 번 올려 보냄
         media = bool(images) or bool(reply_to and route.MEDIA_MARK.search(reply_to))   # 사진·영상에 답장 = 그걸로 뭘 하려는 것
-        lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings),
+        cont = await route.recent_heavy(svc.db, ctx.chat_id, getattr(ctx.caller, "id", 0), time.time())
+        lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings, recent_heavy=cont),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
     ctx_tools = _ToolSet(schemas, allowed)
     # 🎞️ 움프 vs 🎬 AI 영상: AI 영상 도구가 없는 방은 '애매'도 움프로 (물어볼 게 없음)
@@ -208,6 +209,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
     started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     if lane.lane == "light":
+        snap = (ctx.tainted, ctx.bot_tainted, list(ctx.mentions), list(ctx.name_notes), ctx.quiet)
         try:
             return await _attempt(ctx, run, list(base), "light", purpose, ctx_tools, request, mode, steer,
                                   started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
@@ -217,10 +219,18 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 run.step(route.ESCALATE_TOOL, e.reason, "큰 모델로 올려 보냄")
             except Exception:
                 log.exception("agent log step failed")
+            # heavy 는 light 가 읽은 것을 모름 → light 의 읽기로 켜진 표시(tainted 등)는 되돌림 (안 그러면 heavy 의 제재·설정이
+            # '방 기록을 읽은 답변' 으로 막힘 — 리뷰 재현). light 가 이미 한 가벼운 쓰기가 있으면 그 결과(quiet·멘션)는 남기고 heavy 에 알림.
+            ctx.tainted, ctx.bot_tainted = snap[0], snap[1]
+            ctx.name_notes[:] = snap[3]
+            if not e.done:
+                ctx.mentions[:], ctx.quiet = snap[2], snap[4]
             messages = base + [{"role": "user", "content": STEER_NOTE + wrap("request", t, nonce())}
                                for t in (steer.taken if steer is not None else [])]
+            if e.done:
+                messages.append({"role": "system", "content": DONE_NOTE.format(tools=", ".join(e.done))})
             return await _attempt(ctx, run, messages, "heavy", purpose, ctx_tools, request, mode, steer,
-                                  started, deadline, think=think0, escalated=True)
+                                  time.monotonic(), deadline, think=think0, escalated=True)   # heavy 는 시간을 새로
     if lane.lane == "banter":   # 말싸움 명장면: 큰 모델 말맛, 추론은 필요 없음
         return await _attempt(ctx, run, base, "banter", purpose, ctx_tools, request, mode, steer,
                               started, deadline)
@@ -248,9 +258,13 @@ class _ToolSet:
 
 
 class _Escalate(Exception):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, done: list[str] | None = None):
         super().__init__(reason)
-        self.reason = reason
+        self.reason, self.done = reason, list(done or [])
+
+
+LIGHT_MAX_STEPS = 3    # 작은 모델은 도구 라운드 3번까지 (길게 찾으면 올려 보낸 큰 모델의 시간·요금을 먹음)
+DONE_NOTE = ("(이미 한 일) 이 요청에서 방금 이미 실행한 도구: {tools}. 같은 일을 다시 하지 말고 남은 일만 한다.")
 
 
 async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, purpose: str, ts: _ToolSet,
@@ -264,7 +278,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     call_purpose = purpose + tag            # 기록(counters prompt:·cached:)용 — 캐시 키는 도구 지문(ts.key)
     schemas, allowed = ts.schemas, ts.allowed
     restrict = ts.restrict()
-    if light:
+    chime = mode in ("chime", "morning")
+    if light and not chime:    # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
         schemas = [*schemas, route.ESCALATE_SCHEMA]
         restrict = ts.restrict((route.ESCALATE_TOOL,))
 
@@ -294,8 +309,11 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
 
     used = checked = num_checked = read = False
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
-    for step in range(MAX_STEPS):
-        if step and run.usd_micro >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
+    done: list[str] = []                     # light 가 실행한 쓰기 도구 (올려 보낼 때 heavy 에 알림)
+    usd0 = run.usd_micro                     # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
+    rounds = min(LIGHT_MAX_STEPS, MAX_STEPS) if light else MAX_STEPS
+    for step in range(rounds):
+        if step and run.usd_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
             break
         if step and time.monotonic() - started > deadline:        # 시간 상한: 기다리게 하지 말고 지금까지로 답
@@ -307,9 +325,9 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
         if light:   # 쓰기 도구·도움 요청이 하나라도 있으면 이 라운드 도구는 하나도 실행하지 않고 올려 보냄
             for c in calls:
                 if c.function.name == route.ESCALATE_TOOL:
-                    raise _Escalate(f"ask_senior {(c.function.arguments or '')[:120]}")
+                    raise _Escalate(f"ask_senior {(c.function.arguments or '')[:120]}", done)
                 if c.function.name in allowed and not route.light_ok(c.function.name, READ_ONLY):
-                    raise _Escalate(f"tool {c.function.name}")
+                    raise _Escalate(f"tool {c.function.name}", done)
         if not calls:
             text = msg.content or ""
             if steer is not None and steer.pending:   # 답하는 사이 이어 보낸 말 → 그것까지 보고 다시 (답은 한 번)
@@ -346,6 +364,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 result = await execute(c.function.name, c.function.arguments, ctx)
                 results.append(result)
                 read = read or c.function.name in READ_ONLY
+                if light and c.function.name in route.LIGHT_WRITE:
+                    done.append(c.function.name)
             log.info("도구 %s chat=%s user=%s 인자=%s → %s", c.function.name, ctx.chat_id, ctx.caller.id,
                      (c.function.arguments or "")[:200], result[:200].replace("\n", " "))
             try:
@@ -355,6 +375,9 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", clip_mid(result, TOOL_RESULT_CHARS), nonce())})
 
+    if light and not chime and used and rounds == LIGHT_MAX_STEPS and step == rounds - 1:
+        # 작은 모델이 라운드를 다 쓰고도 도구를 더 원함 = 여러 단계 일 → 대충 마무리하지 말고 큰 모델로
+        raise _Escalate("rounds", done)
     # 도구 라운드·요금 상한을 다 쓰면 도구 없이 마무리 답변만 받는다 (그 사이 이어 보낸 말도 STEER_FINAL 번까지는 반영,
     # 그래도 남으면 steer.pending 에 남아 handlers 가 새 실행으로)
     for i in range(1 + STEER_FINAL):
