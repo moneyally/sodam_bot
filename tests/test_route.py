@@ -362,6 +362,9 @@ async def llm_sends_allowed_tools_and_cache_key():
     llm.client.chat.completions.create = picky
     msg = await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=["read_chat"])
     assert msg.content == "네" and llm.allowed_off
+    # 원격 점검에서 확인할 수 있게 받음/거절을 셈 (앞의 성공 호출 2번 = ok, 이번 거절 1번 = rejected)
+    assert await db.counter(llm._today(), 0, "allowed_tools_ok:gpt-5.4-mini") == 2
+    assert await db.counter(llm._today(), 0, "allowed_tools_rejected:gpt-5.4") == 1
     retry = [k for _, k in sent if k.get("tool_choice") == "auto"]
     assert [t["function"]["name"] for t in retry[-1]["tools"]] == ["read_chat"]
     sent.clear()

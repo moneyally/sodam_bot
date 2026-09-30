@@ -244,14 +244,26 @@ class LLM:
             kwargs["response_format"] = {"type": "json_object"}
         try:
             resp = await self.client.chat.completions.create(**kwargs)
+            await self._mark_allowed(kwargs, model, ok=True)
         except BadRequestError as e:
             if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
                 raise
+            await self._mark_allowed(kwargs, model, ok=False)
             self._allowed_rejected(e)
             kwargs["tools"], kwargs["tool_choice"] = _narrow(tools, allowed), "auto"
             resp = await self.client.chat.completions.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
         return resp.choices[0].message
+
+    async def _mark_allowed(self, kwargs: dict, model: str, *, ok: bool) -> None:
+        """allowed_tools 를 실제 API 가 받았는지 센다 (counters 전체: allowed_tools_ok:<모델> / allowed_tools_rejected:<모델>)
+        → 원격 점검 창구 `diag counters` 로 확인. 거절이면 로그에 경고도 (_allowed_rejected)."""
+        if not isinstance(kwargs.get("tool_choice"), dict) or self.db is None:
+            return
+        try:
+            await self.db.bump(self._today(), 0, f"allowed_tools_{'ok' if ok else 'rejected'}:{model}")
+        except Exception:
+            log.debug("allowed_tools 카운터 실패", exc_info=True)
 
     @staticmethod
     def _about_tool_choice(e: Exception) -> bool:
@@ -294,9 +306,11 @@ class LLM:
             kwargs["parallel_tool_calls"] = False
         try:
             resp = await self.client.responses.create(**kwargs)
+            await self._mark_allowed(kwargs, model, ok=True)
         except BadRequestError as e:
             if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
                 raise
+            await self._mark_allowed(kwargs, model, ok=False)
             self._allowed_rejected(e)
             kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in _narrow(tools, allowed)]
             kwargs["tool_choice"] = "auto"
