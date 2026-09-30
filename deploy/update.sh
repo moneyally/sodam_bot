@@ -120,6 +120,9 @@ voice_setup() {
 # 🔌 원격 점검 창구(sodam-diag) + Caddy(https://<공인IP>.sslip.io, 인증서 자동) + 방화벽 80·443. 실패해도 본체는 그대로.
 # 창구는 읽기 전용·토큰 필수 (sodam/diag.py). 토큰은 봇이 오너 1:1 로만 보냄.
 DIAG_PORT=${DIAG_PORT:-8787}
+SSHWS_PORT=${SSHWS_PORT:-8023}
+SSHD_CONF=${SSHD_CONF:-/etc/ssh/sshd_config}
+ROOT_KEYS=${ROOT_KEYS:-/root/.ssh/authorized_keys}
 diag_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] || return 0
     local apt=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -y -q)
@@ -132,7 +135,12 @@ diag_setup() {
     [ -n "$ip" ] || { log "diag: 공인 IP 를 모름"; report diag_setup.status "diag_fail 공인 IP 모름"; return 0; }
     host="${ip//./-}.sslip.io"
     conf=$(mktemp)
-    printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$host" "$DIAG_PORT" > "$conf"
+    if [ -f "$APP_DIR/deploy/sodam-sshws.service" ]; then   # 🔐 /sshws = SSH 웹소켓 다리 (sodam/sshws.py), 나머지 = 점검 창구
+        printf '%s {\n\thandle /sshws {\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n\thandle {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n}\n' \
+            "$host" "$SSHWS_PORT" "$DIAG_PORT" > "$conf"
+    else
+        printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$host" "$DIAG_PORT" > "$conf"
+    fi
     if ! cmp -s "$conf" /etc/caddy/Caddyfile; then
         cp "$conf" /etc/caddy/Caddyfile && $SYSTEMCTL reload-or-restart caddy && log "diag: Caddy → https://$host"
     fi
@@ -147,6 +155,47 @@ diag_setup() {
         log "diag: 점검 창구 재시작"; report diag_setup.status "diag_ok https://$host"
     else
         log "diag: 재시작 실패 (journalctl -u sodam-diag)"; report diag_setup.status "diag_fail sodam-diag 시작 실패"
+    fi
+}
+
+# 🔐 SSH 웹소켓 다리 (sodam/sshws.py, 오너 결정 2026-10-01): 클로드 작업 환경은 HTTPS 만 나가서 22번이 막힘 → Caddy /sshws → 127.0.0.1:22.
+# 지키는 것: 다리 = 점검 토큰 필요 · sshd = 127.0.0.1 에서 온 접속은 비밀번호 로그인 금지(키만) · 클로드 키 = from="127.0.0.1,::1" 로만.
+# 끄기: systemctl disable --now sodam-sshws (다음 배포 때 다시 켜지지 않게 하려면 deploy/sodam-sshws.service 를 지우고 배포)
+sshws_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-sshws.service" ] && [ -f "$APP_DIR/deploy/claude_ssh.pub" ] || return 0
+    local pub line mark_b="# >>> sodam-sshws" mark_e="# <<< sodam-sshws" tmp
+    pub=$(head -n1 "$APP_DIR/deploy/claude_ssh.pub")
+    case "$pub" in ssh-ed25519\ *) ;; *) log "sshws: 공개키 모양이 이상함 → 건너뜀"; report sshws_setup.status "sshws_fail 공개키"; return 0;; esac
+    # 1) sshd: 다리(127.0.0.1)로 온 접속은 키만 + root 는 키로만 (맨 끝 Match 블록, 표시 사이만 바꿈 · sshd -t 통과해야 적용)
+    if [ -f "$SSHD_CONF" ]; then
+        tmp=$(mktemp)
+        awk -v b="$mark_b" -v e="$mark_e" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$SSHD_CONF" > "$tmp"
+        printf '%s\nMatch Address 127.0.0.1,::1\n\tPasswordAuthentication no\n\tKbdInteractiveAuthentication no\n\tPermitRootLogin prohibit-password\n%s\n' \
+            "$mark_b" "$mark_e" >> "$tmp"
+        if ! cmp -s "$tmp" "$SSHD_CONF"; then
+            if sshd -t -f "$tmp" 2>/dev/null; then
+                cp "$SSHD_CONF" "$SSHD_CONF.sodam-bak" && cat "$tmp" > "$SSHD_CONF" \
+                    && { $SYSTEMCTL reload ssh 2>/dev/null || $SYSTEMCTL reload sshd 2>/dev/null || true; } && log "sshws: sshd 다리 규칙 적용"
+            else
+                log "sshws: sshd -t 실패 → sshd 설정 안 바꿈, 다리도 안 켬"; report sshws_setup.status "sshws_fail sshd -t"; rm -f "$tmp"; return 0
+            fi
+        fi
+        rm -f "$tmp"
+    fi
+    # 2) 클로드 키: from=127.0.0.1 (다리로만) · 포워딩 없음
+    line="from=\"127.0.0.1,::1\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding $pub"
+    mkdir -p "$(dirname "$ROOT_KEYS")" && chmod 700 "$(dirname "$ROOT_KEYS")"
+    touch "$ROOT_KEYS" && chmod 600 "$ROOT_KEYS"
+    if ! grep -qF "$pub" "$ROOT_KEYS"; then echo "$line" >> "$ROOT_KEYS" && log "sshws: 클로드 키 등록 (127.0.0.1 전용)"; fi
+    # 3) 다리 유닛
+    if ! cmp -s "$APP_DIR/deploy/sodam-sshws.service" "$UNIT_DIR/sodam-sshws.service"; then
+        cp "$APP_DIR/deploy/sodam-sshws.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q sodam-sshws 2>/dev/null || $SYSTEMCTL enable -q sodam-sshws
+    if $SYSTEMCTL restart sodam-sshws; then
+        log "sshws: 다리 재시작"; report sshws_setup.status "sshws_ok"
+    else
+        log "sshws: 다리 시작 실패 (journalctl -u sodam-sshws)"; report sshws_setup.status "sshws_fail 시작 실패"
     fi
 }
 
@@ -194,6 +243,11 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] && ! $SYSTEMCTL is-active -q sodam-diag 2>/dev/null; then
         diag_setup
     fi
+    # SSH 다리가 안 떠 있으면 10분마다 다시 설치 시도 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-sshws.service" ] && ! $SYSTEMCTL is-active -q sodam-sshws 2>/dev/null; then
+        diag_setup
+        sshws_setup
+    fi
     exit 0
 fi
 if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
@@ -234,6 +288,7 @@ if restart_and_verify "$VER"; then
     report update.status "ok $VER"
     voice_setup
     diag_setup
+    sshws_setup
     unit_setup
     exit 0
 fi
