@@ -43,9 +43,8 @@ def probe(data: bytes) -> str:
     return p.stderr.decode(errors="replace")
 
 
-SPECS = [*avatar.PRESETS.values(),                                        # 부품마다 한 번씩은 (전체 조합은 느려서 대표만)
-         *(avatar.Spec(m, "fast", c, p) for m, c, p in zip(avatar.MOTIONS, list(avatar.COLORS)[2:] + ["none"] * 6,
-                                                            list(avatar.PARTICLES)[1:] + ["none"] * 6))]
+SPECS = [avatar.PRESETS["shine"], avatar.Spec("zoom", "fast", "rainbow", "hearts"), avatar.Spec("pan", "normal", "vintage", "snow"),
+         avatar.Spec("sway", "slow", "neon", "petals")]    # 대표만 진짜로 (옛 이름 전체의 값 옮기기는 test_animation 이 sanitize 로 검사)
 
 
 @test
@@ -56,7 +55,7 @@ async def every_part_meets_telegram_avatar_spec():
         info = probe(data)
         assert len(data) <= avatar.MAX_BYTES and data[4:8] == b"ftyp", style
         assert "h264" in info and "yuv420p" in info and "640x640" in info and "Audio" not in info, (style, info)
-        assert "Duration: 00:00:06" in info, (style, info)                 # ≤ 10초
+        assert "Duration: 00:00:05.9" in info, (style, info)            # 3초 반복 × 2 (≤ 10초)
         head = data[:200]
         assert head.find(b"moov") != -1 or data.find(b"moov") < data.find(b"mdat"), "faststart (moov 가 앞)"
 
@@ -72,7 +71,7 @@ async def world(profile=True):
     r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False})
     for u in (BOSS, A):
         await r.join(u)
-    r.bot.files = {"prof1": png(640, 640)}
+    r.bot.files = {"prof1": pattern(640, 640)}
 
     async def photos(uid, limit=1, **kw):
         r.bot.calls.append(("profile_photos", uid))
@@ -106,7 +105,7 @@ def avatar_limit():
 @test
 async def attached_photo_even_someone_elses_is_used_profile_missing_is_explained():
     r = await world(profile=False)
-    res = await ask(r, BOSS, [tool_call("make_profile_video", {"motion": "sway"})], image=Attached(png(), "image/png", A.id))
+    res = await ask(r, BOSS, [tool_call("make_profile_video", {"motion": "sway"})], image=Attached(pattern(), "image/png", A.id))
     assert "보냈음" in res[0] and len(docs(r)) == 1, res                        # 남의 사진도 됨 (사용자 결정, 하루 한도)
     assert ("profile_photos", BOSS.id) not in r.bot.calls                        # 붙은 사진이 있으면 프사는 안 가져옴
     res = await ask(r, A, [tool_call("make_profile_video", {"motion": "sway"})])            # 프사 없음
@@ -120,7 +119,7 @@ async def ai_art_uses_image_edit_and_room_image_limit():
 
     async def image(prompt, source=None, chat_id=None):
         seen.append((prompt, source.owner if source else None))
-        return png(1024, 1024, (20, 200, 220))
+        return pattern(1024, 1024)
     r.llm.image = image
     res = await ask(r, A, [tool_call("make_profile_video", {"art": "anime"})])
     assert "보냈음" in res[0] and seen and "anime" in seen[0][0] and seen[0][1] == A.id, (res, seen)
@@ -131,18 +130,8 @@ async def ai_art_uses_image_edit_and_room_image_limit():
     assert "보냈음" in res[0], res                                               # 그림체 없이는 됨
     for bad in ({"motion": "x; rm -rf /"}, {"color": "','"}, {"particles": "hearts:y=1"}, {"art": "gore"}):
         res = await ask(r, A, [tool_call("make_profile_video", bad)])
-        assert "중 하나" in res[0], (bad, res)                                     # 정해진 부품만 (ffmpeg 인자에 글이 안 들어감)
+        assert "중 하나" in res[0], (bad, res)                                     # 옛 인자는 표 이름만 (글이 엔진 값으로 안 들어감)
     assert len(docs(r)) == 2
-
-
-@test
-def particle_tile_loops_seamlessly():
-    from PIL import Image
-    im = Image.open(io.BytesIO(avatar.particle_tile("hearts"))).convert("RGBA")
-    assert im.size == (avatar.SIZE, avatar.SIZE * 2)
-    top, bottom = im.crop((0, 0, avatar.SIZE, avatar.SIZE)), im.crop((0, avatar.SIZE, avatar.SIZE, avatar.SIZE * 2))
-    assert top.tobytes() == bottom.tobytes() and top.getbbox()                   # 같은 타일 두 장 → 흐를 때 이음새 없음
-
 
 
 def frame(data: bytes, n: int):
@@ -155,30 +144,16 @@ def frame(data: bytes, n: int):
 
 @test
 async def loops_seamlessly_frame_after_last_equals_first():
+    """옛 인자 → 같은 엔진: 89장 한 바퀴를 두 번 이어 붙임 → 90번째 장(두 번째 바퀴 첫 장) = 첫 장 (무늬 있는 사진으로)."""
     from PIL import ImageChops, ImageStat
-    old = avatar.SECONDS
-    avatar.SECONDS = f"{(avatar.FRAMES + 1) / avatar.FPS:.4f}"                 # 한 장 더 (다음 바퀴의 첫 장)
-    try:
-        src = pattern()
-        for spec in (avatar.Spec("shake", "fast", "rainbow", "hearts"), avatar.Spec("pan", "slow", "neon", "snow"),
-                     avatar.Spec("sway", "normal", "shine", "bubbles"), avatar.Spec("zoom", "slow", "none", "petals"),
-                     avatar.Spec("breathe", "slow"), avatar.Spec("zoom", "normal"), avatar.Spec("pan", "fast")):
-            data = await avatar.make(src, spec)
-            f0 = frame(data, 0)
-            d = {n: max(ImageStat.Stat(ImageChops.difference(f0, frame(data, n))).mean)
-                 for n in (15, 30, 45, 60, 90, avatar.FRAMES)}
-            end, mid = d.pop(avatar.FRAMES), max(d.values())
-            # 끝 다음 장 = 첫 장 (압축 오차만). 주기가 어긋나면 중간만큼 다름
-            assert end <= max(5.0, 0.35 * mid) and mid > 2 * end, (spec, end, d)
-        flat = png(640, 640, (30, 30, 60))                                       # 날리는 것만 (배경이 안 움직임)
-        for kind in ("snow", "hearts"):
-            data = await avatar.make(flat, avatar.Spec("still", "slow", "none", kind))
-            f0 = frame(data, 0)
-            end = max(ImageStat.Stat(ImageChops.difference(f0, frame(data, avatar.FRAMES))).mean)
-            mid = max(ImageStat.Stat(ImageChops.difference(f0, frame(data, avatar.FRAMES // 2))).mean)
-            assert end < 0.5 and mid > 4 * max(end, 0.1), (kind, end, mid)
-    finally:
-        avatar.SECONDS = old
+    src = pattern()
+    for spec in (avatar.Spec("shake", "fast", "rainbow", "hearts"), avatar.Spec("pan", "slow", "neon", "snow"),
+                 avatar.Spec("breathe", "normal", "shine", "bubbles")):
+        data = await avatar.make(src, spec)
+        f0 = frame(data, 0)
+        d = {n: max(ImageStat.Stat(ImageChops.difference(f0, frame(data, n))).mean) for n in (22, 44, 66, 89)}
+        end, mid = d.pop(89), max(d.values())
+        assert end <= max(5.0, 0.35 * mid) and mid > 2 * end, (spec, end, d)
 
 
 @test
@@ -211,6 +186,6 @@ async def other_members_profile_photo_via_photo_of_for_ump_sticker_and_image():
         assert "photo_of" in tools._BY_NAME[name].params, name
     ctx = ToolCtx(r.svc, r.bot, r.CHAT, A, Role.MEMBER, await r.db.get_settings(r.CHAT))
     data, err = await P.source_photo(ctx, {"photo_of": BOSS.first_name})
-    assert data == png(640, 640) and err is None
+    assert data == pattern(640, 640) and err is None
     from sodam import prompt
     assert "누구 것이든" in prompt.SYSTEM and "본인 것만이라고 거절하지 않는다" in prompt.SYSTEM

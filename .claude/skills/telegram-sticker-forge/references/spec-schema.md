@@ -1,5 +1,11 @@
 # Spec schema
 
+> **소담 판 추가 (2026-09-30)**: 아래 원본 형식에 더해 `motion` 에 `{"type":"keyframes","pivot":[x,y],"keys":[{t,scale,sx,sy,rotate,x,y,opacity,ease}]}`,
+> 최상위 `layers:[{type: particles|grade|flash|lightning|transition|<fx 이름>, …, start, end}]`, 움프용 `loop`(false = 6초 한 번)·`cover`.
+> 값의 형식·범위는 코드가 기준: `sodam/stickerforge/__init__.py` 의 `layer_params()`·`KEY_RANGES`, 예시는 `sodam/stickerforge/examples.py`.
+> 예: `{"loop":false,"layers":[{"type":"transition","kind":"burn","start":0.12,"end":0.8,"embers":50},
+> {"type":"particles","shape":"smoke","spawn":"bottom","angle":-90,"grow":2.2,"blur":4}]}` = 사진이 타서 사라지며 연기.
+
 `forge.py spec.json` reads one JSON object. Unknown keys are ignored; every key
 but `image` and `out` has a default.
 

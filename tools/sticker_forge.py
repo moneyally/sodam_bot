@@ -3,7 +3,8 @@
 python tools/sticker_forge.py IMAGE '{"motion":["idle"],"fx":["sparkle"],"caption":"안녕"}' out.webm [--preview p.png] [--icon icon.webm]
 python tools/sticker_forge.py IMAGE '{"recipe":"출근_번개잽","seed":3,"caption":"출근완료"}' out.webm
 python tools/sticker_forge.py IMAGE '{"mode":"photo","motion":[{"type":"punch","hits":2}],"fx":["sweep","sparkle","glitch"]}' ump.mp4 --mp4
-python tools/sticker_forge.py --catalog '출근완료 강렬하게' [--kind glow]
+python tools/sticker_forge.py IMAGE '{"loop":false,"layers":[{"type":"transition","kind":"burn"}]}' ump.mp4 --mp4   (6초 한 번 타서 사라짐)
+python tools/sticker_forge.py --catalog '출근완료 강렬하게' [--section parts|examples|effects|recipes] [--kind glow]
 spec 은 소담 AI 도구와 같은 sanitize 를 거침 → 검사표(PASS/FAIL) + qc 경고를 찍고, 실패면 종료 코드 1.
 """
 import argparse
@@ -26,10 +27,11 @@ def main() -> int:
     ap.add_argument("--mp4", action="store_true", help="움프(640 H.264 6초) 로")
     ap.add_argument("--catalog", metavar="QUERY", help="레시피 후보·부품 목록만 보고 끝")
     ap.add_argument("--kind", choices=["cutout", "photo", "glow", "mono"])
+    ap.add_argument("--section", default="parts", choices=["parts", "examples", "effects", "recipes"])
     a = ap.parse_args()
     if a.catalog:
         from sodam.panels.sticker import catalog_text
-        print(catalog_text(a.catalog, a.kind))
+        print(catalog_text(a.catalog, a.kind, None, a.section))
         return 0
     if not (a.image and a.spec and a.out):
         ap.error("IMAGE SPEC OUT 이 필요 (또는 --catalog)")

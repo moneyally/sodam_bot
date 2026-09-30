@@ -19,6 +19,7 @@ LIMITS = {
     "motion_min": 0.3,         # 프레임 간 평균 차이(0~255) 가 이보다 작으면 밋밋 (잔잔한 idle ≈ 0.5)
     "motion_max": 48.0,        # 한 프레임 차이가 이보다 크면 요란
     "whiteout_frames": 1,      # 불투명 픽셀의 90% 이상이 245↑ 인 프레임 수
+    "dark_ratio": 0.5,         # 거의 까맣거나(평균 밝기 14↓) 텅 빈(불투명 2%↓) 프레임 비율 — 타서 사라지기도 절반은 보여야
 }
 THUMB = 96                     # 프레임 차이는 축소본으로 잰다 (빠르고 노이즈에 둔감)
 
@@ -51,6 +52,19 @@ def whiteout_frames(frames: list[Image.Image], step: int = 2) -> int:
         if bright.sum() >= 0.9 * opaque.sum():
             n += 1
     return n * step if n else 0
+
+
+def dark_ratio(frames: list[Image.Image], step: int = 3) -> float:
+    """거의 까만(검정 위에 평탄화했을 때 평균 밝기 14↓) 또는 텅 빈 프레임 비율."""
+    picked = frames[::step]
+    n = 0
+    for f in picked:
+        a = _small(f)
+        al = a[..., 3] / 255.0
+        lum = (a[..., :3].mean(axis=2) * al).mean()
+        if al.mean() < 0.02 or lum < 14:
+            n += 1
+    return n / max(1, len(picked))
 
 
 def edge_clip(frames: list[Image.Image], band: int = 2, step: int = 4) -> float:
@@ -94,6 +108,7 @@ def inspect(frames: list[Image.Image], *, mode: str, keying: str, subject_boxes:
         "holes": int(holes or 0),
         "motion_mean": round(m_mean, 2), "motion_max": round(m_max, 2),
         "whiteout_frames": whiteout_frames(frames),
+        "dark_ratio": round(dark_ratio(frames), 2),
     }
     w = []
     if has_caption and metrics["caption_overlap"] > LIMITS["caption_overlap"]:
@@ -108,6 +123,9 @@ def inspect(frames: list[Image.Image], *, mode: str, keying: str, subject_boxes:
         w.append(f"너무 요란함(한 프레임 차이 최대 {m_max:.0f}) → 효과를 하나 빼거나 amp/strength 를 줄일 것")
     if metrics["whiteout_frames"] >= LIMITS["whiteout_frames"]:
         w.append(f"{metrics['whiteout_frames']}프레임이 하얗게 날아감 → flashbang amount·aura flare·glow strength 를 줄일 것")
+    if metrics["dark_ratio"] > LIMITS["dark_ratio"]:
+        w.append(f"프레임 {metrics['dark_ratio']:.0%} 가 거의 까맣거나 비어 있음 → transition end 를 늦추거나(0.85~0.95) "
+                 "brightness 를 올리거나 어두운 grade·vignette 를 줄일 것")
     return w, metrics
 
 

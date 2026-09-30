@@ -407,24 +407,38 @@
   vec0 chat_id 파티션. 요금은 전체 예산에만 (메시지 2천 개 ≈ $0.001). search_chat(stats.search_text svc=) 결과에 뜻으로만 찾은 글은 ≈.
   끄기 .env SEMSEARCH=0 · 거리 SEM_MAX_DIST(기본 0.7).
 
-## 🎞️ 움프 (`avatar.py`, `panels/avatar.py`, 스킬 `.claude/skills/telegram-ump/SKILL.md`, tests/test_avatar.py·test_sticker_upgrade.py)
-- AI 도구 make_profile_video(**spec** = 스티커 엔진 spec(기본, photo·radius 0 → `stickerforge.forge_video` 640×640 H.264 5.93초 = 3초 루프×2,
-  2MB↓, qc 경고면 안 보내고 한 번 고치게) / spec 없으면 옛 부품 motion 6 × speed 3 × color 8 × particles 6 avatar.Spec, art none/anime/3d/neon/water):
-  붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 → send_document (영상으로 보내면 재압축).
+## 🎞️ 움프 = 🧩 스티커와 같은 엔진·같은 부품 프레임워크 (`stickerforge/`, `panels/avatar.py`, 옛 인자 어댑터 `avatar.py`,
+## 스킬 telegram-ump 2-0, tests/test_animation.py · test_avatar.py · test_sticker_upgrade.py)
+- **2026-09-30 프레임워크로 다시 짬** (위 교훈 '고정 목록 말고 프레임워크로'): 옛 motion 6·color 8·particles 5 ffmpeg 필터 목록을 없애고
+  움프·스티커 모두 `stickerforge` 한 엔진. spec = `motion`(keyframes{pivot, keys[t·scale·sx·sy·rotate·x·y·opacity·ease]} 또는 이름 31개) +
+  `layers`(particles 일반 방출기 · grade 색 보정 · flash · lightning · transition dissolve/burn/fade/pixelate/shatter · 기존 fx 이름, 순서·start/end) +
+  `loop`(움프 false = 6초 한 번, 20fps) · `cover`. 값은 `layer_params()` 형식으로만(경로·코드 없음), fx+layers ≤6, keys ≤16, 입자 합계 ≤300.
+- make_profile_video 설명은 짧게(부품 조합 + sticker_catalog 먼저 + seed + wanted), 옛 인자(motion·speed·color·particles)는 설명에서 빼고
+  오면 `avatar.to_forge_spec` 으로 같은 엔진 값(옛 이름 표 = 어댑터, 모양 이름이면 particles smoke 도 됨). art 그림체는 그대로.
+- `sticker_catalog(query, section)` = 부품·값 범위 + 요청과 닮은 예시(`stickerforge/examples.py`: 쌍절곤·타서 없어지기·담배 연기·화려하게·잔잔·
+  글리치·네온·번개·'인물 움직이기'(=못 함→wanted)) — **도구 결과 4000자(agent.TOOL_RESULT_CHARS) 안** (예전 6,900자는 가운데가 잘려 부품 설명이 안 보였음).
+- 같은 조합 막기(`panels/sticker.same_as_last`): 같은 사람·하루 안·요청 글이 다른데 조합이 값까지(`stickerlearn.fingerprint`: 이름+값 소수 한 자리, seed 제외) 직전과 같으면
+  안 그리고 '말대로 바꿔서 다시' (정말 같게 = accept_warnings). seed 안 주면 코드가 매번 새로. 규격 실패면 레이어 하나 덜고 한 번 더.
+- qc 경고에 dark_ratio(거의 까맣거나 빈 프레임 50%↑) 추가. CPU 실측(이 상자): 입자 200+불씨 60+burn+bloom 6초 = CPU 18.5초 — 합성은 PIL C 함수,
+  grade 는 3×4 색 행렬 한 번, x264 crf 는 넘친 만큼 건너뜀. 한 번에 하나(_LOCK).
+- 못 하는 것: 사진 속 사람 팔다리·표정이 실제로 움직이기(생성형 영상 모델 필요, 영상 API 는 아직 없음) → 가까운 전체 움직임 + wanted.
+- AI 도구 make_profile_video: 붙은/답장한 사진(**남의 사진도 됨** — 사용자 결정, 하루 한도), 없으면 get_user_profile_photos 요청자 프사 →
+  send_document (영상으로 보내면 재압축). 640×640 H.264 5.93초(3초×2) 또는 6초 한 번, 2MB↓, qc 경고면 안 보내고 한 번 고치게.
 - **원본 사진 규칙 하나로** (오너 결정 2026-09-29, '여긴 되고 저긴 안 되고' 없앰): `panels/avatar.source_photo` = photo_of(이 방 멤버 누구든 프사, tools._resolve)
   > 붙은·답장한 사진(누가 올렸든) > 요청자 프사. make_image(photo_of → edit)·make_sticker·make_profile_video 공통. 프롬프트 [사진]: 본인 것만이라고 거절 X,
   성적·잔인·사칭(그 사람인 척 속이기)만 안 됨. 한도는 사람·방 하루 한도 그대로.
 - 원본이 이미 그림이면 `stickerforge.looks_illustrated`(평평한 면 + 굵은 선 + 적은 색) 가 art 를 건너뜀 (gpt-image 비용·시간 낭비 방지).
-- 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. ffmpeg 는 Semaphore 1·60초 제한. 영상 API(Veo 등)는 아직 없음.
+- 사람마다 하루 5개, 그림체(art)는 llm.image 고치기 + 방 image_daily 한도. 렌더는 한 번에 하나. 영상 API(Veo 등)는 아직 없음.
 - 학습은 스티커와 같은 표(product='ump'): sticker_log/sticker_recipes, `sticker_catalog(for_video=true)`, 없는 효과는 `wanted` → featreq.
 
 ## 🧩 스티커 공방 (`stickerforge/`, `panels/sticker.py`, `stickerlearn.py`, 스킬 `.claude/skills/telegram-sticker-forge/`,
 ## tests/test_sticker.py·test_sticker_upgrade.py·test_sticker_parts.py·test_sticker_learn.py)
-- 엔진(배경 빼기·**움직임 31**·**효과 42**·**자막 애니 20**) → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘 + 움프(forge_video).
+- 엔진(배경 빼기·**움직임 31 + keyframes**·**효과 42**·**부품 레이어 particles·grade·flash·lightning·transition**(위 🎞️ 움프)·**자막 애니 20**)
+  → 512×512 VP9 WebM 투명 2.97초 256KB↓ + 팩 아이콘 + 움프(forge_video). 새 연출은 이름을 더하기 전에 부품 값으로 되는지부터.
   부품 목록은 **코드가 진실**: `stickerforge.catalog()` 가 PRESETS/ANIMS 와 함수 인자·docstring 첫 줄에서 뽑음 (문서에 따로 안 적음).
   새 부품 = motions.py/fx.py 에 함수 + PRESETS 한 줄(첫 줄 docstring 한국어), CLAMP/SPECIAL 범위, tests/test_sticker_parts.py 가 자동 검사
   (첫 장 = 끝 다음 장, sanitize 통과, 규격 렌더). 모션은 6-튜플(angle, sx, sy, dx, dy, shear). 글 인자(text 8자)는 PIL 로만, points 는 512 좌표 4개까지.
-- AI 도구 `sticker_catalog(query, kind, for_video)`(읽기: 학습 레시피 → 계열이 다른 정적 후보 3 → 부품 전체) → `make_sticker(spec, icon,
+- AI 도구 `sticker_catalog(query, section, kind, for_video)`(읽기: 학습 레시피 → 부품·값 범위 → 닮은 예시, 4000자 안) → `make_sticker(spec, icon,
   accept_warnings, request, wanted)`: spec 은 `{recipe, seed}`(정적 36개 또는 이 방 학습 레시피 이름) 또는/그리고 motion·fx·caption·framing,
   `sanitize` 가 이름·숫자·범위만 통과(rain/rise·font = 파일 경로라 막음). 검사표 PASS + qc 경고 없음이어야 전송(경고면 안 보내고 고칠 방향, 두 번째는
   accept_warnings), 규격 실패면 효과 하나 덜고 한 번 더. 사람마다 하루 5개, 남의 사진 허용, 한 번에 하나(to_thread).
@@ -434,7 +448,7 @@
   별로였던 건 뒤, 최근 3번 계열은 미룸. 없는 효과는 가까운 조합 + `wanted` → featreq 접수(오너 💡) → **새 효과는 코드로만** (AI 가 실행 중 코드·ffmpeg 필터 생성 금지).
 - photo 모드 framing auto(에지 에너지 관심 영역·위쪽 가중)/center/top/blur. 속도(4코어): 그리기 10.4→4.9초 (raw RGBA, 격자 캐시, 경계만 unpremultiply,
   VP9 1차 패스 cpu-used 4, 사다리 건너뛰기). 명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]`.
-- 도구 설명은 아트 디렉터 프롬프트(①사진 읽기 ②catalog ③spec ④경고 고치기, 한국어 표현 매핑). 카탈로그 본문은 도구 결과라 매 호출에 안 붙음.
+- 도구 설명은 짧게(`stickerforge/examples.COMPOSE` 공통 규칙: catalog 먼저·말의 낱말 → 부품 값·같은 조합 금지·seed·wanted). 부품·예시는 카탈로그 결과로만.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
