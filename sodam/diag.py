@@ -40,7 +40,7 @@ MAX_ROWS, MAX_HOURS, MAX_LOG_LINES = 500, 24 * 14, 1000
 FAIL_MAX, FAIL_WINDOW, RATE_PER_MIN = 20, 600, 120
 # 봇 토큰은 URL 안 'bot123:ABC' 처럼 글자에 붙어 나와 \b 가 안 걸림 → 앞이 숫자만 아니면 가림
 # (실제 사례 2026-09-30: 음성 담당 httpx 로그의 …/bot<토큰>/getMe 가 logs 창구에 그대로 나옴)
-SECRET_RE = re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|\b[0-9a-f]{32}\b")
+SECRET_RE = re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|\b[0-9a-f]{32}\b")
 
 
 def data_dir(db_path: str) -> Path:

@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -61,6 +62,8 @@ class Config:
 def load_config() -> Config:
     # 봇을 두 개(메인·딜러) 켤 때: SODAM_ENV=.env.dealer python -m sodam
     load_dotenv(os.getenv("SODAM_ENV", ".env"))
+    # 오너가 1:1 로 넣은 API 키 (sodam/apikeys.py — data/keys.env, 같은 이름이면 이쪽이 이김)
+    load_dotenv(Path(os.getenv("DB_PATH", "data/sodam.db")).resolve().parent / "keys.env", override=True)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not token:

@@ -26,7 +26,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHand
 from . import (accountage, addressee, anomaly, cards, casino, channel, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
-from . import agent, aiqueue
+from . import agent, aiqueue, apikeys
 from . import modactions
 from .agent import run_agent
 from .db import disk_full
@@ -471,6 +471,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             _bot_hooks(context, hooks.BOT_MESSAGE_HOOKS, msg)
         return
     anonymous_admin = msg.sender_chat is not None
+    if apikeys.LOOKS_SECRET.search(msg.text or msg.caption or ""):   # 방에 붙인 API 키: 기록·AI 전에 지움 (저장은 1:1 에서만)
+        await _drop_secret(bot, msg, "🔑 API 키처럼 보이는 글이라 지웠어요. 키는 소담 1:1 에서 봇 운영자만 넣을 수 있어요.")
+        return
 
     seen: set = context.bot_data["chats"]
     if chat_id not in seen:
@@ -1038,6 +1041,36 @@ _OWNER_CMD = re.compile(r"^[./](owner|오너)(@\w+)?\s+(\d{8})\s*$", re.I)
 _DEEP_LINK = re.compile(r"^/start\s+(sub|cfg)_(-\d{5,18})\s*$")
 
 
+async def _drop_secret(bot: Bot, msg, note: str) -> None:
+    try:
+        await msg.delete()
+    except TelegramError as e:
+        log.info("secret message delete failed %s: %s", msg.chat_id, e)
+        note += " (메시지를 못 지웠어요 — 직접 지워 주세요)"
+    try:
+        await bot.send_message(msg.chat_id, note)
+    except TelegramError:
+        pass
+
+
+async def _handle_key(svc: Services, bot: Bot, msg, user, got) -> None:
+    """1:1 에 온 API 키 (sodam/apikeys.py): 메시지는 늘 지움, 오너 + 허용된 이름·모양이면 data/keys.env 에 저장."""
+    if user.id not in await svc.perms.owners():
+        return await _drop_secret(bot, msg, "🔒 API 키는 봇 운영자만 넣을 수 있어요. 방금 메시지는 지웠어요.")
+    if got is None or got[1] is None:
+        names = " · ".join(apikeys.ALLOWED)
+        return await _drop_secret(bot, msg, f"🔑 키 이름이나 모양이 안 맞아서 저장 안 했어요 (메시지는 지웠어요).\n"
+                                            f"형식: .키 이름 값 — 이름: {names}")
+    name, value = got
+    try:
+        await asyncio.to_thread(apikeys.save, svc.cfg.db_path, name, value)
+    except (OSError, ValueError) as e:
+        log.warning("api key save failed %s: %s", name, type(e).__name__)
+        return await _drop_secret(bot, msg, f"🔑 {name} 저장에 실패했어요 (메시지는 지웠어요). 서버 data 폴더 권한을 확인해 주세요.")
+    log.info("api key saved by owner: %s (%s)", name, apikeys.masked(value))
+    await _drop_secret(bot, msg, f"🔑 {name} 저장했어요 (끝자리 {apikeys.masked(value)}). 바로 적용돼요 — 키 메시지는 지웠어요.")
+
+
 async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """1:1 채팅 순서: 딥링크·/start·/owner → 예약공지 마법사 → 메뉴 글자 입력 → 명령어 → AI."""
     msg = update.message
@@ -1045,6 +1078,10 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user = msg.from_user
     text = (msg.text or msg.caption or "").strip()
     if not user or user.is_bot:   # 봇이 보낸 1:1 (양쪽 다 Bot-to-Bot 모드면 옴): 답하지 않음 (봇끼리 무한 대화 방지)
+        return
+    got = apikeys.detect(text)
+    if got is not None or apikeys.LOOKS_SECRET.search(text):   # API 키: 맨 먼저 — 기록(messages)·AI 로 새지 않게
+        await _handle_key(svc, bot, msg, user, got)
         return
     await svc.db.ensure_chat(msg.chat_id, None)
     await svc.db.upsert_user(user)

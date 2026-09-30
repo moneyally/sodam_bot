@@ -141,6 +141,10 @@
 - **AI 키로 하는 테스트(ai_live·ai_eval_*)는 사용자 허락 없이 돌리지 않는다** (사용자 결정 2026-09-28: 비용). 오프라인 가짜 LLM 으로.
 
 ## 제재·AI 도구 권한
+- **🔑 API 키 넣기 (SSH 없이)** (`sodam/apikeys.py`, tests/test_apikeys.py, 2026-09-30): 오너가 소담 1:1 에 키를 그대로 붙이거나
+  `.키 이름 값` → 메시지 즉시 삭제, `data/keys.env`(600) 저장 + os.environ 바로 적용, 봇 시작 때 config 가 .env 다음에 읽음(이쪽 우선).
+  허용 이름만(XAI_API_KEY·GEMINI_API_KEY·NEWSAPI_AI_KEY·APISPORTS_KEY·SPORTSDB_KEY). 오너 아니면 지우기만. 방에 붙인 키도 기록 전에 지움.
+  서비스는 ProtectSystem=strict 라 data/ 에만 쓸 수 있음. 음성 담당 등 다른 프로세스는 재시작해야 새 키를 읽음.
 - **비용 한도는 오너만 올림** (`settings.OWNER_CAP` · `over_cap`, tests/test_owner_cap.py, 2026-09-30 오너 "관리자가 이미지 한도 올려 악용하면?"):
   이미지·웹검색 하루 횟수는 방 관리자가 기본값(5·30)까지만 — `.설정변경`·말로(change_setting)·✏️ 숫자 입력·버튼(menu._set) 전부 막힘.
   오너는 방에서 `.설정변경`·✏️ 숫자 입력, 1:1 에선 owner_room_setting(확인 카드)로 올림. 새 비용 설정을 만들면 여기 넣을 것.
