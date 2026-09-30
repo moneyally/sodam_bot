@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from .const import S, FPS, NF, D, MASTER, ffmpeg
 from . import motions as M
@@ -152,6 +152,26 @@ def affine(angle_deg, sx, sy, dx, dy, pivot, shear=0.0):
     return tuple(inv[:2].reshape(-1))
 
 
+def cover_scale(ang, sx, sy, dx, dy, pivot, shear=0.0, lo=1.0, hi=3.0) -> float:
+    """photo 모드 cover: 출력 네 모서리를 거꾸로 되짚어 MASTER 사진 안에 들어오는 가장 작은 추가 배율 (이분 탐색 12번).
+    회전·이동 양으로 대충 키우면 축(pivot)이 멀 때 1.9배까지 과하게 커졌음 (쌍절곤 예시 미리보기에서 확인)."""
+    def inside(k):
+        c = affine(ang, sx * k, sy * k, dx, dy, pivot, shear)
+        for x, y in ((0, 0), (S, 0), (0, S), (S, S)):
+            mx, my = c[0] * x + c[1] * y + c[2], c[3] * x + c[4] * y + c[5]
+            if not (-0.5 <= mx <= MASTER + 0.5 and -0.5 <= my <= MASTER + 0.5):
+                return False
+        return True
+    if inside(lo):
+        return lo
+    if not inside(hi):
+        return hi
+    for _ in range(12):
+        mid = (lo + hi) / 2
+        lo, hi = (lo, mid) if inside(mid) else (mid, hi)
+    return hi
+
+
 def hit_times(motion_specs) -> list:
     """Impulse motions expose their hit times so FX can sync to them."""
     hits = []
@@ -165,17 +185,55 @@ def hit_times(motion_specs) -> list:
     return sorted(hits)
 
 
+_BLACK = Image.new("RGBA", (S, S), (0, 0, 0, 255))
 RAW = "frames.rgba"      # ffmpeg 입력: 89장 RGBA 원시 바이트 한 파일 (PNG 인코드·디코드 생략 → 그리기 1.5초·인코딩 1초 절약)
 
 
-def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
-    """NF 프레임을 그린다. outdir 가 있으면 outdir/frames.rgba (ffmpeg 입력) 로도 쓴다.
-    → {"frames": [RGBA...], "mode", "caption": cap_info, "cap_box", "subject_boxes", "focus", "hits", "framing"}"""
+def timeline(spec: dict, product: str = "sticker") -> dict:
+    """스티커 = 2.97초 반복(89장@30). 움프 loop=True = 같은 89장을 두 바퀴(5.93초), loop=False = 6초 한 번 흐름
+    (ONCE_FPS 로 그려 CPU 를 아낌 — 2vCPU 서버에서 180장@30 은 무거운 조합이 20초를 넘김, tests/test_animation.py 실측)."""
+    if product == "ump" and spec.get("loop") is False:
+        nf = int(ONCE_SECONDS * ONCE_FPS)
+        return {"nf": nf, "fps": ONCE_FPS, "rep": max(1, round(ONCE_SECONDS / D)), "seconds": ONCE_SECONDS, "loop": False}
+    return {"nf": NF, "fps": FPS, "rep": 1, "seconds": D, "loop": True}
+
+
+ONCE_SECONDS, ONCE_FPS = 6.0, 20
+
+
+def _layer_fn(item: dict, idx: int):
+    """레이어 하나 → fn(frame, u, t_old, ctx). 새 부품(prims)은 u, 옛 효과(fx)는 옛 시간 t — 둘 다 start·end 창."""
+    from . import prims
+    name = item["type"]
+    params = {k: v for k, v in item.items() if k != "type"}
+    if name in prims.LAYERS:
+        fn = prims.LAYERS[name]
+
+        def run(frame, u, t, ctx):
+            return fn(frame, u, ctx, _layer=idx, **params)
+        return run
+    fn = FX.PRESETS[name]
+    start, end = params.pop("start", 0.0), params.pop("end", 1.0)
+
+    def run_fx(frame, u, t, ctx):
+        if prims.window(u, start, end) is None:
+            return frame
+        return fn(frame, t, ctx, **params)
+    return run_fx
+
+
+def build(src: Image.Image, spec: dict, outdir: str | None, font: str, tl: dict | None = None, flatten: bool = False) -> dict:
+    """타임라인 nf 장을 그린다. outdir 가 있으면 outdir/frames.rgba (ffmpeg 입력) 로도 쓴다.
+    그리는 순서: 움직임(motion·keyframes, 투명도) → fx(옛 효과) → layers(순서대로, 각자 start·end) → 자막.
+    flatten = 움프용: 알파를 검정 위에 미리 곱해서 씀 (반투명 가장자리·fade 가 mp4 에서 제 밝기).
+    → {"frames": [RGBA...], "mode", "caption": cap_info, "cap_box", "subject_boxes", "focus", "hits", "framing", "timeline"}"""
+    tl = tl or timeline(spec)
+    nf = tl["nf"]
     mode = spec.get("mode", "cutout")
-    motion = M.build(spec.get("motion"))
     apply_fx = FX.build(spec.get("fx"))
+    layers = [_layer_fn(it, i) for i, it in enumerate(spec.get("layers") or [])]
     ctx = {"spec": spec, "seed": int(spec.get("seed", 1)), "hits": hit_times(spec.get("motion")),
-           "font": font, "prev": []}
+           "font": font, "prev": [], "timeline": tl}
 
     cap_frames, cap_info = None, None
     cap = spec.get("caption")
@@ -196,6 +254,9 @@ def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
             bottom = cap_info["band_top"] + 6            # subject sits above the caption band
         master, pivot = prepare_cutout(src, float(spec.get("margin", 0.08)), bottom)
         mask = None
+    motion = M.build_u(spec.get("motion"), tl["rep"], pivot, tl["loop"])
+    keyed = any((m.get("type") if isinstance(m, dict) else m) == "keyframes" for m in spec.get("motion") or [])
+    cover = bool(spec.get("cover"))
 
     raw = None
     if outdir:
@@ -204,23 +265,36 @@ def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
         os.makedirs(outdir)
         raw = open(os.path.join(outdir, RAW), "wb")
     frames, boxes = [], []
-    for n in range(NF):
-        t = n / FPS
-        ang, sx, sy, dx, dy, shear = motion(t)
-        if mode == "photo":                                  # never reveal the canvas edge
+    for n in range(nf):
+        u = n / nf
+        t = ((u * tl["rep"]) % 1.0) * D                     # 옛 부품(이름 있는 움직임·fx·자막)의 시간
+        (ang, sx, sy, dx, dy, shear), op = motion(u)
+        if mode == "photo" and cover:                        # 돌리고 옮겨도 가장자리가 안 보일 만큼만 확대
+            k = cover_scale(ang, sx, sy, dx, dy, pivot, shear)
+            sx, sy = sx * k, sy * k
+        elif mode == "photo" and not keyed:                  # never reveal the canvas edge
             sx, sy = max(abs(sx), 1.0) * (1 if sx >= 0 else -1), max(abs(sy), 1.0) * (1 if sy >= 0 else -1)
         frame = master.transform((S, S), Image.AFFINE, affine(ang, sx, sy, dx, dy, pivot, shear), resample=Image.BICUBIC)
         frame = unpremultiply(frame)
         if mask is not None:
-            frame.putalpha(mask)
-        boxes.append(frame.getchannel("A").getbbox() if mode == "cutout" else None)   # 피사체 위치 (효과·자막 전)
+            frame.putalpha(ImageChops.multiply(frame.getchannel("A"), mask) if keyed else mask)
+        if op < 1:
+            frame.putalpha(frame.getchannel("A").point(lambda v, o=op: int(v * o)))
+        box = frame.getchannel("A").getbbox() if mode == "cutout" else None
+        boxes.append(box)   # 피사체 위치 (효과·자막 전)
+        ctx["subject_box"] = box
         frame = apply_fx(frame, t, ctx)
+        for run in layers:
+            frame = run(frame, u, t, ctx)
         if cap_frames:
-            frame.alpha_composite(cap_frames[n])
+            frame.alpha_composite(cap_frames[min(NF - 1, int(round(t * FPS)))])
         ctx["prev"] = (ctx["prev"] + [frame])[-2:]
         frames.append(frame)
         if raw:
-            raw.write(frame.tobytes())
+            if flatten:                                      # 검정 위에 평탄화 (PIL C 함수)
+                raw.write(Image.alpha_composite(_BLACK, frame).tobytes())
+            else:
+                raw.write(frame.tobytes())
     if raw:
         raw.close()
     cap_box = None
@@ -228,7 +302,7 @@ def build(src: Image.Image, spec: dict, outdir: str | None, font: str) -> dict:
         cap_box = (max(0, cap_info["left"] - 4), max(0, cap_info["band_top"]), min(S, cap_info["left"] + cap_info["width"] + 4),
                    cap_info["band_bottom"])
     return {"frames": frames, "mode": mode, "caption": cap_info, "cap_box": cap_box, "subject_boxes": boxes,
-            "focus": focus, "hits": ctx["hits"], "framing": framing}
+            "focus": focus, "hits": ctx["hits"], "framing": framing, "timeline": tl}
 
 
 def _input(frames_dir, fps=FPS, loops=1) -> list:
@@ -281,19 +355,21 @@ def encode_fit(frames_dir, out, ladder="cutout", limit=None, start=None):
     return size, br, crf
 
 
-def encode_profile(frames_dir, out, side=PROFILE_SIDE, loops=PROFILE_LOOPS, limit=PROFILE_MAX):
+def encode_profile(frames_dir, out, side=PROFILE_SIDE, loops=PROFILE_LOOPS, limit=PROFILE_MAX, fps=FPS, seconds=D):
     """움프: 같은 프레임을 `loops` 바퀴 이어 640×640 H.264 MP4 (알파는 검정 위에 평탄화, 소리 없음, faststart).
     512→640 은 lanczos + 약한 unsharp. 2MB 넘으면 crf 를 올려 한 번 더. → (size, crf)"""
     vf = f"scale={side}:{side}:flags=lanczos,unsharp=5:5:0.6:5:5:0.0,format=yuv420p"
-    size = crf = None
-    for crf in (20, 24, 28, 32):
-        subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *_input(frames_dir, FPS, loops),
-                        "-vf", vf, "-t", f"{D * loops:.4f}", "-c:v", "libx264", "-profile:v", "main", "-preset", "veryfast",
+    size, crf = None, 22
+    for _ in range(4):
+        subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *_input(frames_dir, fps, loops),
+                        "-vf", vf, "-t", f"{seconds * loops:.4f}", "-c:v", "libx264", "-profile:v", "main", "-preset", "veryfast",
                         "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", out],
                        check=True, timeout=120)
         size = os.path.getsize(out)
-        if size <= limit:
+        if size <= limit or crf >= 36:
             break
+        # x264 는 crf +6 에 용량 약 절반 → 넘친 비율만큼 한 번에 건너뜀 (인코딩 횟수 = CPU 절약)
+        crf = min(36, crf + max(2, math.ceil(6 * math.log2(size / limit * 1.06))))
     return size, crf
 
 

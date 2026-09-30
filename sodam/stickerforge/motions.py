@@ -377,6 +377,32 @@ PRESETS = {
 }
 
 
+def build_u(specs, rep: int = 1, pivot=None, loop: bool = True) -> callable:
+    """엔진용: u(타임라인 0~1) → ((angle, sx, sy, dx, dy, shear), opacity).
+    이름 있는 움직임은 옛 시간 t = (u·rep mod 1)·D 로 (움프 6초 한 번 모드에선 두 바퀴 = 예전과 같은 빠르기),
+    keyframes 는 타임라인 전체 u 로 — 키 t 가 곧 화면 시간의 비율."""
+    from . import prims
+    from .const import MASTER
+    pivot = pivot or (MASTER / 2, MASTER / 2)
+    named, keyed = [], []
+    for sp in specs or [{"type": "idle"}]:
+        sp = {"type": sp} if isinstance(sp, str) else sp
+        if sp.get("type") == "keyframes":
+            keyed.append(prims.keyframes(sp["keys"], sp.get("pivot"), loop, pivot))
+        else:
+            named.append(sp)
+    base = build(named) if named else (lambda t: (0.0, 1.0, 1.0, 0.0, 0.0, 0.0))
+
+    def f(u):
+        ang, sx, sy, dx, dy, sh = base(((u * rep) % 1.0) * D)
+        op = 1.0
+        for kf in keyed:
+            (a, x, y, ddx, ddy, _s), o = kf(u)
+            ang += a; sx *= x; sy *= y; dx += ddx; dy += ddy; op *= o
+        return (ang, sx, sy, dx, dy, sh), op
+    return f
+
+
 def build(specs) -> callable:
     """specs: list of {"type": name, ...params} (or a bare name string). Stacked."""
     fns = []

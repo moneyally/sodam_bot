@@ -60,8 +60,38 @@ EXPIRE_DAYS = 90
 RECENT_FAMILIES = 3
 
 
+def _layer_sig(l: dict) -> str:
+    """레이어 이름 + 핵심 값 (입자 모양·전환 종류) — '입자' 라도 연기와 하트는 다른 조합."""
+    extra = l.get("shape") or l.get("kind") or ""
+    return f"{l['type']}:{extra}" if extra else l["type"]
+
+
 def signature(spec: dict) -> str:
-    return "+".join([m["type"] for m in spec.get("motion", [])] + [f["type"] for f in spec.get("fx", [])])
+    return "+".join([m["type"] for m in spec.get("motion", [])] + [f["type"] for f in spec.get("fx", [])]
+                    + [_layer_sig(l) for l in spec.get("layers", []) or []])
+
+
+def fingerprint(spec: dict) -> str:
+    """같은 조합 판별용 지문: 이름(signature)에 더해 **값까지** (숫자는 소수 한 자리, seed 제외).
+    signature 만 보면 'breathe+warm' 과 'zoom+mono' 가 둘 다 keyframes+grade 라 다른 연출을 같다고 거절했음 (코드 리뷰 2026-09-30)."""
+    def norm(v):
+        if isinstance(v, bool) or v is None or isinstance(v, str):
+            return v
+        if isinstance(v, (int, float)):
+            return round(float(v), 1)
+        if isinstance(v, dict):
+            return {k: norm(x) for k, x in sorted(v.items()) if k != "seed"}
+        if isinstance(v, (list, tuple)):
+            return [norm(x) for x in v]
+        return str(v)
+    body = {k: norm(spec.get(k)) for k in ("mode", "motion", "fx", "layers", "caption", "loop", "cover") if spec.get(k) not in (None, [], {})}
+    return json.dumps(body, ensure_ascii=False, sort_keys=True)
+
+
+def describe(spec: dict) -> str:
+    """사람이 읽는 조합 (결과 안내·파일 설명)."""
+    return " + ".join([m["type"] for m in spec.get("motion", [])] + [f["type"] for f in spec.get("fx", [])]
+                      + [_layer_sig(l).replace(":", " ") for l in spec.get("layers", []) or []])
 
 
 def auto_name(request: str, spec: dict) -> str:

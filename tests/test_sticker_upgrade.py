@@ -208,11 +208,12 @@ async def ask(r, caller, script, image=None):
 @test
 async def catalog_tool_gives_three_families_and_all_parts():
     r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False})
-    [out] = await ask(r, A, [tool_call("sticker_catalog", {"query": "출근완료 강렬하게", "kind": "glow"})])
+    [out] = await ask(r, A, [tool_call("sticker_catalog", {"query": "출근완료 강렬하게"})])
+    assert "keyframes" in out and "[particles]" in out and "[transition]" in out and "slice_glitch" in out and "예시" in out, out
+    assert len(out) < 4100                                                   # 도구 결과 4000자에서 안 잘림 (감싸는 태그 포함)
+    [out] = await ask(r, A, [tool_call("sticker_catalog", {"query": "출근완료 강렬하게", "kind": "glow", "section": "recipes"})])
     names = [l.split(" · ")[0][2:] for l in out.splitlines() if l.startswith("- ")]
-    fams = [recipes.family(recipes.BY_NAME[n]) for n in names]
-    assert 1 < len(names) <= 3 and len(set(fams)) == len(fams) and "출근_번개잽" in names, out
-    assert "slice_glitch" in out and "recipe" in out and "framing" in out
+    assert "출근_번개잽" in names and all(n in recipes.BY_NAME for n in names), out     # 옛 레시피도 section 으로
 
 
 @test
@@ -263,11 +264,11 @@ async def profile_video_uses_sticker_engine_spec_and_skips_art_for_drawings():
                                                                 "art": "anime"})], image=img)
         assert "보냈음" in res[0] and "건너뜀" in res[0] and not arts, res                    # 이미 그림 → art 안 함
         assert seen and seen[0]["mode"] == "photo" and seen[0]["fx"][1]["type"] == "glitch"
-        assert "스티커 엔진" in r.bot.named("send_document")[-1][3]
+        assert "부품: punch + sweep + glitch" in r.bot.named("send_document")[-1][3]
         res = await ask(r, A, [tool_call("make_profile_video", {"spec": {"fx": [{"type": "rain", "image": "/etc/passwd"}]}})], image=img)
         assert "spec 오류" in res[0], res
-        res = await ask(r, A, [tool_call("make_profile_video", {"motion": "sway"})], image=img)   # spec 없으면 옛 부품
-        assert "보냈음" in res[0] and len(seen) == 1, res
+        res = await ask(r, A, [tool_call("make_profile_video", {"motion": "sway"})], image=img)   # 옛 인자도 같은 엔진 (어댑터)
+        assert "보냈음" in res[0] and len(seen) == 2 and seen[1]["motion"][0]["type"] == "keyframes", res
     finally:
         SF.forge_video = orig
 
