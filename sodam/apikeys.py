@@ -23,8 +23,9 @@ ALLOWED: dict[str, re.Pattern] = {
     "APISPORTS_KEY": re.compile(r"[A-Za-z0-9]{20,80}"),
     "SPORTSDB_KEY": re.compile(r"[A-Za-z0-9]{1,40}"),
 }
-BARE = {"XAI_API_KEY": re.compile(r"\s*(xai-[A-Za-z0-9]{20,200})\s*"),
-        "GEMINI_API_KEY": re.compile(r"\s*(AIza[0-9A-Za-z_-]{30,60})\s*")}
+BARE = {"XAI_API_KEY": re.compile(r"(?<![A-Za-z0-9])(xai-[A-Za-z0-9]{20,200})(?![A-Za-z0-9])"),
+        "GEMINI_API_KEY": re.compile(r"(?<![A-Za-z0-9])(AIza[0-9A-Za-z_-]{30,60})(?![0-9A-Za-z_-])")}
+_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\S+)")
 _CMD = re.compile(r"^[./](?:키|key|apikey)(?:@\w+)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*=?\s*(\S+)\s*$", re.I)
 # 방·1:1 어디든 이런 모양이 보이면 일단 지울 대상 (오너가 실수로 방에 붙여도)
 LOOKS_SECRET = re.compile(r"xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|sk-[A-Za-z0-9_-]{20,}")
@@ -38,8 +39,13 @@ def detect(text: str) -> tuple[str, str] | tuple[str, None] | None:
         name, value = m.group(1).upper(), m.group(2)
         pat = ALLOWED.get(name)
         return (name, value) if pat and pat.fullmatch(value) else (name, None)
-    for name, pat in BARE.items():
-        b = pat.fullmatch(t)
+    m = _ASSIGN.fullmatch(t.strip("`'\" "))           # XAI_API_KEY=값 (.env 줄 그대로) — 키 이름처럼 생긴 것만 ('a=b' 같은 말은 통과)
+    if m and (m.group(1).upper() in ALLOWED or re.search(r"KEY|TOKEN|SECRET", m.group(1), re.I)):
+        name, value = m.group(1).upper(), m.group(2)
+        pat = ALLOWED.get(name)
+        return (name, value) if pat and pat.fullmatch(value) else (name, None)
+    for name, pat in BARE.items():   # 키만 · 앞뒤에 다른 말("키 …", 코드블록 ``)이 붙어도 (2026-09-30 오너 복붙 실패)
+        b = pat.search(t)
         if b:
             return name, b.group(1)
     return None

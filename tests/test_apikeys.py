@@ -66,6 +66,11 @@ async def non_owner_and_bad_names_are_deleted_not_saved():
     m = await dm(OWNER, "sk-" + "x" * 30)                                # 모르는 모양도 기록 전에 지움
     assert m.deleted and not path.exists()
     assert apikeys.detect("오늘 날씨 어때") is None and apikeys.detect("xai 라는 회사 알아?") is None
+    # 2026-09-30 오너 복붙 실패: 앞뒤 말·코드블록·.env 줄 모양이어도 키를 알아봄
+    for t in (f"키 {XAI}", f"`{XAI}`", f"XAI_API_KEY={XAI}", f"그록꺼 {XAI} 넣어줘"):
+        assert apikeys.detect(t) == ("XAI_API_KEY", XAI), t
+    assert apikeys.detect("x=1") is None and apikeys.detect("a = b") is None, "평범한 말은 통과"
+    assert apikeys.detect("TELEGRAM_BOT_TOKEN=1:abc") == ("TELEGRAM_BOT_TOKEN", None), "허용 안 된 이름은 저장 X (지우기만)"
 
 
 @test
