@@ -206,6 +206,11 @@ def now() -> int:
     return int(time.time())
 
 
+def _until(until: int | None) -> int:
+    """집계 끝(미포함). 없으면 끝 없음 (util.period_range: '어제' = 오늘 0시까지)."""
+    return until if until is not None else 1 << 62
+
+
 # 기능 모듈(패널·태그 알림 등)이 자기 테이블을 따로 선언한다 (db.py 한 곳에 몰리지 않게).
 # 반드시 CREATE TABLE/INDEX IF NOT EXISTS 만. 모듈 import 시점에 호출 → DB.open 때 실행.
 EXTRA_SCHEMA: list[str] = []
@@ -549,23 +554,23 @@ class DB:
             rows = sorted(rows, key=lambda r: -sum(w in index_text(r["text"]) for w in words))[:limit]  # 안정 정렬
         return rows
 
-    async def top_chatters(self, chat_id: int, since: int, limit: int = 10) -> list[aiosqlite.Row]:
+    async def top_chatters(self, chat_id: int, since: int, limit: int = 10, until: int | None = None) -> list[aiosqlite.Row]:
         return await self._all(
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
             "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.is_bot=0 "
-            "GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, limit))
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 "
+            "GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, _until(until), limit))
 
-    async def chat_totals(self, chat_id: int, since: int) -> aiosqlite.Row:
+    async def chat_totals(self, chat_id: int, since: int, until: int | None = None) -> aiosqlite.Row:
         return await self._one(
             "SELECT COUNT(*) AS messages, COUNT(DISTINCT user_id) AS users FROM messages "
-            "WHERE chat_id=? AND ts>=? AND is_bot=0", (chat_id, since))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0", (chat_id, since, _until(until)))
 
-    async def hourly_counts(self, chat_id: int, since: int, tz_offset_sec: int) -> list[aiosqlite.Row]:
+    async def hourly_counts(self, chat_id: int, since: int, tz_offset_sec: int, until: int | None = None) -> list[aiosqlite.Row]:
         return await self._all(
             "SELECT ((ts + ?) / 3600) % 24 AS hour, COUNT(*) AS n FROM messages "
-            "WHERE chat_id=? AND ts>=? AND is_bot=0 GROUP BY hour ORDER BY hour",
-            (tz_offset_sec, chat_id, since))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 GROUP BY hour ORDER BY hour",
+            (tz_offset_sec, chat_id, since, _until(until)))
 
     async def user_message_count(self, chat_id: int, user_id: int, since: int = 0) -> int:
         row = await self._one(
@@ -608,10 +613,11 @@ class DB:
         await self._write("INSERT INTO requests(chat_id, user_id, text, ts) VALUES(?,?,?,?)",
                           (chat_id, user_id, text[:500], now()))
 
-    async def user_requests(self, chat_id: int, user_id: int, since: int, limit: int = 20) -> list[aiosqlite.Row]:
+    async def user_requests(self, chat_id: int, user_id: int, since: int, limit: int = 20,
+                            until: int | None = None) -> list[aiosqlite.Row]:
         return await self._all(
-            "SELECT text, ts FROM requests WHERE chat_id=? AND user_id=? AND ts>=? ORDER BY id LIMIT ?",
-            (chat_id, user_id, since, limit))
+            "SELECT text, ts FROM requests WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? ORDER BY id LIMIT ?",
+            (chat_id, user_id, since, _until(until), limit))
 
     # ── 경고 ──────────────────────────────────────────────
     async def add_warning(self, chat_id: int, user_id: int, by_id: int, reason: str) -> int:

@@ -523,9 +523,10 @@ async def ops_inbox_tool_by_role_and_place():
     db, svc, bot = await world()
     await scam(db, CHAT, name="에이방사기", ago=30)
     await scam(db, OTHER, name="비방사기", ago=20)
-    for uid, role in ((MEMBER, Role.MEMBER), (BOTADM, Role.ADMIN)):   # 방에서: 멤버·봇관리자 거절
-        out = await tools.execute("ops_inbox", "{}", ctx_for(svc, bot, CHAT, uid, role))
-        assert "텔레그램 관리자만" in out and "사기" not in out, out
+    out = await tools.execute("ops_inbox", "{}", ctx_for(svc, bot, CHAT, MEMBER, Role.MEMBER))   # 방 멤버: 목록에도 없음
+    assert "권한 없음" in out and "사기" not in out, out
+    out = await tools.execute("ops_inbox", "{}", ctx_for(svc, bot, CHAT, BOTADM, Role.ADMIN))     # 봇관리자: 도구가 거절
+    assert "텔레그램 관리자만" in out and "사기" not in out, out
     c = ctx_for(svc, bot, CHAT, A_ADMIN, Role.ADMIN)
     out = await tools.execute("ops_inbox", '{"room": "B 방"}', c)     # 방에선 room 무시 → 그 방만
     assert "에이방사기" in out and "비방사기" not in out and c.tainted

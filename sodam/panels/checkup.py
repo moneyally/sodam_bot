@@ -38,17 +38,23 @@ async def _resolve_who(ctx: ToolCtx, who: str) -> tuple[int | None, str]:
     who = who.strip()
     if re.fullmatch(r"\d{4,15}", who):
         return int(who), ""
-    if who.startswith("@") or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", who):
+    at = who.startswith("@")
+    if at or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", who):
         name = who.lstrip("@")
         row = await ctx.svc.db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (name,))
         if row:
             return row["user_id"], ""
         uid = await namehist.find_by_old_username(ctx.svc.db, None, name)
-        return (uid, "(예전 아이디로 찾음)") if uid else (None, f"@{name} 은 소담이 본 적 없는 아이디.")
+        if uid:
+            return uid, "(예전 아이디로 찾음)"
+        if at:
+            return None, f"@{name} 은 소담이 본 적 없는 아이디."
+        # '@' 없는 영어 낱말('Major')은 아이디가 아니면 이름으로 다시 찾음 (예전엔 '본 적 없는 아이디'로 끝남)
     if ctx.chat_id < 0:
         row, err = await tools._resolve(ctx, who)
         return (row["user_id"], "") if row else (None, err)
-    rows = await ctx.svc.db._all("SELECT user_id, first_name, last_name, username FROM users WHERE first_name=? LIMIT 6", (who,))
+    rows = await ctx.svc.db._all("SELECT user_id, first_name, last_name, username FROM users "
+                                 "WHERE first_name=? COLLATE NOCASE LIMIT 6", (who,))
     if len(rows) == 1:
         return rows[0]["user_id"], ""
     if rows:

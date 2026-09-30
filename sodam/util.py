@@ -150,12 +150,22 @@ PERIODS = {
 
 
 def period_since(word: str, tz: ZoneInfo) -> tuple[int, str]:
-    """기간 단어 → (시작 타임스탬프, 표시 이름)."""
+    """기간 단어 → (시작 타임스탬프, 표시 이름). 끝이 없음 ('어제' = 어제 0시부터 지금까지) — 집계는 period_range."""
     days = PERIODS.get(word.strip().lower(), 0) if word else 0
     if days < 0:
         return 0, "전체"
     label = {0: "오늘", 1: "어제부터", 6: "최근 7일", 29: "최근 30일"}.get(days, "오늘")
     return day_start(tz, days), label
+
+
+def period_range(word: str, tz: ZoneInfo) -> tuple[int, int | None, str]:
+    """기간 단어 → (시작, 끝(없으면 지금까지), 표시 이름). '어제' = [어제 0시, 오늘 0시) 한국 시각
+    (실제 버그: '어제 몇 개 말했어?' 에 오늘 것까지 더한 숫자 — period_since 는 끝이 없었음)."""
+    days = PERIODS.get(word.strip().lower(), 0) if word else 0
+    if days == 1:
+        return day_start(tz, 1), day_start(tz, 0), "어제"
+    since, label = period_since(word, tz)
+    return since, None, label
 
 
 class RateLimiter:

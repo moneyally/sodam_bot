@@ -2,7 +2,7 @@
 from datetime import datetime
 
 from .db import DB
-from .util import display_name, esc, fmt_time, period_since
+from .util import display_name, esc, fmt_time, period_range
 
 MEDALS = ["🥇", "🥈", "🥉"]
 
@@ -12,8 +12,8 @@ def _name(row) -> str:
 
 
 async def ranking_text(db: DB, chat_id: int, tz, period: str = "오늘", limit: int = 10) -> str:
-    since, label = period_since(period, tz)
-    rows = await db.top_chatters(chat_id, since, limit)
+    since, until, label = period_range(period, tz)
+    rows = await db.top_chatters(chat_id, since, limit, until)
     if not rows:
         return f"📊 {label} 채팅 기록이 아직 없어요."
     lines = [f"📊 {label} 채팅 랭킹"]
@@ -24,11 +24,11 @@ async def ranking_text(db: DB, chat_id: int, tz, period: str = "오늘", limit: 
 
 
 async def summary_text(db: DB, chat_id: int, tz, period: str = "오늘") -> str:
-    since, label = period_since(period, tz)
-    totals = await db.chat_totals(chat_id, since)
+    since, until, label = period_range(period, tz)   # '어제' = 어제 하루만 (오늘 것 안 섞임)
+    totals = await db.chat_totals(chat_id, since, until)
     offset = int(datetime.now(tz).utcoffset().total_seconds())
-    hours = await db.hourly_counts(chat_id, since, offset)
-    top = await db.top_chatters(chat_id, since, 3)
+    hours = await db.hourly_counts(chat_id, since, offset, until)
+    top = await db.top_chatters(chat_id, since, 3, until)
     lines = [
         f"📈 {label} 방 통계",
         f"메시지 {totals['messages']}개 · 참여 {totals['users']}명",

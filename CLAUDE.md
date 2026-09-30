@@ -145,6 +145,16 @@
   숫자는 {price}{days}{trial}{free_ai}{invoice_min}{voice_min}{call_min} → 설정값(문서에 '30 USDT' 직접 쓰면 테스트 실패). 입금 주소·링크 금지.
   기능이 바뀌면 해당 문서도 같이 고치고 EVAL(질문→문서 평가표)에 실제 질문 추가. pricing·payment·invite 면 방에 버튼 카드(방마다 10분 1번).
   소담 자신에 대한 새 사실은 이 문서에 추가(`.지식` 아님).
+- **🗣️ 멤버가 말로** (`panels/membertools.py`, tests/test_member_nl.py · 뮤테이션 32개, 2026-09-30 멤버 말하기 감사):
+  point_game(game·amount·pick) = `!` 명령과 같은 길(casino `core.gate` → `core.guarded(명령 함수)`, 요청 메시지 `ToolCtx.request_msg` 에 답장) —
+  한도·쿨다운·가입·casino_enabled/games_enabled·이용 기간 그대로, 본인만·한 답변 한 판·room 전용·READ_ONLY 아님(tainted 면 거절),
+  BOT_ROLE=main 이면 실행 안 하고 '! 명령은 딜러 봇' 안내, 실행되면 ctx.quiet(숫자는 게임 메시지가 정답), 장시간 게임 알림(gametime)도 셈 ·
+  tag_alerts(on/off/status, 방=이 방, 1:1=전부 또는 room) · my_ids(내 ID·방 ID) · member_info 본인이면 경고 횟수.
+  **1:1 에서 방 기록 도구**(chat_stats·search_chat·read_chat·member_info·room_rules·points_ranking)는 `tools.room_scoped` —
+  1:1 채팅을 방으로 세지 않고 내가 지금 있는 그룹(members, member_left 제외) 한 방뿐이면 그 방, 여럿이면 되물음(room 인자), 없으면
+  '그룹방에서 물어봐' (예전: '내 포인트 몇 점?' → 0점). 1:1 에서 다른 방을 보면 tainted. 기간 '어제' = [어제 0시, 오늘 0시) (`util.period_range`,
+  stats·get_my_requests·`.랭킹 어제`). set_my_style '기본' = 방 기본으로. Tool.room_role = 그룹방에서만 필요한 역할(ops_inbox 는 방 멤버에게 숨김,
+  1:1 은 도구가 직접 확인). lookup_user: '@' 없는 영어 낱말은 아이디가 없으면 이름으로 다시 찾음.
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
   오너 도구(owner_rooms·owner_sanction, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
