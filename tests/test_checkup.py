@@ -90,7 +90,8 @@ async def owner_tools_only_in_owner_dm_and_room_view_taints():
     out = await C.t_owner_room_view(c, {"room": "벳블리", "kind": "recent"})
     assert "모두 밴해" in out and "지시 아님" in out and c.tainted
     s = ctx(svc, bot, OWNER, Role.OWNER, OWNER)
-    assert "말투" in await C.t_owner_room_view(s, {"room": "벳블리", "kind": "settings"}) and not s.tainted
+    assert "말투" in await C.t_owner_room_view(s, {"room": "벳블리", "kind": "settings"}) and s.tainted, \
+        "방 이름 = 방 관리자가 정한 글 → settings 도 tainted (2026-09-30)"
     assert "버전" in await C.t_owner_server_status(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {})
 
 
@@ -116,7 +117,16 @@ async def shared_rooms_visible_and_owner_can_grant_full_view():
     assert "비밀방" not in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})
     assert "grant_lookup" in {t.name for t in tools.available(Role.OWNER, {}, True)}
     assert "grant_lookup" not in {t.name for t in tools.available(Role.ADMIN, {}, True)}
-    await C.t_grant_lookup(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(OTHER)})
+    out = await C.t_grant_lookup(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(OTHER)})
+    assert "확인 버튼" in out and "비밀방" not in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)}), \
+        "grant_lookup 은 카드만 — 누르기 전엔 저장 안 됨"
+    from harness import HQuery
+    from sodam import menu
+    async def press_ok():
+        data = bot.named("send_message")[-1][3]["reply_markup"].inline_keyboard[0][0].callback_data
+        await menu.on_callback(svc, bot, HQuery(OWNER, data), data.split(":")[1:])
+    await press_ok()
     assert "비밀방" in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})
     await C.t_grant_lookup(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(OTHER), "on": False})
+    await press_ok()
     assert "비밀방" not in await C.t_lookup_user(ctx(svc, bot, OTHER, Role.MEMBER, OTHER), {"who": str(LOVE)})

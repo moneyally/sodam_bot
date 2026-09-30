@@ -108,16 +108,22 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_grant_lookup(ctx: ToolCtx, a: dict) -> str:
-    """오너 1:1: 특정 사람에게 '사람 찾기 전체 방 보기' 권한 주기/빼기."""
+    """오너 1:1: 특정 사람에게 '사람 찾기 전체 방 보기' 권한 주기/빼기 → 이 1:1 에 확인 카드 (오너가 눌러야 저장,
+    panels/ownertools.py). 바로 저장하면 방 이름 등에 숨은 지시로 같은 답변에서 권한이 새어 나갈 수 있음."""
     uid, note = await _resolve_who(ctx, str(a.get("who", "")))
     if not uid:
         return note
-    cur = await trusted(ctx.svc.db)
-    on = a.get("on", True) is not False
+    from . import ownertools   # 늦게 import (ownertools 가 이 모듈의 trusted 를 씀)
+    return await ownertools.ask_lookup_grant(ctx, uid, a.get("on", True) is not False)
+
+
+async def set_trusted(db, actor: int, uid: int, on: bool) -> int:
+    """사람 찾기 전체 권한 저장 (확인 카드를 누른 뒤에만). → 지금 권한 받은 사람 수."""
+    cur = await trusted(db)
     new = (cur | {uid}) if on else (cur - {uid})
-    await ctx.svc.db.set_state(0, TRUSTED_KEY, sorted(new) or None)
-    await ctx.svc.db.log_mod(0, ctx.caller.id, uid, "lookup_trust", "on" if on else "off")
-    return (f"ID {uid} 에게 사람 찾기 전체 방 보기 권한을 {'줬음' if on else '뺐음'}. 지금 권한 받은 사람 {len(new)}명.")
+    await db.set_state(0, TRUSTED_KEY, sorted(new) or None)
+    await db.log_mod(0, actor, uid, "lookup_trust", "on" if on else "off")
+    return len(new)
 
 
 # ── 방 점검 (관리자) ───────────────────────────────────────
@@ -157,6 +163,8 @@ async def t_room_checkup(ctx: ToolCtx, a: dict) -> str:
     if ctx.role < Role.OWNER and cid != ctx.chat_id and not await ctx.svc.perms.is_tg_admin(ctx.bot, cid, ctx.caller.id):
         return "그 방 관리자가 아님."
     svc = ctx.svc
+    if cid != ctx.chat_id:
+        ctx.tainted = True   # 다른 방 이름 = 그 방 관리자가 정한 글 → 이 답변에선 이후 읽기 도구만
     out = [f"[{title}] 소담 점검"]
     out.append("설정: " + await _settings_summary(svc, cid))
     out.append("이용 기간: " + ("이용 중" if await svc.paid_features(cid) else "끝남 (AI 답 멈춤, 방 관리는 계속)"))
@@ -215,9 +223,9 @@ async def t_owner_room_view(ctx: ToolCtx, a: dict) -> str:
         return err
     cid, title, kind = room["chat_id"], room["title"], a.get("kind") or "settings"
     db, tz = ctx.svc.db, ctx.svc.cfg.tz
+    ctx.tainted = True   # 방 이름(방 관리자가 정한 글)·대화 → 이 답변에선 이후 읽기 도구만 (settings 도 방 이름이 나감)
     if kind == "settings":
         return f"[{title}] " + await _settings_summary(ctx.svc, cid)
-    ctx.tainted = True
     if kind == "recent":
         hours = max(1, min(int(a.get("hours") or 3), 24))
         rows = await db._all("SELECT m.ts, m.user_id, m.is_bot, u.first_name, m.text FROM messages m LEFT JOIN users u "
@@ -247,7 +255,7 @@ CHECKUP_TOOLS = [
           "'7647564988 누구야?', '@abc 예전 이름 뭐야?' 같은 질문에.",
           {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"}}, ["who"], t_lookup_user), True),
     (Tool("grant_lookup", "[오너] 사람 찾기에서 모든 방을 볼 수 있는 권한을 특정 사람에게 주거나(on=true) 뺀다(on=false). "
-          "'○○한테 사람 찾기 전체 권한 줘'.", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
+          "'○○한테 사람 찾기 전체 권한 줘'. 이 1:1 에 확인 버튼을 보냄 (오너가 눌러야 저장).", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
                                                  "on": {"type": "boolean"}}, ["who"], t_grant_lookup, Role.OWNER, where="owner_dm"), False),
     (Tool("room_checkup", "[관리자] 방 소담 점검: 설정(말투·욕 받아치기·19금·음성 등)·이용 기간·오늘 AI 한도 %·봇 권한·최근 AI 문제. "
           "'소담 왜 답 안 해?', '우리 방 설정 뭐야?' 같은 질문에. 1:1 에선 room 필요.",
