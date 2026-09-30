@@ -66,7 +66,7 @@ async def owner_dm_sanction_outcome_goes_to_owner_dm():
                                                            "reason": "사기"})], chat_id=OWNER.id, role=Role.OWNER)
     assert "확인 버튼을 보냈음" in res[0], res
     await press(r, OWNER, next(iter(r.svc.pending)), "n")
-    assert (await log_lines(r, OWNER.id))[-1].startswith("❌ 내보내기 취소 — 조이킨") and not await log_lines(r)
+    assert (await log_lines(r, OWNER.id))[-1].startswith("❌ 밴(영구 추방) 취소 — 조이킨") and not await log_lines(r)
 
 
 @test

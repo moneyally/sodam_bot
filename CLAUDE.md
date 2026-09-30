@@ -598,3 +598,18 @@
   시작·골 버림, 종료·취소는 sports_held → 끝나면 '밤사이 경기 결과'. sports_enabled + 이용 중인 방(paid_features)만.
   알림 종류 sports_alerts final/basic/goals(기본)/all. 옛 표 sports_subs/sports_sent 는 안 씀(구독 0건이었음).
 - 네이버를 켜면 guide/sports.md 의 '국내 리그 준비 중' 문장도 같이 고칠 것.
+
+## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)
+- **change_setting 키 목록은 부를 때마다** (`Tool.build` → `setkeys.schema`): 예전엔 tools.py import 때 `list(DEFAULTS)` 로 굳어 113개 중 51개
+  (잠금·사기 의심·스팸 방패·퇴장 인사·뉴스·음성…)가 빠졌음. 설명에 '키=한국어 이름(선택지)', 키는 한국어 이름으로도 받음(`setkeys.resolve`).
+  **새 설정은 자동으로 들어감. 말로 바꾸면 안 되는 건 `setkeys.EXCLUDED` 에 이유와 함께** (gt_setter·인사 미디어·URL 버튼·whitelist_domains) —
+  테스트가 '목록 ∪ EXCLUDED = 모든 설정' 을 검사. ai_enabled 끄기는 되지만 켜기는 말로 불가(꺼지면 AI 가 안 돎) → 결과에 `.AI대화 켜기` 안내.
+- 형식 검사 `settings.VALIDATORS`(register_setting(validator=)/register_validator): whitelist_domains = normalize_domain·50개(예전: URL 그대로 저장 →
+  link_allowed 절대 안 맞음), greet/farewell_template 800자, news_times·news_categories, botlink_members 선택지. `.설정변경` 도 같은 coerce.
+- **밴 ≠ 내보내기**: 예전 AI 밴 카드가 '내보내기'인데 실행은 영구 밴. 이제 ban_member = '밴(영구 추방)', kick_member = 내보내기(재입장 가능).
+  카드 종류·글자·실행은 `modactions.KINDS` 한 곳(handlers._confirm_action 이 씀): warn/mute/ban/kick + 푸는 조치 unban·unwarn·resetwarns·free·unfree·captcha_pass
+  (**전부 확인 카드**, 요청자·누른 사람 may, 한 답변 카드 1장, 제재만 관리자 대상 거절, needs_bot 인 것만 봇 권한 검사, 할 게 없으면 카드 안 띄움).
+  밴 해제는 방에 없는 사람도: 숫자 ID · 이 방 멤버 기록 · 이 방 mod_log ban 기록(이름·@), get_chat_member 가 kicked 일 때만.
+- edit_list(금지어·허용 도메인 add/remove/list, **바로 저장** — change_setting·.금지어 와 같은 규칙, 200/50개, 한 번에 20개) ·
+  manage_schedule(schedules·alert_rules list 바로 / pause·resume·delete 는 요청자 카드 sched_ok) · room_control(lock/unlock/purge/notice 카드 room_ok,
+  누를 때 may 다시 — 잠금 restrict·청소 delete, 청소 범위 = 도구 부를 때 messages 의 최신 msg_id 부터 N개). 전부 ADMIN·room·READ_ONLY 아님(tainted 면 막힘).

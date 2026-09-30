@@ -22,7 +22,8 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from . import cards, cron, gametime, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨 (change_setting 목록에 들어가게)
+from . import cards, cron, gametime, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨
+from . import modactions, setkeys   # 확인 카드 조치 종류 · change_setting 키 목록(부를 때마다)
 from .llm import BudgetExceeded
 from .vision import Attached
 from .permissions import Role, may
@@ -63,14 +64,16 @@ class Tool:
     min_role: Role = Role.MEMBER
     setting: str | None = None  # 이 설정이 꺼져 있으면 도구를 숨김
     where: str = "any"          # room = 그룹방에서만 · dm = 1:1 에서만 · owner_dm = 오너의 1:1 에서만 (도구 목록 = 할 수 있는 일)
+    build: Callable[[], tuple[str, dict]] | None = None   # (설명, 인자)를 부를 때마다 만듦 (예: 설정 키 목록 — import 순서와 무관하게)
 
     def schema(self) -> dict:
+        desc, params = self.build() if self.build else (self.description, self.params)
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
-                "parameters": {"type": "object", "properties": self.params,
+                "description": desc,
+                "parameters": {"type": "object", "properties": params,
                                "required": self.required, "additionalProperties": False},
             },
         }
@@ -573,7 +576,7 @@ def _sanction_used(ctx: ToolCtx) -> bool:
 
 NO_RIGHT = ("요청한 관리자에게 텔레그램 '사용자 차단' 권한이 없어서 제재할 수 없음. "
             "'텔레그램에서 사용자 차단 권한이 있는 관리자만 할 수 있어요'라고 짧게 안내할 것.")
-SANCTION_LABEL = {"warn": "경고", "mute": "채팅 금지", "ban": "내보내기"}
+SANCTION_LABEL = {k: modactions.KINDS[k].label for k in ("warn", "mute", "ban")}   # 오너 1:1 제재 종류 (밴 = 영구 추방)
 
 
 async def _sanction_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
@@ -597,18 +600,20 @@ async def _sanction_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
 
 
 async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, card_chat: int | None = None,
-                        room_title: str = "") -> str:
+                        room_title: str = "", resolver=None) -> str:
     """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action.
-    여러 명은 확인 카드 한 장·버튼 한 번. card_chat = 카드를 보낼 곳 (오너 1:1 요청이면 1:1, 아니면 그 방)."""
+    여러 명은 확인 카드 한 장·버튼 한 번. card_chat = 카드를 보낼 곳 (오너 1:1 요청이면 1:1, 아니면 그 방).
+    kind = modactions.KINDS (푸는 조치도 같은 카드). resolver = 대상 찾기 (밴 해제처럼 방에 없는 사람, panels/admintools)."""
+    spec = modactions.KINDS[kind]
     asked = ", ".join(map(str, a.get("names") or [a.get("name", "")]))[:100]
     attempt = lambda why: ctx.svc.db.audit(ctx.chat_id, ctx.caller.id, None, f"ask_{kind}", f"{why}: {asked}")  # noqa: E731
     if not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.caller.id):  # 부른 사람에게 텔레그램 '사용자 차단' 권한
         await attempt("거절(요청자 권한 없음)")
         return NO_RIGHT
-    if not await ctx.svc.perms.bot_can_moderate(ctx.bot, ctx.chat_id):     # 봇에게 그 방 제재 권한이 없으면 버튼도 없음
+    if spec.needs_bot and not await ctx.svc.perms.bot_can_moderate(ctx.bot, ctx.chat_id):   # 봇에게 그 방 제재 권한이 없으면 버튼도 없음
         await attempt("거절(봇 권한 없음)")
         return NO_BOT_RIGHT
-    rows, err = await _sanction_targets(ctx, a)
+    rows, err = await (resolver or _sanction_targets)(ctx, a)
     if err:
         return err
     if _sanction_used(ctx):
@@ -618,12 +623,12 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
     targets = [(r["user_id"], _row_name(r)) for r in rows]
     key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes,
                                             extra=tuple(targets[1:]), from_dm=card_chat is not None))
-    label = SANCTION_LABEL[kind] + (f" {human_minutes(minutes)}" if minutes else "")
+    label = modactions.label(kind, minutes)
     who = ", ".join(f"{mention(uid, name)}(<code>{uid}</code>)" for uid, name in targets)
     count = f"{len(targets)}명 " if len(targets) > 1 else ""
-    buttons = ([InlineKeyboardButton(f"✅ {count}{SANCTION_LABEL[kind]} + 방에 안내", callback_data=f"act:{key}:p"),
-                InlineKeyboardButton(f"✅ {SANCTION_LABEL[kind]}만", callback_data=f"act:{key}:y")]
-               if card_chat else [InlineKeyboardButton(f"✅ {count}{SANCTION_LABEL[kind]}", callback_data=f"act:{key}:y")])
+    buttons = ([InlineKeyboardButton(f"✅ {count}{spec.label} + 방에 안내", callback_data=f"act:{key}:p"),
+                InlineKeyboardButton(f"✅ {spec.label}만", callback_data=f"act:{key}:y")]
+               if card_chat else [InlineKeyboardButton(f"✅ {count}{spec.label}", callback_data=f"act:{key}:y")])
     where = f"방: <b>{esc(room_title)}</b>\n" if card_chat else ""
     await ctx.bot.send_message(
         card_chat or ctx.chat_id,
@@ -780,7 +785,12 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
     if getattr(ctx, "simulated", False):   # 실제 평가 실패: '보고 괜찮으면 바꿔줘' 에 결과도 안 보여주고 바로 바꿈
         return ("아직 안 바꿈: 이 답변에서 방금 미리 돌려봤으니, 결과를 관리자에게 먼저 보여주고 "
                 "'바꿔'라고 하면 그때 바꾼다고 안내할 것.")
-    key, value = str(a.get("key", "")), str(a.get("value", ""))
+    raw_key, value = str(a.get("key", "")), str(a.get("value", ""))
+    key = setkeys.resolve(raw_key)   # 키 이름 또는 한국어 이름 (목록은 부를 때마다 — setkeys)
+    if key is None:
+        return f"'{raw_key}' 같은 방 설정이 없음. 목록의 키 중에서 골라 다시 시도할 것."
+    if key in setkeys.EXCLUDED:
+        return f"이 설정({LABELS.get(key, key)})은 말로 못 바꿈: {setkeys.EXCLUDED[key]}. 그렇게 짧게 안내할 것."
     try:
         parsed = coerce(key, value)
     except ValueError as e:
@@ -788,6 +798,8 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
     await ctx.svc.db.set_setting(ctx.chat_id, key, parsed)
     await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "setting", f"{key}={parsed}")
     out = f"설정 변경: {LABELS.get(key, key)} = {render(key, parsed)}"
+    if key == "ai_enabled" and parsed is False:
+        out += "." + setkeys.AI_OFF_NOTE
     if key == "style":   # 방 기본 말투: 개인 말투를 따로 정한 사람은 그대로라는 걸 알려야 '방 전체'와 어긋나지 않음
         own = await ctx.svc.db._all(
             "SELECT u.first_name FROM members m JOIN users u USING(user_id) WHERE m.chat_id=? AND m.style IS NOT NULL",
@@ -970,15 +982,15 @@ TOOLS: list[Tool] = [
           "reason": {"type": "string"}}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN,
          where="room"),
-    Tool("ban_member", "[관리자] 멤버를 내보낸다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+    Tool("ban_member", "[관리자] 멤버를 밴(영구 추방)한다 — 밴을 풀기 전엔 다시 못 들어옴 (확인 버튼 한 장). '밴·영구 차단·다시 못 오게' 일 때만. "
+         "그냥 '내보내·강퇴·킥'(다시 들어올 수 있음)은 kick_member. 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_ban, Role.ADMIN, where="room"),
     Tool("set_member_style", "[관리자] 특정 멤버 한 사람에게 쓸 봇 말투를 바꾼다 ('기본' 이면 방 기본으로).",
          {"name": {"type": "string", "description": "@username, 이름, 또는 ID (<addressee_hints> 의 그대로)"},
           "style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}},
          ["name", "style"], t_set_member_style, Role.ADMIN, where="room"),
-    Tool("change_setting", "[관리자] 방 설정을 바꾼다.",
-         {"key": {"type": "string", "enum": list(DEFAULTS)}, "value": {"type": "string"}},
-         ["key", "value"], t_change_setting, Role.ADMIN, where="room"),
+    Tool("change_setting", "[관리자] 방 설정을 바꾼다.", {"key": {"type": "string"}, "value": {"type": "string"}},
+         ["key", "value"], t_change_setting, Role.ADMIN, where="room", build=setkeys.schema),
     Tool("reset_member_styles", "[관리자] 이 방 멤버들이 따로 정한 개인 말투를 모두 지워 방 기본 말투로 맞춘다.",
          {}, [], t_reset_member_styles, Role.ADMIN, where="room"),
     # 오너 전용 (1:1): 다른 방 관리 — 오너에게만, 1:1 에서만 보인다

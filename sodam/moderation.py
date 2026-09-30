@@ -77,7 +77,7 @@ def owner_kb(chat_id: int, user_id: int, kind: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ 밴 해제", callback_data=data("n"))]])
     extend = [] if kind == "hold" else [InlineKeyboardButton("⏱ 1일로 연장", callback_data=data("x"))]
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔊 풀기", callback_data=data("u")), *extend,
-                                  InlineKeyboardButton("🚫 내보내기", callback_data=data("b"))]])
+                                  InlineKeyboardButton("🚫 밴(영구)", callback_data=data("b"))]])
 
 
 class Notice(str):
@@ -182,7 +182,7 @@ class Moderator:
         try:
             if count >= s["warn_ban_at"]:
                 await self.ban(bot, chat_id, user_id, actor_id, f"경고 {count}회 누적")
-                text += f"\n🚫 경고 {count}회 누적으로 내보냈어요."
+                text += f"\n🚫 경고 {count}회 누적으로 밴(영구 추방)했어요."
                 await self.incident(bot, chat_id, "autoban", f"[자동 밴] chat {chat_id} / {esc(name)}({user_id}) 경고 "
                                     f"{count}회 누적 ({esc(reason)})", owner_kb(chat_id, user_id, "ban"),
                                     sub=user_id, label=name)
