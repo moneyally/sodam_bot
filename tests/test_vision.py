@@ -108,6 +108,15 @@ async def make_new_image_sends_photo_and_counts():
     assert len(r.bot.named("send_photo")) == 1                                # 하루 한도 1장
     last_tool = [x["content"] for x in r.llm.of("chat")[-1]["messages"] if x["role"] == "tool"][-1]
     assert "한도" in last_tool
+    assert "오늘 1장 만듦" in last_tool, last_tool                                # 몇 장 썼는지도 (2026-09-30 벳블리)
+    await r.db.set_setting(r.CHAT, "image_daily", 2)                          # 관리자가 한도를 올리면 바로 다시 됨
+    r.llm.script = [tool_call("make_image", {"prompt": "또", "mode": "new"}), "그렸어"]
+    m = group_msg(r, text="소담아 다시 그려줘")
+    m.from_user = member
+    await say(r, m)
+    assert len(r.bot.named("send_photo")) == 2
+    desc = [t for t in r.llm.of("chat")[-1]["tools"] if t["function"]["name"] == "make_image"][0]["function"]["description"]
+    assert "다시 부른다" in desc, "앞에서 막혔어도 기억으로 '막혔다' 하지 말고 도구를 다시 부르라는 안내"
 
 
 @test
