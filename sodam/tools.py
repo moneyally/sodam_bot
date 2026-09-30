@@ -53,6 +53,7 @@ class ToolCtx:
     reply_msg_id: int | None = None  # 요청이 답장한 메시지 ID (handlers.reply_ref) → 사건 재현 기준 (AI 가 고르지 않음)
     name_notes: list[str] = field(default_factory=list)  # _resolve 가 예전 이름으로 찾았을 때 → execute 가 도구 결과 끝에 붙임
     request_msg: object | None = None  # 이 요청 메시지 (handlers) → point_game 이 ! 명령처럼 그 메시지에 답장
+    media_intent: str | None = None  # 🎞️/🎬 mediaintent.classify (agent._run) → make_video·make_profile_video 가 다른 쪽이면 돌려보냄
 
 
 @dataclass

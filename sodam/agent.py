@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from openai import BadRequestError
 
-from . import agentlog, ai_instructions, costs, lessons, memory, route
+from . import agentlog, ai_instructions, costs, lessons, mediaintent, memory, route
 from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
@@ -201,6 +201,10 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
     ctx_tools = _ToolSet(schemas, allowed)
+    # 🎞️ 움프 vs 🎬 AI 영상: AI 영상 도구가 없는 방은 '애매'도 움프로 (물어볼 게 없음)
+    ctx.media_intent = mediaintent.classify(request, reply_to)
+    if ctx.media_intent == "ambiguous" and "make_video" not in allowed:
+        ctx.media_intent = "ump"
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
     started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     if lane.lane == "light":

@@ -486,6 +486,13 @@
 - 원본 사진(mode=image): photo_of > 붙은·답장한 사진 > 요청자 프사 (panels/avatar.source_photo 규칙을 videogen 에 복사 — avatar 는 다른 작업이 고치는 중이었음).
 - 점검(room_checkup) '영상 이번 주 n/한도개' (+키 없으면 표시) · 안내서 `guide/video.md` · 프롬프트 규칙 9 = 도구가 없을 때만 '영상 생성 안 됨'. 음성 도구엔 안 넣음.
 
+## 🎞️ 움프 vs 🎬 AI 영상 의도 (`mediaintent.py`, tests/test_mediaintent.py · 뮤테이션 7개, 2026-10-01 오너 '복불복으로 만들어줌')
+- 실제 사례: '원형테두리 없애주고 영상으로 움직이게'(움프 고치던 중) → AI 영상(주 한도), '움직이는영상프로필' → 사람이 '프로필말고 영상' 다시.
+- `classify(request, reply_to)` 코드 판정: '~말고' 부정 먼저 → 움프 말(프사·프로필·gif·테두리·효과 이름)만 = ump · 영상 말(영상 제작·장면·동작·소리)만 = video ·
+  둘 다면 실제 동작(춤·걷기·말하기·담배…)이 있으면 video('프사로 춤추는 영상'), 아니면 프로필 말이 있으면 ump · '움직이게'만 = ambiguous(답장 대상이 움프 얘기면 ump).
+- agent._run 이 ctx.media_intent 에 넣고, AI 영상 도구가 없는 방은 ambiguous → ump. make_video / make_profile_video 가 판정과 다르면 실행 안 하고
+  `redirect` 결과로 돌려보냄, ambiguous + make_video = ask_choice 버튼([🎞️ 움프][🎬 AI 영상]) — 추측으로 주 한도를 쓰지 않게. 선택 뒤 '(선택: …)' 도 classify.
+
 ## 📓 소담이 일기 (`diary.py`, `panels/diary.py`, tests/test_diary.py · 뮤테이션 2개)
 - 매일 밤(diary_time 21:00/22:00/23:00/23:30, 기본 23:30) 오너 채널에 '📓 소담이의 메모장 #N' (#1 은 사람이 직접). 30초 틱 + 날짜 claim → 하루 한 번.
 - 사실 = 오늘 숫자만(대화·말한 사람·방 수·입장·AI 답·스티커·움프·그림·게임·캡차 통과·치운 링크·바쁜 시간 + 오늘 git 커밋 제목). **방·사람 이름·대화 글은 AI 에 안 감.**
