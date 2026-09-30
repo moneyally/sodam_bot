@@ -27,7 +27,15 @@ description: 'Turn any image plus a free-form request into a verified Telegram v
 >   tests/test_sticker_parts.py 가 자동 검사. 모션은 6-튜플(…, shear).
 > - **실시간 학습** (`sodam/stickerlearn.py`): sticker_log ← 👍❤️🔥 반응·'좋다/별로' 답장·10분 안 재요청 → sticker_recipes(방 50개, 90일) →
 >   카탈로그가 좋아한 조합 먼저·별로 뒤·최근 계열 미룸. 없는 효과는 가까운 조합 + `wanted`(featreq). AI 는 새 코드·필터를 만들지 않는다.
-> - 소담 AI 도구: `sticker_catalog(query, kind, for_video)`(읽기, 학습 레시피 + 계열이 다른 후보 3 + 부품 전체) → `make_sticker(spec, icon, accept_warnings, request, wanted)`
+> - **2026-09-30 부품 프레임워크 (오너 지시 '고정 목록 말고 프레임워크로', 스킬 telegram-ump 2-0 에 표)**: 이름 목록 위에 일반 부품을 얹음 —
+>   `stickerforge/prims.py`: motion `keyframes`(pivot·keys t/scale/sx/sy/rotate/x/y/opacity/ease) · `layers`: `particles`(일반 방출기,
+>   모양 21종+글자·색·개수·크기·나오는 곳·각도·속도·중력·바람·회전·수명·fade·grow·blend add·blur·turbulence·burst) · `grade`(색 행렬+비네트·
+>   그레인·블룸, [a,b] 진동) · `flash` · `lightning` · `transition`(dissolve·burn·fade·pixelate·shatter, in/out, to 색) · 기존 fx 이름도 레이어로.
+>   모든 레이어 start·end, fx+layers ≤6, 입자 합계 ≤300. 값 검사는 `layer_params()`(형식 num·int·osc·range·enum·color·colors·xy·times·text·bool).
+>   **새 효과는 이름을 더하기 전에 이 부품 값으로 되는지부터** — 예시 `stickerforge/examples.py`(실패했던 실제 요청 → spec, 테스트가 전부 그려 봄).
+>   카탈로그는 도구 결과 4000자 안(section=parts/examples/effects/recipes). 같은 조합 반복 막기(`panels/sticker.same_as_last`)·seed 자동.
+>   테스트 `python tests/run_all.py animation`.
+> - 소담 AI 도구: `sticker_catalog(query, section, kind, for_video)`(읽기: 부품·값 범위 + 닮은 예시, 학습 레시피) → `make_sticker(spec, icon, accept_warnings, request, wanted)`
 >   (`sanitize`: 이름은 목록만, 값은 그 함수 인자 + 숫자·참거짓·숫자 목록, 범위 CLAMP/SPECIAL, **rain/rise·font 는 파일 경로라 막음**;
 >   검사표 PASS + 경고 없어야 전송, 경고면 안 보내고 돌려줌(두 번째는 accept_warnings), 규격 실패면 효과 하나 덜고 한 번 더).
 >   원본은 붙은·답장한 사진, 없으면 요청자 프사. 사람마다 하루 5개. 테스트 `python tests/run_all.py sticker sticker_upgrade`.

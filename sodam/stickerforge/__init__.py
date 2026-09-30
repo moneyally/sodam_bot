@@ -72,7 +72,8 @@ def _int(v, default: int) -> int:
 
 
 def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    import math
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _clean_params(kind: str, fn, raw: dict) -> dict:
@@ -139,12 +140,22 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
             "radius": int(min(max(raw.get("radius", 56), 8), 256)),   # 스티커는 투명 픽셀이 있어야 함(alpha_range) → 모서리 최소 8
             "seed": _int(raw.get("seed"), 1) % 1000,
             "framing": raw.get("framing") if raw.get("framing") in ("auto", "center", "top", "blur") else "auto"}
-    spec["motion"], spec["fx"] = [], []
-    for item in (raw.get("motion") or [{"type": "idle"}])[:MAX_MOTIONS]:
+    spec["motion"], spec["fx"], spec["layers"] = [], [], []
+    spec["loop"] = raw.get("loop") is not False                    # 움프: false = 6초 한 번 흐름 (타서 없어지기 등)
+    if raw.get("cover") is True:
+        spec["cover"] = True                                       # 사진이 돌거나 움직여도 가장자리(검정)가 안 보이게 확대
+    motions = raw.get("motion") or [{"type": "idle"}]
+    for item in (motions if isinstance(motions, list) else [motions])[:MAX_MOTIONS]:
         item = {"type": item} if isinstance(item, str) else item
-        name = (item or {}).get("type")
+        name = (item or {}).get("type") if isinstance(item, dict) else None
+        if name == "keyframes":
+            kf, err = _clean_keyframes(item)
+            if err:
+                return None, err
+            spec["motion"].append(kf)
+            continue
         if name not in M.PRESETS:
-            return None, f"motion 은 {sorted(M.PRESETS)} 중"
+            return None, f"motion 은 keyframes 또는 {sorted(M.PRESETS)} 중"
         fn = {"breathe": M.idle, "float": M.float_}.get(name, M.PRESETS[name])
         spec["motion"].append({"type": name, **_clean_params(name, fn, item)})
     for item in (raw.get("fx") or [])[:MAX_FX]:
@@ -153,6 +164,17 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         if name not in FX.PRESETS or name in BLOCKED_FX:
             return None, f"fx 는 {sorted(set(FX.PRESETS) - BLOCKED_FX)} 중"
         spec["fx"].append({"type": name, **_clean_params(name, FX.PRESETS[name], item)})
+    layers = raw.get("layers") or []
+    if not isinstance(layers, list):
+        return None, "layers 는 [{type, ...}, ...] 목록"
+    if len(spec["fx"]) + len(layers) > MAX_LAYERS:
+        return None, f"효과(fx)+레이어(layers)는 합쳐서 {MAX_LAYERS}개까지 (렌더 시간 상한)"
+    for item in layers:
+        lay, err = _clean_layer(item)
+        if err:
+            return None, err
+        spec["layers"].append(lay)
+    _fit_budget(spec["layers"])
     cap = raw.get("caption")
     if isinstance(cap, str):
         cap = {"text": cap}
@@ -169,6 +191,174 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
                            "anims": anims, "position": "top" if cap.get("position") == "top" else "bottom",
                            "typing": bool(cap.get("typing", True))}
     return spec, None
+
+
+# ── 프레임워크 부품(prims) 값 검사 — 이름·숫자·범위만 통과 (경로·코드·수식 없음) ─────────────
+MAX_LAYERS = 6            # fx + layers 합계 (CPU 상한)
+MAX_KEYS = 16
+PARTICLE_BUDGET = 300     # 모든 입자 레이어 개수 합 + 불씨 (2vCPU 서버 렌더 시간 상한, tests/test_animation.py 실측)
+
+
+def _p():
+    from . import prims
+    return prims
+
+
+def layer_params() -> dict:
+    """레이어 종류 → {인자: (형식, …)}. 형식: num lo hi · int lo hi · osc lo hi(숫자 또는 [a,b] 진동) · range lo hi(숫자 또는 [최소,최대]) ·
+    enum 선택지 · color · colors n · xy(0~1 좌표) · times n(0~1 시각 목록) · text n · bool. 모든 레이어에 start·end(0~1)."""
+    P = _p()
+    return {
+        "particles": {"shape": ("enum", tuple(P.SHAPES)), "char": ("text", 2), "colors": ("colors", 6), "color": ("color",),
+                      "count": ("int", 1, 200), "size": ("range", 2, 160), "spawn": ("enum", P.SPAWNS), "at": ("xy",),
+                      "spread": ("num", 0, 0.5), "angle": ("num", -360, 360), "angle_spread": ("num", 0, 180),
+                      "speed": ("num", 0, 900), "gravity": ("num", -900, 900), "wind": ("num", -600, 600),
+                      "spin": ("num", -1080, 1080), "life": ("num", 0.1, 6), "fade": ("enum", P.FADES),
+                      "grow": ("num", 0.1, 5), "blend": ("enum", P.BLENDS), "blur": ("int", 0, 10),
+                      "opacity": ("num", 0.05, 1), "turbulence": ("num", 0, 60), "burst": ("bool",)},
+        "grade": {"brightness": ("osc", -0.4, 0.4), "contrast": ("osc", 0.5, 2), "saturation": ("osc", 0, 2.5),
+                  "hue_shift": ("osc", -180, 180), "hue_spin": ("int", -3, 3), "tint": ("color",), "tint_amount": ("osc", 0, 0.8),
+                  "vignette": ("osc", 0, 1), "grain": ("num", 0, 0.25), "bloom": ("osc", 0, 1.2), "cycles": ("int", 1, 6)},
+        "flash": {"times": ("times", 6), "count": ("int", 1, 6), "color": ("color",), "strength": ("num", 0, 0.75),
+                  "decay": ("num", 0.02, 0.3)},
+        "lightning": {"times": ("times", 4), "count": ("int", 1, 4), "color": ("color",), "origin": ("xy",), "target": ("xy",),
+                      "branches": ("int", 0, 4), "width": ("int", 1, 8), "strength": ("num", 0, 0.6), "decay": ("num", 0.03, 0.25)},
+        "transition": {"kind": ("enum", P.TRANSITIONS), "direction": ("enum", ("out", "in")), "scale": ("int", 8, 160),
+                       "edge": ("num", 0, 0.2), "edge_color": ("color",), "embers": ("int", 0, 80), "tiles": ("int", 3, 10),
+                       "to": ("color",), "origin": ("enum", P.ORIGINS)},
+    }
+
+
+KEY_RANGES = {"t": (0, 1), "scale": (0.05, 4), "sx": (0.05, 4), "sy": (0.05, 4), "rotate": (-1440, 1440),
+              "x": (-1.5, 1.5), "y": (-1.5, 1.5), "opacity": (0, 1)}
+
+
+def _color(v):
+    """[r,g,b] 또는 '#rrggbb' → 정수 튜플 (아니면 None)."""
+    import re
+    if isinstance(v, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", v.strip()):
+        h = v.strip().lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    if isinstance(v, (list, tuple)) and len(v) == 3 and all(_num(x) for x in v):
+        return tuple(int(min(max(x, 0), 255)) for x in v)
+    return None
+
+
+def _clip(v, lo, hi):
+    return min(max(float(v), lo), hi)
+
+
+def _clean_value(kind: tuple, v):
+    """형식 하나 검사 → 값 (못 쓰면 None — 그 인자만 기본값으로)."""
+    k = kind[0]
+    if k == "num" and _num(v):
+        return _clip(v, kind[1], kind[2])
+    if k == "int" and _num(v):
+        return int(_clip(v, kind[1], kind[2]))
+    if k == "osc":
+        if _num(v):
+            return _clip(v, kind[1], kind[2])
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(x) for x in v):
+            return [_clip(x, kind[1], kind[2]) for x in v]
+    if k == "range":
+        if _num(v):
+            return (_clip(v, kind[1], kind[2]),) * 2
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(x) for x in v):
+            a, b = sorted(_clip(x, kind[1], kind[2]) for x in v)
+            return (a, b)
+    if k == "enum" and isinstance(v, str) and v in kind[1]:
+        return v
+    if k == "color":
+        return _color(v)
+    if k == "colors" and isinstance(v, (list, tuple)):
+        cols = [c for c in (_color(x) for x in v[:kind[1]]) if c]
+        return cols or None
+    if k == "xy" and isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(x) for x in v):
+        return tuple(_clip(x, 0, 1) for x in v)
+    if k == "times" and isinstance(v, (list, tuple)) and all(_num(x) for x in v):
+        return [_clip(x, 0, 1) for x in v[:kind[1]]] or None
+    if k == "text" and isinstance(v, str):
+        return " ".join(v.split())[:kind[1]] or None
+    if k == "bool" and isinstance(v, bool):
+        return v
+    return None
+
+
+def _clean_keyframes(item: dict) -> tuple[dict | None, str | None]:
+    keys = item.get("keys")
+    if not isinstance(keys, list) or not keys:
+        return None, "keyframes 는 keys=[{t, scale, rotate, x, y, opacity, ease}, ...] (1~16개, t 는 0~1)"
+    out = []
+    P = _p()
+    for i, k in enumerate(keys[:MAX_KEYS]):
+        if not isinstance(k, dict):
+            continue
+        c = {p: _clip(k[p], *KEY_RANGES[p]) for p in KEY_RANGES if p in k and _num(k[p])}
+        c.setdefault("t", i / max(1, len(keys) - 1))
+        if k.get("ease") in P.EASES:
+            c["ease"] = k["ease"]
+        out.append(c)
+    if not out:
+        return None, "keyframes keys 가 비었음"
+    kf = {"type": "keyframes", "keys": out}
+    piv = _clean_value(("xy",), item.get("pivot"))
+    if piv:
+        kf["pivot"] = piv
+    return kf, None
+
+
+def _clean_layer(item) -> tuple[dict | None, str | None]:
+    from . import fx as FX
+    item = {"type": item} if isinstance(item, str) else item
+    if not isinstance(item, dict):
+        return None, "layers 항목은 {type, ...}"
+    name = item.get("type")
+    schema = layer_params()
+    win = {k: _clip(item[k], 0, 1) for k in ("start", "end") if _num(item.get(k))}
+    if name in schema:
+        P = _p()
+        if name == "particles":
+            shape = item.get("shape", "circle")
+            if isinstance(shape, str) and shape not in P.SHAPES:        # 이모지·글자로 준 모양
+                if P.EMOJI.get(shape.strip().rstrip("️")):
+                    item = {**item, "shape": P.EMOJI[shape.strip().rstrip("️")]}
+                elif 1 <= len(shape.strip()) <= 2 and P.glyph_ok(shape.strip()):
+                    item = {**item, "shape": "char", "char": shape.strip()}
+                else:
+                    return None, f"particles shape 는 {list(P.SHAPES)} 중 (글자는 shape=char, char='별')"
+            if item.get("shape") == "char":
+                ch = str(item.get("char") or "").strip()[:2]
+                if ch and not P.glyph_ok(ch):
+                    mapped = P.EMOJI.get(ch.rstrip("️"))
+                    if not mapped:
+                        return None, f"글꼴에 없는 글자 '{ch}' — 한글·영문·숫자만, 이모지는 비슷한 shape 로"
+                    item = {**item, "shape": mapped}
+                elif not ch:
+                    return None, "shape=char 이면 char 에 글자 1~2자"
+        lay = {"type": name}
+        for k, kind in schema[name].items():
+            if k in item:
+                v = _clean_value(kind, item[k])
+                if v is not None:
+                    lay[k] = v
+        lay.update(win)
+        return lay, None
+    if name in FX.PRESETS and name not in BLOCKED_FX:                     # 기존 효과 이름도 레이어로 (순서·시간 창 조절)
+        return {"type": name, **_clean_params(name, FX.PRESETS[name], item), **win}, None
+    return None, (f"layers type 은 {list(schema)} 또는 효과 이름({', '.join(sorted(set(FX.PRESETS) - BLOCKED_FX))}) 중")
+
+
+def _fit_budget(layers: list) -> None:
+    """입자 합계가 PARTICLE_BUDGET 를 넘으면 비율대로 줄임 (한 편 렌더 CPU 상한)."""
+    total = sum(l.get("count", 30) for l in layers if l["type"] == "particles") + \
+        sum(l.get("embers", 30) for l in layers if l["type"] == "transition" and l.get("kind") == "burn")
+    if total > PARTICLE_BUDGET:
+        k = PARTICLE_BUDGET / total
+        for l in layers:
+            if l["type"] == "particles":
+                l["count"] = max(1, int(l.get("count", 30) * k))
+            elif l["type"] == "transition" and l.get("kind") == "burn":
+                l["embers"] = int(l.get("embers", 30) * k)
 
 
 def catalog() -> dict:
@@ -252,7 +442,7 @@ def render(image: bytes, spec: dict, icon: bool = False, keep: str | None = None
 
 
 def render_video(image: bytes, spec: dict) -> Result:
-    """움프: 같은 엔진으로 그린 뒤 640×640 H.264 6초 (3초 루프 ×2). 알파는 검정 위에 평탄화.
+    """움프: 같은 엔진으로 그린 뒤 640×640 H.264 약 6초 — loop(기본) = 3초 루프 ×2, loop=false = 6초 한 번 흐름. 알파는 검정 위에 평탄화.
     photo 모드가 자연스럽고(radius 0 권장), cutout 도 됨(배경 검정)."""
     from . import engine
     spec = {**spec, "radius": 0}                                     # 프사는 원형으로 잘리므로 모서리 없음
@@ -260,9 +450,10 @@ def render_video(image: bytes, spec: dict) -> Result:
     try:
         src, used = _load(image, spec, tmp)
         frames_dir = os.path.join(tmp, "frames")
-        built = engine.build(src, spec, frames_dir, FONT)
+        tl = engine.timeline(spec, "ump")
+        built = engine.build(src, spec, frames_dir, FONT, tl=tl, flatten=True)
         out = os.path.join(tmp, "out.mp4")
-        size, crf = engine.encode_profile(frames_dir, out)
+        size, crf = engine.encode_profile(frames_dir, out, loops=2 if tl["loop"] else 1, fps=tl["fps"], seconds=tl["seconds"])
         rows = [("size", f"{size / 1024:.0f}KB / {VIDEO_MAX_BYTES // 1024}KB", size <= VIDEO_MAX_BYTES),
                 ("crf", str(crf), True)]
         warnings, metrics = _inspect(built, used, None, spec)
