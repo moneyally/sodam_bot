@@ -24,7 +24,7 @@ from telegram.error import BadRequest, TelegramError
 from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import filter_output
-from .settings import register_setting
+from .settings import max_text, register_setting, register_validator
 from .util import esc, mention, send_retry
 
 if TYPE_CHECKING:
@@ -63,6 +63,7 @@ def _render_buttons(value: Any) -> str:
 register_setting("greet_media_type", "", "인사 미디어 종류")
 register_setting("greet_media_id", "", "인사 미디어")
 register_setting("greet_buttons", [], "인사 URL 버튼", render_fn=_render_buttons)
+register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
 
 
 # ── 검사 ──────────────────────────────────────────────────

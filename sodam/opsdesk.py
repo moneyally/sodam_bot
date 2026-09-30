@@ -635,8 +635,8 @@ tools.register_tool(Tool(
     "AI 사용량 80%↑·이용 기간 곧 끝남·봇 권한 없음·하루 요약 못 받는 대표님. '처리할 일 보여줘', '밀린 거 있어?' 에 사용. "
     "그룹방에선 그 방, 1:1 에선 내가 텔레그램 관리자인 모든 방(room 으로 좁히기). 1:1 에선 role 이 member 로 보여도 먼저 호출 "
     "(관리자인지는 도구가 확인).",
-    {"room": {"type": "string", "description": "1:1 에서 볼 방 이름(일부) 또는 ID. 비우면 전부"}}, [], t_ops_inbox),
-    read_only=True)
+    {"room": {"type": "string", "description": "1:1 에서 볼 방 이름(일부) 또는 ID. 비우면 전부"}}, [], t_ops_inbox,
+    room_role=Role.ADMIN), read_only=True)   # 그룹방 멤버에겐 숨김 (늘 거절이라 목록 낭비) · 1:1 은 도구가 TG 관리자 확인
 tools.register_tool(Tool(
     "owner_command_center", "[오너] 운영센터: 모든 방 상황을 정상/확인 필요/보안 이벤트로 나눠 보여줌 + 합계(방 수·오늘 AI 요금·구독 수). "
     "'전체 방 상황', '확인 필요한 방만'(attention), '오늘 보안 이벤트'(security), 방 하나(방 이름).",

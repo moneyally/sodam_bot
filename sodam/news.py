@@ -99,9 +99,26 @@ TIME_PRESETS = ["09:00,21:00", "08:00,12:00,18:00,22:00", "09:00", "07:00,19:00"
 register_setting("news_mode", "off", "세계 뉴스 알림",
                  choices={**{k: k for k in MODES}, "끔": "off", "끄기": "off", "속보": "breaking", "속보만": "breaking",
                           "정리": "digest", "둘다": "both", "둘 다": "both"}, choice_labels=MODES)
-register_setting("news_times", "09:00,21:00", "뉴스 정리 시각")
+def _times_value(raw: str) -> str:
+    """.설정변경·AI: '9시, 21:00' 같은 글 → '09:00,21:00' (없으면 ValueError)."""
+    times = times_of({"news_times": raw.replace("시", ":00")})
+    if not times:
+        raise ValueError("시각은 09:00,21:00 처럼 적어주세요 (최대 4개)")
+    return ",".join(times)
+
+
+def _cats_value(raw: str) -> list[str]:
+    """'경제, 코인' → ['economy', 'crypto'] (모르는 분야면 ValueError — 예전엔 조용히 '세계'로)."""
+    items = [x.strip().lower() for x in re.split(r"[,\s]+", raw) if x.strip()]
+    if not items or any(x not in CAT_ALIASES for x in items):
+        raise ValueError("분야는 " + " / ".join(v.split()[1] for v in CATS.values()) + " 중에서 골라주세요")
+    return [c for c in CATS if c in {CAT_ALIASES[x] for x in items}]
+
+
+register_setting("news_times", "09:00,21:00", "뉴스 정리 시각", validator=lambda raw: _times_value(raw))
 register_setting("news_categories", ["world"], "뉴스 분야",
-                 render_fn=lambda v: ", ".join(CATS[c].split()[1] for c in cats_of({"news_categories": v})))
+                 render_fn=lambda v: ", ".join(CATS[c].split()[1] for c in cats_of({"news_categories": v})),
+                 validator=lambda raw: _cats_value(raw))
 register_setting("news_min_sources", 3, "뉴스 기준(매체 수)", range_=(2, 5))
 register_setting("news_quiet", "0-7", "뉴스 조용한 시간", choices={**{k: k for k in QUIETS}, "없음": "off", "끔": "off"},
                  choice_labels=QUIETS)

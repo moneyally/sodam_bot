@@ -27,6 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, commands,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue
+from . import modactions
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -820,7 +821,7 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
     elif (recent := svc.games.status(chat_id)) != "진행 중인 게임 없음":   # 방금 끝난 게임 ('고장났어?' 에 이유 설명·다시 시작)
         hints = [*hints, "게임 단서: " + recent + " (필요하면 game_control 로 다시 시작)"]
     image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진·영상 (영상은 장면 여러 장, 고쳐 달라면 대표 장면을 원본으로)
-    ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image, reply_msg_id=reply_ref(msg)[0])
+    ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image, reply_msg_id=reply_ref(msg)[0], request_msg=msg)
     typing = asyncio.create_task(_keep_typing(bot, chat_id))   # 텔레그램 '입력 중'은 5초면 꺼짐 → 답이 나올 때까지 4초마다
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
@@ -898,7 +899,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
 
 
-OWNER_ACTIONS = {"u": "채팅 금지를 풀었어요", "x": "1일 채팅 금지로 바꿨어요", "b": "내보냈어요", "n": "밴을 풀었어요"}
+OWNER_ACTIONS = {"u": "채팅 금지를 풀었어요", "x": "1일 채팅 금지로 바꿨어요", "b": "밴(영구 추방)했어요", "n": "밴을 풀었어요"}
 
 
 async def _owner_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
@@ -956,13 +957,13 @@ async def _unmute_button(svc: Services, bot: Bot, q, parts: list[str]) -> None:
 
 
 async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
-    """경고·뮤트·밴 확인 버튼 (tools._ask_sanction). y = 실행, p = 실행 + 방에 안내(오너 1:1 요청), n = 취소.
-    대상이 여러 명이면 한 번에 처리하고 사람마다 결과를 보여 준다."""
+    """경고·뮤트·밴·내보내기·밴 해제·경고 취소·자유 멤버·캡차 통과 확인 버튼 (tools._ask_sanction, 종류는 modactions.KINDS).
+    y = 실행, p = 실행 + 방에 안내(오너 1:1 요청), n = 취소. 대상이 여러 명이면 한 번에 처리하고 사람마다 결과를 보여 준다."""
     key, yn = (parts + ["", ""])[:2]
     # 재시작(배포) 뒤엔 메모리에 없음 → DB 에서 (sodam/persist.py, 카드 유효시간은 그대로)
     action = svc.pending.get(key) or (await persist.load_pending(svc.db, key) if key else None)
     presser = q.from_user.id
-    if not action or action.expires < time.time():
+    if not action or action.expires < time.time() or action.kind not in modactions.KINDS:
         svc.pending.pop(key, None)
         await q.answer("만료된 요청이에요.")
         try:
@@ -994,7 +995,8 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         return
     await q.answer()
     # AI 맥락용 결과 한 줄 (cards.record): 카드가 뜬 대화 = 오너 1:1 요청이면 오너 1:1, 아니면 그 방
-    label = {"warn": "경고", "mute": f"뮤트 {human_minutes(action.minutes)}", "ban": "내보내기"}[action.kind]
+    kind = modactions.KINDS[action.kind]
+    label = modactions.record_label(action.kind, action.minutes)
     names = ", ".join(name for _, name in action.targets)[:60]
     card_chat = action.requested_by if action.from_dm else action.chat_id
     if yn not in ("y", "p"):
@@ -1006,19 +1008,14 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     by, lines, done = esc(user_name(q.from_user)), [], []
     for uid, name in action.targets:
         who = mention(uid, name)
-        if await svc.perms.protected(bot, action.chat_id, uid):  # 버튼이 떠 있는 동안 관리자가 됐을 수도
+        if kind.punitive and await svc.perms.protected(bot, action.chat_id, uid):  # 버튼이 떠 있는 동안 관리자가 됐을 수도
             lines.append(f"⛔ {who}님은 관리자라서 제재할 수 없어요.")
             continue
         try:
-            if action.kind == "warn":
-                lines.append(await svc.mod.warn(bot, action.chat_id, uid, name, presser, action.reason))
-            elif action.kind == "mute":
-                await svc.mod.mute(bot, action.chat_id, uid, action.minutes, presser, action.reason)
-                lines.append(f"🔇 {who}님 {human_minutes(action.minutes)} 채팅 금지했어요.")
-            else:
-                await svc.mod.ban(bot, action.chat_id, uid, presser, action.reason)
-                lines.append(f"🚫 {who}님을 내보냈어요.")
-            done.append(who)
+            ok, line = await kind.run(svc, bot, action.chat_id, uid, name, presser, action)
+            lines.append(line)
+            if ok:
+                done.append(who)
         except TelegramError as e:
             log.warning("sanction %s failed: chat %s user %s: %s", action.kind, action.chat_id, uid, e)
             lines.append(f"❌ {who}님 실패: {esc(e.message)} (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)")
@@ -1028,7 +1025,7 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
                        (f"✅ {label} 실행됨 — {len(done)}명" if done else f"⚠️ {label} 실행 안 됨") + f" — {names}"
                        + (f" (못 한 사람 {failed}명)" if done and failed else "") + f" (처리: {user_name(q.from_user)})")
     if yn == "p" and done:   # 오너 1:1 요청: 방에도 짧게 안내 (정해진 문구 + 사유만, AI 문장 아님)
-        notice = {"warn": "경고", "mute": f"{human_minutes(action.minutes)} 채팅 금지", "ban": "내보내기"}[action.kind]
+        notice = modactions.notice(action.kind, action.minutes)
         try:
             await bot.send_message(action.chat_id, f"📢 관리자 조치: {', '.join(done)}님 {notice}\n사유: {esc(action.reason)}",
                                    parse_mode="HTML")

@@ -269,7 +269,10 @@ MEMBER_LEVELS = {"off": ("👥 멤버 신청 끔", ()),
                  "control": ("👥 멤버: 조작까지", ("play", "queue", "search", "skip", "pause", "resume", "stop"))}
 MEMBER_PER_10MIN = 3
 SENDS_PER_ANSWER = 2   # 한 답변에 보낼 수 있는 명령 (대기열 보고 → 번호로 빼기 같은 두 단계)
-register_setting("botlink_members", "request", "멤버의 다른 봇 명령 (끔/신청만/조작까지)")
+register_setting("botlink_members", "request", "멤버의 다른 봇 명령 (끔/신청만/조작까지)",
+                 choices={"off": "off", "끔": "off", "request": "request", "신청": "request", "신청만": "request",
+                          "control": "control", "조작": "control", "조작까지": "control"},
+                 choice_labels={k: v[0].removeprefix("👥 ") for k, v in MEMBER_LEVELS.items()})
 menu.register_preset("botlink_members", [(k, v[0]) for k, v in MEMBER_LEVELS.items()], "blk")
 
 HELP_EVERY = 86400          # 방·봇마다 /help 물어보기 하루 1번

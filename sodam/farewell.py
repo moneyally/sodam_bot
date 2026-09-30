@@ -23,7 +23,7 @@ from telegram.error import TelegramError
 
 from . import persist, raid
 from .greet import _render_buttons, button_rows as _greet_rows
-from .settings import register_setting
+from .settings import max_text, register_setting
 from .util import esc, send_retry, user_name
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ DEFAULTS = {
 register_setting("farewell_mode", "off", "퇴장 인사",
                  choices={"on": "on", "켜기": "on", "켬": "on", "off": "off", "끄기": "off", "끔": "off"},
                  choice_labels={"on": "켜짐", "off": "꺼짐"})
-register_setting("farewell_template", "", "퇴장 문구")
+register_setting("farewell_template", "", "퇴장 문구", validator=max_text(MAX_TEMPLATE))
 register_setting("farewell_buttons", [], "퇴장 URL 버튼", render_fn=_render_buttons)
 register_setting("farewell_delete_after", 0, "퇴장 인사 삭제(초)", range_=(0, 3600))
 

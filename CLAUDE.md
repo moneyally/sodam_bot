@@ -135,7 +135,7 @@
 ## 제재·AI 도구 권한
 - **🔎 사람 찾기·점검 도구** (`panels/checkup.py`, tests/test_checkup.py · 뮤테이션 7개, 2026-09-29 — 오너 '7647564988 아이디 뭐야'에 도구가 없어
   기능 요청만 접수한 실제 사례): lookup_user(누구나, 숫자ID·@·예전 @·이름 → 지금 이름·@·namehist 변경 기록, 봤던 방은 오너=전부·관리자=자기 관리 방·
-  그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
+  그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted, 2026-09-30부터 오너 1:1 확인 카드), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
 - **📘 소담 공식 안내서** (`sodam/guide/*.md` 19개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —
@@ -145,12 +145,32 @@
   숫자는 {price}{days}{trial}{free_ai}{invoice_min}{voice_min}{call_min} → 설정값(문서에 '30 USDT' 직접 쓰면 테스트 실패). 입금 주소·링크 금지.
   기능이 바뀌면 해당 문서도 같이 고치고 EVAL(질문→문서 평가표)에 실제 질문 추가. pricing·payment·invite 면 방에 버튼 카드(방마다 10분 1번).
   소담 자신에 대한 새 사실은 이 문서에 추가(`.지식` 아님).
+- **🗣️ 멤버가 말로** (`panels/membertools.py`, tests/test_member_nl.py · 뮤테이션 32개, 2026-09-30 멤버 말하기 감사):
+  point_game(game·amount·pick) = `!` 명령과 같은 길(casino `core.gate` → `core.guarded(명령 함수)`, 요청 메시지 `ToolCtx.request_msg` 에 답장) —
+  한도·쿨다운·가입·casino_enabled/games_enabled·이용 기간 그대로, 본인만·한 답변 한 판·room 전용·READ_ONLY 아님(tainted 면 거절),
+  BOT_ROLE=main 이면 실행 안 하고 '! 명령은 딜러 봇' 안내, 실행되면 ctx.quiet(숫자는 게임 메시지가 정답), 장시간 게임 알림(gametime)도 셈 ·
+  tag_alerts(on/off/status, 방=이 방, 1:1=전부 또는 room) · my_ids(내 ID·방 ID) · member_info 본인이면 경고 횟수.
+  **1:1 에서 방 기록 도구**(chat_stats·search_chat·read_chat·member_info·room_rules·points_ranking)는 `tools.room_scoped` —
+  1:1 채팅을 방으로 세지 않고 내가 지금 있는 그룹(members, member_left 제외) 한 방뿐이면 그 방, 여럿이면 되물음(room 인자), 없으면
+  '그룹방에서 물어봐' (예전: '내 포인트 몇 점?' → 0점). 1:1 에서 다른 방을 보면 tainted. 기간 '어제' = [어제 0시, 오늘 0시) (`util.period_range`,
+  stats·get_my_requests·`.랭킹 어제`). set_my_style '기본' = 방 기본으로. Tool.room_role = 그룹방에서만 필요한 역할(ops_inbox 는 방 멤버에게 숨김,
+  1:1 은 도구가 직접 확인). lookup_user: '@' 없는 영어 낱말은 아이디가 없으면 이름으로 다시 찾음.
 - 도구 목록 = AI 가 할 수 있는 일 (`tools.available(role, settings, in_dm)`): 방 관리 도구(where=room)는 1:1 에서 안 보임,
-  오너 도구(owner_rooms·owner_sanction, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
+  오너 도구(owner_*·grant_lookup, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
   오너 1:1 카드: 오너만 누름, [실행+방에 안내]/[실행만]/[취소], 방 안내는 정해진 문구+사유.
 - 자동 입장 인사 뒤 10분 안의 AI 인사 요청은 중복으로 봄. 제3자(신입)에게 하는 인사는 방 기본 말투.
 
+- **👑 오너 1:1 말로 운영** (`panels/ownertools.py`, tests/test_owner_nl.py, 2026-09-30): owner_grant_days(1~365일, 실행은
+  owner.apply_grant = 오너 메뉴와 같음) · owner_revenue(읽기: 오늘/7일/30일/이번·지난 달 매출·안 맞는 입금·방 상태·방별 만료) ·
+  owner_room_setting(키는 부를 때마다 settings.DEFAULTS, 값은 settings.coerce, 내부 ID·미디어·버튼 키 막음, 비용 한도 키는 줄이기만) ·
+  owner_room_plan(costs.PLAN_CENTS, agentlog.set_plan) · owner_feature_requests(읽기)/owner_feature_status(카드, 완료 = 요청자 알림) ·
+  owner_sanction unmute/unban(카드, 밴된 사람 뮤트 해제는 StillBanned 로 밴 유지) · grant_lookup(카드). 쓰기는 전부 오너 1:1 확인 카드
+  (cards.card 토큰 own_ok/own_no need=OWNER + 실행 함수에서 오너 한 번 더, 방·값 다시 검사, 10분, 도구마다 한 답변 1장).
+  방 이름이 비슷하면 코드가 만든 [🏠 방 고르기] 버튼(own_pick) — AI 결과엔 방 이름을 안 넣음. **방 이름 = 그 방 관리자가 정한 글** →
+  owner_rooms·방 못 찾음 안내·owner_room_view(settings)·다른 방 room_checkup·owner_revenue 도 ctx.tainted (숨은 지시 → 같은 답변 쓰기 도구 차단).
+  오너 말은 '기능 요청: …'·'기능 요청으로 넣어줘' 처럼 직접 말할 때만 feature_request (`panels/featreq.OWNER_EXPLICIT`, agentlog 실행의 요청 글로 판단).
+  `.구독부여` 는 봇이 아는 방(db.has_chat)만. 여러 방 공지(브로드캐스트)는 아직 없음 (오너 결정 대기).
 - 오너 보고(도배 뮤트·사칭·자동 밴·CAS)에 바로가기 버튼 [풀기][1일 연장][내보내기](무기한 사칭 뮤트엔 연장 없음)/[밴 해제] (ow:, 오너만).
 - 오너 1:1 방 기록 조회 `owner_room_log(room, kind=sanction|attempt|requests|all, days)`: 정해진 조회만 (자유 SQL 없음 —
   SQLite mode=ro 만으론 ATTACH·temp 표로 쓰기가 됨, 필요하면 authorizer+ATTACH 0+progress 제한으로). 제재 요청은 mod_log
@@ -231,7 +251,7 @@
   전액으로 세서 2M 토큰(=실제 $1~3)에 막히던 것). 웹 검색은 호출당 $0.01 을 extra_micro 로.
   이미지(gpt-image-2.5-flare/sunburst, OpenAI 문서 2026-09-27): 토큰 요금 입력 $8(사진 입력 값, 글 $5 와 못 나눠서 보수적)·캐시 $2·출력 $30.
   모르는 gpt-image-* = 이미지 최고값, 모르는 대화 모델 = 기본 모델 → 대화 모델 최고값.
-- 방 하루 한도 = 오너 요금제(chat_state `ai_usd_plan` 센트, $0.5/1.5/3/5, 기본 $1.50 — 방 설정이 아니라서 `.설정변경`·AI 도구로 못 바꿈)
+- 방 하루 한도 = 오너 요금제(chat_state `ai_usd_plan` 센트, `costs.PLAN_CENTS` = $0.5/1.5/3/5/10, 기본 $10.00(`DEFAULT_PLAN_CENTS` 1000, 사용자 결정 2026-09-27) — 방 설정이 아니라서 `.설정변경`·change_setting 으로 못 바꿈, 오너 📒 화면 또는 오너 1:1 AI 도구 owner_room_plan(확인 카드))
   × 방 관리자 `ai_room_budget_pct`(10~100%, 기본=상한 100 → 줄이기만, 저장값도 잘라 씀). 오너 1:1 은 방 달러 한도 없음. 토큰 한도(60만)도 그대로.
 - AI 작업 기록(`agentlog.py`, 표 agent_runs, 14일): run_agent 1번 = 1줄 (요청 200자·방식·도구 호출(이름+인자 요약, 비밀값 모양 가림)+결과 120자·
   answered/tool_only/empty/error/budget·토큰·요금). 토큰은 ContextVar `agentlog.current` 로 → 도구 안에서 부른 AI(웹검색 등)도 같은 실행에,
@@ -598,3 +618,18 @@
   시작·골 버림, 종료·취소는 sports_held → 끝나면 '밤사이 경기 결과'. sports_enabled + 이용 중인 방(paid_features)만.
   알림 종류 sports_alerts final/basic/goals(기본)/all. 옛 표 sports_subs/sports_sent 는 안 씀(구독 0건이었음).
 - 네이버를 켜면 guide/sports.md 의 '국내 리그 준비 중' 문장도 같이 고칠 것.
+
+## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)
+- **change_setting 키 목록은 부를 때마다** (`Tool.build` → `setkeys.schema`): 예전엔 tools.py import 때 `list(DEFAULTS)` 로 굳어 113개 중 51개
+  (잠금·사기 의심·스팸 방패·퇴장 인사·뉴스·음성…)가 빠졌음. 설명에 '키=한국어 이름(선택지)', 키는 한국어 이름으로도 받음(`setkeys.resolve`).
+  **새 설정은 자동으로 들어감. 말로 바꾸면 안 되는 건 `setkeys.EXCLUDED` 에 이유와 함께** (gt_setter·인사 미디어·URL 버튼·whitelist_domains) —
+  테스트가 '목록 ∪ EXCLUDED = 모든 설정' 을 검사. ai_enabled 끄기는 되지만 켜기는 말로 불가(꺼지면 AI 가 안 돎) → 결과에 `.AI대화 켜기` 안내.
+- 형식 검사 `settings.VALIDATORS`(register_setting(validator=)/register_validator): whitelist_domains = normalize_domain·50개(예전: URL 그대로 저장 →
+  link_allowed 절대 안 맞음), greet/farewell_template 800자, news_times·news_categories, botlink_members 선택지. `.설정변경` 도 같은 coerce.
+- **밴 ≠ 내보내기**: 예전 AI 밴 카드가 '내보내기'인데 실행은 영구 밴. 이제 ban_member = '밴(영구 추방)', kick_member = 내보내기(재입장 가능).
+  카드 종류·글자·실행은 `modactions.KINDS` 한 곳(handlers._confirm_action 이 씀): warn/mute/ban/kick + 푸는 조치 unban·unwarn·resetwarns·free·unfree·captcha_pass
+  (**전부 확인 카드**, 요청자·누른 사람 may, 한 답변 카드 1장, 제재만 관리자 대상 거절, needs_bot 인 것만 봇 권한 검사, 할 게 없으면 카드 안 띄움).
+  밴 해제는 방에 없는 사람도: 숫자 ID · 이 방 멤버 기록 · 이 방 mod_log ban 기록(이름·@), get_chat_member 가 kicked 일 때만.
+- edit_list(금지어·허용 도메인 add/remove/list, **바로 저장** — change_setting·.금지어 와 같은 규칙, 200/50개, 한 번에 20개) ·
+  manage_schedule(schedules·alert_rules list 바로 / pause·resume·delete 는 요청자 카드 sched_ok) · room_control(lock/unlock/purge/notice 카드 room_ok,
+  누를 때 may 다시 — 잠금 restrict·청소 delete, 청소 범위 = 도구 부를 때 messages 의 최신 msg_id 부터 N개). 전부 ADMIN·room·READ_ONLY 아님(tainted 면 막힘).

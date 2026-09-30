@@ -11,12 +11,14 @@ m:frr:<방>[:쪽]                            방 관리자 그룹 허브 💡 �
 """
 from __future__ import annotations
 
+import re
 from functools import wraps
 
 from telegram import Message
 
-from .. import featreq, menu, tools
+from .. import agentlog, featreq, menu, tools
 from ..menu import ADMIN, OWNER, B, HubItem, PanelCtx, Route, Screen
+from ..permissions import Role
 from ..services import PendingInput
 from ..subscription import chat_title
 from ..util import esc, fmt_time, to_int, user_name
@@ -48,7 +50,23 @@ def _short(text: str, n: int = 24) -> str:
 
 
 # ── AI 도구 ────────────────────────────────────────────────
+# 오너 말은 '기능 요청: …', '기능 요청으로 넣어줘', '건의: …' 처럼 직접 접수를 말할 때만 (오너의 '벳블리 30일 늘려줘'·
+# '기능 요청 뭐 들어왔어?' 가 새 요청으로 쌓이던 것 — 오너가 곧 요청을 처리하는 사람이라 목록만 더러워짐)
+OWNER_EXPLICIT = re.compile(r"(기능\s*요청|건의)\s*[:：]|(기능\s*요청|건의)\s*(으로|로)?\s*(좀\s*)?"
+                            r"(넣|접수|남겨|남기|올려|등록|해\s*(줘|놔|둬|주))")
+OWNER_NOT_FILED = ("오너의 말은 기능 요청으로 접수하지 않았음 (오너가 '기능 요청: …'처럼 직접 말할 때만 접수). "
+                   "할 수 있는 도구가 없으면 오너 메뉴 버튼(👑 오너 메뉴·📒 AI 비용·💡 기능 요청 등)이나 명령으로 하는 방법을 "
+                   "짧게 알려 줄 것.")
+
+
+def _owner_asked_to_file() -> bool:
+    run = agentlog.current.get()
+    return bool(run and OWNER_EXPLICIT.search(run.trigger or ""))
+
+
 async def t_feature_request(ctx: tools.ToolCtx, a: dict) -> str:
+    if ctx.role >= Role.OWNER and not _owner_asked_to_file():
+        return OWNER_NOT_FILED
     summary = str(a.get("summary", ""))
     detail = str(a.get("detail", ""))
     res = await featreq.submit(ctx.svc.db, ctx.caller.id, user_name(ctx.caller), ctx.chat_id, summary, detail)
@@ -71,7 +89,8 @@ TOOL = tools.Tool(
     "feature_request",
     "소담이 지금 할 수 없는 기능(맞는 도구가 없는 일)을 사용자가 원하거나 '이런 기능 있어?', '○○ 되면 좋겠다'고 물으면, "
     "'못 해요'로 끝내지 말고 이 도구로 운영자에게 기능 요청을 전달한다. '기능 요청: …', '건의: …' 이라고 하면 바로 쓴다. "
-    "이미 할 수 있는 일(다른 도구가 있는 일)이나 잡담·질문엔 쓰지 않는다. 결과를 받은 뒤 '운영자에게 전달했어요'라고만 하고 "
+    "이미 할 수 있는 일(다른 도구가 있는 일)이나 잡담·질문엔 쓰지 않는다. owner 의 말은 owner 가 직접 '기능 요청'으로 "
+    "넣어 달라고 할 때만 쓴다. 결과를 받은 뒤 '운영자에게 전달했어요'라고만 하고 "
     "언제 된다고 약속하지 않는다.",
     {"summary": {"type": "string", "description": "원하는 기능을 짧은 이름으로 (예: '입장 때 규칙 퀴즈', '출석 체크'). 40자 안"},
      "detail": {"type": "string", "description": "사용자가 말한 내용 그대로 요약 (없는 내용 추가 금지, 300자 안). 없으면 비움"}},

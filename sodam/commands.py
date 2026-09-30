@@ -613,7 +613,7 @@ async def c_ban(ctx: CmdCtx) -> None:
     if t:
         uid, name, rest = t
         await _safe(ctx, ctx.svc.mod.ban(ctx.bot, ctx.chat_id, uid, ctx.user.id, " ".join(rest) or "관리자 판단"),
-                    f"🚫 {mention(uid, name)}님을 내보냈어요.")
+                    f"🚫 {mention(uid, name)}님을 밴(영구 추방)했어요. (풀려면 <code>.밴해제</code>)")
 
 
 async def c_unban(ctx: CmdCtx) -> None:
@@ -1099,6 +1099,9 @@ async def c_grant(ctx: CmdCtx) -> None:
     chat_id, days = int(ctx.args[0]), int(ctx.args[1])
     if chat_id >= 0 or not 1 <= days <= 3650:
         await ctx.reply("방 ID(음수)와 1~3650 일수를 확인해주세요.")
+        return
+    if not await ctx.svc.db.has_chat(chat_id):   # 오타 ID 에 구독 줄을 만들고 '연장했어요' 하던 것 (오너 메뉴 _room_cid 와 같게)
+        await ctx.reply(f"❌ 봇이 모르는 방 ID 예요: <code>{chat_id}</code>\n그 방에서 <code>.내아이디</code> 로 확인해주세요.")
         return
     until = await ctx.svc.billing.extend(chat_id, days)
     await ctx.svc.db.log_mod(chat_id, ctx.user.id, None, "sub_grant", f"{days}일")
