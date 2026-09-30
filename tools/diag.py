@@ -8,6 +8,7 @@
     python tools/diag.py agent_runs chat=벳블리 limit=20
     python tools/diag.py voice chat=벳블리 · modlog chat=… hours=24 · counters [chat=…] [day=YYYY-MM-DD]
     python tools/diag.py tables · logs unit=sodam lines=200 [grep=오류] [since='30 min ago']
+    python tools/diag.py cleanup [chat=세컨드]   (🧹 멤버 정리 마지막 스캔 — 분류별·접속 상태 분포 숫자만)
 
 토큰: 환경변수 SODAM_DIAG_TOKEN (오너가 봇 1:1 로 받아 클로드 환경 설정에 넣음 — 출력·저장 안 함).
 주소: SODAM_DIAG_URL (기본 https://178-104-55-232.sslip.io).

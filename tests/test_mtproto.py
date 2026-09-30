@@ -104,9 +104,10 @@ async def participants_mapping():
     svc, mt = await world(members=[(10, "민지", "minji"), (11, None, None, True)])
     assert mt.bot.connected and mt.bot.me == "@sodambot"
     got = await mt.participants(CH, limit=50)
-    base = {"last_name": "", "deleted": False, "min": False}
-    assert got == [{"id": 10, "first_name": "민지", "username": "minji", "is_bot": False, **base},
-                   {"id": 11, "first_name": "", "username": "", "is_bot": True, **base}], got
+    base = {"last_name": "", "deleted": False, "min": False, "status": "unknown", "was_online": None, "photo": False,
+            "scam": False, "fake": False, "premium": False}
+    assert got == [{"id": 10, "first_name": "민지", "username": "minji", "is_bot": False, "usernames": ["minji"], **base},
+                   {"id": 11, "first_name": "", "username": "", "is_bot": True, "usernames": [], **base}], got
     c = mt.bot.client
     assert ("entity", PeerChannel(1234567890)) in c.calls and ("page", PeerChannel(1234567890), 0, 50) in c.calls
     assert 424242 not in [m["id"] for m in got], "users 에 섞여 온 초대한 사람은 참가자가 아님"

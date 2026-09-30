@@ -17,7 +17,7 @@ class FakeClient:
     made: list = []
 
     def __init__(self, session, api_id, api_hash, *, bot_id=999, authorized=None, members=(), views=None,
-                 connect_error=None, sign_in_error=None, is_user=None):
+                 connect_error=None, sign_in_error=None, is_user=None, extra=None, full=None, unknown=()):
         self.session_in, self.api = session, (api_id, api_hash)
         self.authorized = bool(session) if authorized is None else authorized
         self.bot_id = bot_id
@@ -30,6 +30,10 @@ class FakeClient:
         self.calls: list = []
         self.raises: list = []
         self.cached_entities: set = set()
+        # 멤버 정리·프로필 테스트용 (인스턴스마다 — 테스트 파일끼리 섞이지 않게)
+        self.extra = dict(extra or {})     # 사람 ID → User 속성 덮어쓰기 (status·photo·deleted·scam·premium·usernames …)
+        self.full = dict(full or {})       # 사람 ID → {"about": …, "common_chats_count": …} (users.getFullUser)
+        self.unknown = set(unknown)        # 이 세션이 access_hash 를 모르는 사람 ID (get_input_entity 가 ValueError)
         self.session = SimpleNamespace(save=lambda: f"S:{self.bot_id}")
         FakeClient.made.append(self)
 
@@ -65,13 +69,20 @@ class FakeClient:
 
     async def get_input_entity(self, peer):
         self.calls.append(("entity", peer))
+        if getattr(peer, "user_id", None) in self.unknown:
+            raise ValueError(f"Could not find the input entity for {peer}")
+        if isinstance(peer, str) and isinstance(m := self.usernames.get(peer.lower()), tuple):
+            from telethon.tl.types import PeerUser
+            return PeerUser(m[0])
         return peer
 
-    @staticmethod
-    def user(m):
-        """members 항목 (id, 이름, 아이디[, 봇[, 성]]) → 텔레그램 User 흉내."""
-        return SimpleNamespace(id=m[0], first_name=m[1], username=m[2], bot=m[3] if len(m) > 3 else False,
-                               last_name=m[4] if len(m) > 4 else None, deleted=False, min=False)
+    def user(self, m):
+        """members 항목 (id, 이름, 아이디[, 봇[, 성]]) → 텔레그램 User 흉내 (+ extra 속성)."""
+        u = SimpleNamespace(id=m[0], first_name=m[1], username=m[2], bot=m[3] if len(m) > 3 else False,
+                            last_name=m[4] if len(m) > 4 else None, deleted=False, min=False)
+        for k, v in getattr(self, "extra", {}).get(m[0], {}).items():
+            setattr(u, k, v)
+        return u
 
     async def iter_participants(self, entity, limit=None):   # 기본 그룹 (getFullChat)
         self.calls.append(("participants", entity, limit))
@@ -104,6 +115,18 @@ class FakeClient:
             if m == "channel":
                 return SimpleNamespace(peer=PeerChannel(5), users=[self.user((5, "관련 없는 사람", "x"))], chats=[])
             return SimpleNamespace(peer=PeerUser(m[0]), users=[self.user(m)], chats=[])
+        if kind == "GetFullUserRequest":
+            uid = getattr(req.id, "user_id", None) or getattr(req.id, "id", None)
+            self.calls.append(("full", uid))
+            self._maybe_raise()
+            info = self.full.get(uid)
+            m = next((m for m in self.members if m[0] == uid), None)
+            if info is None or m is None:
+                from telethon.errors import UserIdInvalidError
+                raise UserIdInvalidError(req)
+            return SimpleNamespace(full_user=SimpleNamespace(id=uid, about=info.get("about"),
+                                                             common_chats_count=info.get("common_chats_count", 0)),
+                                   users=[self.user(m)], chats=[])
         self.calls.append(("call", kind, list(req.id), req.increment))
         self._maybe_raise()
         return SimpleNamespace(views=[SimpleNamespace(views=self.view_counts.get(i)) for i in req.id])

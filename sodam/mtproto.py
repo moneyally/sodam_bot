@@ -40,6 +40,9 @@ RESOLVE_PER_HOUR = 60       # contacts.resolveUsername 시간당 상한 (조회�
 RATE_KEY = "mtproto_rate"      # chat_state(0, …): FloodWait 끝 시각·지난 1시간 호출 시각
 NOT_FOUND_TTL = 86400       # 없는 @아이디는 하루 다시 안 물어봄
 RESTART_GAP = 30            # [🔄 다시 연결] 연타 방지 (봇 로그인 반복은 FloodWait 을 부름)
+FULL_TTL = 3600             # users.getFullUser 결과 캐시 (한 사람 프로필 — 명단 전체엔 안 씀)
+FULL_GAP = 60               # 같은 사람은 1분에 1번만 실제로 물어봄 (실패·없음 포함)
+FULL_MAX = 5000             # 캐시 사람 수 상한
 _sleep = asyncio.sleep      # 테스트가 바꿔 끼움
 
 dbm.register_schema("""
@@ -97,9 +100,41 @@ def make_client(session: str, api_id: int, api_hash: str):
                           flood_sleep_threshold=0, device_model="sodam-helper", connection_retries=2)
 
 
+# 접속 상태 (User.status). 정확 = online·offline(was_online) · 대략 = 상대가 '마지막 접속'을 숨김 · 모름 = Empty/없음
+# (Empty 는 '아주 오래전'일 수도, '봇이라 못 봄'일 수도 있음 — 구분 불가라 '오래전'으로 치지 않는다).
+STATUS_KIND = {"UserStatusOnline": "online", "UserStatusOffline": "offline", "UserStatusRecently": "recently",
+               "UserStatusLastWeek": "last_week", "UserStatusLastMonth": "last_month"}
+EXACT, ROUGH = ("online", "offline"), ("recently", "last_week", "last_month")
+
+
+def _status(st) -> tuple[str, int | None]:
+    """(종류, 마지막 접속 epoch). 종류 = online·offline·recently·last_week·last_month·unknown."""
+    kind = STATUS_KIND.get(type(st).__name__, "unknown") if st is not None else "unknown"
+    was = None
+    if kind == "offline":
+        w = getattr(st, "was_online", None)
+        try:
+            was = int(w.timestamp()) if hasattr(w, "timestamp") else int(w) if w else None
+        except (TypeError, ValueError, OverflowError):
+            was = None
+        if not was:
+            kind = "unknown"
+    return kind, was
+
+
 def _user(u) -> dict:
+    """참가자 한 명. 예전 키(id·이름·username·is_bot·deleted·min)는 그대로, 뒤에 더한 키만 늘어남 (namehist 등 호출자 그대로)."""
+    kind, was = _status(getattr(u, "status", None))
+    photo = getattr(u, "photo", None)
+    names = [x.username for x in (getattr(u, "usernames", None) or ()) if getattr(x, "active", True) and x.username]
+    if u.username and u.username not in names:
+        names.insert(0, u.username)
     return {"id": u.id, "first_name": u.first_name or "", "last_name": u.last_name or "", "username": u.username or "",
-            "is_bot": bool(u.bot), "deleted": bool(getattr(u, "deleted", False)), "min": bool(getattr(u, "min", False))}
+            "is_bot": bool(u.bot), "deleted": bool(getattr(u, "deleted", False)), "min": bool(getattr(u, "min", False)),
+            "status": kind, "was_online": was,
+            "photo": photo is not None and type(photo).__name__ != "UserProfilePhotoEmpty",
+            "scam": bool(getattr(u, "scam", False)), "fake": bool(getattr(u, "fake", False)),
+            "premium": bool(getattr(u, "premium", False)), "usernames": names}
 
 
 def _flood_seconds(e: BaseException) -> int | None:
@@ -146,6 +181,8 @@ class MTProto:
         self.call_log: deque[float] = deque()                        # ① 요청 시각 (시간당 상한)
         self.resolve_log: deque[float] = deque(maxlen=RESOLVE_PER_HOUR)
         self._not_found: dict[str, float] = {}
+        self._full: dict[int, tuple[float, dict]] = {}   # 사람 → (받은 시각, getFullUser 요약)
+        self._full_try: dict[int, float] = {}             # 사람 → 마지막으로 물어본 시각
 
     @property
     def enabled(self) -> bool:
@@ -310,7 +347,8 @@ class MTProto:
         return self.bot.client is not None and time.time() >= self.bot.flood_until
 
     async def participants(self, chat_id: int, limit: int = 10000) -> list[dict] | None:
-        """[{id, first_name, last_name, username, is_bot, deleted, min}]. 슈퍼그룹·채널은 channels.getParticipants
+        """[{id, first_name, last_name, username, is_bot, deleted, min, status, was_online, photo, scam, fake, premium, usernames}]
+        (_user). 슈퍼그룹·채널은 channels.getParticipants
         (Recent, 200명씩 — 텔레그램이 Recent 로 주는 건 1만 명까지), 기본 그룹은 messages.getFullChat 1번."""
         peer = to_peer(chat_id)
 
@@ -404,6 +442,53 @@ class MTProto:
             self._not_found[name] = time.time()
             if len(self._not_found) > 5000:
                 self._not_found.clear()
+        return got
+
+    def full_cached(self, user_id: int) -> dict | None:
+        hit = self._full.get(user_id)
+        return hit[1] if hit and time.time() - hit[0] < FULL_TTL else None
+
+    async def full_user(self, user_id: int, username: str = "") -> dict | None:
+        """한 사람 프로필 (users.getFullUser, core.telegram.org: 봇도 부를 수 있음). 명단 전체엔 쓰지 않는다 (사람마다 요청 1번).
+        {"about": 소개글, "common_chats": 공통 방 수, "user": _user(…) 또는 None} · 없는 사람 {} · 못 물어봄 None.
+        결과는 FULL_TTL 캐시, 같은 사람은 FULL_GAP 에 1번만 (실패·없음도). 봇 세션은 그 사람을 본 적(참가자 명단·대화)이 있어야
+        access_hash 를 알아서, 모르면 @아이디(있으면)로 한 번 찾는다."""
+        cached = self.full_cached(user_id)
+        if cached is not None:
+            return cached
+        now = time.time()
+        if now - self._full_try.get(user_id, 0) < FULL_GAP or not self.bot_ready:
+            return None
+        if len(self._full_try) > FULL_MAX:
+            self._full_try.clear()
+        self._full_try[user_id] = now
+
+        async def fetch(client):
+            from telethon.tl.functions.users import GetFullUserRequest
+            from telethon.tl.types import PeerUser
+            try:
+                entity = await client.get_input_entity(PeerUser(user_id))
+            except (ValueError, TypeError):
+                if not username:
+                    return {}
+                self._count_call()
+                try:
+                    entity = await client.get_input_entity(username.lstrip("@"))
+                except (ValueError, TypeError):
+                    return {}
+            self._count_call()
+            res = await client(GetFullUserRequest(entity))
+            fu = getattr(res, "full_user", None)
+            if fu is None or getattr(fu, "id", user_id) != user_id:
+                return {}
+            u = next((x for x in getattr(res, "users", None) or () if x.id == user_id), None)
+            return {"about": getattr(fu, "about", None) or "", "common_chats": int(getattr(fu, "common_chats_count", 0) or 0),
+                    "user": _user(u) if u is not None else None}
+        got = await self._run(self.bot, fetch)
+        if got:
+            if len(self._full) > FULL_MAX:
+                self._full.clear()
+            self._full[user_id] = (time.time(), got)
         return got
 
     # ── ② 사용자: 조회수 ──────────────────────────────────────
