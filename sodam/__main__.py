@@ -24,7 +24,7 @@ from .llm import LLM
 from .moderation import Moderator
 from .mtproto import MTProto
 from .permissions import Permissions
-from . import casino, namehist, persist
+from . import casino, cleanup, namehist, persist
 from .ratelimit import ChatRateLimiter
 from .services import Services
 from .sports import Sports
@@ -191,6 +191,10 @@ def build_app(cfg: Config, db: DB) -> Application:
             await casino.startup(svc)       # kill -9·컨테이너 회수로 정산 못 한 베팅 환불 (폴링 시작 전)
         # 재시작 전 상태 복구: 메뉴 입력·예약공지 마법사·기억 정리 예약, 끝내지 못한 게임 방에 안내 (sodam/persist.py)
         await persist.restore(svc, app.bot)
+        try:   # 🧹 멤버 정리: 재시작 전에 돌던 작업을 남은 사람부터 이어서 (sodam/cleanup.py, 딜러 봇은 안 함)
+            await cleanup.resume_all(svc, app.bot)
+        except Exception:
+            logging.exception("멤버 정리 이어하기 실패")
         code = await svc.perms.prepare_claim_code()
         if code:
             # 서버 화면(터미널)을 볼 수 있는 사람 = 서버 주인만 알 수 있는 1회용 코드

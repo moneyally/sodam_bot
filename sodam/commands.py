@@ -459,6 +459,155 @@ async def c_members(ctx: CmdCtx) -> None:
                                   "👥 열기", url=f"https://t.me/{ctx.bot.username}?start=cfg_{ctx.chat_id}")]]), seconds=60)
 
 
+async def _to_dm(ctx: CmdCtx, text: str, kb=None, what: str = "결과") -> bool:
+    """관리자 1:1 로 보내고, 방이면 명령을 지우고 '1:1 확인' 만 잠깐 (방엔 명단·프로필을 안 뿌림)."""
+    try:
+        await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML", reply_markup=kb)
+    except TelegramError:
+        if ctx.chat_id < 0:
+            await _private_notice(ctx, "관리자님, 먼저 소담과 1:1 대화를 시작해주세요.",
+                                  InlineKeyboardMarkup([[InlineKeyboardButton(
+                                      "▶️ 1:1 열기", url=f"https://t.me/{ctx.bot.username}?start=cfg_{ctx.chat_id}")]]),
+                                  seconds=60)
+        return False
+    if ctx.chat_id < 0:
+        await _private_notice(ctx, f"🔒 관리자님, 1:1 채팅에서 {what}를 확인해주세요.")
+    return True
+
+
+async def _room_arg(ctx: CmdCtx, words: list[str]) -> tuple[int | None, str]:
+    """방에선 그 방. 오너 1:1 에선 남은 말 = 방 이름·ID (봇이 있는 방 하나로 맞을 때만)."""
+    if ctx.chat_id < 0:
+        return ctx.chat_id, ""
+    q = " ".join(words).strip()
+    if not q:
+        return None, "1:1 에선 방 이름이나 방 ID 를 붙여주세요. 예: <code>.멤버정리 세컨드</code>"
+    from .tools import _norm_title
+    rows = await ctx.svc.db._all("SELECT chat_id, title FROM chats WHERE chat_id < 0 ORDER BY title")
+    qn = _norm_title(q)
+    hit = ([r for r in rows if str(r["chat_id"]) == q] or [r for r in rows if qn and _norm_title(r["title"]) == qn]
+           or [r for r in rows if qn and qn in _norm_title(r["title"])])
+    if len(hit) != 1:
+        names = ", ".join(f"{esc((r['title'] or '')[:20])}(<code>{r['chat_id']}</code>)" for r in hit[:8])
+        return None, (f"'{esc(q[:30])}' 방이 여러 개예요: {names}" if hit else f"'{esc(q[:30])}' 방을 못 찾았어요.")
+    return hit[0]["chat_id"], ""
+
+
+async def _who(ctx: CmdCtx, chat_id: int | None, word: str) -> tuple[int, str] | str:
+    """답장 · 숫자 ID · @아이디(이 방 멤버 기록 → 모르면 MTProto 조회) · 이름 → (ID, @아이디 힌트)."""
+    reply = ctx.msg.reply_to_message
+    if ctx.chat_id < 0 and reply and reply.from_user:
+        return reply.from_user.id, reply.from_user.username or ""
+    if not word:
+        return "대상 메시지에 답장하거나 @아이디·숫자 ID 를 적어주세요."
+    if (uid := to_int(word)) is not None and uid > 0:
+        return uid, ""
+    rows = await ctx.svc.db.find_members(chat_id, word) if chat_id else []
+    if not rows and word.startswith("@"):
+        rows = await ctx.svc.db._all("SELECT user_id, username FROM users WHERE username=? COLLATE NOCASE LIMIT 2",
+                                     (word[1:],))
+    if len(rows) == 1:
+        return rows[0]["user_id"], rows[0]["username"] or ""
+    if len(rows) > 1:
+        return "같은 이름이 여러 명이에요. @아이디나 숫자 ID 로 적어주세요."
+    mt = getattr(ctx.svc, "mtproto", None)
+    if word.startswith("@") and mt is not None:
+        got = await mt.resolve_username(word)
+        if got:
+            return got["id"], got["username"]
+    return f"'{esc(word[:32])}' 를 못 찾았어요. 답장이나 숫자 ID 로 해주세요."
+
+
+async def c_profile(ctx: CmdCtx) -> None:
+    """👤 한 사람 프로필 (텔레그램 정보 + 이 방 소담 기록). 결과는 관리자 1:1 로만 (sodam/profile.py)."""
+    from . import profile
+    reply_target = ctx.chat_id < 0 and ctx.msg.reply_to_message and ctx.msg.reply_to_message.from_user
+    word = "" if reply_target else (ctx.args[0] if ctx.args else "")
+    rest = ctx.args if reply_target else ctx.args[1:]
+    chat_id: int | None = ctx.chat_id
+    if ctx.chat_id > 0:   # 오너 1:1: '.프로필 @user 세컨드' (방 없으면 텔레그램 정보만)
+        chat_id = None
+        if rest:
+            chat_id, err = await _room_arg(ctx, rest)
+            if chat_id is None:
+                await ctx.reply(err)
+                return
+    who = await _who(ctx, chat_id, word)
+    if isinstance(who, str):
+        await (_private_notice(ctx, who) if ctx.chat_id < 0 else ctx.reply(who))
+        return
+    if not profile.allow(ctx.user.id):
+        await (_private_notice(ctx, "프로필은 1분에 10번까지예요.") if ctx.chat_id < 0 else ctx.reply("프로필은 1분에 10번까지예요."))
+        return
+    uid, uname = who
+    p = await profile.gather(ctx.svc, ctx.bot, chat_id, uid, uname)
+    title = ""
+    if chat_id:
+        row = await ctx.svc.db._one("SELECT title FROM chats WHERE chat_id=?", (chat_id,))
+        title = (row["title"] if row else "") or ""
+    await _to_dm(ctx, profile.card_html(uid, p, ctx.svc.cfg.tz, title), what="프로필")
+
+
+CLEANUP_SUB = {"탈퇴": "d", "봇": "b", "잠수": "i", "모름": "u", "접속모름": "u", "가라": "f"}
+
+
+async def c_cleanup(ctx: CmdCtx) -> None:
+    """🧹 멤버 정리 (sodam/cleanup.py · panels/cleanup.py). 방: 관리자 + '사용자 차단' 권한. 오너 1:1: 방 이름·ID 를 붙여 다른 방."""
+    from . import cleanup
+    from .panels import cleanup as panel
+    args = list(ctx.args)
+    sub = args.pop(0) if args and (args[0] in CLEANUP_SUB or args[0] in ("중지", "제외", "제외해제", "제외목록")) else ""
+    days = None
+    if sub == "잠수":
+        days = to_int(args[0]) if args else None
+        if days is not None:
+            args.pop(0)
+        days = days or 30
+        if not 1 <= days <= cleanup.IDLE_MAX:
+            await ctx.reply(f"잠수 기준은 1~{cleanup.IDLE_MAX}일이에요.")
+            return
+    target = ""
+    if sub in ("제외", "제외해제") and not (ctx.chat_id < 0 and ctx.msg.reply_to_message):
+        target = args.pop(0) if args else ""
+    chat_id, err = await _room_arg(ctx, args)
+    if chat_id is None:
+        await ctx.reply(err)
+        return
+    if ctx.chat_id > 0 and not await may(ctx.svc.perms, ctx.bot, chat_id, ctx.user.id, "restrict"):
+        await ctx.reply(no_right_text("restrict"))
+        return
+    svc, bot = ctx.svc, ctx.bot
+    if sub == "중지":
+        ok = await cleanup.stop_job(svc, chat_id, ctx.user.id)
+        msg = "⏸ 멤버 정리를 멈출게요 (지금 사람까지 하고 멈춰요)." if ok else "진행 중인 멤버 정리가 없어요."
+        await (_private_notice(ctx, msg) if ctx.chat_id < 0 else ctx.reply(msg))
+        return
+    if sub in ("제외", "제외해제"):
+        who = await _who(ctx, chat_id, target)
+        if isinstance(who, str):
+            await (_private_notice(ctx, who) if ctx.chat_id < 0 else ctx.reply(who))
+            return
+        changed = await cleanup.exclude(svc.db, chat_id, who[0], ctx.user.id, sub == "제외")
+        msg = (f"🚫 <code>{who[0]}</code> 멤버 정리 제외 명단에 {'넣었어요' if sub == '제외' else '뺐어요'}." if changed
+               else f"<code>{who[0]}</code> 은(는) {'이미 제외 명단에 있어요' if sub == '제외' else '제외 명단에 없어요'}.")
+        await (_private_notice(ctx, msg) if ctx.chat_id < 0 else ctx.reply(msg))
+        return
+    if sub == "제외목록":
+        screen = await panel.s_excl(menu.PanelCtx(svc, bot, ctx.user.id, chat_id, []))
+        await _to_dm(ctx, screen.text or "", screen.kb, what="제외 목록")
+        return
+    s, err = await cleanup.scan(svc, bot, chat_id, ctx.user.id)
+    if s is None:
+        await (_private_notice(ctx, esc(err), seconds=30) if ctx.chat_id < 0 else ctx.reply(esc(err)))
+        return
+    if sub:
+        sel = cleanup.parse_sel(CLEANUP_SUB[sub] + (str(days) if sub == "잠수" else ""))
+        screen = await panel.preview(svc, bot, chat_id, sel)
+    else:
+        screen = await panel.summary(svc, bot, chat_id, "(10분 안에 스캔한 결과 — 방마다 10분에 1번)" if s.get("reused") else "")
+    await _to_dm(ctx, screen.text or "", screen.kb, what="멤버 정리")
+
+
 async def c_settings(ctx: CmdCtx) -> None:
     """그룹헬프처럼 버튼 설정 패널을 관리자 1:1 로 보낸다. '.설정 전체' 는 글 목록."""
     if not (ctx.args and ctx.args[0] in ("전체", "all", "목록")):
@@ -1137,6 +1286,13 @@ COMMANDS: list[Cmd] = [
         help="@아이디 변경만", group="이름 기록", dm_ok=True),
     Cmd(("내기록", "myhistory"), c_myhistory, help="내 이름·아이디 기록", group="이름 기록", dm_ok=True),
     Cmd(("멤버", "멤버목록", "members"), c_members, Role.ADMIN, help="방 멤버 목록 (1:1 로)", group="관리자"),
+    Cmd(("프로필", "profile"), c_profile, Role.ADMIN, usage="@user|답장|ID",
+        help="한 사람 프로필: 소개글·접속 상태·계정 생성 추정 + 이 방 기록 (1:1 로, 오너는 1:1 에서 뒤에 방 이름)",
+        group="관리자", dm_ok=True),
+    Cmd(("멤버정리", "cleanup"), c_cleanup, Role.ADMIN,
+        usage="[탈퇴|봇|잠수 N|모름|가라|중지|제외 @user|제외해제 @user|제외목록]",
+        help="탈퇴 계정·봇·잠수·가라 의심 멤버 스캔 → 1:1 미리보기·확인 카드 → 천천히 내보내기 (오너는 1:1 에서 뒤에 방 이름)",
+        group="관리자", right="restrict", dm_ok=True),
     Cmd(("이름알림", "namealert"), c_name_notice, Role.ADMIN, usage="[켜기|끄기]", help="이름 변경 알림 설정",
         group="관리자"),
     Cmd(("랭킹", "rank"), c_rank, usage="[오늘|주간|월간|전체]", help="채팅 랭킹", group="집계"),
