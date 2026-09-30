@@ -199,9 +199,11 @@ class LLM:
             return {"reasoning_effort": effort}
         # 도구 + gpt-5.x 는 .env 값과 무관하게 늘 'none' (빈 값이면 모델 기본값 medium 이 적용돼 400 — gpt-5.4-mini 기본 medium,
         # 2026-10-01 라우팅 리뷰: 작은 모델을 도구와 함께 chat 으로 부르는 첫 경로라 .env 가 비면 light 가 전부 실패할 뻔)
+        if self.cfg.reasoning_effort.strip().lower() == "off":   # .env off = 아예 안 보냄 (추론 값을 안 받는 모델용 비상 탈출구)
+            return {}
         if has_tools and model.startswith("gpt-5"):
             return {"reasoning_effort": "none"}
-        if not self.cfg.reasoning_effort:  # .env 에서 비우면 안 보냄
+        if not self.cfg.reasoning_effort:  # .env 에서 비우면 (도구 없는 호출엔) 안 보냄
             return {}
         # gpt-5.x 는 chat.completions 에서 도구와 추론을 같이 못 씀 → 도구 호출 땐 'none' 이어야 함
         # (OpenAI 400: "Function tools with reasoning_effort are not supported ... set reasoning_effort to 'none'")
