@@ -56,8 +56,8 @@ FR_LINES = 15
 BLOCKED_KEYS = frozenset({"gt_setter", "greet_media_id", "greet_media_type", "greet_buttons", "farewell_buttons"})
 BLOCKED_SUFFIX = ("_id", "_setter", "_buttons", "_media_type")
 # 예산·AI 사용량 키: 줄이기만 (말 한마디로 비용이 늘지 않게 — 늘리려면 버튼 화면)
-LOWER_ONLY = frozenset({"ai_room_daily_tokens", "ai_room_budget_pct", "web_search_daily", "image_daily", "scam_daily_ai",
-                        "ai_chime_daily"})
+# (이미지·웹검색 하루 한도는 settings.OWNER_CAP — 방 관리자는 못 올리니 오너가 여기서 확인 카드로 올림, 2026-09-30)
+LOWER_ONLY = frozenset({"ai_room_daily_tokens", "ai_room_budget_pct", "scam_daily_ai", "ai_chime_daily"})
 RELEASE = {"unmute": "뮤트 해제", "unban": "밴 해제"}
 FR_TARGET = {"doing": "🛠 진행 중", "done": "✅ 완료", "wont": "🙅 안 함"}
 FR_FILTER = {"open": featreq.OPEN, "done": ("done",), "wont": ("wont",), "all": featreq.OPEN + ("done", "wont")}

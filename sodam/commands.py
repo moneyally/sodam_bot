@@ -14,7 +14,7 @@ from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .security import normalize_domain
-from .settings import DEFAULTS, LABELS, coerce, render
+from .settings import DEFAULTS, LABELS, coerce, over_cap, render
 from .styles import STYLES, resolve_style, style_list
 from .games import GAME_LIST
 from .ai_settings import ROOM_TOKENS_MAX
@@ -496,6 +496,9 @@ async def c_set(ctx: CmdCtx) -> None:
         value = coerce(key, raw)
     except ValueError as e:
         await ctx.reply(f"❌ {esc(str(e))}")
+        return
+    if ctx.role < Role.OWNER and (why := over_cap(key, value)):
+        await ctx.reply(f"❌ {esc(why)}")
         return
     await ctx.svc.db.set_setting(ctx.chat_id, key, value)
     await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, None, "setting", f"{key}={value}")

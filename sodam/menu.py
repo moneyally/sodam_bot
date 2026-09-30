@@ -27,7 +27,7 @@ from telegram.error import BadRequest, TelegramError
 from .db import register_schema
 from .security import normalize_domain
 from .services import MenuToken, PendingInput
-from .settings import LABELS, coerce, render
+from .settings import LABELS, coerce, over_cap, render
 from .styles import STYLES
 from .subscription import STATE_LABEL, chat_title, panel as sub_panel
 from .util import esc, human_minutes, iyeyo, josa
@@ -470,6 +470,8 @@ def style_menu(chat_id: int, current: str) -> InlineKeyboardMarkup:
 async def _set(c: PanelCtx, key: str, value) -> bool:
     """바뀐 경우에만 저장·기록 (같은 버튼 재전송은 기록도 안 남김)."""
     if (await c.svc.db.get_settings(c.cid))[key] == value:
+        return False
+    if over_cap(key, value) and c.uid not in await c.svc.perms.owners():   # 비용 한도는 오너만 올림
         return False
     await c.svc.db.set_setting(c.cid, key, value)
     await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"{key}={value}")

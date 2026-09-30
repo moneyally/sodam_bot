@@ -14,7 +14,7 @@ from telegram.error import TelegramError
 from .. import menu
 from ..menu import TG_ADMIN, B, HubItem, PanelCtx, Route, Screen
 from ..services import PendingInput
-from ..settings import LABELS, RANGES, coerce
+from ..settings import LABELS, RANGES, coerce, over_cap
 from ..util import display_name, esc, josa, to_int
 
 MAX_RULES = 2000
@@ -64,7 +64,7 @@ async def _input_rules(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 NUM_GROUPS: dict[str, tuple[str, list[str]]] = {
     "sec": ("🛡️ 보안", ["flood_count", "flood_seconds", "flood_mute_minutes", "dup_limit", "newbie_link_hours"]),
     "wl": ("⚠️ 경고 단계", ["warn_mute_at", "warn_mute_minutes", "warn_ban_at"]),
-    "ai": ("🤖 AI", ["reply_max_chars", "user_rate_per_min", "room_rate_per_min", "web_search_daily"]),
+    "ai": ("🤖 AI", ["reply_max_chars", "user_rate_per_min", "room_rate_per_min", "web_search_daily", "image_daily"]),
 }
 GROUP_OF = {k: g for g, (_, keys) in NUM_GROUPS.items() for k in keys}
 NUM_KEYS = [k for k in GROUP_OF if k in RANGES]   # 범위가 정해진 정수 설정만
@@ -120,6 +120,8 @@ async def _input_num(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         value = coerce(key, raw)
     except ValueError as e:
         return False, f"❌ {esc(str(e))}"
+    if (why := over_cap(key, value)) and c.uid not in await c.svc.perms.owners():
+        return False, f"❌ {esc(why)}"
     await menu._set(c, key, value)
     return True, f"✅ {esc(LABELS[key])}: {value}{_unit(key)}"
 

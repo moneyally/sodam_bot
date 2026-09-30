@@ -29,7 +29,7 @@ from .vision import Attached
 from .permissions import Role, may
 from .services import PendingAction, Services
 from .prompt import reply_mark
-from .settings import DEFAULTS, LABELS, RANGES, coerce, render
+from .settings import DEFAULTS, LABELS, RANGES, coerce, over_cap, render
 from .styles import STYLES, resolve_style
 from .util import display_name, esc, fmt_time, human_minutes, mention, period_range
 
@@ -875,6 +875,8 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
         parsed = coerce(key, value)
     except ValueError as e:
         return f"실패: {e}"
+    if ctx.role < Role.OWNER and (why := over_cap(key, parsed)):
+        return f"안 바꿈: {why} 그렇게 짧게 안내할 것."
     await ctx.svc.db.set_setting(ctx.chat_id, key, parsed)
     await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "setting", f"{key}={parsed}")
     out = f"설정 변경: {LABELS.get(key, key)} = {render(key, parsed)}"
