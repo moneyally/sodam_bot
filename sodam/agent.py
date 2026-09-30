@@ -197,7 +197,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     light_model = getattr(svc.cfg, "light_model", "") or ""
     lane = route.Route("heavy", "off")
     if light_model:   # 🧭 하이브리드: 코드 판정(돈 0) → light 면 작은 모델, 쓰기 도구·ask_senior 면 heavy 로 한 번 올려 보냄
-        lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, bool(images), ctx.settings),
+        media = bool(images) or bool(reply_to and route.MEDIA_MARK.search(reply_to))   # 사진·영상에 답장 = 그걸로 뭘 하려는 것
+        lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
     ctx_tools = _ToolSet(schemas, allowed)
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)

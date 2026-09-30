@@ -26,7 +26,10 @@ DEFAULT_MODE = "hybrid"
 
 # light 에서 실행해도 되는 도구 = 이 서버 데이터 읽기(tools.READ_ONLY, 실행 때 합침) + 바깥 조회만.
 # 이 밖의 도구(제재·설정·전송·그림·영상·게임·기억 저장…)를 부르면 heavy 로 올려 보냄.
-LIGHT_EXTRA = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user"})
+LIGHT_EXTRA = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user",
+                         # 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건)
+                         "greet_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
+                         "feature_request", "tag_alerts", "my_ids", "point_game"})
 ESCALATE_TOOL = "ask_senior"
 ESCALATE_SCHEMA = {"type": "function", "function": {
     "name": ESCALATE_TOOL,
@@ -41,11 +44,13 @@ _DO = re.compile(
     r"설정|바꿔|바꾸|변경|켜\s?(줘|주|라|기)|꺼\s?(줘|주|라|기)|끄\s?(고|기)|밴|뮤트|경고|강퇴|추방|내보내|차단|해제|"
     r"공지|고정|예약|알람|알림\s?(설정|걸|켜|꺼|규칙)|규칙\s?(저장|추가|바꿔|정해)|삭제|지워|청소|등록|저장해|"
     r"그려|그림|이미지|스티커|움프|프사|영상|동영상|보내\s?(줘|주|라)|올려\s?(줘|주|라)|초대|음성방|통화|들어와|"
-    r"잠금|잠가|캡차|말투\s?(바꿔|설정)|추가해|추가\s?해|빼\s?(줘|주)|지급|포인트\s?(줘|주)|구독|결제|연장|번역")
+    r"잠금|잠가|캡차|말투|추가해|추가\s?해|빼\s?(줘|주)|지급|포인트\s?(줘|주)|구독|결제|연장|번역|"
+    r"벤|처리해|없애|풀어|데려와|안내|전화|신청곡|틀어|play|완장|생성|만들어\s?(줘|주|봐)|해\s?달래|수정해|다시\s?(해|만들|그려)")
 # 분석·판단 (agent._WHY 와 같은 뜻 + 계획)
 _THINK = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)|계획|전략|추천해|정리해\s?줘|요약")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각")
 LONG_CHARS = 140
+MEDIA_MARK = re.compile(r"\[(사진|영상|이미지|GIF|동그라미|스티커|움직이는|파일)")
 _LINK = re.compile(r"https?://|t\.me/|www\.", re.I)                            # 이보다 긴 요청 = 설명이 많은 일일 때가 많음
 
 
@@ -64,6 +69,7 @@ class Req:
 Signal = tuple[str, Callable[[Req], bool], str]
 SIGNALS: list[Signal] = [
     ("media", lambda r: r.has_media, "heavy"),
+    ("choice", lambda r: r.request.startswith("(선택"), "heavy"),              # 선택 버튼으로 이어진 일 (askchoice)
     ("dm_manage", lambda r: r.in_dm and r.role >= Role.ADMIN, "heavy"),       # 1:1 관리자·오너 = 운영 일
     ("do", lambda r: bool(_DO.search(r.request)), "heavy"),
     ("think", lambda r: bool(_THINK.search(r.request)), "heavy"),
