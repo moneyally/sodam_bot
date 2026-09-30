@@ -1150,8 +1150,13 @@ def register_tool(tool: Tool, *, read_only: bool = False) -> None:
 
 def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
     """이 사람·이 대화에서 쓸 수 있는 도구 = AI 가 할 수 있는 일의 전부 (안 되는 도구는 아예 안 보여 '된다'고 못 함)."""
-    return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))
-            and (t.enabled is None or t.enabled())
+    return [t for t in offered(role, in_dm) if not t.setting or settings.get(t.setting)]
+
+
+def offered(role: Role, in_dm: bool = False) -> list[Tool]:
+    """역할·대화 종류로만 정한 도구 목록 (방 설정과 무관 → 모델에 싣는 목록이 방마다 같아 프롬프트 캐시가 안 깨짐).
+    방 설정으로 꺼진 도구는 목록엔 남기고 호출만 allowed_tools 로 막는다 (OpenAI 캐싱 가이드: 도구 목록은 요청마다 같게)."""
+    return [t for t in TOOLS if role >= t.min_role and (t.enabled is None or t.enabled())
             and not (t.where == "room" and in_dm) and not (t.where in ("dm", "owner_dm") and not in_dm)
             and not (t.room_role is not None and not in_dm and role < t.room_role)]
 

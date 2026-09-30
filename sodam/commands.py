@@ -1406,7 +1406,7 @@ COMMANDS: list[Cmd] = [
         help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
     Cmd(("백업", "backup"), c_backup, Role.OWNER, usage="[목록]", help="DB 지금 백업 / 백업 목록", group="오너", dm_ok=True),
-    Cmd(("AI모델", "ai모델", "airoute"), c_route, Role.OWNER, usage="[나눠|절약|최고] [방ID|전체]",
+    Cmd(("AI모델", "airoute"), c_route, Role.OWNER, usage="[나눠|절약|최고] [방ID|전체]",
         help="방마다 AI 모델 길 (작은 모델로 비용 절약)", group="오너", dm_ok=True),
     Cmd(("구독부여", "grant"), c_grant, Role.OWNER, usage="방ID 일수", help="결제 없이 이용 기간 부여", group="오너", dm_ok=True),
 ]

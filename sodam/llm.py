@@ -7,7 +7,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from openai import AsyncOpenAI, OpenAIError
+from openai import AsyncOpenAI, BadRequestError, OpenAIError
 
 from . import agentlog, costs
 from .ai_settings import ROOM_TOKENS_MAX
@@ -71,6 +71,14 @@ class AIUnavailable(OpenAIError):
     """OPENAI_API_KEY 가 없을 때. OpenAIError 를 상속해서 기존 오류 처리(게임·인사 등)가 그대로 받는다."""
 
 
+def _narrow(tools: list[dict] | None, allowed: list[str] | None) -> list[dict] | None:
+    """allowed 이름만 남긴 도구 목록 (allowed_tools 대신 쓰는 예전 방식 — 캐시는 덜 맞지만 늘 됨)."""
+    if tools is None or allowed is None:
+        return tools
+    keep = set(allowed)
+    return [t for t in tools if t["function"]["name"] in keep] or None
+
+
 class LLM:
     def __init__(self, cfg: Config, db: DB):
         self.cfg = cfg
@@ -81,6 +89,7 @@ class LLM:
         self.usd_budget = _env_float("DAILY_USD_BUDGET", costs.DEFAULT_USD_BUDGET)
         # 토큰 예산은 .env 에 DAILY_TOKEN_BUDGET 을 직접 적은 경우만 (예전 설정 그대로 지키기). 없으면 0 = 안 봄
         self.token_budget = cfg.daily_token_budget if os.getenv("DAILY_TOKEN_BUDGET", "").strip() else 0
+        self.allowed_off = False   # allowed_tools 를 API 가 거절하면 True → 도구 목록 자체를 줄이는 예전 방식
 
     def _today(self) -> str:
         return datetime.now(self.cfg.tz).strftime("%Y-%m-%d")
@@ -174,9 +183,10 @@ class LLM:
         day = self._today()
         return {k: await self.db.counter(day, 0, k) for k in ("tokens", "prompt_tokens", "cached_tokens")}
 
-    def _cache(self, purpose: str) -> dict[str, Any]:
-        """프롬프트 캐시: 같은 앞부분(시스템 규칙+도구)을 쓰는 요청끼리 같은 캐시 키로 묶는다."""
-        kw: dict[str, Any] = {"prompt_cache_key": f"sodam:{purpose}"}
+    def _cache(self, purpose: str, cache_key: str | None = None) -> dict[str, Any]:
+        """프롬프트 캐시: 같은 앞부분(시스템 규칙+도구)을 쓰는 요청끼리 같은 캐시 키로 묶는다.
+        cache_key 를 주면 그걸로 (에이전트: 도구 목록 지문 — 기록용 purpose 와 따로)."""
+        kw: dict[str, Any] = {"prompt_cache_key": f"sodam:{cache_key or purpose}"}
         if self.cfg.cache_retention:
             kw["prompt_cache_retention"] = self.cfg.cache_retention
         return kw
@@ -198,32 +208,54 @@ class LLM:
     async def chat(self, messages: list[dict], *, tools: list[dict] | None = None,
                    tool_choice: str = "auto", model: str | None = None,
                    max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc",
-                   chat_id: int | None = None, effort: str | None = None):
+                   chat_id: int | None = None, effort: str | None = None,
+                   allowed: list[str] | None = None, cache_key: str | None = None):
         """chat.completions 호출. 응답 message 객체를 돌려준다.
+        allowed: tools 중 이번에 부를 수 있는 이름만 (None = 전부) — 목록은 그대로 싣고 호출만 좁힘(캐시 유지).
         chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
         await self._check_budget(chat_id)
         model = model or self.cfg.model
+        if allowed is not None and self.allowed_off and tools:   # allowed_tools 를 거절당한 뒤: 예전처럼 목록 자체를 줄임
+            tools, allowed = _narrow(tools, allowed), None
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_completion_tokens": max_tokens,
             **self._extra(model, has_tools=bool(tools), effort=effort),
-            **self._cache(purpose),
+            **self._cache(purpose, cache_key),
         }
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+            if tool_choice == "auto" and allowed == []:
+                kwargs["tool_choice"] = "none"
+            elif tool_choice == "auto" and allowed is not None:
+                kwargs["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {
+                    "mode": "auto", "tools": [{"type": "function", "function": {"name": n}} for n in allowed]}}
             if tool_choice != "none":
                 kwargs["parallel_tool_calls"] = False
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        resp = await self.client.chat.completions.create(**kwargs)
+        try:
+            resp = await self.client.chat.completions.create(**kwargs)
+        except BadRequestError as e:
+            if not isinstance(kwargs.get("tool_choice"), dict):
+                raise
+            self._allowed_rejected(e)
+            kwargs["tools"], kwargs["tool_choice"] = _narrow(tools, allowed), "auto"
+            resp = await self.client.chat.completions.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
         return resp.choices[0].message
 
+    def _allowed_rejected(self, e: Exception) -> None:
+        """allowed_tools 를 API 가 안 받으면 이 프로세스에선 끄고 예전 방식(목록 줄이기)으로 — AI 답이 멈추면 안 됨."""
+        if not self.allowed_off:
+            log.warning("allowed_tools 거절 → 도구 목록 줄이기로 돌아감: %s", e)
+        self.allowed_off = True
+
     async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
-                    model: str | None = None):
+                    model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
@@ -231,17 +263,32 @@ class LLM:
         text.verbosity=low: 단톡방 답은 짧게 (Codex CLI 와 같은 설정)."""
         await self._check_budget(chat_id)
         model = model or self.cfg.model
+        if allowed is not None and self.allowed_off and tools:
+            tools, allowed = _narrow(tools, allowed), None
         kwargs: dict[str, Any] = {
             "model": model, "input": to_input(messages), "max_output_tokens": max_tokens,
             "reasoning": {"effort": effort}, "store": False, "include": ["reasoning.encrypted_content"],
             "text": {"verbosity": "low"},
-            **self._cache(purpose),
+            **self._cache(purpose, cache_key),
         }
         if tools:
             kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in tools]
             kwargs["tool_choice"] = tool_choice
+            if tool_choice == "auto" and allowed == []:
+                kwargs["tool_choice"] = "none"
+            elif tool_choice == "auto" and allowed is not None:
+                kwargs["tool_choice"] = {"type": "allowed_tools", "mode": "auto",
+                                         "tools": [{"type": "function", "name": n} for n in allowed]}
             kwargs["parallel_tool_calls"] = False
-        resp = await self.client.responses.create(**kwargs)
+        try:
+            resp = await self.client.responses.create(**kwargs)
+        except BadRequestError as e:
+            if not isinstance(kwargs.get("tool_choice"), dict):
+                raise
+            self._allowed_rejected(e)
+            kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in _narrow(tools, allowed)]
+            kwargs["tool_choice"] = "auto"
+            resp = await self.client.responses.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
         calls = [SimpleNamespace(id=o.call_id, type="function", function=SimpleNamespace(name=o.name, arguments=o.arguments))
                  for o in resp.output if o.type == "function_call"]

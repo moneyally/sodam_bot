@@ -12,7 +12,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
 from .security import nonce, wrap
-from .tools import READ_ONLY, ToolCtx, available, execute
+from .tools import READ_ONLY, ToolCtx, available, execute, offered
 from .util import clip_mid
 
 log = logging.getLogger(__name__)
@@ -185,11 +185,13 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
         reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, in_dm=ctx.chat_id > 0,
         instructions=instructions, lessons=room_lessons, comeback=comeback, spicy=spicy, **extras)
-    tools = available(ctx.role, ctx.settings, ctx.chat_id > 0)
+    # 모델에 싣는 목록 = 역할·대화 종류로만 (방 설정과 무관 → 방마다 같아 캐시 유지), 부를 수 있는 건 방 설정까지 본 것만
+    shown = offered(ctx.role, ctx.chat_id > 0)
+    usable = {t.name for t in available(ctx.role, ctx.settings, ctx.chat_id > 0)}
     if mode in ("chime", "morning"):
-        tools = [t for t in tools if t.name in CHIME_TOOLS]
-    schemas = [t.schema() for t in tools]
-    allowed = {t.name for t in tools}
+        shown = [t for t in shown if t.name in CHIME_TOOLS]
+    schemas = [t.schema() for t in shown]
+    allowed = {t.name for t in shown} & usable
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
     think0 = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
     light_model = getattr(svc.cfg, "light_model", "") or ""
@@ -197,11 +199,12 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     if light_model:   # 🧭 하이브리드: 코드 판정(돈 0) → light 면 작은 모델, 쓰기 도구·ask_senior 면 heavy 로 한 번 올려 보냄
         lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, bool(images), ctx.settings),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
+    ctx_tools = _ToolSet(schemas, allowed)
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
     started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     if lane.lane == "light":
         try:
-            return await _attempt(ctx, run, list(base), "light", purpose, schemas, allowed, request, mode, steer,
+            return await _attempt(ctx, run, list(base), "light", purpose, ctx_tools, request, mode, steer,
                                   started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
         except _Escalate as e:
             log.info("🧭 light → heavy (chat=%s, %s)", ctx.chat_id, e.reason)
@@ -211,13 +214,32 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 log.exception("agent log step failed")
             messages = base + [{"role": "user", "content": STEER_NOTE + wrap("request", t, nonce())}
                                for t in (steer.taken if steer is not None else [])]
-            return await _attempt(ctx, run, messages, "heavy", purpose, schemas, allowed, request, mode, steer,
+            return await _attempt(ctx, run, messages, "heavy", purpose, ctx_tools, request, mode, steer,
                                   started, deadline, think=think0, escalated=True)
     if lane.lane == "banter":   # 말싸움 명장면: 큰 모델 말맛, 추론은 필요 없음
-        return await _attempt(ctx, run, base, "banter", purpose, schemas, allowed, request, mode, steer,
+        return await _attempt(ctx, run, base, "banter", purpose, ctx_tools, request, mode, steer,
                               started, deadline)
-    return await _attempt(ctx, run, base, "heavy", purpose, schemas, allowed, request, mode, steer,
+    return await _attempt(ctx, run, base, "heavy", purpose, ctx_tools, request, mode, steer,
                           started, deadline, think=think0)
+
+
+@dataclass
+class _ToolSet:
+    schemas: list
+    allowed: set
+
+    def restrict(self, extra: tuple[str, ...] = ()) -> list[str] | None:
+        """allowed_tools 에 줄 이름 (싣는 목록이 전부 부를 수 있으면 None = 제한 없음)."""
+        names = [s["function"]["name"] for s in self.schemas]
+        if set(names) <= self.allowed:
+            return None
+        return [n for n in names if n in self.allowed] + list(extra)
+
+    def key(self, tag: str) -> str:
+        """캐시 키 = 싣는 도구 이름 지문 (오너·관리자, 방·1:1 이 같은 목록이면 캐시를 같이 씀)."""
+        import hashlib
+        names = ",".join(s["function"]["name"] for s in self.schemas)
+        return "agent:" + hashlib.sha1(names.encode()).hexdigest()[:10] + tag
 
 
 class _Escalate(Exception):
@@ -226,17 +248,20 @@ class _Escalate(Exception):
         self.reason = reason
 
 
-async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, purpose: str, schemas: list,
-                   allowed: set, request: str, mode: str, steer: Steer | None, started: float, deadline: float, *,
+async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, purpose: str, ts: _ToolSet,
+                   request: str, mode: str, steer: Steer | None, started: float, deadline: float, *,
                    model: str | None = None, think: bool = False, escalated: bool = False) -> str:
     """한 길로 끝까지 (도구 라운드 → 마무리 답). lane=light 이면 쓰기 도구·ask_senior 에서 _Escalate (그 라운드 도구는 실행 안 함)."""
     svc = ctx.svc
     light = lane == "light"
     tag = {"light": ":light", "banter": ":banter"}.get(lane, "")
     run.purpose = purpose + (":think" if think else "") + tag + (":escalated" if escalated else "")
-    call_purpose = purpose + tag            # 캐시 키: 길마다 따로 (모델이 다르면 캐시도 따로)
+    call_purpose = purpose + tag            # 기록(counters prompt:·cached:)용 — 캐시 키는 도구 지문(ts.key)
+    schemas, allowed = ts.schemas, ts.allowed
+    restrict = ts.restrict()
     if light:
         schemas = [*schemas, route.ESCALATE_SCHEMA]
+        restrict = ts.restrict((route.ESCALATE_TOOL,))
 
     async def call(tool_choice: str = "auto"):
         nonlocal think
@@ -244,7 +269,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             try:
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
-                                           purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model)
+                                           purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
+                                           allowed=restrict, cache_key=ts.key(":think" + tag))
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
@@ -252,7 +278,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 think = False
                 run.purpose = run.purpose.replace(":think", "")
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
-                                  purpose=call_purpose, chat_id=ctx.chat_id, model=model)
+                                  purpose=call_purpose, chat_id=ctx.chat_id, model=model,
+                                  allowed=restrict, cache_key=ts.key(tag))
 
     def inject() -> None:
         """모델을 부르기 직전: 실행 중 이어 보낸 말을 새 user 메시지로 (nonce 태그 안 데이터, 멤버 글과 같게)."""
@@ -306,8 +333,10 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             **({"items": msg.items} if think else {}),   # 추론 항목을 다음 라운드로 (llm.to_input)
         })
         for c in calls:
-            if c.function.name not in allowed:  # 이번 호출에 보여주지 않은 도구
-                result = "이 도구는 지금 사용할 수 없음."
+            if c.function.name not in allowed:  # 이번 호출에 보여주지 않은 도구 · 방 설정으로 꺼진 도구
+                shown_names = {s["function"]["name"] for s in ts.schemas}
+                result = ("이 방에서는 꺼져 있는 기능이라 사용할 수 없음 (관리자가 설정에서 켜야 함)."
+                          if c.function.name in shown_names else "이 도구는 지금 사용할 수 없음.")
             else:
                 result = await execute(c.function.name, c.function.arguments, ctx)
                 results.append(result)

@@ -217,6 +217,99 @@ async def owner_command_sets_room_mode_admin_cannot():
 
 
 @test
+async def tool_list_is_stable_across_room_settings_for_cache():
+    old = fast_timers()
+    try:
+        keys, tools = [], []
+        for settings in ({}, {"image_daily": 0, "games_enabled": False, "sports_enabled": False}):
+            llm = ScriptedLLM([reply("네")])
+            r = await _room(llm, light="", settings=settings)
+            await r.say(BOSS, "소담아 공지 올려줘")
+            call = llm.of("chat", "agent:admin")[0]
+            keys.append(call["cache_key"])
+            tools.append([t["function"]["name"] for t in call["tools"]])
+            if settings:
+                assert call["allowed"] is not None and "make_image" not in call["allowed"]
+                assert "start_game" not in call["allowed"] and "warn_member" in call["allowed"]
+            else:
+                assert call["allowed"] is None                                   # 전부 부를 수 있으면 제한 없음
+        assert tools[0] == tools[1] and keys[0] == keys[1]                        # 방 설정이 달라도 같은 앞부분·같은 캐시 키
+
+        # 꺼진 도구를 모델이 불러도 실행 안 됨 + '꺼져 있는 기능' 안내
+        llm = ScriptedLLM([tool_call("make_image", {"prompt": "고양이", "mode": "new"}), reply("이 방은 그림이 꺼져 있어요")])
+        r = await _room(llm, light="", settings={"image_daily": 0})
+        await r.say(BOSS, "소담아 고양이 그려줘")
+        second = llm.of("chat", "agent:admin")[1]["messages"]
+        assert any(m.get("role") == "tool" and "꺼져 있는 기능" in m["content"] for m in second)
+    finally:
+        restore_timers(old)
+
+
+@test
+async def llm_sends_allowed_tools_and_cache_key():
+    from types import SimpleNamespace
+
+    from fakes import cfg, make_db
+
+    from sodam.llm import LLM
+    db = await make_db()
+    llm = LLM(cfg(db.path), db)
+    sent = []
+    usage = SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12,
+                            prompt_tokens_details=SimpleNamespace(cached_tokens=0), input_tokens=10, output_tokens=2,
+                            input_tokens_details=SimpleNamespace(cached_tokens=0))
+
+    async def chat_create(**kw):
+        sent.append(("chat", kw))
+        return SimpleNamespace(usage=usage, choices=[SimpleNamespace(message=SimpleNamespace(content="네", tool_calls=None))])
+
+    async def resp_create(**kw):
+        sent.append(("resp", kw))
+        return SimpleNamespace(usage=usage, output=[], output_text="네")
+    llm.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=chat_create)),
+                                 responses=SimpleNamespace(create=resp_create))
+    schema = [{"type": "function", "function": {"name": n, "description": "d", "parameters": {"type": "object"}}}
+              for n in ("read_chat", "make_image")]
+    await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", model="gpt-5.4-mini",
+                   allowed=["read_chat"], cache_key="agent:abc")
+    await llm.think([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin:think", allowed=["read_chat"],
+                    cache_key="agent:abc:think", model="gpt-5.4-mini")
+    await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=[])
+    await llm.chat([{"role": "user", "content": "x"}], tools=schema, tool_choice="none", purpose="agent:admin",
+                   allowed=["read_chat"])
+    (_, c1), (_, t1), (_, c2), (_, c3) = sent
+    assert c1["model"] == "gpt-5.4-mini" and c1["prompt_cache_key"] == "sodam:agent:abc"
+    assert c1["tool_choice"] == {"type": "allowed_tools", "allowed_tools": {
+        "mode": "auto", "tools": [{"type": "function", "function": {"name": "read_chat"}}]}}
+    assert len(c1["tools"]) == 2                                                  # 목록은 그대로
+    assert t1["model"] == "gpt-5.4-mini" and t1["prompt_cache_key"] == "sodam:agent:abc:think"
+    assert t1["tool_choice"] == {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "read_chat"}]}
+    assert c2["tool_choice"] == "none"                                            # 부를 수 있는 게 없으면 도구 안 씀
+    assert c3["tool_choice"] == "none"                                            # 마무리 답은 그대로 none
+
+    # API 가 allowed_tools 를 거절하면: 그 요청은 목록을 줄여 다시, 이후엔 처음부터 목록 줄이기 (AI 답이 멈추면 안 됨)
+    import httpx
+    from openai import BadRequestError
+    sent.clear()
+    fails = [1]
+
+    async def picky(**kw):
+        if isinstance(kw.get("tool_choice"), dict) and fails:
+            fails.pop()
+            raise BadRequestError("bad tool_choice", response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+                                  body=None)
+        return await chat_create(**kw)
+    llm.client.chat.completions.create = picky
+    msg = await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=["read_chat"])
+    assert msg.content == "네" and llm.allowed_off
+    retry = [k for _, k in sent if k.get("tool_choice") == "auto"]
+    assert [t["function"]["name"] for t in retry[-1]["tools"]] == ["read_chat"]
+    sent.clear()
+    await llm.chat([{"role": "user", "content": "x"}], tools=schema, purpose="agent:admin", allowed=["read_chat"])
+    assert len(sent) == 1 and [t["function"]["name"] for t in sent[0][1]["tools"]] == ["read_chat"]
+
+
+@test
 def diag_ai_config_never_reads_secrets():
     import tempfile
 
