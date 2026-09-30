@@ -182,6 +182,10 @@ async def t_room_checkup(ctx: ToolCtx, a: dict) -> str:
     s = await svc.db.get_settings(cid)   # 이미지·웹검색 오늘 쓴 횟수 / 하루 한도 (2026-09-30 벳블리: "점검에 사진 횟수가 안 떠")
     out.append(f"오늘 이미지 {await svc.db.counter(day, cid, 'image')}/{s['image_daily']}장 · "
                f"웹검색 {await svc.db.counter(day, cid, 'web_search')}/{s['web_search_daily']}번")
+    from .. import video
+    from . import videogen   # 영상 = 한 주 한도 (한국시간 월요일 0시 초기화)
+    out.append(f"영상 이번 주 {await videogen.used_this_week(svc, cid)}/{videogen.weekly_limit(s)}개"
+               + ("" if video.active() else " (영상 AI 키 없음 — 운영자가 켜야 함)"))
     try:
         me = await ctx.bot.get_chat_member(cid, ctx.bot.id)
         miss = [label for attr, label in RIGHTS if not getattr(me, attr, False)]
