@@ -430,7 +430,8 @@ def r_user(d: Diag, q: dict) -> dict:
 
 
 def r_cleanup(d: Diag, q: dict) -> dict:
-    """🧹 멤버 정리 마지막 스캔 요약 — 분류별 인원·접속 상태 종류 분포·보호 인원·작업 진행 숫자만 (이름·ID 목록 없음).
+    """🧹 멤버 정리 마지막 스캔 요약 — 분류별 인원·접속 상태 종류 분포·보호 인원·작업 진행 숫자만 (사람 이름·ID 없음,
+    실패도 이유별 수만 — fail_ids 는 안 읽음).
     chat= 없으면 스캔한 모든 방. 봇 세션에 접속 상태(status)가 실제로 오는지 여기 분포로 확인한다."""
     def one(c: sqlite3.Connection, r) -> dict:
         out = {"chat_id": r["chat_id"], "ts": r["ts"], "total": r["total"], "partial": bool(r["partial"]),
@@ -445,6 +446,11 @@ def r_cleanup(d: Diag, q: dict) -> dict:
         if job:
             out["job"] = {k: job[k] for k in job.keys()}
             out["job"]["left"] = c.execute("SELECT COUNT(*) FROM cleanup_queue WHERE chat_id=?", (r["chat_id"],)).fetchone()[0]
+        try:   # 밴 풀기 대기 (영구 밴으로 남지 않게 틱이 다시 푸는 중인 사람 수)
+            out["unban_wait"] = c.execute("SELECT COUNT(*) FROM cleanup_banning WHERE chat_id=? AND stage='unban'",
+                                          (r["chat_id"],)).fetchone()[0]
+        except sqlite3.Error:
+            out["unban_wait"] = None
         return out
     with d.db() as c:
         if q.get("chat", "").strip():
