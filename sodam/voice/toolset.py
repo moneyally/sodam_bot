@@ -30,7 +30,7 @@ MAX_CALLS = 20
 MAX_WRITES = 5
 MAX_OUT = 1500
 SKIP = {"owner_rooms", "owner_room_log", "my_rooms", "get_my_requests", "owner_sanction", "channel_draft",
-        "voice_call", "ask_choice", "make_image", "make_sticker", "make_profile_video"}   # 1:1·오너용 / 음성에 안 맞음
+        "voice_call", "ask_choice", "make_image", "make_sticker", "make_profile_video", "make_video"}   # 1:1·오너용 / 음성에 안 맞음
 # 음성에 내놓는 도구만 (전부 내놓으면 실측 입력 14k 토큰·첫 소리 2.3초) — 설명은 DESC_MAX 자로
 VOICE_TOOLS = {"chat_stats", "search_chat", "read_chat", "member_info", "room_members", "room_rules", "search_knowledge",
                "points_ranking", "warn_member", "mute_member", "unmute_member", "ban_member", "change_setting",

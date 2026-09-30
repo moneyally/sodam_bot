@@ -5,7 +5,7 @@
   index.md = 목차(사람용 입구). 주제를 못 찾으면 도구가 key: summary 목록을 돌려줌.
 - 쓰는 법(조사 2026-09-29: Diátaxis·llms.txt·토스/카카오 문체): 한 질문 = 한 문서, 맨 위 '한 줄 답'(해요체), 버튼은 화면 글자 그대로 [💳 구독하기],
   '소담이 하지 말 것' 절, '관련 문서' 절(사람용 링크 — AI 에겐 빼고 related 로). 본문 1,500자 안.
-- 가격·기간은 문서에 숫자를 박지 않고 {price}·{days}·{trial}·{free_ai}·{invoice_min}·{voice_min}·{call_min} → 서버 설정값으로 채움.
+- 가격·기간은 문서에 숫자를 박지 않고 {price}·{days}·{trial}·{free_ai}·{invoice_min}·{voice_min}·{call_min}·{video_weekly}·{video_sec} → 서버 설정값으로 채움.
 - 요금·데려오기 주제면 그룹방에 [➕ 우리 방에 소담 추가][💳 구독하기] 버튼 카드 (방마다 10분에 1번). 입금 주소는 절대 방에 안 나감 (결제 화면 = 관리자 1:1).
 """
 from __future__ import annotations
@@ -45,12 +45,16 @@ def load() -> dict[str, dict]:
     return out
 
 
+from ..settings import DEFAULTS  # noqa: E402  (영상 한도 기본값 — ai_settings 가 등록)
+
+
 def render(body: str, cfg) -> str:
     values = {"price": getattr(cfg, "sub_price_usdt", "30"), "days": getattr(cfg, "sub_days", 30),
               "trial": getattr(cfg, "trial_days", 3), "free_ai": getattr(cfg, "free_ai_per_day", 10),
               "invoice_min": getattr(cfg, "invoice_minutes", 60),
               "voice_min": os.getenv("VOICE_ROOM_MONTH_MIN", "120"),
-              "call_min": int(os.getenv("VOICE_CALL_MAX_SEC", "900")) // 60}
+              "call_min": int(os.getenv("VOICE_CALL_MAX_SEC", "900")) // 60,
+              "video_weekly": DEFAULTS.get("video_weekly", 6), "video_sec": DEFAULTS.get("video_seconds", 6)}   # 방 기본값
     return re.sub(r"\{(\w+)\}", lambda m: str(values.get(m.group(1), m.group(0))), body)
 
 

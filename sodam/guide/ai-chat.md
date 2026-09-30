@@ -2,7 +2,7 @@
 title: 소담 부르는 법·AI 한도
 summary: 문장 앞에 '소담아'를 붙이거나 소담 답에 답장하면 대답해요. 1:1 은 그냥 말하면 돼요.
 tags: 부르는법, 호출, 부르면, 대답안해, 답안해, 왜답안, 무시, 한도, 천천히, 사용량, 사진봐, 그림그려, 이어말하기, 끼어들기
-related: modes, memory, features, faq
+related: modes, memory, features, faq, video
 audience: 모두
 type: howto
 ---
@@ -26,6 +26,7 @@ type: howto
 | 방 하루 AI 사용량 | 다 차면 "내일 다시 불러주세요" |
 | 웹 검색 | 방마다 하루 정해진 횟수 |
 | 그림 만들기 | 방마다 하루 몇 장 |
+| 영상 만들기 | 방마다 한 주 몇 개 (월요일 0시 초기화) |
 | 1:1 대화 | 하루 {free_ai}번 무료 |
 
 ## 대답 안 할 때

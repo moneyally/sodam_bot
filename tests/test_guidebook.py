@@ -20,7 +20,7 @@ def ctx(svc, bot, chat):
 
 
 CFG = SimpleNamespace(sub_price_usdt="30", sub_days=30, trial_days=3, free_ai_per_day=10, invoice_minutes=60)
-PLACEHOLDERS = {"price", "days", "trial", "free_ai", "invoice_min", "voice_min", "call_min"}
+PLACEHOLDERS = {"price", "days", "trial", "free_ai", "invoice_min", "voice_min", "call_min", "video_weekly", "video_sec"}
 
 
 @test
@@ -72,6 +72,9 @@ EVAL = [("소담아 근데 너 결제하면 얼마야?", {"pricing", "payment"})
 # 관리자 말로 하는 관리 (tests/test_admin_nl.py, 2026-09-30)
 EVAL += [("밴해제 어떻게 해", {"security"}), ("경고 취소 어떻게 해", {"security"}), ("소담아 영희 밴 풀어줘", {"security"}),
          ("예약 끄는법", {"schedule"}), ("예약목록 보는법", {"schedule"})]
+# AI 영상 만들기 (tests/test_videogen.py, 2026-09-30)
+EVAL += [("소담아 영상 만들어줄 수 있어?", {"video"}), ("동영상 생성 한 주에 몇 개야", {"video"}), ("이 사진 움직이는 영상으로 돼?", {"video"}),
+         ("영상 몇개까지 만들 수 있어", {"video"})]
 
 
 @test

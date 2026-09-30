@@ -67,6 +67,7 @@ class Tool:
     where: str = "any"          # room = 그룹방에서만 · dm = 1:1 에서만 · owner_dm = 오너의 1:1 에서만 (도구 목록 = 할 수 있는 일)
     room_role: Role | None = None  # 그룹방에서만 필요한 최소 역할 (1:1 은 역할이 늘 member 라 도구가 직접 확인 — ops_inbox 등)
     build: Callable[[], tuple[str, dict]] | None = None   # (설명, 인자)를 부를 때마다 만듦 (예: 설정 키 목록 — import 순서와 무관하게)
+    enabled: Callable[[], bool] | None = None   # False 면 숨김 (예: make_video = 영상 AI 키가 있을 때만)
 
     def schema(self) -> dict:
         desc, params = self.build() if self.build else (self.description, self.params)
@@ -1150,6 +1151,7 @@ def register_tool(tool: Tool, *, read_only: bool = False) -> None:
 def available(role: Role, settings: dict, in_dm: bool = False) -> list[Tool]:
     """이 사람·이 대화에서 쓸 수 있는 도구 = AI 가 할 수 있는 일의 전부 (안 되는 도구는 아예 안 보여 '된다'고 못 함)."""
     return [t for t in TOOLS if role >= t.min_role and (not t.setting or settings.get(t.setting))
+            and (t.enabled is None or t.enabled())
             and not (t.where == "room" and in_dm) and not (t.where in ("dm", "owner_dm") and not in_dm)
             and not (t.room_role is not None and not in_dm and role < t.room_role)]
 
