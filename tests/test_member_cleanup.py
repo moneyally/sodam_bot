@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from fakes import FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 from seed_mtproto import factory
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest, RetryAfter, TimedOut
 from telethon.errors import FloodWaitError
 from telethon.tl.types import UserStatusEmpty, UserStatusLastMonth, UserStatusOffline, UserStatusOnline, UserStatusRecently
 
@@ -150,9 +150,9 @@ async def classify_and_protect():
     everyone = set().union(*got.values())
     for uid in (16, 17, 18, 2, 1, 999):
         assert uid not in everyone, f"보호 대상 {uid} 가 후보에 들어감"
-    assert 19 not in everyone, "소담 기록상 N일 안 활동이 있으면 잠수 아님"
+    assert 19 not in everyone, "스티커·사진 같은 활동(members.last_seen)도 14일 보호"
     assert s["counts"] == {"d": 1, "b": 1, "i14": 2, "i30": 1, "u": 1, "f": len(got["f"])}, s["counts"]
-    assert s["prot"]["최근 14일 글"] == 1 and s["prot"]["제외 명단"] == 1 and s["prot"]["자유 멤버"] == 1, s["prot"]
+    assert s["prot"]["최근 14일 활동"] == 2 and s["prot"]["제외 명단"] == 1 and s["prot"]["자유 멤버"] == 1, s["prot"]
     assert s["prot"]["관리자·오너·봇"] == 3, s["prot"]
     assert s["dist"]["offline"] == 8 and s["dist"]["unknown"] >= 3 and s["dist"]["last_month"] == 1, s["dist"]
     assert s["rec_since"] and s["rec_since"] < now - 59 * DAY
@@ -479,7 +479,10 @@ async def bot_losing_ban_right_halts_and_notifies():
     ok, _ = await cleanup.resume_job(svc, bot, CH, BOSS.id)
     await wait_job(svc)
     job = await cleanup.get_job(svc.db, CH)
-    assert ok and job["state"] == "done" and job["failed"] == 3 and "내보내기 실패" in json.dumps(job["fails"], ensure_ascii=False)
+    assert ok and job["state"] == "done" and job["failed"] == 3 and job["fails"] == {"내보내기 실패": 3}, job
+    assert sorted(job["fail_ids"]) == [10, 12, 13], "실패한 사람 ID 는 이유와 따로 목록으로"
+    assert not await svc.db._all("SELECT 1 FROM cleanup_banning"), "밴이 거절되면 '밴 중' 표시도 지움"
+    assert not any(cleanup._leaving), "밴이 안 됐으면 작업 퇴장 기록도 없음 (서비스 메시지 지우기 대상 아님)"
     await mt.stop()
 
 
@@ -520,8 +523,10 @@ async def job_leave_deletes_service_message_and_skips_farewell():
     for _ in range(3):
         await asyncio.sleep(0)
     assert deleted == [12, 13] and [c for c in bot.named("send_message") if c[1] == CH], "보통 퇴장은 인사"
-    # 재시작 직후(기록 없음)라도 소담이 내보냈고 이 방 작업이 도는 중이면 작업 퇴장
+    # 재시작 직후(기록 없음): 소담이 내보냈고 그 사람에게 '밴 중' 표시가 있을 때만 작업 퇴장
     await svc.db._write("UPDATE cleanup_jobs SET state='running'")
+    assert not await cleanup.job_leave(svc, CH, 71, bot.id, bot.id), "작업 중이라도 작업이 안 내보낸 사람(스팸 등)은 아님"
+    await svc.db._write("INSERT INTO cleanup_banning(chat_id, user_id, stage, ts) VALUES(?,?,?,?)", (CH, 71, "banning", 1))
     assert await cleanup.job_leave(svc, CH, 71, bot.id, bot.id)
     assert not await cleanup.job_leave(svc, CH, 71, 71, bot.id), "스스로 나간 건 아님"
     await svc.db._write("UPDATE cleanup_jobs SET state='done'")
@@ -605,6 +610,179 @@ async def diag_route_numbers_only():
     assert "잠수40" not in raw and "idle40" not in raw and "user_id" not in raw, "이름·ID 목록은 안 나감"
     code, body = d.handle("/v1/cleanup", {})
     assert code == 200 and body["scans"][0]["chat_id"] == CH
+    await mt.stop()
+
+
+# ── 11. 리뷰 수정 (2026-09-30, 203019a 코드 리뷰) ─────────────
+async def _kill_task(svc):
+    t = cleanup._TASKS.get((svc.db.path, CH))
+    if t is not None:
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+    cleanup._TASKS.clear()
+
+
+@test
+async def activity_protects_but_join_alone_does_not():
+    """14일 보호가 messages 만 보던 것: 스티커·사진만 올리는 사람(members.last_seen)도 보호. 입장만 한 건 활동 아님."""
+    svc, mt, bot = await world()
+    now = time.time()
+    await svc.db.upsert_user(fake_user(13, "잠수20", "idle20"))
+    await svc.db.touch_member(CH, 13)                                   # 그룹에 스티커 (글 기록 없음)
+    await svc.db._write("UPDATE members SET last_seen=? WHERE chat_id=? AND user_id=13", (int(now - 3 * DAY), CH))
+    await svc.db.upsert_user(fake_user(12, "잠수40", "idle40"))
+    await svc.db.touch_member(CH, 12, joined=True)                      # 방금 입장만 (last_seen = joined_at)
+    assert await cleanup.recent_writer(svc.db, CH, 13) and not await cleanup.recent_writer(svc.db, CH, 12)
+    await cleanup.scan(svc, bot, CH, BOSS.id)
+    got = ids(await cleanup.selection(svc, CH, ["i14"]))
+    assert 13 not in got and 12 in got, got
+    base = {"deleted": 0, "is_bot": 0, "msgs": 0, "photo": 0, "username": "", "recent": 0, "burst": 0,
+            "status": "offline", "was_online": 1}
+    assert "활동 0(소담 기록)" in cleanup.fake_signals({**base, "last_act": None})
+    assert "활동 0(소담 기록)" not in cleanup.fake_signals({**base, "last_act": int(now)}), "스티커만 올려도 '활동 0' 아님"
+    await mt.stop()
+
+
+@test
+async def crash_between_ban_and_unban_is_undone_on_resume():
+    """ban 뒤 unban 전에 죽음(배포·크래시) → 이어 할 때 'kicked + 밴 중 표시' = 우리가 밴한 사람 → 먼저 풂 (영구 밴 X).
+    표시 없는 kicked(다른 이유로 밴)는 안 풂."""
+    svc, mt, bot = await world()
+    s, _ = await cleanup.scan(svc, bot, CH, BOSS.id)
+    await cleanup.start_job(svc, bot, CH, BOSS.id, ["d", "b"], s["ts"])   # 10, 11
+    await _kill_task(svc)
+    await svc.db._write("INSERT INTO cleanup_banning(chat_id, user_id, stage, ts, reason, by_id) VALUES(?,?,?,?,?,?)",
+                        (CH, 10, "banning", int(time.time()), "탈퇴 계정", BOSS.id))
+    bot.member_status = {(CH, 10): "kicked", (CH, 11): "kicked"}
+    assert await cleanup.resume_all(svc, bot) == 1
+    await wait_job(svc)
+    job = await cleanup.get_job(svc.db, CH)
+    assert ("unban", CH, 10) in bot.calls and ("unban", CH, 11) not in bot.calls and not bot.named("ban"), bot.calls
+    assert job["kicked"] == 1 and job["gone"] == 1 and job["state"] == "done", job
+    assert not await svc.db._all("SELECT 1 FROM cleanup_banning")
+    # 틱: 작업이 사라진 채 오래된 '밴 중' 표시도 정리 (밴돼 있으면 풂)
+    await svc.db._write("INSERT INTO cleanup_banning(chat_id, user_id, stage, ts) VALUES(?,?,?,?)", (CH, 13, "banning", 1))
+    bot.member_status[(CH, 13)] = "kicked"
+    assert await cleanup.retry_unbans(svc, bot) == 1 and ("unban", CH, 13) in bot.calls
+    await mt.stop()
+
+
+class GateBot(FakeBot):
+    """ban 이 끝나기 전에 종료가 오는 상황."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.gate = asyncio.Event()
+
+    async def ban_chat_member(self, chat_id, user_id, **kw):
+        self.calls.append(("ban", chat_id, user_id))
+        await self.gate.wait()
+
+
+@test
+async def shutdown_finishes_ban_unban_before_stopping():
+    svc, mt, _ = await world()
+    bot = GateBot(admins=[BOSS, SUB])
+    s, _ = await cleanup.scan(svc, bot, CH, BOSS.id)
+    await cleanup.start_job(svc, bot, CH, BOSS.id, ["d", "i14"], s["ts"])
+    for _ in range(500):   # DB 는 스레드라 sleep(0) 로는 안 넘어감
+        if bot.named("ban"):
+            break
+        await asyncio.sleep(0.01)
+    assert bot.named("ban"), "ban 에서 멈춰 있어야"
+    sd = asyncio.create_task(cleanup.shutdown(svc))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not bot.named("unban")
+    bot.gate.set()
+    await sd
+    assert [c[2] for c in bot.named("unban")] == [10], "밴한 사람은 풀고 나서 멈춤"
+    job = await cleanup.get_job(svc.db, CH)
+    assert job["state"] == "running" and job["kicked"] == 1 and await cleanup.remaining(svc.db, CH) == 2, job
+    assert not await svc.db._all("SELECT 1 FROM cleanup_banning")
+    await mt.stop()
+
+
+class FlakyBot(FakeBot):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.ban_timeouts, self.unban_fail = 1, True
+
+    async def ban_chat_member(self, chat_id, user_id, **kw):
+        self.calls.append(("ban", chat_id, user_id))
+        if self.ban_timeouts:
+            self.ban_timeouts -= 1
+            raise TimedOut()
+
+    async def unban_chat_member(self, chat_id, user_id, only_if_banned=False, **kw):
+        self.calls.append(("unban", chat_id, user_id))
+        if self.unban_fail:
+            raise RetryAfter(cleanup.RETRY_MAX_WAIT + 100)
+
+
+@test
+async def ban_timeout_and_failed_unban_go_to_retry_queue():
+    """ban 이 시간 초과(밴 됐는지 모름) → 풀기 시도 · 풀기가 RetryAfter 로 실패 → DB 대기열 → 틱이 나중에 풂 (영구 밴 X)."""
+    svc, mt, _ = await world()
+    bot = FlakyBot(admins=[BOSS, SUB])
+    s, _ = await cleanup.scan(svc, bot, CH, BOSS.id)
+    await cleanup.start_job(svc, bot, CH, BOSS.id, ["d", "b"], s["ts"])
+    await wait_job(svc)
+    job = await cleanup.get_job(svc.db, CH)
+    assert ("unban", CH, 10) in bot.calls, "시간 초과여도 풀기 시도 (only_if_banned)"
+    assert job["failed"] == 2 and job["fails"] == {cleanup.UNBAN_WAIT: 2} and sorted(job["fail_ids"]) == [10, 11], job
+    assert not any(ch.isdigit() for k in job["fails"] for ch in k), "실패 이유 키엔 사람 ID 없음"
+    rows = await svc.db._all("SELECT user_id, stage FROM cleanup_banning ORDER BY user_id")
+    assert [(r["user_id"], r["stage"]) for r in rows] == [(10, "unban"), (11, "unban")]
+    assert list(cleanup._leaving) == [(svc.db.path, CH, 11)], "밴 성공이 확실한 사람만 작업 퇴장 기록 (10 은 시간 초과)"
+    # 원격 점검: 숫자만 (fail_ids·사람 ID 없음)
+    from sodam import diag
+    code, body = diag.Diag(svc.db.path).handle("/v1/cleanup", {"chat": str(CH)})
+    raw = json.dumps(body, ensure_ascii=False)
+    assert code == 200 and body["scan"]["unban_wait"] == 2 and "fail_ids" not in raw, raw
+    # 아직 시간 안 됨 → 안 건드림 · 시간 되면 틱이 풂 (재시작해도 DB 라 남음)
+    bot.unban_fail = False
+    assert await cleanup.retry_unbans(svc, bot) == 0
+    await svc.db._write("UPDATE cleanup_banning SET next_ts=0")
+    assert await cleanup.retry_unbans(svc, bot) == 2
+    assert not await svc.db._all("SELECT 1 FROM cleanup_banning")
+    logs = await svc.db._all("SELECT detail FROM mod_log WHERE action='kick' AND detail LIKE '%늦게 풂%'")
+    assert len(logs) == 2
+    await mt.stop()
+
+
+@test
+async def basic_group_is_blocked():
+    """일반 그룹(-100 없는 ID)은 unbanChatMember 가 안 돼 내보내면 영구 밴 → 시작 전에 막음."""
+    svc, mt, bot = await world()
+    await svc.db.ensure_chat(-4242, "일반방")
+    s, err = await cleanup.scan(svc, bot, -4242, BOSS.id)
+    assert s is None and "슈퍼그룹" in err
+    ok, text = await cleanup.start_job(svc, bot, -4242, BOSS.id, ["d"], 0)
+    assert not ok and "슈퍼그룹" in text and not bot.named("ban")
+    assert not cleanup.is_supergroup(-4242) and cleanup.is_supergroup(CH)
+    await mt.stop()
+
+
+@test
+async def sodam_family_bots_are_protected():
+    """같은 DB 를 쓰는 딜러 봇(다른 ID)·소담 계열 계정(@Sodam_bot2 음성 도우미 등)은 절대 안 내보냄."""
+    people = {**PEOPLE, 5555: ((5555, "딜러", "casino_dealer_x", True), {}),
+              6666: ((6666, "도우미", "Sodam_bot2"), {"status": off(40)})}
+    svc, mt, bot = await world(people)
+    await cleanup.note_bot(svc, SimpleNamespace(id=5555))   # 딜러 봇 프로세스가 시작 때 적음
+    await cleanup.scan(svc, bot, CH, BOSS.id)
+    got = ids(await cleanup.selection(svc, CH, ["d", "b", "i14", "u", "f"]))
+    assert 5555 not in got and 6666 not in got and 11 in got, got
+    assert await cleanup.still_protected(svc, bot, CH, 5555) == "소담"
+    import os
+    os.environ["SODAM_BOT_IDS"] = "11"
+    try:
+        assert await cleanup.still_protected(svc, bot, CH, 11) == "소담"
+    finally:
+        os.environ.pop("SODAM_BOT_IDS")
     await mt.stop()
 
 

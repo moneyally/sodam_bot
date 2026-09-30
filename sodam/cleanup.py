@@ -21,12 +21,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut
 
 from . import accountage, free, persist
 from .db import register_schema
@@ -55,6 +56,11 @@ RETRY_MAX_WAIT = 300        # 이보다 오래 기다리라면 멈춤 (나중에
 LEASE = 120                 # 작업이 이만큼 소식 없으면 다른 틱이 이어 받음 (죽은 작업)
 LEAVE_TTL = 300             # 이 작업이 낸 퇴장으로 보는 시간
 CARD_TTL = 600              # 확인 카드 유효
+UNBAN_RETRY = 60            # 밴 풀기 실패한 사람을 다시 풀어 보는 간격 (초, 틱마다 확인)
+UNBAN_MAX_TRIES = 50        # 그 뒤엔 관리자 1:1 에 '직접 풀어주세요' (그래도 표엔 남김)
+CRIT_WAIT = 20              # 종료 때 밴~풀기 한 사람은 끝내고 멈춤 (최대 초)
+FAIL_IDS_MAX = 50           # 실패한 사람 ID 목록 상한 (관리자 1:1 보고용, 이유 집계와 따로)
+BOT_IDS_KEY = "sodam_bot_ids"   # chat_state(0): 이 DB 를 쓰는 소담 봇들(메인·딜러)의 ID — 서로 보호
 PREVIEW_NAMES = 20
 NAME_CHARS = 24
 _sleep = asyncio.sleep      # 테스트가 바꿔 끼움
@@ -115,10 +121,22 @@ CREATE TABLE IF NOT EXISTS cleanup_jobs (
     gone     INTEGER NOT NULL DEFAULT 0,
     skipped  INTEGER NOT NULL DEFAULT 0,
     failed   INTEGER NOT NULL DEFAULT 0,
-    fails    TEXT NOT NULL DEFAULT '{}',    -- 실패 이유 → 수
+    fails    TEXT NOT NULL DEFAULT '{}',    -- 실패 이유 → 수 (이유에 사람 ID 없음)
+    fail_ids TEXT NOT NULL DEFAULT '[]',    -- 실패한 사람 ID (FAIL_IDS_MAX 까지)
     before_n INTEGER,
     dm_msg   INTEGER,
     ended    INTEGER
+);
+CREATE TABLE IF NOT EXISTS cleanup_banning (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    stage   TEXT NOT NULL,                  -- banning(밴 직전 표시) · unban(풀기 실패 → 다시 풀 대기열)
+    ts      INTEGER NOT NULL,
+    next_ts INTEGER NOT NULL DEFAULT 0,
+    tries   INTEGER NOT NULL DEFAULT 0,
+    reason  TEXT NOT NULL DEFAULT '',
+    by_id   INTEGER,
+    PRIMARY KEY (chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS cleanup_queue (
     chat_id INTEGER NOT NULL,
@@ -128,7 +146,7 @@ CREATE TABLE IF NOT EXISTS cleanup_queue (
     PRIMARY KEY (chat_id, user_id)
 );
 """, migrate={"cleanup_scans": "drop", "cleanup_cands": "drop", "cleanup_excl": "composite",
-              "cleanup_jobs": "drop", "cleanup_queue": "drop"})
+              "cleanup_jobs": "drop", "cleanup_queue": "drop", "cleanup_banning": "composite"})
 
 
 # ── 분류 (값만 보고 판단, DB·네트워크 없음) ─────────────────
@@ -161,8 +179,8 @@ def idle(r, days: int, now: float) -> bool:
 def fake_signals(r) -> list[str]:
     """가라 의심 신호 (전부 기록된 사실). FAKE_MIN 개 이상이면 '의심' — 확정 아님."""
     sig = []
-    if not r["msgs"]:
-        sig.append("글 0개(소담 기록)")
+    if not r["msgs"] and not r["last_act"]:   # 글도 없고 스티커·사진·반응 같은 활동(members.last_seen, 입장만은 뺌)도 없음
+        sig.append("활동 0(소담 기록)")
     if not r["photo"]:
         sig.append("프사 없음")
     if not r["username"]:
@@ -223,10 +241,53 @@ async def free_ids(db, chat_id: int) -> set[int]:
     return {r["user_id"] for r in await db._all("SELECT user_id FROM free_members WHERE chat_id=?", (chat_id,))}
 
 
+# 소담 기록상 '활동' = members.last_seen — 그룹 글이면 종류와 상관없이(스티커·사진·게임 명령) 갱신되지만, 입장할 때도
+# last_seen=joined_at 으로 같이 찍혀서 그 값은 활동이 아님 (입장만 한 사람을 '최근 활동'으로 보호하지 않게)
+ACT_SQL = "CASE WHEN last_seen IS NOT NULL AND (joined_at IS NULL OR last_seen > joined_at) THEN last_seen END"
+
+
 async def recent_writer(db, chat_id: int, user_id: int, now: float | None = None) -> bool:
+    """최근 PROTECT_DAYS 안에 이 방에서 글(messages) 또는 활동(스티커·사진 등, members.last_seen)이 있음."""
+    cut = int((now or time.time()) - PROTECT_DAYS * DAY)
     row = await db._one("SELECT 1 FROM messages WHERE chat_id=? AND user_id=? AND is_bot=0 AND ts>=? LIMIT 1",
-                        (chat_id, user_id, int((now or time.time()) - PROTECT_DAYS * DAY)))
-    return row is not None
+                        (chat_id, user_id, cut))
+    if row is not None:
+        return True
+    row = await db._one(f"SELECT {ACT_SQL} AS act FROM members WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    return bool(row and row["act"] and row["act"] >= cut)
+
+
+def _env_bot_ids() -> set[int]:
+    return {int(x) for x in os.getenv("SODAM_BOT_IDS", "").replace(" ", "").split(",") if x.lstrip("-").isdecimal()}
+
+
+_noted: set = set()
+
+
+async def note_bot(svc: Services, bot) -> None:
+    """이 프로세스의 봇 ID 를 DB 에 적음 (메인·딜러가 같은 DB → 서로를 멤버 정리에서 보호). 봇 시작 때 한 번."""
+    if (svc.db.path, bot.id) in _noted:
+        return
+    _noted.add((svc.db.path, bot.id))
+    try:
+        ids = set(await svc.db.get_state(0, BOT_IDS_KEY) or [])
+        if bot.id not in ids:
+            await svc.db.set_state(0, BOT_IDS_KEY, sorted(ids | {bot.id}))
+    except Exception as e:
+        log.info("소담 봇 ID 기록 실패: %s", e)
+
+
+async def sodam_bot_ids(svc: Services, bot) -> set[int]:
+    try:
+        stored = set(await svc.db.get_state(0, BOT_IDS_KEY) or [])
+    except Exception:
+        stored = set()
+    return stored | _env_bot_ids() | {bot.id}
+
+
+def sodam_name(username: str | None) -> bool:
+    """소담 계열 계정(@sodam_ai_bot · 음성 도우미 @Sodam_bot2 등) — 이름으로도 보호."""
+    return bool(username) and username.lower().startswith("sodam")
 
 
 async def _admin_ids(svc: Services, bot, chat_id: int) -> set[int]:
@@ -237,7 +298,10 @@ async def _admin_ids(svc: Services, bot, chat_id: int) -> set[int]:
 
 async def still_protected(svc: Services, bot, chat_id: int, uid: int) -> str:
     """실행 직전 사람마다 다시: 보호 이유 (없으면 ''). 스캔 뒤 제외·자유 멤버 지정·새 글·관리자 승격을 잡는다."""
-    if uid == bot.id:
+    if uid in await sodam_bot_ids(svc, bot):
+        return "소담"
+    cand = await svc.db._one("SELECT username FROM cleanup_cands WHERE chat_id=? AND user_id=?", (chat_id, uid))
+    if cand and sodam_name(cand["username"]):
         return "소담"
     if uid in await svc.perms.owners():
         return "오너"
@@ -246,7 +310,7 @@ async def still_protected(svc: Services, bot, chat_id: int, uid: int) -> str:
     if await free.is_free(svc.db, chat_id, uid):
         return "자유 멤버"
     if await recent_writer(svc.db, chat_id, uid):
-        return f"최근 {PROTECT_DAYS}일 글"
+        return f"최근 {PROTECT_DAYS}일 활동"
     try:
         if await svc.perms.protected(bot, chat_id, uid):
             return "관리자"
@@ -279,12 +343,23 @@ async def last_scan(db, chat_id: int) -> dict | None:
     return _scan_dict(await db._one("SELECT * FROM cleanup_scans WHERE chat_id=?", (chat_id,)))
 
 
+def is_supergroup(chat_id: int) -> bool:
+    """-100… = 슈퍼그룹. 일반 그룹은 unbanChatMember 가 안 돼서(밴 풀기 불가 → 영구 밴) 멤버 정리를 막는다."""
+    return chat_id <= -1_000_000_000_000
+
+
+BASIC_GROUP = ("이 방은 '일반 그룹'이라 내보낸 사람의 밴을 풀 수 없어요 (텔레그램 제한). 멤버 정리는 슈퍼그룹만 돼요 — "
+               "텔레그램 방 설정에서 기록 보이기를 켜거나 공개로 바꾸면 슈퍼그룹이 돼요.")
+
+
 def scan_fresh(scan: dict | None, now: float | None = None) -> bool:
     return bool(scan) and (now or time.time()) - scan["ts"] < SCAN_VALID
 
 
 async def scan(svc: Services, bot, chat_id: int, by_id: int, *, force: bool = False) -> tuple[dict | None, str]:
     """(스캔 요약, 오류 글). 방당 SCAN_GAP 안엔 저장된 결과 (force 여도). 스캔 요약에 'reused'."""
+    if not is_supergroup(chat_id):
+        return None, BASIC_GROUP
     mt = getattr(svc, "mtproto", None)
     if mt is None or not getattr(mt, "enabled", False):
         return None, NO_MT
@@ -303,20 +378,20 @@ async def scan(svc: Services, bot, chat_id: int, by_id: int, *, force: bool = Fa
 async def _classify_store(svc: Services, bot, chat_id: int, by_id: int, members: list[dict], now: float) -> dict:
     db = svc.db
     admins = await _admin_ids(svc, bot, chat_id)
-    admins |= set(await db.bot_admin_ids(chat_id)) | set(await svc.perms.owners()) | {bot.id}
+    admins |= set(await db.bot_admin_ids(chat_id)) | set(await svc.perms.owners()) | await sodam_bot_ids(svc, bot)
     excl, frees = await excluded_ids(db, chat_id), await free_ids(db, chat_id)
     acts = {r["user_id"]: (r["last"], r["n"]) for r in await db._all(
         "SELECT user_id, MAX(ts) AS last, COUNT(*) AS n FROM messages WHERE chat_id=? AND is_bot=0 GROUP BY user_id",
         (chat_id,))}
-    mem = {r["user_id"]: (r["last_seen"], r["joined_at"]) for r in await db._all(
-        "SELECT user_id, last_seen, joined_at FROM members WHERE chat_id=?", (chat_id,))}
+    mem = {r["user_id"]: (r["act"], r["joined_at"]) for r in await db._all(
+        f"SELECT user_id, {ACT_SQL} AS act, joined_at FROM members WHERE chat_id=?", (chat_id,))}
     rec = await db._one("SELECT MIN(ts) AS t FROM messages WHERE chat_id=?", (chat_id,))
     buckets: dict[int, int] = {}
     for _, joined in mem.values():
         if joined:
             buckets[joined // BURST_WINDOW] = buckets.get(joined // BURST_WINDOW, 0) + 1
     writer_cut = now - PROTECT_DAYS * DAY
-    prot = {"관리자·오너·봇": 0, f"최근 {PROTECT_DAYS}일 글": 0, "자유 멤버": 0, "제외 명단": 0}
+    prot = {"관리자·오너·봇": 0, f"최근 {PROTECT_DAYS}일 활동": 0, "자유 멤버": 0, "제외 명단": 0}
     dist: dict[str, int] = {}
     rows = []
     for m in members:
@@ -324,11 +399,12 @@ async def _classify_store(svc: Services, bot, chat_id: int, by_id: int, members:
         kind = m.get("status") or "unknown"
         dist[kind] = dist.get(kind, 0) + 1
         last_msg, n_msgs = acts.get(uid, (None, 0))
-        if uid in admins:
+        seen, joined = mem.get(uid, (None, None))
+        if uid in admins or sodam_name(m.get("username")) or any(sodam_name(u) for u in m.get("usernames") or ()):
             prot["관리자·오너·봇"] += 1
             continue
-        if last_msg and last_msg >= writer_cut:
-            prot[f"최근 {PROTECT_DAYS}일 글"] += 1
+        if (last_msg and last_msg >= writer_cut) or (seen and seen >= writer_cut):
+            prot[f"최근 {PROTECT_DAYS}일 활동"] += 1
             continue
         if uid in frees:
             prot["자유 멤버"] += 1
@@ -336,7 +412,6 @@ async def _classify_store(svc: Services, bot, chat_id: int, by_id: int, members:
         if uid in excl:
             prot["제외 명단"] += 1
             continue
-        seen, joined = mem.get(uid, (None, None))
         last_act = max([t for t in (last_msg, seen) if t] or [0]) or None
         rows.append({"user_id": uid, "name": display_name(m.get("first_name"), m.get("last_name"), None)
                      if (m.get("first_name") or m.get("last_name")) else "",
@@ -419,7 +494,8 @@ async def excluded_rows(db, chat_id: int) -> list:
 @dataclass
 class Outcome:
     kind: str        # kicked · gone · skipped · failed · halt
-    why: str = ""
+    why: str = ""    # 이유 (집계 키 — 사람 ID 를 넣지 않음)
+    keep_id: bool = False   # 실패한 사람 ID 를 따로 목록(fail_ids)에 남김
 
 
 _TASKS: dict[tuple, asyncio.Task] = {}
@@ -437,8 +513,9 @@ async def get_job(db, chat_id: int) -> dict | None:
     d = dict(row)
     try:
         d["fails"] = json.loads(d["fails"] or "{}")
+        d["fail_ids"] = json.loads(d.get("fail_ids") or "[]")
     except ValueError:
-        d["fails"] = {}
+        d["fails"], d["fail_ids"] = {}, []
     return d
 
 
@@ -463,14 +540,15 @@ async def bot_can_ban(bot, chat_id: int) -> bool | None:
 
 
 async def job_leave(svc: Services, chat_id: int, user_id: int, by_id: int | None = None, bot_id: int | None = None) -> bool:
-    """이 퇴장이 멤버 정리 작업이 낸 것인지 (작별 인사·서비스 메시지 처리용). 내보내기 직전에 적어 둔 기록,
-    또는 소담이 내보냈고 이 방 작업이 도는 중 (재시작 직후 기록이 없어도)."""
+    """이 퇴장이 멤버 정리 작업이 낸 것인지 (작별 인사·서비스 메시지 처리용). 작업이 **실제로 밴한 사람만**:
+    밴이 된 뒤 적어 둔 기록, 또는 (재시작 직후라 기록이 없으면) 소담이 내보냈고 그 사람에게 '밴 중' 표시가 있을 때.
+    작업 중이라도 다른 이유(스팸·관리자)로 나간 사람은 아님."""
     t = _leaving.get((svc.db.path, chat_id, user_id))
     if t and time.time() - t < LEAVE_TTL:
         return True
     if by_id is not None and bot_id is not None and by_id == bot_id:
-        job = await get_job(svc.db, chat_id)
-        return bool(job and job["state"] == "running")
+        row = await svc.db._one("SELECT 1 FROM cleanup_banning WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        return row is not None
     return False
 
 
@@ -485,6 +563,8 @@ def _mark_leaving(svc: Services, chat_id: int, user_id: int) -> None:
 async def start_job(svc: Services, bot, chat_id: int, by_id: int, sel: list[str], scan_ts: int) -> tuple[bool, str]:
     """확인 카드 [🧹 내보내기] → 작업 시작. 누를 때 모든 조건을 다시 본다."""
     from .permissions import may
+    if not is_supergroup(chat_id):
+        return False, BASIC_GROUP
     scan_row = await last_scan(svc.db, chat_id)
     if not scan_row or scan_row["ts"] != scan_ts or not scan_fresh(scan_row):
         return False, "스캔이 바뀌었거나 30분이 지났어요. [🔄 다시 스캔] 뒤 다시 확인해주세요."
@@ -564,6 +644,7 @@ async def resume_job(svc: Services, bot, chat_id: int, by_id: int) -> tuple[bool
 async def resume_all(svc: Services, bot, *, stale_only: bool = False) -> int:
     """봇 시작 때(post_init) · 30초 틱: DB 에 '진행 중'인데 이 프로세스에서 안 도는 작업을 이어 돌린다.
     틱에선 LEASE 동안 소식 없는 것만 (다른 프로세스가 돌리는 중일 수 있어서)."""
+    await note_bot(svc, bot)   # 딜러 봇도 자기 ID 는 적음 (메인이 보호하게)
     if getattr(svc.cfg, "bot_role", "all") == "dealer":
         return 0
     rows = await svc.db._all("SELECT chat_id, beat FROM cleanup_jobs WHERE state='running'")
@@ -600,8 +681,45 @@ def _rights_error(e: TelegramError) -> bool:
         or "have no rights" in m
 
 
+async def _take_mark(db, chat_id: int, uid: int, stage: str | None = None, ts: int | None = None) -> dict | None:
+    """'밴 중' 표시를 꺼내며 지움 (한 번에 한 쪽만 — 작업과 틱이 같은 사람을 두 번 풀지 않게). 없으면 None."""
+    def run(c):
+        row = c.execute("SELECT stage, ts, reason, by_id, tries FROM cleanup_banning WHERE chat_id=? AND user_id=?",
+                        (chat_id, uid)).fetchone()
+        if row is None or (stage is not None and row[0] != stage) or (ts is not None and row[1] != ts):
+            return None
+        c.execute("DELETE FROM cleanup_banning WHERE chat_id=? AND user_id=?", (chat_id, uid))
+        return {"stage": row[0], "ts": row[1], "reason": row[2], "by_id": row[3], "tries": row[4]}
+    return await db.atomic(run)
+
+
+async def _park_unban(db, chat_id: int, uid: int, reason: str, by_id: int | None, tries: int = 0) -> None:
+    """풀기 실패 → 다시 풀 대기열 (DB — 재시작해도 남음, 틱이 다시 풂). 영구 밴으로 두지 않는다."""
+    now = int(time.time())
+    await db._write("INSERT OR REPLACE INTO cleanup_banning(chat_id, user_id, stage, ts, next_ts, tries, reason, by_id) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (chat_id, uid, "unban", now, now + UNBAN_RETRY * min(tries + 1, 60), tries + 1, reason, by_id))
+
+
+async def _unban(bot, chat_id: int, uid: int) -> str:
+    """'' = 풀림(또는 밴 아니었음), 아니면 실패 이유."""
+    try:
+        await _tg(lambda: bot.unban_chat_member(chat_id, uid, only_if_banned=True))
+        return ""
+    except RetryAfter:
+        return "속도 제한"
+    except TelegramError as e:
+        return str(getattr(e, "message", e))[:60] or type(e).__name__
+
+
+UNBAN_WAIT = "밴 풀기 대기(자동으로 다시 풂)"
+
+
 async def kick_one(svc: Services, bot, chat_id: int, uid: int, reason: str, by_id: int) -> Outcome:
-    """한 사람: 보호 다시 확인 → 아직 멤버·관리자 아님 확인 → ban → unban → 기록."""
+    """한 사람: 보호 다시 확인 → 아직 멤버·관리자 아님 확인 → '밴 중' 표시(DB) → ban → unban → 표시 지움·기록.
+    ban~unban 사이에 죽어도(배포·크래시) 표시가 남아서, 이어 할 때 'kicked + 표시' = 우리가 밴한 사람 → 먼저 풂.
+    unban 이 실패하면 표시를 '풀기 대기'로 바꿔 틱이 다시 풂 (영구 밴으로 남기지 않음)."""
+    db = svc.db
     why = await still_protected(svc, bot, chat_id, uid)
     if why:
         return Outcome("skipped", why)
@@ -617,29 +735,97 @@ async def kick_one(svc: Services, bot, chat_id: int, uid: int, reason: str, by_i
         return Outcome("gone", "")   # user not found = 이미 없음
     except Forbidden:
         return Outcome("halt", "소담이 방에서 빠졌거나 권한이 없어요")
-    except TelegramError as e:
-        return Outcome("failed", f"확인 실패: {e.message[:40]}")
+    except TelegramError:
+        return Outcome("failed", "멤버 확인 실패", True)
     status = str(getattr(m, "status", ""))
-    if status in ("left", "kicked") or (status == "restricted" and getattr(m, "is_member", True) is False):
+    if status == "kicked":
+        mark = await _take_mark(db, chat_id, uid)
+        if mark is None:
+            return Outcome("gone")   # 다른 이유로 밴된 사람 — 우리가 풀지 않음
+        err = await _unban(bot, chat_id, uid)   # 지난번에 밴만 하고 못 푼 사람 (재시작·크래시) → 지금 풂
+        if err:
+            await _park_unban(db, chat_id, uid, reason, by_id, mark["tries"])
+            return Outcome("failed", UNBAN_WAIT, True)
+        await db.log_mod(chat_id, by_id, uid, "kick", f"멤버 정리: {reason}")
+        return Outcome("kicked")
+    if status == "left" or (status == "restricted" and getattr(m, "is_member", True) is False):
+        await _take_mark(db, chat_id, uid)
         return Outcome("gone")
     if status in ("administrator", "creator"):
         return Outcome("skipped", "관리자")
-    _mark_leaving(svc, chat_id, uid)
+    await db._write("INSERT OR REPLACE INTO cleanup_banning(chat_id, user_id, stage, ts, reason, by_id) VALUES(?,?,?,?,?,?)",
+                    (chat_id, uid, "banning", int(time.time()), reason, by_id))
     try:
         await _tg(lambda: bot.ban_chat_member(chat_id, uid))
     except RetryAfter:
+        await _take_mark(db, chat_id, uid)
         return Outcome("halt", "텔레그램 속도 제한이 길어요")
-    except TelegramError as e:
+    except (BadRequest, Forbidden) as e:   # 텔레그램이 거절 = 밴 안 됨 (PTB 에선 BadRequest 도 NetworkError 라 먼저)
+        await _take_mark(db, chat_id, uid)
         if _rights_error(e):
             return Outcome("halt", "소담의 '사용자 차단' 권한이 빠졌어요")
-        return Outcome("failed", f"내보내기 실패: {getattr(e, 'message', str(e))[:40]}")
-    try:
-        await _tg(lambda: bot.unban_chat_member(chat_id, uid, only_if_banned=True))
+        return Outcome("failed", "내보내기 실패", True)
+    except (TimedOut, NetworkError):
+        # 밴이 됐는지 모름 → 풀기(only_if_banned: 밴 아니면 아무 일 없음). 못 풀면 대기열로
+        err = await _unban(bot, chat_id, uid)
+        mark = await _take_mark(db, chat_id, uid)
+        if err:
+            await _park_unban(db, chat_id, uid, reason, by_id, (mark or {}).get("tries", 0))
+            return Outcome("failed", UNBAN_WAIT, True)
+        return Outcome("failed", "연결 끊김(내보냈는지 모름)", True)
     except TelegramError as e:
-        await svc.db.log_mod(chat_id, by_id, uid, "ban", f"멤버 정리: {reason} (밴 풀기 실패 — 직접 풀어주세요)")
-        return Outcome("failed", f"밴 풀기 실패(ID {uid} — .밴해제 로 풀어주세요): {getattr(e, 'message', str(e))[:30]}")
-    await svc.db.log_mod(chat_id, by_id, uid, "kick", f"멤버 정리: {reason}")
+        await _take_mark(db, chat_id, uid)
+        if _rights_error(e):
+            return Outcome("halt", "소담의 '사용자 차단' 권한이 빠졌어요")
+        return Outcome("failed", "내보내기 실패", True)
+    _mark_leaving(svc, chat_id, uid)   # 밴이 된 뒤에만 (서비스 메시지 지우기·작별 인사 건너뛰기 대상)
+    err = await _unban(bot, chat_id, uid)
+    if err:
+        mark = await _take_mark(db, chat_id, uid)
+        await _park_unban(db, chat_id, uid, reason, by_id, (mark or {}).get("tries", 0))
+        await db.log_mod(chat_id, by_id, uid, "ban", f"멤버 정리: {reason} (밴 풀기 대기 — 자동으로 다시 풂)")
+        return Outcome("failed", UNBAN_WAIT, True)
+    await _take_mark(db, chat_id, uid)
+    await db.log_mod(chat_id, by_id, uid, "kick", f"멤버 정리: {reason}")
     return Outcome("kicked")
+
+
+async def retry_unbans(svc: Services, bot, limit: int = 20) -> int:
+    """30초 틱: '풀기 대기' 사람을 다시 풂 + 오래된 '밴 중' 표시(작업이 죽음) 정리. 푼 사람 수."""
+    now = int(time.time())
+    rows = await svc.db._all(
+        "SELECT chat_id, user_id, stage, ts, reason, by_id, tries FROM cleanup_banning "
+        "WHERE (stage='unban' AND next_ts<=?) OR (stage='banning' AND ts<?) ORDER BY next_ts LIMIT ?",
+        (now, now - LEASE, limit))
+    n = 0
+    for r in rows:
+        cid, uid = r["chat_id"], r["user_id"]
+        if running_here(svc, cid) and r["stage"] == "banning":
+            continue
+        if await _take_mark(svc.db, cid, uid, r["stage"], r["ts"]) is None:
+            continue   # 작업이 먼저 처리함
+        if r["stage"] == "banning":   # 밴 직전·직후에 죽은 작업: 밴이 됐으면 풂
+            try:
+                m = await bot.get_chat_member(cid, uid)
+            except TelegramError:
+                await _park_unban(svc.db, cid, uid, r["reason"], r["by_id"], r["tries"])
+                continue
+            if str(getattr(m, "status", "")) != "kicked":
+                continue
+        err = await _unban(bot, cid, uid)
+        if err:
+            await _park_unban(svc.db, cid, uid, r["reason"], r["by_id"], r["tries"])
+            if r["tries"] + 1 == UNBAN_MAX_TRIES and r["by_id"]:
+                try:
+                    await bot.send_message(r["by_id"], f"⚠️ 멤버 정리: <code>{uid}</code> 밴을 {UNBAN_MAX_TRIES}번 못 풀었어요 "
+                                                       f"({esc(err)}). 방에서 <code>.밴해제 {uid}</code> 로 직접 풀어주세요.",
+                                           parse_mode="HTML")
+                except TelegramError:
+                    pass
+            continue
+        await svc.db.log_mod(cid, r["by_id"], uid, "kick", f"멤버 정리: {r['reason']} (밴 늦게 풂)")
+        n += 1
+    return n
 
 
 def _stop_kb(chat_id: int) -> InlineKeyboardMarkup:
@@ -666,6 +852,10 @@ def report_text(job: dict, title: str, after: int | None, tz) -> str:
              + (f" · 방 인원 {job['before_n']} → {after}" if job.get("before_n") is not None and after is not None else "")]
     if job["fails"]:
         lines.append("실패 이유: " + " · ".join(f"{esc(k)} {v}" for k, v in list(job["fails"].items())[:5]))
+    if job.get("fail_ids"):
+        ids = job["fail_ids"]
+        lines.append("확인할 ID: " + ", ".join(f"<code>{int(i)}</code>" for i in ids[:10]) + (f" 외 {len(ids) - 10}명" if len(ids) > 10 else "")
+                     + (" (밴 풀기 대기는 소담이 자동으로 다시 풀어요)" if UNBAN_WAIT in job["fails"] else ""))
     lines.append("<i>내보낸 사람은 다시 들어올 수 있어요 (밴 아님). 관리 기록에 한 사람씩 남았어요.</i>")
     return "\n".join(lines)
 
@@ -728,25 +918,20 @@ async def _runner(svc: Services, bot, chat_id: int) -> None:
             if n % RIGHTS_EVERY == 0 and await bot_can_ban(bot, chat_id) is False:
                 await _halt(svc, bot, job, "소담의 '사용자 차단' 권한이 빠졌어요", title)
                 return
-            out = await kick_one(svc, bot, chat_id, nxt["user_id"], nxt["reason"], job["by_id"])
+            # ban~unban 은 끊지 않음: 종료(취소)가 와도 이 사람은 끝낸 뒤 멈춤 (중간에 끊기면 영구 밴)
+            uid = nxt["user_id"]
+            one = asyncio.ensure_future(kick_one(svc, bot, chat_id, uid, nxt["reason"], job["by_id"]))
+            try:
+                out = await asyncio.shield(one)
+            except asyncio.CancelledError:
+                await asyncio.wait({one}, timeout=CRIT_WAIT)
+                if one.done() and not one.cancelled() and one.exception() is None and one.result().kind != "halt":
+                    await _save_step(db, chat_id, uid, one.result())   # 끝낸 사람은 명단에서 빼고 멈춤 (다시 밴 안 하게)
+                raise
             if out.kind == "halt":
                 await _halt(svc, bot, job, out.why, title)
                 return
-            col = {"kicked": "kicked", "gone": "gone", "skipped": "skipped", "failed": "failed"}[out.kind]
-            uid = nxt["user_id"]
-
-            def step(c) -> None:
-                c.execute("DELETE FROM cleanup_queue WHERE chat_id=? AND user_id=?", (chat_id, uid))
-                c.execute(f"UPDATE cleanup_jobs SET {col}={col}+1 WHERE chat_id=?", (chat_id,))
-                if out.kind in ("kicked", "gone"):
-                    c.execute("DELETE FROM cleanup_cands WHERE chat_id=? AND user_id=?", (chat_id, uid))
-                if out.kind == "failed":
-                    row = c.execute("SELECT fails FROM cleanup_jobs WHERE chat_id=?", (chat_id,)).fetchone()
-                    fails = json.loads(row[0] or "{}") if row else {}
-                    k = out.why.split(":")[0][:40]
-                    fails[k] = fails.get(k, 0) + 1
-                    c.execute("UPDATE cleanup_jobs SET fails=? WHERE chat_id=?", (json.dumps(fails, ensure_ascii=False), chat_id))
-            await db.atomic(step)
+            await _save_step(db, chat_id, uid, out)
             n += 1
             if n % PROGRESS_EVERY == 0 and time.monotonic() - last_edit >= PROGRESS_MIN_SEC:
                 last_edit = time.monotonic()
@@ -763,6 +948,28 @@ async def _runner(svc: Services, bot, chat_id: int) -> None:
     finally:
         if _TASKS.get(key) is asyncio.current_task():
             _TASKS.pop(key, None)
+
+
+async def _save_step(db, chat_id: int, uid: int, out: Outcome) -> None:
+    """한 사람 결과: 남은 명단에서 빼고 수를 셈 (한 번에)."""
+    col = {"kicked": "kicked", "gone": "gone", "skipped": "skipped", "failed": "failed"}[out.kind]
+
+    def step(c) -> None:
+        c.execute("DELETE FROM cleanup_queue WHERE chat_id=? AND user_id=?", (chat_id, uid))
+        c.execute(f"UPDATE cleanup_jobs SET {col}={col}+1 WHERE chat_id=?", (chat_id,))
+        if out.kind in ("kicked", "gone"):
+            c.execute("DELETE FROM cleanup_cands WHERE chat_id=? AND user_id=?", (chat_id, uid))
+        if out.kind == "failed":
+            row = c.execute("SELECT fails, fail_ids FROM cleanup_jobs WHERE chat_id=?", (chat_id,)).fetchone()
+            fails = json.loads(row[0] or "{}") if row else {}
+            fids = json.loads(row[1] or "[]") if row else []
+            k = out.why[:40]   # 이유별로만 셈 (사람 ID 는 따로)
+            fails[k] = fails.get(k, 0) + 1
+            if out.keep_id and uid not in fids and len(fids) < FAIL_IDS_MAX:
+                fids.append(uid)
+            c.execute("UPDATE cleanup_jobs SET fails=?, fail_ids=? WHERE chat_id=?",
+                      (json.dumps(fails, ensure_ascii=False), json.dumps(fids), chat_id))
+    await db.atomic(step)
 
 
 async def _finish(svc: Services, bot, job: dict, title: str) -> None:
@@ -788,10 +995,12 @@ async def shutdown(svc: Services) -> int:
     for t in tasks:
         t.cancel()
     if tasks:
-        await asyncio.wait(tasks, timeout=5)
+        await asyncio.wait(tasks, timeout=CRIT_WAIT + 5)   # 밴~풀기 중인 사람은 끝내고 멈춤
     return 0
 
 
 async def tick(svc: Services, bot) -> None:
-    """30초 틱: 죽은(소식 없는) 작업을 이어 받는다."""
+    """30초 틱: 죽은(소식 없는) 작업을 이어 받고, 밴 풀기 대기열을 다시 풂."""
     await resume_all(svc, bot, stale_only=True)
+    if getattr(svc.cfg, "bot_role", "all") != "dealer":
+        await retry_unbans(svc, bot)

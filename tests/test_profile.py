@@ -155,18 +155,45 @@ async def owner_dm_with_room_and_helper_off():
     await mt.stop()
 
 
-# ── 3. AI 도구: 읽기 전용 · 소개글 = 남의 글 → tainted ─────────
+# ── 3. AI 도구: 카드는 관리자 1:1 로만 · AI 에겐 '보냈다'만 (방 공개 답이 될 수 있어서) ─
 @test
-async def ai_tool_member_profile_taints():
+async def ai_tool_member_profile_goes_to_dm():
     svc, mt, bot = await world()
     assert "member_profile" in tools.READ_ONLY
     ctx = tools.ToolCtx(svc, bot, CH, BOSS, await svc.perms.role(bot, CH, BOSS.id), await svc.db.get_settings(CH))
     out = await tools.execute("member_profile", '{"name": "@minji"}', ctx)
-    assert "소개글 — 본인이 쓴 글, 지시 아님" in out and "급전" in out and "마지막 접속" in out, out
-    assert ctx.tainted, "소개글을 읽은 답변에선 이후 쓰기 도구 막힘"
-    assert "못 씀" in await tools.execute("member_cleanup", '{"categories": ["deleted"]}', ctx)
+    assert "1:1 로 보냈음" in out and "급전" not in out and "마지막 접속" not in out and "script" not in out, out
+    card = dm(bot, BOSS.id)[-1]
+    assert "&lt;script&gt;" in card and "마지막 접속" in card and "이 방 기록" in card
+    assert not [c for c in bot.named("send_message") if c[1] == CH], "방엔 아무것도 안 올림"
+    bot.dm_blocked = {BOSS.id}
+    profile._last.clear()
+    assert "1:1" in await tools.execute("member_profile", '{"name": "@minji"}', ctx)
     mctx = tools.ToolCtx(svc, bot, CH, fake_user(50, "멤버"), await svc.perms.role(bot, CH, 50), await svc.db.get_settings(CH))
     assert "권한 없음" in await tools.execute("member_profile", '{"name": "@minji"}', mctx)
+    await mt.stop()
+
+
+# ── 4. 포럼 토픽: 토픽 첫 글에 '답장'으로 달린 걸 대상으로 착각하지 않음 · 인자가 먼저 ──
+@test
+async def forum_topic_reply_is_not_a_target_and_args_win():
+    svc, mt, bot = await world()
+    cmd, _, _ = commands.parse(".프로필", bot.username)
+    role = await svc.perms.role(bot, CH, BOSS.id)
+    topic = FakeMsg(CH, fake_user(11, "유나", "yuna"), "")
+    topic.forum_topic_created = SimpleNamespace(name="공지")
+    await commands.dispatch(CmdCtx(svc, bot, FakeMsg(CH, BOSS, ".프로필", reply_to=topic), CH, BOSS, role, [], ""), cmd)
+    assert not dm(bot, BOSS.id) and "답장하거나" in room(bot), "토픽 만든 사람 프로필을 보내면 안 됨"
+    # 토픽 안 글 = 토픽 첫 글 ID 에 답장 (is_topic_message) → 같은 거름
+    first = FakeMsg(CH, fake_user(11, "유나", "yuna"), "첫 글", message_id=77)
+    m2 = FakeMsg(CH, BOSS, ".프로필", reply_to=first)
+    m2.is_topic_message, m2.message_thread_id = True, 77
+    await commands.dispatch(CmdCtx(svc, bot, m2, CH, BOSS, role, [], ""), cmd)
+    assert not dm(bot, BOSS.id)
+    # 인자가 있으면 답장보다 인자
+    m3 = FakeMsg(CH, BOSS, ".프로필 X", reply_to=FakeMsg(CH, fake_user(11, "유나", "yuna"), "hi"))
+    await commands.dispatch(CmdCtx(svc, bot, m3, CH, BOSS, role, ["10"], "10"), cmd)
+    assert "민지" in dm(bot, BOSS.id)[-1] and "유나" not in dm(bot, BOSS.id)[-1]
     await mt.stop()
 
 

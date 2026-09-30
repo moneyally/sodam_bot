@@ -493,12 +493,24 @@ async def _room_arg(ctx: CmdCtx, words: list[str]) -> tuple[int | None, str]:
     return hit[0]["chat_id"], ""
 
 
+def _reply_user(msg):
+    """답장한 사람 (handlers.reply_ref 와 같은 거름): 포럼 토픽 첫 글(토픽 안 모든 글이 그 글에 답장으로 옴)·
+    채널·익명 관리자 글이면 None — 토픽을 만든 사람을 대상으로 착각하지 않게."""
+    r = getattr(msg, "reply_to_message", None)
+    if r is None or getattr(r, "forum_topic_created", None) or (
+            getattr(msg, "is_topic_message", False) and r.message_id == getattr(msg, "message_thread_id", None)):
+        return None
+    if getattr(r, "sender_chat", None) is not None:
+        return None
+    return getattr(r, "from_user", None)
+
+
 async def _who(ctx: CmdCtx, chat_id: int | None, word: str) -> tuple[int, str] | str:
-    """답장 · 숫자 ID · @아이디(이 방 멤버 기록 → 모르면 MTProto 조회) · 이름 → (ID, @아이디 힌트)."""
-    reply = ctx.msg.reply_to_message
-    if ctx.chat_id < 0 and reply and reply.from_user:
-        return reply.from_user.id, reply.from_user.username or ""
+    """인자(숫자 ID · @아이디(이 방 멤버 기록 → 모르면 MTProto 조회) · 이름)가 먼저, 없으면 답장 → (ID, @아이디 힌트)."""
     if not word:
+        who = _reply_user(ctx.msg) if ctx.chat_id < 0 else None
+        if who is not None:
+            return who.id, who.username or ""
         return "대상 메시지에 답장하거나 @아이디·숫자 ID 를 적어주세요."
     if (uid := to_int(word)) is not None and uid > 0:
         return uid, ""
@@ -521,9 +533,8 @@ async def _who(ctx: CmdCtx, chat_id: int | None, word: str) -> tuple[int, str] |
 async def c_profile(ctx: CmdCtx) -> None:
     """👤 한 사람 프로필 (텔레그램 정보 + 이 방 소담 기록). 결과는 관리자 1:1 로만 (sodam/profile.py)."""
     from . import profile
-    reply_target = ctx.chat_id < 0 and ctx.msg.reply_to_message and ctx.msg.reply_to_message.from_user
-    word = "" if reply_target else (ctx.args[0] if ctx.args else "")
-    rest = ctx.args if reply_target else ctx.args[1:]
+    word = ctx.args[0] if ctx.args else ""   # 인자가 먼저 (답장은 인자가 없을 때만 — _who)
+    rest = ctx.args[1:]
     chat_id: int | None = ctx.chat_id
     if ctx.chat_id > 0:   # 오너 1:1: '.프로필 @user 세컨드' (방 없으면 텔레그램 정보만)
         chat_id = None
@@ -567,8 +578,8 @@ async def c_cleanup(ctx: CmdCtx) -> None:
             await ctx.reply(f"잠수 기준은 1~{cleanup.IDLE_MAX}일이에요.")
             return
     target = ""
-    if sub in ("제외", "제외해제") and not (ctx.chat_id < 0 and ctx.msg.reply_to_message):
-        target = args.pop(0) if args else ""
+    if sub in ("제외", "제외해제"):
+        target = args.pop(0) if args else ""   # 인자가 먼저, 없으면 답장 (포럼 토픽 첫 글은 답장으로 안 봄)
     chat_id, err = await _room_arg(ctx, args)
     if chat_id is None:
         await ctx.reply(err)

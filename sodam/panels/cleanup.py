@@ -292,14 +292,20 @@ register_token_action("mc_unex", t_unexclude, fresh=True)
 
 # ── AI 도구 (관리자·그룹방) ─────────────────────────────────
 async def t_member_profile(ctx: ToolCtx, a: dict) -> str:
+    """프로필 카드는 요청한 관리자 1:1 로만 (AI 답은 방에 공개되니 소개글·접속 상태를 AI 에 주지 않음)."""
     row, err = await tools._resolve(ctx, str(a.get("name", "")))
     if err:
         return err
     if not P.allow(ctx.caller.id):
         return "프로필 조회가 너무 잦음. 1분 뒤 다시."
     p = await P.gather(ctx.svc, ctx.bot, ctx.chat_id, row["user_id"], row["username"] or "")
-    ctx.tainted = True   # 소개글·이름 = 그 사람이 쓴 글 (숨은 지시가 같은 답변의 쓰기 도구로 이어지지 않게)
-    return P.card_text(row["user_id"], p, ctx.svc.cfg.tz)
+    title = await C._title(ctx.svc, ctx.chat_id)
+    try:
+        await ctx.bot.send_message(ctx.caller.id, P.card_html(row["user_id"], p, ctx.svc.cfg.tz, title), parse_mode="HTML")
+    except TelegramError:
+        return "요청한 관리자와 1:1 대화가 안 열려 있어서 못 보냄. 소담 1:1 을 먼저 시작하라고 짧게 안내할 것."
+    return ("프로필을 요청한 관리자 1:1 로 보냈음. 방에는 '1:1 로 보냈어요'만 짧게 말하고 소개글·접속 상태 같은 내용은 "
+            "말하지 말 것 (내용은 모름).")
 
 
 async def t_cleanup_status(ctx: ToolCtx, a: dict) -> str:
@@ -343,7 +349,8 @@ async def t_member_cleanup(ctx: ToolCtx, a: dict) -> str:
 
 
 tools.register_tool(Tool(
-    "member_profile", "멤버 한 명의 텔레그램 프로필(소개글·접속 상태·프사·프리미엄·공통 방·계정 생성 추정) + 이 방 기록 (관리자).",
+    "member_profile", "멤버 한 명의 텔레그램 프로필(소개글·접속 상태·프사·프리미엄·공통 방·계정 생성 추정) + 이 방 기록을 "
+    "요청한 관리자 1:1 로 보냄 (관리자, 방엔 내용 안 올림).",
     {"name": {"type": "string", "description": "@username, 이름, 또는 숫자 ID"}}, ["name"], t_member_profile,
     Role.ADMIN, where="room"), read_only=True)
 tools.register_tool(Tool(
