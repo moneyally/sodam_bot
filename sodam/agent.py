@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from openai import BadRequestError
 
-from . import agentlog, ai_instructions, costs, lessons, memory
+from . import agentlog, ai_instructions, costs, lessons, memory, route
 from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
@@ -191,8 +191,52 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     schemas = [t.schema() for t in tools]
     allowed = {t.name for t in tools}
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
-    think = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
-    run.purpose = purpose + (":think" if think else "")
+    think0 = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
+    light_model = getattr(svc.cfg, "light_model", "") or ""
+    lane = route.Route("heavy", "off")
+    if light_model:   # 🧭 하이브리드: 코드 판정(돈 0) → light 면 작은 모델, 쓰기 도구·ask_senior 면 heavy 로 한 번 올려 보냄
+        lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, bool(images), ctx.settings),
+                            mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
+    base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
+    started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
+    if lane.lane == "light":
+        try:
+            return await _attempt(ctx, run, list(base), "light", purpose, schemas, allowed, request, mode, steer,
+                                  started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
+        except _Escalate as e:
+            log.info("🧭 light → heavy (chat=%s, %s)", ctx.chat_id, e.reason)
+            try:
+                run.step(route.ESCALATE_TOOL, e.reason, "큰 모델로 올려 보냄")
+            except Exception:
+                log.exception("agent log step failed")
+            messages = base + [{"role": "user", "content": STEER_NOTE + wrap("request", t, nonce())}
+                               for t in (steer.taken if steer is not None else [])]
+            return await _attempt(ctx, run, messages, "heavy", purpose, schemas, allowed, request, mode, steer,
+                                  started, deadline, think=think0, escalated=True)
+    if lane.lane == "banter":   # 말싸움 명장면: 큰 모델 말맛, 추론은 필요 없음
+        return await _attempt(ctx, run, base, "banter", purpose, schemas, allowed, request, mode, steer,
+                              started, deadline)
+    return await _attempt(ctx, run, base, "heavy", purpose, schemas, allowed, request, mode, steer,
+                          started, deadline, think=think0)
+
+
+class _Escalate(Exception):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, purpose: str, schemas: list,
+                   allowed: set, request: str, mode: str, steer: Steer | None, started: float, deadline: float, *,
+                   model: str | None = None, think: bool = False, escalated: bool = False) -> str:
+    """한 길로 끝까지 (도구 라운드 → 마무리 답). lane=light 이면 쓰기 도구·ask_senior 에서 _Escalate (그 라운드 도구는 실행 안 함)."""
+    svc = ctx.svc
+    light = lane == "light"
+    tag = {"light": ":light", "banter": ":banter"}.get(lane, "")
+    run.purpose = purpose + (":think" if think else "") + tag + (":escalated" if escalated else "")
+    call_purpose = purpose + tag            # 캐시 키: 길마다 따로 (모델이 다르면 캐시도 따로)
+    if light:
+        schemas = [*schemas, route.ESCALATE_SCHEMA]
 
     async def call(tool_choice: str = "auto"):
         nonlocal think
@@ -200,14 +244,15 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             try:
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
-                                           purpose=run.purpose, chat_id=ctx.chat_id)
+                                           purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model)
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
                 log.warning("생각하는 에이전트 실패 → 기본 방식: %s", e)
-                think, run.purpose = False, purpose
+                think = False
+                run.purpose = run.purpose.replace(":think", "")
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
-                                  purpose=purpose, chat_id=ctx.chat_id)
+                                  purpose=call_purpose, chat_id=ctx.chat_id, model=model)
 
     def inject() -> None:
         """모델을 부르기 직전: 실행 중 이어 보낸 말을 새 user 메시지로 (nonce 태그 안 데이터, 멤버 글과 같게)."""
@@ -217,7 +262,6 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
 
     used = checked = num_checked = read = False
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
-    started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     for step in range(MAX_STEPS):
         if step and run.usd_micro >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
@@ -228,6 +272,12 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         inject()
         msg = await call()
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
+        if light:   # 쓰기 도구·도움 요청이 하나라도 있으면 이 라운드 도구는 하나도 실행하지 않고 올려 보냄
+            for c in calls:
+                if c.function.name == route.ESCALATE_TOOL:
+                    raise _Escalate(f"ask_senior {(c.function.arguments or '')[:120]}")
+                if c.function.name in allowed and not route.light_ok(c.function.name, READ_ONLY):
+                    raise _Escalate(f"tool {c.function.name}")
         if not calls:
             text = msg.content or ""
             if steer is not None and steer.pending:   # 답하는 사이 이어 보낸 말 → 그것까지 보고 다시 (답은 한 번)

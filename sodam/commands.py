@@ -1271,6 +1271,47 @@ async def c_grant(ctx: CmdCtx) -> None:
     await ctx.reply(f"✅ {chat_id} 방 이용 기간을 {fmt_time(until, ctx.svc.cfg.tz, '%Y-%m-%d')} 까지로 연장했어요.")
 
 
+async def c_route(ctx: CmdCtx) -> None:
+    """🧭 오너: 방마다 AI 모델 길 (sodam/route.py). 방에선 이 방, 1:1 에선 방ID 또는 전체."""
+    from . import route
+    names = {"나눠": "hybrid", "나눠쓰기": "hybrid", "기본": "hybrid", "hybrid": "hybrid",
+             "절약": "saver", "saver": "saver", "최고": "best", "best": "best"}
+    in_dm = ctx.chat_id > 0
+    if not ctx.svc.cfg.light_model:
+        await ctx.reply("🧭 작은 모델(AGENT_LIGHT_MODEL)이 비어 있어서 지금은 모든 방이 큰 모델이에요.")
+        return
+    help_ = ("🧭 <b>AI 모델 길</b> (작은 모델: <code>" + esc(ctx.svc.cfg.light_model) + "</code>)\n"
+             + "\n".join(f"• {esc(v)}" for v in route.MODES.values())
+             + "\n사용법: " + ("<code>.AI모델 나눠|절약|최고 방ID|전체</code>" if in_dm else "<code>.AI모델 나눠|절약|최고</code>"))
+    if not ctx.args:
+        if in_dm:
+            await ctx.reply(help_)
+        else:
+            cur = await route.room_mode(ctx.svc.db, ctx.chat_id)
+            await ctx.reply(f"🧭 이 방: <b>{esc(route.MODES[cur])}</b>\n\n" + help_)
+        return
+    mode = names.get(ctx.args[0].lower())
+    if mode is None:
+        await ctx.reply(help_)
+        return
+    if in_dm:
+        target = ctx.args[1] if len(ctx.args) > 1 else ""
+        if target == "전체":
+            rooms = [r["chat_id"] for r in await ctx.svc.db._all("SELECT chat_id FROM chats WHERE chat_id < 0")]
+        elif (cid := to_int(target)) is not None and cid < 0 and await ctx.svc.db.has_chat(cid):
+            rooms = [cid]
+        else:
+            await ctx.reply(help_)
+            return
+    else:
+        rooms = [ctx.chat_id]
+    for cid in rooms:
+        await ctx.svc.db.set_state(cid, route.ROUTE_KEY, None if mode == route.DEFAULT_MODE else mode)
+        await ctx.svc.db.log_mod(cid, ctx.user.id, None, "ai_route", mode)
+    where = "이 방" if not in_dm else ("모든 방" if len(rooms) > 1 else f"방 {rooms[0]}")
+    await ctx.reply(f"✅ {where}: <b>{esc(route.MODES[mode])}</b> — 다음 답부터 적용")
+
+
 async def c_myid(ctx: CmdCtx) -> None:
     await ctx.reply(f"🪪 {esc(user_name(ctx.user))}님의 텔레그램 ID: <code>{ctx.user.id}</code>\n"
                     + (f"이 방 ID: <code>{ctx.chat_id}</code>" if ctx.chat_id < 0 else ""))
@@ -1365,6 +1406,8 @@ COMMANDS: list[Cmd] = [
         help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
     Cmd(("백업", "backup"), c_backup, Role.OWNER, usage="[목록]", help="DB 지금 백업 / 백업 목록", group="오너", dm_ok=True),
+    Cmd(("AI모델", "ai모델", "airoute"), c_route, Role.OWNER, usage="[나눠|절약|최고] [방ID|전체]",
+        help="방마다 AI 모델 길 (작은 모델로 비용 절약)", group="오너", dm_ok=True),
     Cmd(("구독부여", "grant"), c_grant, Role.OWNER, usage="방ID 일수", help="결제 없이 이용 기간 부여", group="오너", dm_ok=True),
 ]
 _INDEX = {name.lower(): cmd for cmd in COMMANDS for name in cmd.names}

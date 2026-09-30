@@ -282,7 +282,27 @@ def r_health(d: Diag, q: dict) -> dict:
     except (OSError, AttributeError):
         out["loadavg"] = None
     out["db_mb"] = round(Path(d.db_path).stat().st_size / 1e6, 1)
+    out["ai_config"] = ai_config(d.app_dir / ".env")
     return out
+
+
+# 서버 .env 중 비밀이 아닌 AI 설정만 (키·토큰은 이름부터 안 읽음). 비어 있으면 코드 기본값이 쓰임 → "(기본)"
+AI_CONFIG_KEYS = ("OPENAI_MODEL", "OPENAI_GUARD_MODEL", "AGENT_LIGHT_MODEL", "OPENAI_CACHE_RETENTION", "AGENT_THINK",
+                  "AGENT_THINK_EFFORT", "OPENAI_REASONING_EFFORT", "DAILY_USD_BUDGET", "VIDEO_PROVIDER", "VIDEO_MODEL")
+
+
+def ai_config(env: Path) -> dict | None:
+    try:
+        lines = env.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    vals: dict[str, str] = {}
+    for line in lines:
+        k, sep, v = line.strip().partition("=")
+        k = k.strip().removeprefix("export ").strip()
+        if sep and k in AI_CONFIG_KEYS:
+            vals[k] = v.strip().strip("'\"")[:40]
+    return {k: (vals.get(k) or "(기본)") for k in AI_CONFIG_KEYS}
 
 
 def r_rooms(d: Diag, q: dict) -> dict:

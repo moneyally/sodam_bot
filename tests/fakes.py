@@ -27,7 +27,8 @@ def cfg(db_path=":memory:", **kw) -> Config:
                 call_names=("소담아", "소담이", "소담"), model="gpt-5.4", guard_model="gpt-5.4-mini",
                 reasoning_effort="", daily_token_budget=1_000_000, db_path=db_path, tz=TZ,
                 log_chat_id=None, sportsdb_key="123",
-                agent_think="off")   # 생각하는 에이전트(기본 auto)는 test_agent_think·test_agent_codex 에서 켜고 봄
+                agent_think="off",   # 생각하는 에이전트(기본 auto)는 test_agent_think·test_agent_codex 에서 켜고 봄
+                light_model="")      # 🧭 하이브리드 라우팅은 test_route 에서 켜고 봄
     base.update(kw)
     return Config(**base)
 
