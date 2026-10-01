@@ -201,6 +201,13 @@ async def home_menu_does_not_ask_telegram_about_kicked_rooms_every_time():
     assert await svc.perms.is_admin(bot, -1003000000000, 20)
 
 
+
+@test
+async def edited_join_service_message_is_ignored():
+    """입장 메시지가 수정돼 edited_message 로 다시 오면 update.message 가 None → on_join 이 AttributeError (운영 2026-10-01 14:44)."""
+    upd = SimpleNamespace(message=None, edited_message=SimpleNamespace(new_chat_members=[]))
+    await handlers.on_join(upd, None)
+
 if __name__ == "__main__":
     import sys
     sys.exit(asyncio.run(run_all()))
