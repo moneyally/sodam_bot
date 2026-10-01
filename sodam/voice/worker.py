@@ -23,11 +23,16 @@ from typing import Any, Callable
 from .. import mtproto
 from . import store
 from .bridge import Bridge
+from .live import BACKEND_MODEL, LIVE_MODEL, LiveBridge
 from .video import FPS as VFPS, H as VH, W as VW, to_i420
 
 log = logging.getLogger("sodam.voice")
 
 MODEL = os.getenv("VOICE_MODEL", "gpt-realtime-2.1-mini")
+# 음성 엔진: realtime(기본, bridge.py) | live(gpt-live-1, live.py — docs/VOICE_LIVE.md). 되돌리기 = realtime 으로 바꾸고 재시작
+ENGINE = os.getenv("VOICE_ENGINE", "realtime").strip().lower()
+LIVE = os.getenv("VOICE_LIVE_MODEL", LIVE_MODEL)
+BACKEND = os.getenv("VOICE_BACKEND_MODEL", BACKEND_MODEL)
 POLL = 1.0
 VIDEO = os.getenv("VOICE_VIDEO", "0") == "1"             # 기본 소리만 (오너 결정 2026-09-29). 영상 칸에 프사: VOICE_VIDEO=1
 MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
@@ -80,8 +85,10 @@ def user_client(session: str, api_id: int, api_hash: str):
 class Worker:
     def __init__(self, cfg, db, *, client_factory: Callable | None = None, calls_factory: Callable | None = None,
                  realtime_connect: Callable | None = None, media: Any = None,
-                 web_search: Callable | None = None, svc: Any = None, bot: Any = None):
+                 web_search: Callable | None = None, svc: Any = None, bot: Any = None, engine: str | None = None):
         self.cfg, self.db = cfg, db
+        self.engine = (engine or ENGINE) if (engine or ENGINE) in ("realtime", "live") else "realtime"
+        self.model = LIVE if self.engine == "live" else MODEL
         self.client_factory = client_factory or user_client
         self.calls_factory = calls_factory
         self.realtime_connect = realtime_connect
@@ -226,13 +233,14 @@ class Worker:
         if p.get("link"):
             await self._join(p)
         md = self.media
-        bridge = Bridge(lambda: self.realtime_connect(MODEL),
+        cls, extra = (LiveBridge, {"model": self.model, "backend": BACKEND}) if self.engine == "live" else (Bridge, {})
+        bridge = cls(lambda: self.realtime_connect(self.model),
                         lambda f: self.calls.send_frame(chat_id, md.Device.MICROPHONE, f),
                         instructions=p.get("instructions") or "", voice=p.get("voice") or "marin",
                         reply=p.get("reply") or "all", greet=p.get("greet"),
                         transcribe_prompt=str(p.get("transcribe_prompt") or ""),
                         max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60),
-                        **(await self._toolset(chat_id, p.get("by") or 0)))
+                        **extra, **(await self._toolset(chat_id, p.get("by") or 0)))
         params = md.AudioParameters(48000, 1)
         video = self.frame is not None
         try:
@@ -337,7 +345,7 @@ class Worker:
             self.ssrc_users.pop(chat_id, None)
             await self._leave(chat_id)
         await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns, res.stats)
-        await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds, MODEL, res.usage)
+        await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds, self.model, res.usage)
         st = res.stats or {}
         log.info("통화 끝 %s %.0f초 %s · 늦은 재생 %s번(최대 %sms) · 루프 지연 최대 %sms · 끼어들기 %s · 오류 %s · 재연결 %s",
                  chat_id, res.seconds, res.reason, st.get("late_ticks"), st.get("max_late_ms"), st.get("loop_lag_max_ms"),
@@ -530,7 +538,8 @@ async def main() -> None:
     svc = build_services(cfg, db)                  # 같은 DB·같은 예산 (폴링 없음 — Bot API 조회만)
     bot = Bot(cfg.telegram_token)
     await bot.initialize()
-    w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: oai.realtime.connect(model=model),
+    w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: (oai.live.connect(max_retries=0) if model.startswith("gpt-live")   # Live: 다시 연결은 우리가 (새 세션)
+                                                    else oai.realtime.connect(model=model)),
                media=_media(), web_search=svc.llm.web_search, svc=svc, bot=bot)
     import signal
     stop = asyncio.Event()

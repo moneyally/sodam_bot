@@ -527,6 +527,12 @@
   새 커밋 없는 다음 타이머에서 통화 없으면 재시작 (테스트용 VOICE_SETUP=1).
   **라이브 통화로만 확인할 것**: 재생 여유(프리버퍼)·20ms 조각(ntgcalls 가 받는지), 에코·음악봇 끼어들기(threshold·semantic_vad·봇 ssrc 빼기),
   ntgcalls GIL 교착(github.com/pytgcalls/ntgcalls/issues/62 — record 중 무거운 I/O).
+- **🆕 GPT-Live 엔진 (2026-10-01, `sodam/voice/live.py` LiveBridge, 설계 docs/VOICE_LIVE.md, tests/test_voice_live.py · 뮤테이션 20개)**:
+  `VOICE_ENGINE=live`(기본 realtime — 안 바꾸면 지금 그대로) → gpt-live-1(VOICE_LIVE_MODEL) 전이중 + Responses 백엔드(VOICE_BACKEND_MODEL gpt-6-luna)가
+  우리 함수 도구 호출(response.event 안 output_item.done → response.item.create + response.create). VAD·truncate·response.create 없음:
+  끼어들기 = 우리 줄에 소담 소리 있을 때 큰 소리 0.3초(소리 길이로 셈) → 줄만 비움 · 받아쓰기 조각 1.2초 끊기면 한 줄 · '부를 때만'은 지시문뿐 ·
+  인사 = session.started 뒤 instructions.append · 소리는 started 뒤(3.11 wait_for 는 취소를 삼켜 asyncio.timeout 씀) · **조용해도 분당 $0.05** →
+  idle 60초가 중요 · 요금 = usage.seconds(누적) + 백엔드 토큰. 켜기 전 실제 통화로 확인할 것(끼어들기·여럿·부를 때만).
 - 봇 계정은 통화(phone.*) 불가 → 음악봇(오픈소스 YukkiMusicBot 구조 참고, 코드는 새로)처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.

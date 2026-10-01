@@ -169,13 +169,24 @@ USD_PER_MIN = float(__import__("os").getenv("VOICE_USD_PER_MIN", "0.08"))   # �
 REALTIME_PRICES = {"gpt-realtime-2.1-mini": (0.60, 0.06, 2.40, 10.00, 0.30, 20.00),
                    "gpt-realtime-2.1": (4.00, 0.40, 24.00, 32.00, 0.40, 64.00)}
 TRANSCRIBE_USD_PER_MIN = 0.003      # gpt-4o-mini-transcribe 받아쓰기 (토큰 usage 에 안 들어감 → 통화 시간으로)
+LIVE_USD_PER_MIN = {"gpt-live-1": 0.05}   # GPT-Live: 세션 시간(조용해도) 초 단위 과금 (voice-latency-cost 가이드)
+# Live 백엔드(Responses) 요금 (입력, 캐시, 출력 USD/1M, 짧은 문맥) — 모르는 모델은 가장 비싼 줄로
+BACKEND_PRICES = {"gpt-6-luna": (0.10, 0.01, 0.50), "gpt-5.6-luna": (0.20, 0.02, 1.20)}
 
 
 def cost_micro(model: str, usage: dict | None, seconds: float) -> tuple[int, str]:
     """(마이크로달러, 근거). 모델 요금표와 음성·글자별 토큰이 있으면 실제 요금 + 받아쓰기, 아니면 분당 추정.
     예전엔 항상 분당 0.08 추정만 써서 usage 를 버렸음 (2026-10-01 점검)."""
-    p = REALTIME_PRICES.get(model or "")
     u = usage or {}
+    if (model or "") in LIVE_USD_PER_MIN:
+        secs = float(u.get("live_seconds") or 0) or seconds        # 서버가 센 초가 있으면 그것 (없으면 통화 길이)
+        usd = secs / 60 * LIVE_USD_PER_MIN[model]
+        bm = str(u.get("backend_model") or "")
+        bp = next((v for k, v in BACKEND_PRICES.items() if bm == k or bm.startswith(k + "-")), max(BACKEND_PRICES.values()))
+        cached = u.get("backend_cached", 0)
+        usd += (max(0, u.get("backend_in", 0) - cached) * bp[0] + cached * bp[1] + u.get("backend_out", 0) * bp[2]) / 1_000_000
+        return int(usd * 1_000_000), "live"
+    p = REALTIME_PRICES.get(model or "")
     if p and any(u.get(k) for k in ("in_audio", "in_text", "out_audio", "out_text")):
         ca, ct = u.get("cached_audio", 0), u.get("cached_text", 0)
         usd = (max(0, u.get("in_text", 0) - ct) * p[0] + ct * p[1] + u.get("out_text", 0) * p[2]

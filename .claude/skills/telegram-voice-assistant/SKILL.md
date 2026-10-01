@@ -58,7 +58,7 @@ description: '텔레그램 그룹 음성채팅(보이스챗/비디오챗)에 소
 | 자기 말에 스스로 대답 | INCOMING 만 받는지(stream_frame Direction.INCOMING) | 필터 확인 |
 
 ## 5. 설정값 (.env)
-VOICE_MODEL(gpt-realtime-2.1-mini) · VOICE_VOICE(marin, 소담=여자 비서) · VOICE_ROOM_MONTH_MIN(120) · VOICE_CALL_MAX_SEC(900) ·
+VOICE_ENGINE(realtime 기본 | live = gpt-live-1, docs/VOICE_LIVE.md) · VOICE_MODEL(gpt-realtime-2.1-mini) · VOICE_VOICE(marin, 소담=여자 비서) · VOICE_ROOM_MONTH_MIN(120) · VOICE_CALL_MAX_SEC(900) ·
 VOICE_IDLE_SEC(60) · VOICE_MAX_CALLS(3) · VOICE_VIDEO(0 = 소리만, 1 = 영상 칸에 프사) · 요금 = 실제 토큰(store.cost_micro 요금표, 하루 AI 예산에 더함) — 요금표에 없는 모델이면 VOICE_USD_PER_MIN(0.08) 추정.
 
 ## 6. 테스트
