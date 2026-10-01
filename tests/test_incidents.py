@@ -94,6 +94,18 @@ async def row(db):
     return await db._one("SELECT * FROM incidents ORDER BY id DESC LIMIT 1")
 
 
+@test
+async def report_names_rooms_and_people_and_escapes():
+    r = await world()
+    await r.db.ensure_chat(-100555, "백악관 <since>")
+    await r.db.upsert_user(fake_user(8591039149, "팬<b>텀", "ss5011004"), commit=True)
+    out = await r.svc.mod.named("[캡차] chat -100555 / user 8591039149: 시간 초과 · chat -1009 / user 42")
+    assert out == ("[캡차] 백악관 &lt;since&gt;(-100555) / 팬&lt;b&gt;텀 @ss5011004(8591039149): 시간 초과 · "
+                   "chat -1009 / user 42"), out                          # 모르는 번호는 그대로
+    await r.svc.mod.report(r.bot, "[인젝션 차단] chat -100555 / x")
+    assert "백악관 &lt;since&gt;(-100555)" in sends(r, OWNER)[-1][2]
+
+
 # ── 캡차 실패 몰림 ────────────────────────────────────────
 @test
 async def five_captcha_failures_one_send_four_edits_and_states():
@@ -102,14 +114,16 @@ async def five_captcha_failures_one_send_four_edits_and_states():
         await captcha_fail(r, 100 + i)
         r.clock.t += 30
     [first] = sends(r, OWNER)
-    assert "🚨 감지" in first[2] and "캡차 실패" in first[2] and "user 100" in first[2], first[2]
+    assert "🚨 감지" in first[2] and "캡차 실패" in first[2] and "입장100(100)" in first[2], first[2]
+    title = (await r.db._one("SELECT title FROM chats WHERE chat_id=?", (CHAT,)))["title"]
+    assert f"{title}({CHAT})" in first[2] and f"chat {CHAT}" not in first[2], first[2]   # 어느 방인지 이름으로
     ed = edits(r, OWNER)
     assert len(ed) == 4, len(ed)
     mid = (await row(r.db))["msgs_json"]
     assert {e[3]["message_id"] for e in ed} == {json.loads(mid)[str(OWNER)]}, "같은 메시지를 고침"
     assert "🚨 감지" in ed[0][2] and "+1건" in ed[0][2], ed[0][2]                       # 2건: 아직 감지
     assert "🔴 지속" in ed[1][2] and "+2건" in ed[1][2], ed[1][2]                       # 3건 → 지속
-    assert "+4건 · 마지막" in ed[-1][2] and "user 104" in ed[-1][2] and "user 100" in ed[-1][2], "최신 + 이전 한 줄"
+    assert "+4건 · 마지막" in ed[-1][2] and "입장104(104)" in ed[-1][2] and "입장100(100)" in ed[-1][2], "최신 + 이전 한 줄"
     assert not [c for c in r.bot.named("send_message") if c[1] in (ADMIN, WEAK)], "보고는 오너(·로그방)만"
     # 조용해지면 틱이 🟢 로 한 번 고치고 닫음
     r.clock.t += incidents.WINDOW - 1 - 30              # 마지막 사건 뒤 WINDOW-1초

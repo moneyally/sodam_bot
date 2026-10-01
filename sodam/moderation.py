@@ -18,6 +18,8 @@ from .security import find_links, find_mentions, link_allowed, normalize
 from .settings import register_setting
 from .util import esc, human_minutes, mention, send_retry, user_name
 
+_IDS = re.compile(r"\b(chat|user) (-?\d{1,18})\b")   # 보고 글의 방·사람 번호 (Moderator.named)
+
 log = logging.getLogger(__name__)
 
 DEFAULT_MEMBER_PERMISSIONS = ChatPermissions(
@@ -202,10 +204,30 @@ class Moderator:
         """관리자 보고 받는 곳: 관리 로그방(LOG_CHAT_ID) + 오너들."""
         return ([self.cfg.log_chat_id] if self.cfg.log_chat_id else []) + sorted(await self.perms.owners())
 
+    async def named(self, text: str) -> str:
+        """보고 글의 'chat -100…' → '방 이름(-100…)', 'user 123' → '이름 @아이디(123)' (오너 요청 2026-10-01: 어느 방인지 모름).
+        DB 에 없으면 번호 그대로."""
+        out, last = [], 0
+        for m in _IDS.finditer(text):
+            kind, num = m.group(1), int(m.group(2))
+            if kind == "chat":
+                row = await self.db._one("SELECT title FROM chats WHERE chat_id=?", (num,))
+                label = f"{esc(row['title'])}({num})" if row and row["title"] else m.group(0)
+            else:
+                row = await self.db._one("SELECT first_name, last_name, username FROM users WHERE user_id=?", (num,))
+                who = user_name(row) if row else ""
+                if row and row["username"] and row["username"] not in who:
+                    who += f" @{row['username']}"
+                label = f"{esc(who)}({num})" if who else m.group(0)
+            out += [text[last:m.start()], label]
+            last = m.end()
+        return "".join(out) + text[last:]
+
     async def incident(self, bot: Bot, chat_id: int, kind: str, text: str, kb: InlineKeyboardMarkup | None = None,
                        *, key="room", sub=None, label: str = "", extra=()) -> incidents.Result:
         """방에서 저절로 생긴 관리 일(캡차 실패·도배 뮤트·사칭·자동 밴·스팸 명단)을 보고 — 같은 방·종류는 10분 안이면
         메시지 하나를 고쳐 가며 (sodam/incidents.py). extra = 함께 받을 사람(방 관리자 등)."""
+        text = await self.named(text)
         return await incidents.open_or_bump(self, bot, chat_id, kind, key, text, kb,
                                             [*extra, *await self.report_targets()], sub=sub, label=label)
 
@@ -215,6 +237,7 @@ class Moderator:
         봇은 먼저 대화를 시작한 사람에게만 개인 메시지를 보낼 수 있어서,
         오너가 봇과 1:1 채팅을 한 번도 안 했으면 그 오너에게는 조용히 건너뛴다.
         """
+        text = await self.named(text)
         for chat_id in await self.report_targets():
             try:   # 1:1·로그방이라 중복돼도 괜찮음 → 응답만 끊긴 경우도 한 번 더 보냄
                 await send_retry(lambda c=chat_id: bot.send_message(c, "📣 " + text, parse_mode="HTML", reply_markup=kb),
