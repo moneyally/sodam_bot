@@ -299,6 +299,36 @@ async def greeter_sends_media_and_buttons():
 
 
 @test
+async def greet_without_tag_sends_template_only_and_editor_toggles():
+    db, svc, bot, _ = await setup()
+    await db.set_setting(CHAT, "greet_template", "안내")
+    await greet(svc, bot, [(20, "다 타")])
+    assert bot.named("send_message")[-1][2] == '<a href="tg://user?id=20">다 타</a> 안내'   # 기본: 태그 + 인사말
+    q = await press(svc, bot, 1, f"m:w:{CHAT}")
+    assert "이름 태그: 켜짐" in q.edits[-1]
+    q = await press(svc, bot, 1, find(q.kb, "이름 태그").callback_data)                   # ✅ → ❌
+    assert (await db.get_settings(CHAT))["greet_mention"] is False and "이름 태그: 꺼짐" in q.edits[-1]
+    await greet(svc, bot, [(21, "로이")])
+    assert bot.named("send_message")[-1][2] == "안내", bot.named("send_message")[-1]       # 이름도 태그도 없이
+    await db.set_setting(CHAT, "greet_template", "{names}님 어서 오세요")
+    await greet(svc, bot, [(22, "<b>사하</b>")])
+    assert bot.named("send_message")[-1][2] == "&lt;b&gt;사하&lt;/b&gt;님 어서 오세요"        # 이름은 글자로만
+    q = await press(svc, bot, 1, f"m:wv:{CHAT}:all")                                     # 미리보기도 같게
+    assert "tg://user" not in bot.named("send_message")[-1][2]
+    q = await press(svc, bot, 1, f"m:w:{LONG}")                                          # 긴 방 ID 도 64바이트 안
+    assert all(len(b.callback_data.encode()) <= 64 for b in buttons(q.kb)) and find(q.kb, "이름 태그")
+    # 말로: "입장인사 안내로, 태그 없이" → change_setting 두 번 (관리자)
+    from sodam import tools
+    from sodam.permissions import Role
+    ctx = tools.ToolCtx(svc, bot, CHAT, fake_user(1, "방장"), Role.ADMIN, await db.get_settings(CHAT))
+    await db.set_setting(CHAT, "greet_mention", True)
+    out = await tools.execute("change_setting", '{"key": "입장 인사 이름 태그", "value": "끄기"}', ctx)
+    assert "greet_mention" in out and (await db.get_settings(CHAT))["greet_mention"] is False, out
+    out = await tools.execute("change_setting", '{"key": "greet_template", "value": "안내"}', ctx)
+    assert (await db.get_settings(CHAT))["greet_template"] == "안내" and "greet_mention" in out, out
+
+
+@test
 async def greeter_falls_back_and_revalidates():
     db, svc, bot, _ = await setup()
 

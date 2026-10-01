@@ -394,6 +394,17 @@ async def extract(svc: Services, chat_id: int, user_id: int) -> list[str]:
     upto = await _max_id(db, chat_id)
     texts = await _candidate_messages(db, chat_id, user_id, row["last_id"] if row else 0, upto, _now() - 3 * 86400)
     await mark_done(db, chat_id, user_id, upto)
+    return await _extract_from(svc, chat_id, user_id, texts)
+
+
+async def extract_texts(svc: Services, chat_id: int, user_id: int, texts: list[str]) -> list[str]:
+    """채팅 메시지가 아닌 글(🎙 음성채팅 받아쓰기, voice/context.remember_call)에서 기억 정리. 같은 필터·같은 하루 한도."""
+    texts = [t[:300] for t in texts if t and looks_self_disclosing(t) and not scan(t).score][-8:]
+    return await _extract_from(svc, chat_id, user_id, texts)
+
+
+async def _extract_from(svc: Services, chat_id: int, user_id: int, texts: list[str]) -> list[str]:
+    db = svc.db
     if not texts:
         return []
     if await db.bump(_day(svc), chat_id, "memory_extract") > EXTRACT_DAILY:
@@ -615,6 +626,9 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
         f"[{datetime.fromtimestamp(t['ts'], tz).strftime('%m/%d %H:%M')}] 상대: {t['request'][:200]} → "
         f"{svc.cfg.bot_name}: {t['answer'][:200]}"
         for t in turns if t["ts"] < oldest][-3:]
+    if chat_id < 0:   # 🎙 최근 음성채팅에서 이 사람과 한 대화 ('아까 통화에서 한 얘기')
+        from .voice import context as voice_context   # 늦게 import (voice → memory)
+        out["past_turns"] += await voice_context.voice_turns(svc.db, chat_id, user_id, tz)
     from . import cards   # 늦게 import (cards → db 만, 순환 없음)
     out["card_results"] = await cards.recent_lines(svc, chat_id)   # 확인 카드를 누른 결과 ('아까 뮤트 됐어?')
     return out

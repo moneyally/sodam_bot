@@ -250,6 +250,9 @@ async def start_call(svc, bot, chat_id: int, uid: int, style: str | None = None)
         member = await db.get_member(chat_id, uid)
         style = member["style"] if member and member["style"] else None
     instructions, voice = voice_setup(s, style, block)
+    from ..voice import context as vctx               # 채팅 기억·관계·최근 대화 (voice/context.py)
+    if room := await vctx.call_block(db, chat_id, uid, s, getattr(svc.cfg, "tz", None)):
+        instructions += "\n\n" + room
     names = await room_names(db, chat_id)
     if names:   # 발음이 흔들려도 이 방 사람 이름으로 알아듣게 (실측: '지영'→'지원'). 캐시 위해 지시문 맨 끝에
         instructions += "\n\n# 이 방 멤버 이름 (비슷하게 들리면 이 중에서 고른다)\n" + ", ".join(names)

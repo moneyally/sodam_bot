@@ -527,6 +527,12 @@
   새 커밋 없는 다음 타이머에서 통화 없으면 재시작 (테스트용 VOICE_SETUP=1).
   **라이브 통화로만 확인할 것**: 재생 여유(프리버퍼)·20ms 조각(ntgcalls 가 받는지), 에코·음악봇 끼어들기(threshold·semantic_vad·봇 ssrc 빼기),
   ntgcalls GIL 교착(github.com/pytgcalls/ntgcalls/issues/62 — record 중 무거운 I/O).
+- **🆕 음성 ↔ 채팅 기억 연결 (2026-10-01, `sodam/voice/context.py`, tests/test_voice_memory.py · 뮤테이션 24개)**:
+  통화 시작 지시문에 방 흐름(room_memory)·답장 관계 상위 짝(db.reply_stats 3일)·최근 채팅 12줄(3시간)·부른 사람 기억·교훈 (nonce 태그=데이터, 3000자 상한).
+  통화 중 처음 말한 사람(ssrc→계정) → `bridge.note()` (Realtime: system 메시지 item, Live: session.instructions.append) 로 이름·기억 한 번.
+  통화 끝 → `remember_call` 이 사람마다 받아쓰기를 `memory.extract_texts`(채팅과 같은 필터·하루 한도)로 member_memory 에 정리.
+  채팅 `memory.context_for` 의 past_turns 에 6시간 안 통화 대화(이 사람 말 → 소담 답) 최대 3개. ai_memory/ai_room_memory 끈 방은 안 씀.
+  VAD threshold 0.6→0.5 (`VOICE_VAD` 로 조절, 실측: 0.6 에선 85초 소리 중 3번만 받아씀) · stats speech_events/empty_transcripts (통화 끝 로그 '말 감지 N → 받아씀 M').
 - **🆕 GPT-Live 엔진 (2026-10-01, `sodam/voice/live.py` LiveBridge, 설계 docs/VOICE_LIVE.md, tests/test_voice_live.py · 뮤테이션 20개)**:
   `VOICE_ENGINE=live`(기본 realtime — 안 바꾸면 지금 그대로) → gpt-live-1(VOICE_LIVE_MODEL) 전이중 + Responses 백엔드(VOICE_BACKEND_MODEL gpt-6-luna)가
   우리 함수 도구 호출(response.event 안 output_item.done → response.item.create + response.create). VAD·truncate·response.create 없음:
