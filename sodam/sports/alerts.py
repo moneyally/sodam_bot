@@ -28,7 +28,7 @@ from ..util import esc
 from . import fmt
 from .feed import Feed
 from .leagues import GOAL_SPORTS, LEAGUES, ko_name, same_team
-from .providers import KST, Game, SportsError
+from .providers import BACKGROUND, KST, Game, SportsError
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def _score(g: Game) -> str:
 def _scorers(g: Game, new: tuple) -> str:
     parts = []
     for clock, side, who, tag in new:
-        team = ko_name(g.home if side == "home" else g.away) if side else ""
+        team = ko_name(g.home if side == "home" else g.away, g.league) if side else ""
         who = who + (f"({tag})" if tag else "")
         parts.append(" ".join(x for x in (clock, esc(who)) if x) + (f" {esc(team)}" if team and not who else ""))
     return ", ".join(p for p in parts if p)
@@ -246,6 +246,7 @@ class Alerts:
             return []
         self.last_fetch[code] = now
         games: list[Game] = []
+        bg = BACKGROUND.set(True)          # 자동 폴링 = 명령용 예비 한도는 안 씀 (API-Sports)
         try:
             for d in days:
                 if sched_due or not any(g.src for g in live):
@@ -259,6 +260,8 @@ class Alerts:
             if sched_due:   # 실패해도 다음 일정 받기는 RETRY_EVERY 뒤로
                 self.last_sched[code] = now - SCHEDULE_EVERY + RETRY_EVERY
             return []
+        finally:
+            BACKGROUND.reset(bg)
         if sched_due:
             self.last_sched[code] = now
         return games
@@ -333,7 +336,7 @@ class Alerts:
             # 팀 구독은 그 팀이 나가는 유럽 대항전(챔스·유로파) 경기도 (감사 2026-09-30: 토트넘 구독인데 챔스 알림 없음)
             if f["league"] != g.league and not (f["team"] and g.league in cups_for(f["league"])):
                 continue
-            if not f["team"] or same_team(g.home, f["team"]) or same_team(g.away, f["team"]):
+            if not f["team"] or same_team(g.home, f["team"], f["league"]) or same_team(g.away, f["team"], f["league"]):
                 return True
         return False
 

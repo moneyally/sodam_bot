@@ -1,0 +1,582 @@
+{
+ "get": "games",
+ "parameters": {
+  "date": "2026-10-01",
+  "timezone": "Asia/Seoul"
+ },
+ "errors": [],
+ "results": 9,
+ "paging": {
+  "current": 1,
+  "total": 1
+ },
+ "response": [
+  {
+   "id": 208733,
+   "date": "2026-10-01T01:00:00+09:00",
+   "time": "01:00",
+   "timestamp": 1790784000,
+   "timezone": "Asia/Seoul",
+   "week": "4",
+   "status": {
+    "long": "Finished",
+    "short": "FT"
+   },
+   "country": {
+    "id": 34,
+    "name": "Poland",
+    "code": "PL",
+    "flag": "https://media.api-sports.io/flags/pl.svg"
+   },
+   "league": {
+    "id": 119,
+    "name": "I. Liga Women",
+    "type": "League",
+    "logo": "https://media.api-sports.io/volley/leagues/119.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 3841,
+     "name": "Szczyrk W",
+     "logo": "https://media.api-sports.io/volley/teams/3841.png"
+    },
+    "away": {
+     "id": 955,
+     "name": "Solna Wieliczka W",
+     "logo": "https://media.api-sports.io/volley/teams/955.png"
+    }
+   },
+   "scores": {
+    "home": 3,
+    "away": 0
+   },
+   "periods": {
+    "first": {
+     "home": 25,
+     "away": 17
+    },
+    "second": {
+     "home": 25,
+     "away": 12
+    },
+    "third": {
+     "home": 25,
+     "away": 18
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 208491,
+   "date": "2026-10-01T02:00:00+09:00",
+   "time": "02:00",
+   "timestamp": 1790787600,
+   "timezone": "Asia/Seoul",
+   "week": "2",
+   "status": {
+    "long": "Finished",
+    "short": "FT"
+   },
+   "country": {
+    "id": 34,
+    "name": "Poland",
+    "code": "PL",
+    "flag": "https://media.api-sports.io/flags/pl.svg"
+   },
+   "league": {
+    "id": 118,
+    "name": "I. Liga",
+    "type": "League",
+    "logo": "https://media.api-sports.io/volley/leagues/118.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 3854,
+     "name": "Anioly Torun",
+     "logo": "https://media.api-sports.io/volley/teams/3854.png"
+    },
+    "away": {
+     "id": 4357,
+     "name": "Plock",
+     "logo": "https://media.api-sports.io/volley/teams/4357.png"
+    }
+   },
+   "scores": {
+    "home": 3,
+    "away": 0
+   },
+   "periods": {
+    "first": {
+     "home": 25,
+     "away": 14
+    },
+    "second": {
+     "home": 25,
+     "away": 23
+    },
+    "third": {
+     "home": 25,
+     "away": 23
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 206488,
+   "date": "2026-10-01T02:30:00+09:00",
+   "time": "02:30",
+   "timestamp": 1790789400,
+   "timezone": "Asia/Seoul",
+   "week": "2",
+   "status": {
+    "long": "Finished",
+    "short": "FT"
+   },
+   "country": {
+    "id": 13,
+    "name": "Czech-Republic",
+    "code": "CZ",
+    "flag": "https://media.api-sports.io/flags/cz.svg"
+   },
+   "league": {
+    "id": 42,
+    "name": "1. liga",
+    "type": "League",
+    "logo": "https://media.api-sports.io/volley/leagues/42.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 4083,
+     "name": "VK Brno",
+     "logo": "https://media.api-sports.io/volley/teams/4083.png"
+    },
+    "away": {
+     "id": 318,
+     "name": "Kometa Brno",
+     "logo": "https://media.api-sports.io/volley/teams/318.png"
+    }
+   },
+   "scores": {
+    "home": 3,
+    "away": 2
+   },
+   "periods": {
+    "first": {
+     "home": 25,
+     "away": 22
+    },
+    "second": {
+     "home": 25,
+     "away": 20
+    },
+    "third": {
+     "home": 19,
+     "away": 25
+    },
+    "fourth": {
+     "home": 20,
+     "away": 25
+    },
+    "fifth": {
+     "home": 15,
+     "away": 11
+    }
+   }
+  },
+  {
+   "id": 217111,
+   "date": "2026-10-01T10:00:00+09:00",
+   "time": "10:00",
+   "timestamp": 1790816400,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Finished",
+    "short": "FT"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2262,
+     "name": "Kazakhstan",
+     "logo": "https://media.api-sports.io/volley/teams/2262.png"
+    },
+    "away": {
+     "id": 2833,
+     "name": "Hong Kong",
+     "logo": "https://media.api-sports.io/volley/teams/2833.png"
+    }
+   },
+   "scores": {
+    "home": 3,
+    "away": 2
+   },
+   "periods": {
+    "first": {
+     "home": 22,
+     "away": 25
+    },
+    "second": {
+     "home": 24,
+     "away": 26
+    },
+    "third": {
+     "home": 25,
+     "away": 20
+    },
+    "fourth": {
+     "home": 26,
+     "away": 24
+    },
+    "fifth": {
+     "home": 15,
+     "away": 11
+    }
+   }
+  },
+  {
+   "id": 217112,
+   "date": "2026-10-01T10:00:00+09:00",
+   "time": "10:00",
+   "timestamp": 1790816400,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Finished",
+    "short": "FT"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2295,
+     "name": "India",
+     "logo": "https://media.api-sports.io/volley/teams/2295.png"
+    },
+    "away": {
+     "id": 2301,
+     "name": "Pakistan",
+     "logo": "https://media.api-sports.io/volley/teams/2301.png"
+    }
+   },
+   "scores": {
+    "home": 0,
+    "away": 3
+   },
+   "periods": {
+    "first": {
+     "home": 19,
+     "away": 25
+    },
+    "second": {
+     "home": 23,
+     "away": 25
+    },
+    "third": {
+     "home": 18,
+     "away": 25
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 217113,
+   "date": "2026-10-01T16:00:00+09:00",
+   "time": "16:00",
+   "timestamp": 1790838000,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Not Started",
+    "short": "NS"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2277,
+     "name": "Thailand",
+     "logo": "https://media.api-sports.io/volley/teams/2277.png"
+    },
+    "away": {
+     "id": 2212,
+     "name": "China",
+     "logo": "https://media.api-sports.io/volley/teams/2212.png"
+    }
+   },
+   "scores": {
+    "home": null,
+    "away": null
+   },
+   "periods": {
+    "first": {
+     "home": null,
+     "away": null
+    },
+    "second": {
+     "home": null,
+     "away": null
+    },
+    "third": {
+     "home": null,
+     "away": null
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 217114,
+   "date": "2026-10-01T16:00:00+09:00",
+   "time": "16:00",
+   "timestamp": 1790838000,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Not Started",
+    "short": "NS"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2514,
+     "name": "Vietnam",
+     "logo": "https://media.api-sports.io/volley/teams/2514.png"
+    },
+    "away": {
+     "id": 2847,
+     "name": "Uzbekistan",
+     "logo": "https://media.api-sports.io/volley/teams/2847.png"
+    }
+   },
+   "scores": {
+    "home": null,
+    "away": null
+   },
+   "periods": {
+    "first": {
+     "home": null,
+     "away": null
+    },
+    "second": {
+     "home": null,
+     "away": null
+    },
+    "third": {
+     "home": null,
+     "away": null
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 217115,
+   "date": "2026-10-01T19:00:00+09:00",
+   "time": "19:00",
+   "timestamp": 1790848800,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Not Started",
+    "short": "NS"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2841,
+     "name": "Philippines",
+     "logo": "https://media.api-sports.io/volley/teams/2841.png"
+    },
+    "away": {
+     "id": 2296,
+     "name": "Indonesia",
+     "logo": "https://media.api-sports.io/volley/teams/2296.png"
+    }
+   },
+   "scores": {
+    "home": null,
+    "away": null
+   },
+   "periods": {
+    "first": {
+     "home": null,
+     "away": null
+    },
+    "second": {
+     "home": null,
+     "away": null
+    },
+    "third": {
+     "home": null,
+     "away": null
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "id": 217116,
+   "date": "2026-10-01T19:20:00+09:00",
+   "time": "19:20",
+   "timestamp": 1790850000,
+   "timezone": "Asia/Seoul",
+   "week": "Quarter-finals",
+   "status": {
+    "long": "Not Started",
+    "short": "NS"
+   },
+   "country": {
+    "id": 54,
+    "name": "Asia",
+    "code": null,
+    "flag": null
+   },
+   "league": {
+    "id": 233,
+    "name": "Asian Games",
+    "type": "Cup",
+    "logo": "https://media.api-sports.io/volley/leagues/233.png",
+    "season": 2026
+   },
+   "teams": {
+    "home": {
+     "id": 2205,
+     "name": "Japan",
+     "logo": "https://media.api-sports.io/volley/teams/2205.png"
+    },
+    "away": {
+     "id": 2238,
+     "name": "Qatar",
+     "logo": "https://media.api-sports.io/volley/teams/2238.png"
+    }
+   },
+   "scores": {
+    "home": null,
+    "away": null
+   },
+   "periods": {
+    "first": {
+     "home": null,
+     "away": null
+    },
+    "second": {
+     "home": null,
+     "away": null
+    },
+    "third": {
+     "home": null,
+     "away": null
+    },
+    "fourth": {
+     "home": null,
+     "away": null
+    },
+    "fifth": {
+     "home": null,
+     "away": null
+    }
+   }
+  }
+ ]
+}

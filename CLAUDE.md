@@ -683,8 +683,15 @@
   **배당·베팅 기능은 만들지 않음.**
 - 소스(providers.py, 파싱은 전부 tests/fixtures/sports 의 실제 응답 기준): **ESPN**(키 없음, 해외 기본: EPL·라리가·세리에A·분데스·리그1·챔스·유로파·
   J리그·MLB·NBA·NHL·UFC, 비공식 → 실패하면 다음 소스) · **네이버**(국내 KBO·K리그·KBL·WKBL·V리그·NPB, robots·약관상 자동 수집 금지라
-  **기본 꺼짐 `SPORTS_NAVER=1`** — 오너 결정 대기) · TheSportsDB(`SPORTSDB_KEY` 가 123 이 아닐 때만) · API-Sports(`APISPORTS_KEY`, 자리만 —
-  실제 응답 샘플 받은 뒤 구현, 추측 파싱 금지). ESPN 함정: dates 는 미국 동부 날짜·하루씩(범위 400) → 한국 하루 = 두 번 요청 ·
+  **기본 꺼짐 `SPORTS_NAVER=1`** — 오너 결정 대기) · TheSportsDB(`SPORTSDB_KEY` 가 123 이 아닐 때만) ·
+  **API-Sports**(`APISPORTS_KEY`, 2026-10-01 연결 — 국내 KBO·K리그1·2·KBL·WKBL·V리그 남녀 + NPB, tests/test_sports_apisports.py · 뮤테이션 17개).
+  소스 순서 ESPN → API-Sports → 네이버 → TheSportsDB (해외는 ESPN 이 막힐 때만 API-Sports). 실측 함정: 무료 = 종목 API 마다 하루 100번·분당 10번,
+  `season` 붙이면 2022~2024 만 → **date+timezone 만** (그날 모든 리그 한 응답, (종목, 한국 날짜) 하나 = 요청 1번 공유·asyncio.Lock),
+  날짜는 어제~내일만(밖이면 요청 안 씀), 오류는 HTTP 200 + errors(plan/requests/access 정지/token) → 정지·키 오류면 그 키는 안 부르고 키 바뀌면 재시도.
+  같은 날짜 다시 받는 간격 `_gap` = 남은 한도를 UTC 자정까지 나눔(무료 ≈ 10~16분, 한도 1000↑면 60초), 알림 폴링은 예비 8번을 남김(명령용).
+  팀 이름은 영어 → `leagues.canon`(_APS_NAMES) 으로 기존 소스 이름, `ko_name/same_team(…, league)` 리그별 (KBL '삼성' = 서울 삼성).
+  순위는 season 필수라 무료 불가 → 미구현(유료 키 생기면 응답 샘플 받아서). 키는 오너가 소담 1:1 `.키 APISPORTS_KEY 값`(재시작 없이 켜짐).
+  2026-10-01 첫 키는 실측 중 계정 정지됨(errors.access) — 오너가 dashboard.api-football.com 에서 확인 필요. ESPN 함정: dates 는 미국 동부 날짜·하루씩(범위 400) → 한국 하루 = 두 번 요청 ·
   순위는 /apis/v2/ · 상태 이름(POSTPONED 등)이 state 보다 우선. 네이버: categoryId 만(upperCategoryId 붙이면 농구·배구 0건) ·
   statusCode BEFORE/READY/STARTED/ENDED/RESULT + cancel/suspended.
 - 리그·팀 한국어 별칭은 leagues.py 표 하나 (리그 code 는 DB 에 저장되니 바꾸지 말 것). 팀 표시도 이 표로 한국어.
@@ -696,7 +703,7 @@
   중복 = sports_alert_sent(방, 경기, 종류+점수, sent_at) 14일. 방마다 한 틱 = 한 메시지, 시간당 12통, 조용한 시간 sports_quiet(기본 01-07 KST):
   시작·골 버림, 종료·취소는 sports_held → 끝나면 '밤사이 경기 결과'. sports_enabled + 이용 중인 방(paid_features)만.
   알림 종류 sports_alerts final/basic/goals(기본)/all. 옛 표 sports_subs/sports_sent 는 안 씀(구독 0건이었음).
-- 네이버를 켜면 guide/sports.md 의 '국내 리그 준비 중' 문장도 같이 고칠 것.
+- 국내 리그 안내 문장은 guide/sports.md '조건·예외' (API-Sports 무료 기준: 어제~내일·갱신 느림·순위 없음). 소스를 바꾸면 같이 고칠 것.
 
 ## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)
 - **change_setting 키 목록은 부를 때마다** (`Tool.build` → `setkeys.schema`): 예전엔 tools.py import 때 `list(DEFAULTS)` 로 굳어 113개 중 51개
