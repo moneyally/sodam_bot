@@ -89,6 +89,9 @@ class Worker:
         self.cfg, self.db = cfg, db
         self.engine = (engine or ENGINE) if (engine or ENGINE) in ("realtime", "live") else "realtime"
         self.model = LIVE if self.engine == "live" else MODEL
+        if self.engine == "live" and not self.model.startswith("gpt-live"):   # main 의 연결은 이름으로 live/realtime 을 고름
+            log.warning("VOICE_ENGINE=live 인데 VOICE_LIVE_MODEL=%s — Live 모델이 아니라 realtime 으로", self.model)
+            self.engine, self.model = "realtime", MODEL
         self.client_factory = client_factory or user_client
         self.calls_factory = calls_factory
         self.realtime_connect = realtime_connect

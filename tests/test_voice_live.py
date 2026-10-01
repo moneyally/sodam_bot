@@ -33,12 +33,15 @@ class Path_:
 
     async def __call__(self, **kw):
         self._conn.sent.append((self._name, kw))
+        if self._name == "session.close" and self._conn.answer_close:   # 진짜 서버처럼 마지막 사용량과 함께 closed
+            self._conn.push(type="session.closed", reason="close_requested", usage=N(seconds=self._conn.final_sec), session=N())
 
 
 class FakeLive:
     def __init__(self):
         self.sent, self.q = [], asyncio.Queue()
         self.session, self.response = Path_(self, "session"), Path_(self, "response")
+        self.answer_close, self.final_sec = True, 0.0
 
     def named(self, name):
         return [kw for n, kw in self.sent if n == name]
@@ -90,6 +93,7 @@ def config_matches_sdk_shape():
     d = cfg["delegation"]
     assert d["type"] == "responses" and d["responses"]["model"] == "gpt-6-luna"
     assert d["responses"]["tools"][0]["name"] == "web_search" and d["responses"]["parallel_tool_calls"] is False
+    assert d["responses"]["tools"][0]["strict"] is False, "선택 인자가 있는 우리 스키마 — strict 면 거절될 수 있음"
     assert "Selected requests" in cfg["instructions"] and "Delegation policy" in cfg["instructions"]
     assert "Selected requests" not in live_config("x", "marin")["instructions"], "기본은 늘 대답"
     for k in ("turn_detection", "temperature", "max_output_tokens", "tools"):   # Live session 에 없는 필드
@@ -156,6 +160,10 @@ async def barge_in_drops_only_local_queue():
     b.out.extend([("live", bytes(960))] * 10)
     b.feed([(9, tone(10, amp=20000))])                       # 짧은 소리 한 번은 안 끊음
     assert len(b.out) == 10
+    b.out.extend([("live", bytes(960))] * 1000)
+    for i in range(80):                                      # 실제 말처럼 사이사이 조용한 조각 (10개 중 3개)
+        b.feed([(9, tone(10, amp=20000) if i % 10 >= 3 else bytes(960))])
+    assert b.stats["interrupts"] == 2, "말 사이 짧은 정적이 있어도 끊김 (리뷰)"
     b.stop("admin")
     await asyncio.wait_for(task, 2)
 
@@ -201,6 +209,90 @@ async def delegated_tool_runs_with_speaker_and_returns_to_backend():
     micro, how = store.cost_micro("gpt-live-1", u, res.seconds)
     want = 61.5 / 60 * 0.05 + (300 * 0.10 + 600 * 0.01 + 40 * 0.50) / 1e6
     assert how == "live" and micro == int(want * 1e6), (micro, want)
+
+
+@test
+async def stop_closes_session_and_takes_final_seconds():
+    b, conns, _ = make()
+    task = asyncio.create_task(b.run())
+    await until(lambda: conns)
+    c = conns[0]
+    started(c)
+    c.push(type="session.usage.updated", usage=N(seconds=50.0))
+    await until(lambda: b.result.usage.get("live_seconds") == 50.0)
+    c.final_sec = 57.5                                       # 마지막 갱신 뒤 7.5초 더 — closed 에만 있음
+    b.stop("idle")
+    res = await asyncio.wait_for(task, 3)
+    assert c.named("session.close"), "끝낼 때 session.close (정산 확인)"
+    assert res.usage["live_seconds"] == 57.5, res.usage
+
+
+@test
+async def silent_server_on_close_does_not_hang():
+    import sodam.voice.live as L
+    old = L.CLOSE_WAIT
+    L.CLOSE_WAIT = 0.2
+    try:
+        b, conns, _ = make()
+        task = asyncio.create_task(b.run())
+        await until(lambda: conns)
+        conns[0].answer_close = False
+        started(conns[0])
+        await until(lambda: b._started.is_set())
+        b.stop("admin")
+        res = await asyncio.wait_for(task, 2)
+        assert res.reason == "admin"
+    finally:
+        L.CLOSE_WAIT = old
+
+
+@test
+async def speaker_is_taken_from_the_line_window_only():
+    lines = []
+    b, conns, _ = make(on_line=lambda who, text, ssrc: lines.append((who, text, ssrc)))
+    clock = {"t": 1000.0}
+    b.clock = lambda: clock["t"]
+    task = asyncio.create_task(b.run())
+    await until(lambda: conns)
+    c = conns[0]
+    started(c)
+    await until(lambda: b._started.is_set())
+    for _ in range(300):                                     # 관리자(1)가 오래 크게 웃음 (소담이 말하던 때)
+        b.feed([(1, tone(10, amp=20000))])
+    clock["t"] += 10                                         # 10초 뒤 멤버(2)가 짧게 말함
+    for _ in range(40):
+        b.feed([(2, tone(10))])
+    c.push(type="session.input_transcript.delta", delta="그 사람 밴해", start_ms=0, end_ms=400)
+    await until(lambda: b._line_in)
+    c.push(type="session.delegation.created", offset_ms=500,
+           delegation=N(id="d9", target="responses", type="delegation", response_id="r9"))
+    await until(lambda: "d9" in b._deleg)
+    assert b._deleg["d9"]["ssrc"] == 2, "앞서 웃은 관리자 소리는 안 셈 (리뷰: 권한 오인)"
+    b.stop("admin")
+    await asyncio.wait_for(task, 3)
+    assert ("user", "그 사람 밴해", 2) in lines, lines
+
+
+@test
+async def null_delegation_tool_has_no_speaker():
+    seen = []
+
+    async def warn(args, meta):
+        seen.append(meta)
+        return "ok"
+    warn.wants_meta = True
+    b, conns, _ = make(tools={"warn_member": warn})
+    task = asyncio.create_task(b.run())
+    await until(lambda: conns)
+    c = conns[0]
+    started(c)
+    b.speaker = 77                                            # 나중에 말한 사람이 있어도
+    c.push(type="response.event", delegation_id=None, event={
+        "type": "response.output_item.done", "item": {"type": "function_call", "call_id": "c", "name": "warn_member", "arguments": "{}"}})
+    await until(lambda: seen)
+    assert seen[0]["ssrc"] is None, "어느 위임인지 모르면 말한 사람도 모름 → 쓰기 도구는 거절 쪽"
+    b.stop("admin")
+    await asyncio.wait_for(task, 3)
 
 
 @test
@@ -295,6 +387,14 @@ async def worker_picks_engine_and_charges_live_price():
     assert W.Worker(SimpleCfg(), db, engine="weird").engine == "realtime"
     micro = await store.record_cost(db, None, CHAT, 120, "gpt-live-1", {"live_seconds": 120.0})
     assert micro == int(120 / 60 * 0.05 * 1e6)
+    assert store.cost_micro("gpt-live-1-2026-09-10", {"live_seconds": 60.0}, 60) == (int(0.05 * 1e6), "live")
+    old_live = W.LIVE
+    W.LIVE = "gpt-realtime-2.1"                              # live 엔진에 Live 아닌 모델 → realtime 으로 (연결 짝 안 맞음 방지)
+    try:
+        w = W.Worker(SimpleCfg(), db, engine="live")
+        assert (w.engine, w.model) == ("realtime", W.MODEL)
+    finally:
+        W.LIVE = old_live
 
 
 class SimpleCfg:

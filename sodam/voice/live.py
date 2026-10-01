@@ -18,6 +18,7 @@ import base64
 import contextlib
 import json
 import logging
+from collections import deque
 from typing import Any
 
 from . import audio
@@ -29,7 +30,10 @@ LIVE_MODEL = "gpt-live-1"
 BACKEND_MODEL = "gpt-6-luna"        # live-delegation 가이드 추천 ("Start with gpt-6-luna")
 LINE_GAP = 1.2                      # 받아쓰기 조각이 이만큼 끊기면 한 줄 끝
 BARGE_SEC = 0.3                     # 소담이 말하는 중 사람 소리가 이만큼 이어지면 끼어든 것 → 남은 소담 소리 버림
-START_TIMEOUT = 15.0                # session.started 기다리는 최대 시간
+START_TIMEOUT = 15.0                # session.started 기다리는 최대 시간 (처음·다시 연결 둘 다)
+CLOSE_WAIT = 2.0                    # 끝낼 때 session.close → session.closed(마지막 사용량·정산 확인) 기다리는 시간
+SPEAK_LAG = 2.0                     # 받아쓰기 조각은 실제 말보다 늦게 옴 → 그 줄 첫 조각 이만큼 전부터의 소리로 '누가 말했나'
+ENERGY_KEEP = 8000                  # (시각, ssrc, 크기) 최대 개수 (여러 명 × 10 ms — 약 20~30초)
 BACKEND_MAX_OUT = 400
 APPEND_CHARS = 1200                 # instructions.append 는 500 토큰 상한 → 한국어 넉넉히 자름
 # 통화를 끊을 이유가 아닌 Live 오류 (세기만): 바꿀 수 없는 설정·이미 닫힘 등
@@ -70,7 +74,8 @@ def live_config(instructions: str, voice: str, *, reply: str = "all", tools: lis
         "delegation": {"type": "responses", "responses": {
             "model": backend,
             "instructions": BACKEND_PROMPT,
-            "tools": list(tools or []),
+            # strict 안 함: 우리 도구 스키마엔 선택 인자가 있음 (Responses 는 strict 면 거절될 수 있음 — 리뷰)
+            "tools": [{**t, "strict": False} if t.get("type") == "function" else t for t in (tools or [])],
             "tool_choice": "auto",
             "parallel_tool_calls": False,      # 한 번에 하나 → 결과 하나마다 response.create (짝 맞추기 단순)
             "max_output_tokens": BACKEND_MAX_OUT,
@@ -95,7 +100,11 @@ class LiveBridge(Bridge):
         self._line_in: list[str] = []
         self._line_out: list[str] = []
         self._t_in = self._t_out = 0.0
-        self._barge_frames = 0
+        self._barge_frames = 0.0
+        self._heard: deque = deque(maxlen=ENERGY_KEEP)   # (시각, ssrc, 크기) — 말한 구간의 소리만 셈
+        self._line_t0 = 0.0                          # 지금 줄의 첫 받아쓰기 조각 시각
+        self._closed = asyncio.Event()
+        self._tool_tasks: set = set()
         self._deleg: dict[str, dict] = {}            # delegation_id → {ssrc, response_id}
         self._sec_base = 0.0                         # 다시 연결 전 세션들의 과금 초
         self._sec_now = 0.0
@@ -106,23 +115,34 @@ class LiveBridge(Bridge):
         """Bridge.feed + 늘 사람별 소리 크기를 모음 (VAD 이벤트가 없어서 '말하는 중' 구간을 모름) + 끼어들기 (10 ms 마다)."""
         if frames48 and not self._done.is_set():
             pairs = frames48 if isinstance(frames48[0], tuple) else [(None, f) for f in frames48]
+            now = self.clock()
             for ssrc, f in pairs:
                 lv = audio.level(f)
-                if ssrc is not None and lv >= LOUD / 2:
-                    self._energy[ssrc] = self._energy.get(ssrc, 0.0) + lv
+                if ssrc is not None and lv >= LOUD / 2:      # 시각별로 둠 → 그 말 구간의 소리만 셈 (리뷰: 늘 모으면 소담이
+                    self._heard.append((now, ssrc, lv))      # 말하는 동안 크게 웃은 관리자가 다음 멤버 말의 주인이 됨)
             self._check_barge(audio.level(audio.mix([f for _, f in pairs])))
         super().feed(frames48)
 
     def _check_barge(self, level: float) -> None:
         """feed 1번 = 들어온 소리 10 ms. 소담 소리가 줄에 있는 동안 큰 소리가 BARGE_SEC 이어지면 끼어든 것 (시계 아닌 소리 길이로 셈)."""
-        if not self.out or level < LOUD:
-            self._barge_frames = 0
+        if not self.out:
+            self._barge_frames = 0.0
             return
-        self._barge_frames += 1
+        # 사람 말은 자음·단어 사이에 조용한 10 ms 가 섞임 → 조용한 조각은 0.34 만 깎음 (말 소리 70% 면 약 0.5초에 끊김, 리뷰)
+        self._barge_frames = self._barge_frames + 1 if level >= LOUD else max(0.0, self._barge_frames - 0.34)
         if self._barge_frames * audio.FRAME_MS >= BARGE_SEC * 1000:
             self.out.clear()                              # 모델은 스스로 멈춤 — 우리 줄에 남은 소리만 버림
             self.stats["interrupts"] += 1
-            self._barge_frames = 0
+            self._barge_frames = 0.0
+
+    def _speaker_since(self, t0: float, t1: float | None = None) -> int | None:
+        """t0~t1 동안 들어온 소리로 말한 사람 (한 사람이 SPEAKER_SHARE 넘을 때만)."""
+        t1 = self.clock() if t1 is None else t1
+        e: dict[int, float] = {}
+        for t, ssrc, lv in self._heard:
+            if t0 <= t <= t1:
+                e[ssrc] = e.get(ssrc, 0.0) + lv
+        return dominant(e)
 
     # ── 연결 ────────────────────────────────────────────
     def _specs(self) -> list[dict]:
@@ -147,6 +167,29 @@ class LiveBridge(Bridge):
         self._greet_live, self.greet = self.greet, None   # Bridge.run 의 response.create 인사는 Live 에 없음
         return await super().run()
 
+    async def _close(self, stack) -> None:   # type: ignore[override]
+        """소켓 닫기 전에 session.close → session.closed(마지막 사용량·정산 확인)를 CLOSE_WAIT 만큼 기다림 (리뷰: 안 하면 마지막 구간
+        요금이 빠지고, SDK 문서상 session.closed 없이 닫히면 정산이 확인되지 않음). 다시 연결 때 옛 소켓은 이미 끊겨서 건너뜀."""
+        conn = self.conn
+        if stack is not None and conn is not None and self._done.is_set() and self._started.is_set() \
+                and not self._closed.is_set():
+            with contextlib.suppress(Exception):
+                await conn.session.close()
+                async with asyncio.timeout(CLOSE_WAIT):
+                    async for ev in conn:                     # 읽기 작업은 이미 멈춤 → 여기서 마지막 사용량·closed 만
+                        et = _get(ev, "type")
+                        u = _get(ev, "usage") if et in ("session.closed", "session.usage.updated") else None
+                        if u is not None:
+                            self._sec_now = max(self._sec_now, float(_get(u, "seconds", 0) or 0))
+                            self.result.usage["live_seconds"] = self._sec_base + self._sec_now
+                        if et == "session.closed":
+                            self._closed.set()
+                            break
+        if self._done.is_set():
+            for task in list(self._tool_tasks):
+                task.cancel()
+        await Bridge._close(stack)
+
     async def _sender(self) -> None:
         try:   # wait_for 말고 timeout(): 3.11 wait_for 는 started 와 취소가 겹치면 취소를 삼킴 (테스트로 재현 — 통화가 안 끝남)
             async with asyncio.timeout(START_TIMEOUT):
@@ -159,8 +202,14 @@ class LiveBridge(Bridge):
             await self._send_evt.wait()
             self._send_evt.clear()
             while self._sendq:
-                if not self._started.is_set():           # 다시 연결 중 — 새 세션이 시작될 때까지
-                    await self._started.wait()
+                if not self._started.is_set():           # 다시 연결 중 — 새 세션이 시작될 때까지 (안 오면 끝)
+                    try:
+                        async with asyncio.timeout(START_TIMEOUT):
+                            await self._started.wait()
+                    except TimeoutError:
+                        log.warning("Live 다시 연결 뒤 session.started 안 옴")
+                        self.stop("error:start_timeout")
+                        return
                 chunk = self._sendq.popleft()
                 try:
                     await self.conn.session.input_audio.append(audio=base64.b64encode(chunk).decode())
@@ -195,6 +244,8 @@ class LiveBridge(Bridge):
             now = self.clock()
             if self._line_out:
                 self._flush_out()
+            if not self._line_in:
+                self._line_t0 = now
             self._line_in.append(ev.delta or "")
             self._t_in = self._last_voice = self._stopped_at = now
             self._loud_from = None
@@ -213,9 +264,9 @@ class LiveBridge(Bridge):
             d = _get(ev, "delegation")
             did = _get(d, "id")
             if did and len(self._deleg) < 500:
-                talking = dominant(self._energy) if self._line_in else None   # 아직 말하는 줄이면 그 줄의 주인
-                self._deleg[did] = {"ssrc": talking if talking is not None else self.speaker,
-                                    "response_id": _get(d, "response_id")}
+                # 맡긴 말 = 지금 줄(있으면) 또는 방금 끝난 줄 — 그 구간 소리로만 (못 정하면 None → 쓰기 도구 안 됨)
+                who = self._speaker_since(self._line_t0 - SPEAK_LAG) if self._line_in else self.speaker
+                self._deleg[did] = {"ssrc": who, "response_id": _get(d, "response_id")}
         elif t == "response.event":
             await self._on_backend(_get(ev, "delegation_id"), _get(ev, "event") or {})
         elif t == "session.usage.updated":
@@ -223,10 +274,11 @@ class LiveBridge(Bridge):
             self._sec_now = float(_get(u, "seconds", 0) or 0)    # 누적값 — 더하지 않음 (SDK SessionUsage 문서)
             self.result.usage["live_seconds"] = self._sec_base + self._sec_now
         elif t == "session.closed":
+            self._closed.set()
             reason = _get(ev, "reason", "") or ""
             u = _get(ev, "usage")
-            if u is not None:
-                self._sec_now = float(_get(u, "seconds", 0) or 0)
+            if u is not None:   # 누적값 — 줄어들 일은 없지만 줄면 큰 쪽 (적게 세지 않게)
+                self._sec_now = max(self._sec_now, float(_get(u, "seconds", 0) or 0))
                 self.result.usage["live_seconds"] = self._sec_base + self._sec_now
             self._flush_lines(force=True)
             if reason == "expired":
@@ -264,9 +316,11 @@ class LiveBridge(Bridge):
                 meta = dict(self._deleg.get(did or "", {}))
                 if not meta.get("response_id"):
                     meta["response_id"] = did
-                meta.setdefault("ssrc", self.speaker)
-                asyncio.create_task(self._call_tool(_get(item, "call_id"), _get(item, "name") or "",
-                                                    _get(item, "arguments") or "{}", meta))
+                meta.setdefault("ssrc", None)              # 어느 위임인지 모르면 말한 사람도 모름 (쓰기 도구 거절 쪽으로)
+                task = asyncio.create_task(self._call_tool(_get(item, "call_id"), _get(item, "name") or "",
+                                                           _get(item, "arguments") or "{}", meta))
+                self._tool_tasks.add(task)                 # 참조를 잡아 둠 (안 그러면 도중에 GC 될 수 있음)
+                task.add_done_callback(self._tool_tasks.discard)
         elif et in ("response.completed", "response.done", "response.incomplete", "response.failed"):
             resp = _get(e, "response") or {}
             u = _get(resp, "usage")
@@ -311,8 +365,7 @@ class LiveBridge(Bridge):
         self._line_in = []
         if not text:
             return
-        self.speaker = dominant(self._energy)
-        self._energy = {}
+        self.speaker = self._speaker_since(self._line_t0 - SPEAK_LAG, self._t_in)
         self.transcript.append(("user", text))
         self._emit("user", text, self.speaker)
         self.result.user_turns += 1

@@ -178,9 +178,10 @@ def cost_micro(model: str, usage: dict | None, seconds: float) -> tuple[int, str
     """(마이크로달러, 근거). 모델 요금표와 음성·글자별 토큰이 있으면 실제 요금 + 받아쓰기, 아니면 분당 추정.
     예전엔 항상 분당 0.08 추정만 써서 usage 를 버렸음 (2026-10-01 점검)."""
     u = usage or {}
-    if (model or "") in LIVE_USD_PER_MIN:
+    live = next((v for k, v in LIVE_USD_PER_MIN.items() if (model or "") == k or (model or "").startswith(k + "-")), None)
+    if live is not None:                                          # 날짜 붙은 스냅샷 이름도 (gpt-live-1-2026-…)
         secs = float(u.get("live_seconds") or 0) or seconds        # 서버가 센 초가 있으면 그것 (없으면 통화 길이)
-        usd = secs / 60 * LIVE_USD_PER_MIN[model]
+        usd = secs / 60 * live
         bm = str(u.get("backend_model") or "")
         bp = next((v for k, v in BACKEND_PRICES.items() if bm == k or bm.startswith(k + "-")), max(BACKEND_PRICES.values()))
         cached = u.get("backend_cached", 0)
