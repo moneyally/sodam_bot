@@ -265,6 +265,8 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
+    if msg is None:   # 입장 서비스 메시지가 '수정됨'으로 다시 오면(edited_message) 필터는 통과하지만 이미 처리한 입장 → 무시
+        return
     svc = _svc(context)
     for u in msg.new_chat_members:
         await handle_new_member(context, msg.chat_id, msg.chat.title, u)
