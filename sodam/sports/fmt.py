@@ -20,7 +20,7 @@ def mdhm(ts: int) -> str:
 
 
 def sides(g: Game) -> tuple[tuple[str, int | None], tuple[str, int | None]]:
-    home, away = (ko_name(g.home), g.home_score), (ko_name(g.away), g.away_score)
+    home, away = (ko_name(g.home, g.league), g.home_score), (ko_name(g.away, g.league), g.away_score)
     lg = LEAGUES.get(g.league)
     return (away, home) if lg and lg.sport in AWAY_FIRST else (home, away)
 
@@ -80,6 +80,6 @@ def standings_text(code: str, rows: list[Row], limit: int = 20) -> str:
             extra = f" · {int(r.points)}점"
         elif r.pct:
             extra = f" · 승률 {esc(r.pct)}" + (f" · {esc(r.behind)}G" if r.behind not in ("", "-", "0", "0.0") else "")
-        out.append(f"{r.rank}. {esc(ko_name(r.team))} {rec}{extra}")
+        out.append(f"{r.rank}. {esc(ko_name(r.team, code))} {rec}{extra}")
         shown += 1
     return "\n".join(out)

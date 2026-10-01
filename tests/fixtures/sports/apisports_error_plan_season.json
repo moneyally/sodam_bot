@@ -1,0 +1,18 @@
+{
+ "get": "games",
+ "parameters": {
+  "league": "5",
+  "season": "2026",
+  "date": "2026-10-01",
+  "timezone": "Asia/Seoul"
+ },
+ "errors": {
+  "plan": "Free plans do not have access to this season, try from 2022 to 2024."
+ },
+ "results": 0,
+ "paging": {
+  "current": 1,
+  "total": 1
+ },
+ "response": []
+}

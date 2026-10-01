@@ -13,9 +13,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Awaitable, Callable
@@ -23,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .leagues import League
+from .leagues import League, canon, same_team
 
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
@@ -403,20 +405,277 @@ class SportsDB(Provider):
         return sorted([g for g in (self.parse_event(lg, e) for e in evs) if g], key=lambda g: g.start)
 
 
-# ── API-Sports (유료 공식, APISPORTS_KEY) — 연결 전 자리 ──────────────
+# ── API-Sports (공식, APISPORTS_KEY — 국내 리그 KBO·K리그·KBL·WKBL·V리그 + NPB) ─────────────
+# 실측 2026-10-01 (tests/fixtures/sports/apisports_*.json):
+# - 키 하나로 종목 API 4개 (v3.football / v1.baseball / v1.basketball / v1.volleyball), 헤더 x-apisports-key.
+# - 무료 등급: 종목마다 하루 100번 · 분당 10번 · 'season' 을 붙이면 2022~2024 만 → **date 만** 주면 이번 시즌도 나옴,
+#   대신 날짜는 어제~내일만 ("Free plans do not have access to this date, try from …"). date 만 주면 그날 모든 리그가
+#   한 번에 와서(축구 하루 ~200경기) 종목당 날짜 하나 = 요청 1번을 모든 리그·방·명령이 같이 씀.
+# - 오류는 HTTP 200 + errors 에 담겨 옴 (plan / requests / access(정지) / token / season …). 성공은 errors = [].
+# - 상태(short): 축구 NS·TBD·1H·HT·2H·ET·BT·P·LIVE·SUSP·INT·FT·AET·PEN·PST·CANC·ABD·AWD·WO /
+#   야구 NS·IN1~9·POST·CANC·INTR·ABD·FT / 농구 NS·Q1~4·OT·BT·HT·FT·AOT·POST·CANC·SUSP·AWD·ABD /
+#   배구 NS·S1~5·FT·AW·POST·CANC·INTR·ABD (API-Sports 문서 표 — 문서 사이트는 Cloudflare 로 막혀 검색 결과·실제 응답으로 확인).
+# - 순위(standings)는 season 이 꼭 필요해서 무료 등급은 이번 시즌을 못 봄 → 유료 키에서만 (응답 샘플 확인 뒤 구현, 지금은 없음).
+APS_HOST = {"football": "https://v3.football.api-sports.io", "baseball": "https://v1.baseball.api-sports.io",
+            "basketball": "https://v1.basketball.api-sports.io", "volleyball": "https://v1.volleyball.api-sports.io"}
+APS_PATH = {"football": "fixtures", "baseball": "games", "basketball": "games", "volleyball": "games"}
+APS_RESERVE = 8            # 하루 한도 중 명령('.스포츠 내일' 등)용으로 남겨 둘 몫 — 알림 폴링은 이만큼 남으면 쉼
+APS_MIN_GAP = 60           # 같은 (종목, 날짜) 다시 받는 최소 간격(초). 무료 등급은 남은 한도로 더 늘어남 (_gap)
+APS_OTHER_TTL = 3600       # 오늘·어제가 아닌 날(내일 일정 등)은 1시간
+_FB = {"NS": "pre", "TBD": "pre", "1H": "in", "HT": "in", "2H": "in", "ET": "in", "BT": "in", "P": "in", "LIVE": "in",
+       "SUSP": "suspended", "INT": "suspended", "FT": "post", "AET": "post", "PEN": "post", "AWD": "post", "WO": "post",
+       "PST": "postponed", "CANC": "cancel", "ABD": "cancel"}
+_COMMON = {"NS": "pre", "FT": "post", "AOT": "post", "AW": "post", "AWD": "post", "POST": "postponed", "CANC": "cancel",
+           "ABD": "cancel", "INTR": "suspended", "SUSP": "suspended", "HT": "in", "BT": "in", "OT": "in"}
+_PERIOD = re.compile(r"^(IN|Q|S)(\d+)$")
+_SET_KEYS = ("first", "second", "third", "fourth", "fifth")
+
+
 class APISports(Provider):
-    """https://dashboard.api-football.com/register → 키 헤더 x-apisports-key. 종목마다 따로 구독
-    (v3.football / v1.baseball / v1.basketball / v1.volleyball / v1.hockey .api-sports.io).
-    TODO(오너 가입 뒤): 리그 ID 표(K리그1=292, KBO·KBL·V리그 ID 는 /leagues 로 확인) + fixtures?date= / ?live=all 파싱
-    + 이벤트(fixtures/events)로 득점자. 실제 응답 샘플을 tests/fixtures/sports 에 저장한 뒤에 켤 것 (추측 파싱 금지).
-    지금은 키가 있어도 supports()=False 라 쓰이지 않음 — 로그로만 알림."""
     name = "apisports"
 
-    def __init__(self, fetch: Fetch, key: str | None = None):
+    def __init__(self, fetch: Fetch, key: str | None = None, daily: int | None = None, clock=None):
         self.fetch = fetch
-        self.key = (key if key is not None else os.getenv("APISPORTS_KEY", "")).strip()
-        if self.key:
-            log.info("APISPORTS_KEY 가 있지만 API-Sports 연결은 아직 준비 중 (sodam/sports/providers.py TODO)")
+        self._key = key                       # None = 부를 때마다 환경변수 (오너가 '.키' 로 넣으면 재시작 없이 켜짐)
+        self._daily = daily
+        self.clock = clock or time.time
+        self.used: dict[tuple[str, str], int] = {}       # (종목, UTC 날짜) → 이 프로세스가 보낸 요청 수
+        self.exhausted: dict[str, str] = {}               # 종목 → 한도를 다 쓴 UTC 날짜 (API 가 requests 오류를 줌)
+        self.free = False                                 # 'Free plans …' 오류를 한 번이라도 봄 → 날짜 창 검사
+        self.blocked = ""                                 # 계정 정지·키 오류 (그 키로는 더 안 부름)
+        self._blocked_key = ""
+        self._raw: dict[tuple[str, date], tuple[float, list]] = {}
+        self._locks: dict[tuple[str, date], asyncio.Lock] = {}   # '.스포츠 야구' 처럼 KBO·NPB 를 동시에 물어도 요청 1번
+        self._season: dict[str, object] = {}              # 리그 → 응답에 실린 이번 시즌 (순위용)
+        self._unknown: set[str] = set()
+
+    @property
+    def key(self) -> str:
+        return (self._key if self._key is not None else os.getenv("APISPORTS_KEY", "")).strip()
+
+    @property
+    def daily(self) -> int:
+        if self._daily is not None:
+            return self._daily
+        try:
+            return max(10, int(os.getenv("APISPORTS_DAILY", "100")))
+        except ValueError:
+            return 100
 
     def enabled(self) -> bool:
-        return False
+        k = self.key
+        if self.blocked and k != self._blocked_key:      # 키를 바꾸면 다시 시도
+            self.blocked = ""
+        return bool(k) and not self.blocked
+
+    def supports(self, lg: League) -> bool:
+        return bool(lg.aps) and lg.aps[0] in APS_HOST
+
+    # ── 한도·간격 ─────────────────────────────────────────
+    def _utc_day(self) -> str:
+        return datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+
+    def remaining(self, sport: str) -> int:
+        if self.exhausted.get(sport) == self._utc_day():
+            return 0
+        return max(0, self.daily - self.used.get((sport, self._utc_day()), 0))
+
+    def _gap(self, sport: str) -> float:
+        """같은 날짜를 다시 받기까지 기다릴 초. 한도가 넉넉하면(유료) 60초, 무료면 남은 한도를 UTC 자정까지 나눔
+        (한도가 하루 안에 바닥나지 않게 — 남은 게 많으면 짧아지고 적으면 길어짐)."""
+        now = self.clock()
+        left = self.remaining(sport) - APS_RESERVE
+        if left <= 0:
+            return float("inf")
+        midnight = datetime.fromtimestamp(now, UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return max(APS_MIN_GAP, (midnight.timestamp() - now) / left)
+
+    async def _get(self, sport: str, params: dict, *, essential: bool) -> list:
+        """요청 1번. essential=False(알림 폴링)는 예비분을 남기고 멈춤, True(사람 명령)는 예비분까지 씀."""
+        if not self.enabled():
+            raise SportsError("API-Sports 키가 없거나 막혔어요.")
+        rem = self.remaining(sport)
+        if rem <= 0 or (not essential and rem <= APS_RESERVE):
+            raise SportsError("오늘 경기 정보 조회 한도를 다 써서 내일 다시 볼 수 있어요.")
+        day = self._utc_day()
+        self.used[(sport, day)] = self.used.get((sport, day), 0) + 1
+        key = self.key
+        data = await self.fetch(f"{APS_HOST[sport]}/{APS_PATH[sport]}", params, {"x-apisports-key": key})
+        errs = data.get("errors")
+        if errs:
+            text = " ".join(str(v) for v in (errs.values() if isinstance(errs, dict) else errs))
+            kinds = set(errs) if isinstance(errs, dict) else set()
+            if "requests" in kinds:
+                self.exhausted[sport] = day
+                raise SportsError("오늘 경기 정보 조회 한도를 다 써서 내일 다시 볼 수 있어요.")
+            if kinds & {"access", "token"} or "suspend" in text.lower():
+                self.blocked, self._blocked_key = text[:200], key
+                log.error("API-Sports 막힘 (키 확인 필요): %s", text[:200])
+                raise SportsError("경기 정보 소스에 접속이 막혔어요 (운영자 확인 필요).")
+            if "plan" in kinds or "Free plan" in text:
+                self.free = True
+                raise SportsError("무료 등급이라 이 날짜·시즌은 볼 수 없어요.")
+            log.warning("API-Sports %s %s 오류: %s", sport, params, text[:200])
+            raise SportsError("경기 정보를 가져오지 못했어요. 잠시 후 다시 해주세요.")
+        return list(data.get("response") or [])
+
+    def _today_utc(self) -> date:
+        return datetime.fromtimestamp(self.clock(), UTC).date()
+
+    def _in_window(self, d: date) -> bool:
+        """무료 등급(한도 1000 미만이거나 'Free plans' 오류를 봄)은 어제~내일만 — 밖의 날짜는 요청을 쓰지 않고 거절."""
+        return not (self.free or self.daily < 1000) or abs((d - self._today_utc()).days) <= 1
+
+    async def _raw_day(self, sport: str, d: date, essential: bool = True) -> list:
+        """(종목, 한국 날짜) 하나 = 요청 1번, 모든 리그가 같이 씀."""
+        async with self._locks.setdefault((sport, d), asyncio.Lock()):
+            return await self._raw_day_locked(sport, d, essential)
+
+    async def _raw_day_locked(self, sport: str, d: date, essential: bool) -> list:
+        now = self.clock()
+        k = (sport, d)
+        hit = self._raw.get(k)
+        today = datetime.fromtimestamp(now, KST).date()
+        ttl = self._gap(sport) if d in (today, today - timedelta(days=1)) else APS_OTHER_TTL
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        if not self._in_window(d):
+            raise SportsError("무료 등급이라 어제~내일 경기만 볼 수 있어요.")
+        try:
+            items = await self._get(sport, {"date": d.isoformat(), "timezone": "Asia/Seoul"}, essential=essential)
+        except SportsError:
+            if hit:          # 한도·일시 오류면 마지막으로 받은 것 (조금 늦어도 빈 화면보다 나음)
+                return hit[1]
+            raise
+        self._raw[k] = (now, items)
+        for kk in [kk for kk in self._raw if (kk[1] - today).days < -2 or (kk[1] - today).days > 3]:
+            self._raw.pop(kk, None)
+            self._locks.pop(kk, None)
+        return items
+
+    # ── 파싱 ─────────────────────────────────────────────
+    def _state(self, sport: str, short: str) -> str:
+        if sport == "football" and short in _FB:
+            return _FB[short]
+        if short in _COMMON:
+            return _COMMON[short]
+        if _PERIOD.match(short):
+            return "in"
+        if short not in self._unknown:
+            self._unknown.add(short)
+            log.warning("API-Sports %s 모르는 상태 %s", sport, short)
+        return ""
+
+    def parse(self, lg: League, sport: str, x: dict, src: str = "") -> Game | None:
+        fx = x.get("fixture") if sport == "football" else x
+        if not isinstance(fx, dict):
+            return None
+        try:
+            start = int(fx.get("timestamp") or datetime.fromisoformat(fx["date"]).timestamp())
+        except (KeyError, ValueError, TypeError):
+            return None
+        st = fx.get("status") or {}
+        short = (st.get("short") or "").upper()
+        teams = x.get("teams") or {}
+        home = canon(lg.code, (teams.get("home") or {}).get("name") or "?")
+        away = canon(lg.code, (teams.get("away") or {}).get("name") or "?")
+        if sport == "football":
+            hs, as_ = _int((x.get("goals") or {}).get("home")), _int((x.get("goals") or {}).get("away"))
+        elif sport == "volleyball":                          # 배구 점수 = 이긴 세트 수
+            sc = x.get("scores") or {}
+            hs, as_ = _int(sc.get("home")), _int(sc.get("away"))
+        else:
+            sc = x.get("scores") or {}
+            hs, as_ = _int((sc.get("home") or {}).get("total")), _int((sc.get("away") or {}).get("total"))
+        state = self._state(sport, short) or ("in" if hs is not None else "pre")
+        scored = state in ("in", "post", "suspended")
+        return Game(f"aps:{sport}:{x.get('id') if sport != 'football' else fx.get('id')}", lg.code, start, home, away,
+                    hs if scored else None, as_ if scored else None, state, self._detail(sport, short, state, st, x), src=src)
+
+    @staticmethod
+    def _detail(sport: str, short: str, state: str, st: dict, x: dict) -> str:
+        if state == "post":
+            if sport == "football" and short == "PEN":
+                pen = (x.get("score") or {}).get("penalty") or {}
+                return f"승부차기 {pen.get('home')}-{pen.get('away')}" if pen.get("home") is not None else "승부차기"
+            return {"AET": "연장 끝", "AOT": "연장 끝"}.get(short, "")
+        if state != "in":
+            return ""
+        if short == "HT":
+            return "하프타임"
+        if short == "BT":
+            return "쉬는 시간"
+        if sport == "football":
+            if short == "P":
+                return "승부차기"
+            el, ex = st.get("elapsed"), st.get("extra")
+            if el is None:
+                return ""
+            return ("연장 " if short == "ET" else "") + (f"{el}+{ex}'" if ex else f"{el}'")
+        if short == "OT":
+            return "연장"
+        m = _PERIOD.match(short)
+        if not m:
+            return ""
+        n = int(m.group(2))
+        if m.group(1) == "IN":                              # 원정만 그 회 점수가 있으면 초, 홈까지 있으면 말
+            inn = lambda side: ((((x.get("scores") or {}).get(side) or {}).get("innings")) or {}).get(str(n))  # noqa: E731
+            return f"{n}회{'말' if inn('home') is not None else '초'}"
+        if m.group(1) == "Q":
+            timer = st.get("timer")
+            return f"{n}쿼터" + (f" {timer}'" if timer not in (None, "") else "")
+        per = ((x.get("periods") or {}).get(_SET_KEYS[n - 1]) or {}) if 1 <= n <= 5 else {}
+        pts = f" {per.get('home')}-{per.get('away')}" if per.get("home") is not None else ""
+        return f"{n}세트{pts}"
+
+    # ── Provider ─────────────────────────────────────────
+    def _src(self, sport: str, d: date) -> str:
+        return f"aps:{sport}:{d.isoformat()}"
+
+    def _games(self, lg: League, items: list, src: str, d: date | None = None) -> list[Game]:
+        sport, lid = lg.aps
+        out = []
+        for x in items:
+            if ((x.get("league") or {}).get("id")) != lid:
+                continue
+            season = (x.get("league") or {}).get("season")
+            if season is not None:
+                self._season[lg.code] = season
+            g = self.parse(lg, sport, x, src)
+            if g and (d is None or kst_day(g.start) == d):
+                out.append(g)
+        return sorted(out, key=lambda g: (g.start, g.key))
+
+    async def day(self, lg: League, d: date, only: set[str] | None = None) -> list[Game]:
+        sport = lg.aps[0]
+        src = self._src(sport, d)
+        if only is not None and src not in only:
+            return []
+        # 알림 폴링(only 가 있음 = 라이브 재조회)은 예비분을 남김. 명령·일정은 예비분까지.
+        return self._games(lg, await self._raw_day(sport, d, essential=only is None), src, d)
+
+    async def standings(self, lg: League) -> list[Row]:
+        # 순위는 season 이 꼭 필요 → 무료 등급은 이번 시즌 불가. 유료 키가 생기면 실제 응답 샘플을 받아 구현 (추측 파싱 금지).
+        raise SportsError(f"{lg.name} 순위는 아직 못 봐요 (경기 일정·점수·알림은 돼요).")
+
+    async def team_games(self, lg: League, team: str) -> list[Game]:
+        sport = lg.aps[0]
+        today = datetime.fromtimestamp(self.clock(), KST).date()
+        span = 1 if self.free or self.daily < 1000 else 7   # 유료면 앞뒤 7일
+        games: dict[str, Game] = {}
+        got = False
+        for i in range(-span, span + 1):
+            d = today + timedelta(days=i)
+            if not self._in_window(d):
+                continue
+            try:
+                items = await self._raw_day(sport, d)
+            except SportsError:
+                continue
+            got = True
+            for g in self._games(lg, items, self._src(sport, d), d):
+                if same_team(g.home, team, lg.code) or same_team(g.away, team, lg.code):
+                    games[g.key] = g
+        if not got:
+            raise SportsError("경기 정보를 가져오지 못했어요. 잠시 후 다시 해주세요.")
+        return sorted(games.values(), key=lambda g: g.start)

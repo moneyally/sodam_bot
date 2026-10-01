@@ -1,0 +1,268 @@
+{
+ "get": "fixtures",
+ "parameters": {
+  "live": "all"
+ },
+ "errors": [],
+ "results": 2,
+ "paging": {
+  "current": 1,
+  "total": 1
+ },
+ "response": [
+  {
+   "fixture": {
+    "id": 1632353,
+    "referee": null,
+    "timezone": "UTC",
+    "date": "2026-10-01T06:10:00+00:00",
+    "timestamp": 1790835000,
+    "periods": {
+     "first": 1790835000,
+     "second": null
+    },
+    "venue": {
+     "id": null,
+     "name": "Yokohama Stadium",
+     "city": "Yokohama"
+    },
+    "status": {
+     "long": "First Half",
+     "short": "1H",
+     "elapsed": 24,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 916,
+    "name": "Kirin Cup",
+    "country": "World",
+    "logo": "https://media.api-sports.io/football/leagues/916.png",
+    "flag": null,
+    "season": 2026,
+    "round": "Semi-finals",
+    "standings": false
+   },
+   "teams": {
+    "home": {
+     "id": 11,
+     "name": "Panama",
+     "logo": "https://media.api-sports.io/football/teams/11.png",
+     "winner": false
+    },
+    "away": {
+     "id": 4673,
+     "name": "New Zealand",
+     "logo": "https://media.api-sports.io/football/teams/4673.png",
+     "winner": true
+    }
+   },
+   "goals": {
+    "home": 0,
+    "away": 1
+   },
+   "score": {
+    "halftime": {
+     "home": 0,
+     "away": 1
+    },
+    "fulltime": {
+     "home": null,
+     "away": null
+    },
+    "extratime": {
+     "home": null,
+     "away": null
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   },
+   "events": [
+    {
+     "time": {
+      "elapsed": 13,
+      "extra": null
+     },
+     "team": {
+      "id": 4673,
+      "name": "New Zealand",
+      "logo": "https://media.api-sports.io/football/teams/4673.png"
+     },
+     "player": {
+      "id": 179862,
+      "name": "M. Stamenic"
+     },
+     "assist": {
+      "id": 6938,
+      "name": "B. Waine"
+     },
+     "type": "Goal",
+     "detail": "Normal Goal",
+     "comments": null
+    }
+   ]
+  },
+  {
+   "fixture": {
+    "id": 1640419,
+    "referee": null,
+    "timezone": "UTC",
+    "date": "2026-10-01T05:00:00+00:00",
+    "timestamp": 1790830800,
+    "periods": {
+     "first": 1790830800,
+     "second": 1790834400
+    },
+    "venue": {
+     "id": 0,
+     "name": null,
+     "city": null
+    },
+    "status": {
+     "long": "Second Half",
+     "short": "2H",
+     "elapsed": 73,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 764,
+    "name": "Premier League",
+    "country": "Mongolia",
+    "logo": "https://media.api-sports.io/football/leagues/764.png",
+    "flag": "https://media.api-sports.io/flags/mn.svg",
+    "season": 2027,
+    "round": "Regular Season - 5",
+    "standings": true
+   },
+   "teams": {
+    "home": {
+     "id": 26669,
+     "name": "Khovd Western",
+     "logo": "https://media.api-sports.io/football/teams/26669.png",
+     "winner": false
+    },
+    "away": {
+     "id": 16185,
+     "name": "Deren",
+     "logo": "https://media.api-sports.io/football/teams/16185.png",
+     "winner": true
+    }
+   },
+   "goals": {
+    "home": 0,
+    "away": 4
+   },
+   "score": {
+    "halftime": {
+     "home": 0,
+     "away": 3
+    },
+    "fulltime": {
+     "home": null,
+     "away": null
+    },
+    "extratime": {
+     "home": null,
+     "away": null
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   },
+   "events": [
+    {
+     "time": {
+      "elapsed": 23,
+      "extra": null
+     },
+     "team": {
+      "id": 16185,
+      "name": "Deren",
+      "logo": "https://media.api-sports.io/football/teams/16185.png"
+     },
+     "player": {
+      "id": 309343,
+      "name": "B. Myagmar"
+     },
+     "assist": {
+      "id": null,
+      "name": null
+     },
+     "type": "Goal",
+     "detail": "Normal Goal",
+     "comments": null
+    },
+    {
+     "time": {
+      "elapsed": 25,
+      "extra": null
+     },
+     "team": {
+      "id": 16185,
+      "name": "Deren",
+      "logo": "https://media.api-sports.io/football/teams/16185.png"
+     },
+     "player": {
+      "id": 309343,
+      "name": "B. Myagmar"
+     },
+     "assist": {
+      "id": null,
+      "name": null
+     },
+     "type": "Goal",
+     "detail": "Normal Goal",
+     "comments": null
+    },
+    {
+     "time": {
+      "elapsed": 39,
+      "extra": null
+     },
+     "team": {
+      "id": 16185,
+      "name": "Deren",
+      "logo": "https://media.api-sports.io/football/teams/16185.png"
+     },
+     "player": {
+      "id": 309343,
+      "name": "B. Myagmar"
+     },
+     "assist": {
+      "id": null,
+      "name": null
+     },
+     "type": "Goal",
+     "detail": "Normal Goal",
+     "comments": null
+    },
+    {
+     "time": {
+      "elapsed": 72,
+      "extra": null
+     },
+     "team": {
+      "id": 16185,
+      "name": "Deren",
+      "logo": "https://media.api-sports.io/football/teams/16185.png"
+     },
+     "player": {
+      "id": null,
+      "name": null
+     },
+     "assist": {
+      "id": null,
+      "name": null
+     },
+     "type": "Goal",
+     "detail": "Normal Goal",
+     "comments": null
+    }
+   ]
+  }
+ ]
+}

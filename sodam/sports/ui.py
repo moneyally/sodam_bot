@@ -104,7 +104,7 @@ class UI:
                 failed.append(lg.name)
                 continue
             if team:
-                games = [g for g in games if same_team(g.home, team.src) or same_team(g.away, team.src)]
+                games = [g for g in games if same_team(g.home, team.src, team.league) or same_team(g.away, team.src, team.league)]
             if live_only:
                 games = [g for g in games if g.state == "in"]
             if not games:

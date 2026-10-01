@@ -1,0 +1,365 @@
+{
+ "get": "fixtures",
+ "parameters": {
+  "date": "2026-09-30",
+  "timezone": "Asia/Seoul"
+ },
+ "errors": [],
+ "results": 5,
+ "paging": {
+  "current": 1,
+  "total": 1
+ },
+ "response": [
+  {
+   "fixture": {
+    "id": 1350171,
+    "referee": "J. Semler",
+    "timezone": "Asia/Seoul",
+    "date": "2026-09-30T00:00:00+09:00",
+    "timestamp": 1790694000,
+    "periods": {
+     "first": 1790694000,
+     "second": 1790697600
+    },
+    "venue": {
+     "id": null,
+     "name": null,
+     "city": null
+    },
+    "status": {
+     "long": "Match Finished",
+     "short": "FT",
+     "elapsed": 90,
+     "extra": 3
+    }
+   },
+   "league": {
+    "id": 850,
+    "name": "UEFA U21 Championship - Qualification",
+    "country": "World",
+    "logo": "https://media.api-sports.io/football/leagues/850.png",
+    "flag": null,
+    "season": 2027,
+    "round": "Group Stage - 20",
+    "standings": true
+   },
+   "teams": {
+    "home": {
+     "id": 8199,
+     "name": "Iceland U21",
+     "logo": "https://media.api-sports.io/football/teams/8199.png",
+     "winner": true
+    },
+    "away": {
+     "id": 8226,
+     "name": "Switzerland U21",
+     "logo": "https://media.api-sports.io/football/teams/8226.png",
+     "winner": false
+    }
+   },
+   "goals": {
+    "home": 5,
+    "away": 1
+   },
+   "score": {
+    "halftime": {
+     "home": 2,
+     "away": 0
+    },
+    "fulltime": {
+     "home": 5,
+     "away": 1
+    },
+    "extratime": {
+     "home": null,
+     "away": null
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "fixture": {
+    "id": 1636792,
+    "referee": null,
+    "timezone": "Asia/Seoul",
+    "date": "2026-09-30T02:00:00+09:00",
+    "timestamp": 1790701200,
+    "periods": {
+     "first": null,
+     "second": null
+    },
+    "venue": {
+     "id": 22777,
+     "name": "Arena Linköping",
+     "city": "Linkoping"
+    },
+    "status": {
+     "long": "Match Finished",
+     "short": "AET",
+     "elapsed": 120,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 737,
+    "name": "Svenska Cupen - Women",
+    "country": "Sweden",
+    "logo": "https://media.api-sports.io/football/leagues/737.png",
+    "flag": "https://media.api-sports.io/flags/se.svg",
+    "season": 2026,
+    "round": "Round 2",
+    "standings": false
+   },
+   "teams": {
+    "home": {
+     "id": 11080,
+     "name": "Linköping W",
+     "logo": "https://media.api-sports.io/football/teams/11080.png",
+     "winner": false
+    },
+    "away": {
+     "id": 16008,
+     "name": "Norrköping W",
+     "logo": "https://media.api-sports.io/football/teams/16008.png",
+     "winner": true
+    }
+   },
+   "goals": {
+    "home": 2,
+    "away": 3
+   },
+   "score": {
+    "halftime": {
+     "home": 1,
+     "away": 1
+    },
+    "fulltime": {
+     "home": 2,
+     "away": 2
+    },
+    "extratime": {
+     "home": 0,
+     "away": 1
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "fixture": {
+    "id": 1642011,
+    "referee": "Abdulhadi Alasmar Al-Ruaile",
+    "timezone": "Asia/Seoul",
+    "date": "2026-09-30T19:30:00+09:00",
+    "timestamp": 1790764200,
+    "periods": {
+     "first": null,
+     "second": null
+    },
+    "venue": {
+     "id": null,
+     "name": "Osaka Nagai Stadium",
+     "city": "Osaka"
+    },
+    "status": {
+     "long": "Match Finished",
+     "short": "PEN",
+     "elapsed": 120,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 803,
+    "name": "Asian Games",
+    "country": "World",
+    "logo": "https://media.api-sports.io/football/leagues/803.png",
+    "flag": null,
+    "season": 2026,
+    "round": "Semi-finals",
+    "standings": true
+   },
+   "teams": {
+    "home": {
+     "id": 10963,
+     "name": "Uzbekistan U23",
+     "logo": "https://media.api-sports.io/football/teams/10963.png",
+     "winner": false
+    },
+    "away": {
+     "id": 10176,
+     "name": "Japan U23",
+     "logo": "https://media.api-sports.io/football/teams/10176.png",
+     "winner": true
+    }
+   },
+   "goals": {
+    "home": 1,
+    "away": 1
+   },
+   "score": {
+    "halftime": {
+     "home": 1,
+     "away": 0
+    },
+    "fulltime": {
+     "home": 1,
+     "away": 1
+    },
+    "extratime": {
+     "home": 0,
+     "away": 0
+    },
+    "penalty": {
+     "home": 8,
+     "away": 9
+    }
+   }
+  },
+  {
+   "fixture": {
+    "id": 1621348,
+    "referee": null,
+    "timezone": "Asia/Seoul",
+    "date": "2026-09-30T20:30:00+09:00",
+    "timestamp": 1790767800,
+    "periods": {
+     "first": null,
+     "second": null
+    },
+    "venue": {
+     "id": null,
+     "name": null,
+     "city": null
+    },
+    "status": {
+     "long": "Not Started",
+     "short": "NS",
+     "elapsed": null,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 496,
+    "name": "Liga Alef",
+    "country": "Israel",
+    "logo": "https://media.api-sports.io/football/leagues/496.png",
+    "flag": "https://media.api-sports.io/flags/il.svg",
+    "season": 2026,
+    "round": "North - 5",
+    "standings": false
+   },
+   "teams": {
+    "home": {
+     "id": 6169,
+     "name": "Hapoel Tirat HaCarmel",
+     "logo": "https://media.api-sports.io/football/teams/6169.png",
+     "winner": null
+    },
+    "away": {
+     "id": 20706,
+     "name": "Tzeirei Umm al-Fahm",
+     "logo": "https://media.api-sports.io/football/teams/20706.png",
+     "winner": null
+    }
+   },
+   "goals": {
+    "home": null,
+    "away": null
+   },
+   "score": {
+    "halftime": {
+     "home": null,
+     "away": null
+    },
+    "fulltime": {
+     "home": null,
+     "away": null
+    },
+    "extratime": {
+     "home": null,
+     "away": null
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   }
+  },
+  {
+   "fixture": {
+    "id": 1638594,
+    "referee": null,
+    "timezone": "Asia/Seoul",
+    "date": "2026-09-30T21:00:00+09:00",
+    "timestamp": 1790769600,
+    "periods": {
+     "first": null,
+     "second": null
+    },
+    "venue": {
+     "id": null,
+     "name": null,
+     "city": null
+    },
+    "status": {
+     "long": "Match Cancelled",
+     "short": "CANC",
+     "elapsed": null,
+     "extra": null
+    }
+   },
+   "league": {
+    "id": 10,
+    "name": "Friendlies",
+    "country": "World",
+    "logo": "https://media.api-sports.io/football/leagues/10.png",
+    "flag": null,
+    "season": 2026,
+    "round": "Friendly International",
+    "standings": false
+   },
+   "teams": {
+    "home": {
+     "id": 1497,
+     "name": "Mauritius",
+     "logo": "https://media.api-sports.io/football/teams/1497.png",
+     "winner": null
+    },
+    "away": {
+     "id": 1535,
+     "name": "Djibouti",
+     "logo": "https://media.api-sports.io/football/teams/1535.png",
+     "winner": null
+    }
+   },
+   "goals": {
+    "home": null,
+    "away": null
+   },
+   "score": {
+    "halftime": {
+     "home": null,
+     "away": null
+    },
+    "fulltime": {
+     "home": null,
+     "away": null
+    },
+    "extratime": {
+     "home": null,
+     "away": null
+    },
+    "penalty": {
+     "home": null,
+     "away": null
+    }
+   }
+  }
+ ]
+}
