@@ -11,7 +11,8 @@ register_setting("ai_comeback", "wit", "욕 받아치기",                  # �
                  choices={"wit": "wit", "센스": "wit", "욕없이": "wit", "mirror": "mirror", "똑같이": "mirror", "욕으로": "mirror"},
                  choice_labels={"wit": "센스로 받아치기(욕 없이)", "mirror": "똑같이 욕으로"})
 register_setting("ai_spicy", False, "19금 드립 받아치기")               # 기본 꺼짐: 켠 방에서만 야한 드립에 은유 수준으로 (노골적 X)
-register_setting("ai_chime_in", False, "AI 먼저 끼어들기")             # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디
+register_setting("ai_quote", True, "답장 인용으로 답하기")             # 끄면 그룹방 AI 답을 인용 없이 그냥 메시지로 (오너 요청 2026-10-01)
+register_setting("ai_chime_in", False, "AI 먼저 끼어들기")            # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디
 register_setting("ai_chime_gap_min", 120, "끼어들기 최소 간격(분)", range_=(30, 1440))
 register_setting("ai_chime_daily", 4, "끼어들기 하루 최대", range_=(1, 20))
 # 방 하루 토큰 한도: 기본값이 상한이라 방 관리자는 줄이기만 가능 (0=무제한·큰 값으로 전체 예산을 못 씀). llm 도 저장값을 상한으로 자름

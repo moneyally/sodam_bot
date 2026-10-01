@@ -270,7 +270,8 @@ async def _chime_now(svc: Services, bot, msg, text: str, kind: str) -> bool:
     usernames = {r["username"].lower() for r in await db.member_names(chat_id) if r["username"]}
     out = filter_output(answer, max_chars=min(s["reply_max_chars"], 300), allowed_usernames=usernames)
     try:
-        sent = await msg.reply_text(esc(out), parse_mode="HTML", link_preview_options=NO_PREVIEW)
+        sent = await msg.reply_text(esc(out), parse_mode="HTML", link_preview_options=NO_PREVIEW,
+                                    do_quote=bool(s["ai_quote"]))   # 방 설정 답장 인용
     except TelegramError as e:
         log.info("chime send failed: %s", e)
         return False
