@@ -346,6 +346,18 @@ async def overseas_leagues_still_prefer_espn():
     assert f.calls == [], "ESPN 이 되면 API-Sports 한도를 안 씀"
 
 
+@test
+async def http_client_does_not_pretend_to_be_a_browser():
+    """서버(데이터센터 IP)에서 브라우저 UA 로 ESPN 을 부르면 403 (실측 2026-10-01, '야구 일정' 실패 원인)."""
+    from sodam.sports.providers import NAVER_HEADERS, Http
+    h = Http()
+    try:
+        assert "Mozilla" not in h.client.headers.get("user-agent", ""), h.client.headers
+    finally:
+        await h.close()
+    assert "Mozilla" in NAVER_HEADERS["User-Agent"], "네이버는 그 요청에만 브라우저 UA"
+
+
 # ── 팀 이름표 ─────────────────────────────────────────────
 @test
 async def team_names_per_league():

@@ -72,6 +72,8 @@ class Row:
 
 
 Fetch = Callable[[str, dict, dict], Awaitable[dict]]
+# 브라우저 흉내 UA 는 쓰지 않는다: ESPN 이 데이터센터 IP(Hetzner) + 브라우저 UA 조합을 403 으로 막음 (실측 2026-10-01 서버에서
+# 'Mozilla/…' 403 · httpx 기본 UA 200, 3번씩 같음). 브라우저 UA 가 꼭 필요한 곳(네이버)만 그 요청 헤더에 따로.
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
@@ -79,7 +81,7 @@ class Http:
     """진짜 네트워크. 테스트는 fetch 함수(url, params, headers → dict)를 대신 넣는다."""
 
     def __init__(self, timeout: float = 10):
-        self.client = httpx.AsyncClient(timeout=timeout, headers={"User-Agent": UA})
+        self.client = httpx.AsyncClient(timeout=timeout)   # httpx 기본 UA (위 설명)
         self.calls = 0
 
     async def __call__(self, url: str, params: dict, headers: dict) -> dict:
@@ -265,7 +267,7 @@ class ESPN(Provider):
 
 # ── 네이버 스포츠 (국내 리그, 기본 꺼짐: SPORTS_NAVER=1) ─────────
 NAVER = "https://api-gw.sports.naver.com"
-NAVER_HEADERS = {"Referer": "https://m.sports.naver.com/"}
+NAVER_HEADERS = {"Referer": "https://m.sports.naver.com/", "User-Agent": UA}
 _NAVER_STATE = {"BEFORE": "pre", "READY": "pre", "STARTED": "in", "ENDED": "post", "RESULT": "post"}
 
 
