@@ -8,10 +8,13 @@ chat_state(0, voice_assistant) = 로그인된 어시스턴트 {id, name, usernam
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime
 
 from .. import db as dbm
+
+log = logging.getLogger(__name__)
 
 JOB_TTL = 120            # 이만큼 안 가져가면 worker 가 안 도는 것 → failed(no_worker)
 ASSISTANT_KEY = "voice_assistant"
@@ -161,13 +164,32 @@ async def member_voice(db, chat_id: int, user_id: int, since: int) -> tuple[int,
     return (r["c"] or 0, r["n"] or 0) if r else (0, 0)
 
 
-USD_PER_MIN = float(__import__("os").getenv("VOICE_USD_PER_MIN", "0.08"))   # 추정 (Realtime mini 음성 입·출력 + 받아쓰기, 넉넉히)
+USD_PER_MIN = float(__import__("os").getenv("VOICE_USD_PER_MIN", "0.08"))   # 사용량을 모를 때만 쓰는 추정 (넉넉히)
+# 실제 요금표 (USD / 1M 토큰, OpenAI pricing 2026-10-01): (글자 입력, 글자 캐시, 글자 출력, 음성 입력, 음성 캐시, 음성 출력)
+REALTIME_PRICES = {"gpt-realtime-2.1-mini": (0.60, 0.06, 2.40, 10.00, 0.30, 20.00),
+                   "gpt-realtime-2.1": (4.00, 0.40, 24.00, 32.00, 0.40, 64.00)}
+TRANSCRIBE_USD_PER_MIN = 0.003      # gpt-4o-mini-transcribe 받아쓰기 (토큰 usage 에 안 들어감 → 통화 시간으로)
 
 
-async def record_cost(db, tz, chat_id: int, seconds: float) -> int:
-    """통화 요금 추정을 하루 예산(usd_micro)·방 요금(room_usd_micro)에 더함 → 예산이 다 차면 다른 AI 처럼 막힘."""
+def cost_micro(model: str, usage: dict | None, seconds: float) -> tuple[int, str]:
+    """(마이크로달러, 근거). 모델 요금표와 음성·글자별 토큰이 있으면 실제 요금 + 받아쓰기, 아니면 분당 추정.
+    예전엔 항상 분당 0.08 추정만 써서 usage 를 버렸음 (2026-10-01 점검)."""
+    p = REALTIME_PRICES.get(model or "")
+    u = usage or {}
+    if p and any(u.get(k) for k in ("in_audio", "in_text", "out_audio", "out_text")):
+        ca, ct = u.get("cached_audio", 0), u.get("cached_text", 0)
+        usd = (max(0, u.get("in_text", 0) - ct) * p[0] + ct * p[1] + u.get("out_text", 0) * p[2]
+               + max(0, u.get("in_audio", 0) - ca) * p[3] + ca * p[4] + u.get("out_audio", 0) * p[5]) / 1_000_000
+        usd += seconds / 60 * TRANSCRIBE_USD_PER_MIN
+        return int(usd * 1_000_000), "tokens"
+    return int(seconds / 60 * USD_PER_MIN * 1_000_000), "per_min"
+
+
+async def record_cost(db, tz, chat_id: int, seconds: float, model: str = "", usage: dict | None = None) -> int:
+    """통화 요금을 하루 예산(usd_micro)·방 요금(room_usd_micro)에 더함 → 예산이 다 차면 다른 AI 처럼 막힘."""
     from .. import costs
-    micro = int(seconds / 60 * USD_PER_MIN * 1_000_000)
+    micro, how = cost_micro(model, usage, seconds)
+    log.info("통화 요금 %s %.0f초 → $%.4f (%s)", chat_id, seconds, micro / 1e6, how)
     if micro <= 0:
         return 0
     day = datetime.now(tz).strftime("%Y-%m-%d")

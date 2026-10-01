@@ -99,6 +99,22 @@ TOOL_TIMEOUT = 15
 SPEAKER_SHARE = 0.7        # 한 사람 소리가 이만큼 넘어야 '그 사람 말' (여럿이 섞이면 모름 → 쓰기 도구 안 됨)
 
 
+def add_usage(acc: dict, usage) -> None:
+    """response.done 의 usage 를 통화 합계에 더함. 요금은 음성·글자·캐시가 따로라 나눠서 (store.cost_micro).
+    input_tokens = 글자+음성(+그림), cached_tokens 는 그 안의 일부 — OpenAI Realtime usage 형식 (SDK RealtimeResponseUsage)."""
+    if usage is None:
+        return
+    g = lambda o, k: int(getattr(o, k, 0) or 0)  # noqa: E731
+    det, out = getattr(usage, "input_token_details", None), getattr(usage, "output_token_details", None)
+    cdet = getattr(det, "cached_tokens_details", None)
+    for k, v in (("input_tokens", g(usage, "input_tokens")), ("output_tokens", g(usage, "output_tokens")),
+                 ("cached_tokens", g(det, "cached_tokens")),
+                 ("in_audio", g(det, "audio_tokens")), ("in_text", g(det, "text_tokens")),
+                 ("cached_audio", g(cdet, "audio_tokens")), ("cached_text", g(cdet, "text_tokens")),
+                 ("out_audio", g(out, "audio_tokens")), ("out_text", g(out, "text_tokens"))):
+        acc[k] = acc.get(k, 0) + v
+
+
 def dominant(energy: dict[int, float]) -> int | None:
     total = sum(energy.values())
     if total <= 0:
@@ -388,12 +404,7 @@ class Bridge:
                     await self._create()
                 except Exception as e:
                     log.warning("도구 결과 뒤 답 요청 실패: %s", e)
-            usage = getattr(getattr(ev, "response", None), "usage", None)
-            for k in ("input_tokens", "output_tokens"):
-                self.result.usage[k] = self.result.usage.get(k, 0) + int(getattr(usage, k, 0) or 0)
-            det = getattr(usage, "input_token_details", None)        # 앞 턴을 다시 읽는 부분은 자동 캐시 (할인)
-            self.result.usage["cached_tokens"] = (self.result.usage.get("cached_tokens", 0)
-                                                  + int(getattr(det, "cached_tokens", 0) or 0))
+            add_usage(self.result.usage, getattr(getattr(ev, "response", None), "usage", None))
         elif t == "error":
             # 보낸 response.create 가 거절됐을 수 있음 → 기다림을 풀어야 영영 조용해지지 않음 (진짜 답 중이면 created/done 이 옴)
             self._pending = None

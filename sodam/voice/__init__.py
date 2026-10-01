@@ -1,4 +1,4 @@
-"""📞 소담 음성채팅 — 그룹 음성채팅에서 소담이 실시간으로 말한다 (docs/VOICE.md).
+"""📞 소담 음성채팅 — 그룹 음성채팅에서 소담이 실시간으로 말한다 (설계·운영: CLAUDE.md '📞 음성채팅', .claude/skills/telegram-voice-assistant/SKILL.md, GPT-Live 전환 설계 docs/VOICE_LIVE.md).
 
 텔레그램은 봇 계정에 통화(phone.*)를 주지 않는다 → 음악봇들(오픈소스 YukkiMusicBot 등)처럼 **어시스턴트 사람 계정** 하나가
 음성채팅에 들어가고, 소담 봇(관리자)이 그 계정을 1회용 초대링크로 방에 넣고 '음성채팅 관리' 권한을 준다. 구조만 참고, 코드는 새로.

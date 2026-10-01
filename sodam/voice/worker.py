@@ -337,7 +337,7 @@ class Worker:
             self.ssrc_users.pop(chat_id, None)
             await self._leave(chat_id)
         await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns, res.stats)
-        await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds)
+        await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds, MODEL, res.usage)
         st = res.stats or {}
         log.info("통화 끝 %s %.0f초 %s · 늦은 재생 %s번(최대 %sms) · 루프 지연 최대 %sms · 끼어들기 %s · 오류 %s · 재연결 %s",
                  chat_id, res.seconds, res.reason, st.get("late_ticks"), st.get("max_late_ms"), st.get("loop_lag_max_ms"),
