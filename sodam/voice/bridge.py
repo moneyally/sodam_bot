@@ -46,6 +46,9 @@ BENIGN_ERRORS = frozenset({"conversation_already_has_active_response", "response
                            "input_audio_buffer_commit_empty", "item_truncate_invalid_audio_end_ms",
                            "invalid_audio_end_ms", "item_not_found"})
 MAX_RECONNECTS = 1                              # 통화 중 OpenAI 연결이 끊기면 다시 연결하는 횟수
+# 말 감지 기준 (0~1, 높을수록 큰 소리만 말로 봄). 0.6 에선 '야'·작은 목소리가 잡음으로 버려짐 (2026-10-01 베베방 실측:
+# 85초 소리 중 말 3번만 받아씀) → 0.5 (OpenAI 기본값). 잡음 많은 방은 VOICE_VAD 로 다시 올림
+VAD_THRESHOLD = min(0.9, max(0.3, float(os.environ.get("VOICE_VAD", "0.5") or 0.5)))
 LOUD = 600                                      # 들어온 100 ms 소리 크기(RMS)가 이만큼이면 '누가 소리 냄' (idle 아님)
 # 음악봇·켜 둔 마이크: 큰 소리가 계속 들어오고 VAD 는 speech_stopped 를 안 보냄 → 예전엔 idle 이 영영 안 와서 15분 꽉 채움(요금).
 LOUD_MAX = 60.0                                 # 말 이벤트(speech_started/stopped·받아쓰기) 없이 큰 소리만으로 활동이라 보는 최대 시간
@@ -141,7 +144,7 @@ def session_config(instructions: str, voice: str, reply: str = "all", language: 
                 "noise_reduction": {"type": "far_field"},           # 여러 사람 폰 마이크
                 "transcription": {"model": "gpt-4o-mini-transcribe", "language": language,
                                   **({"prompt": transcribe_prompt[:500]} if transcribe_prompt else {})},
-                "turn_detection": {"type": "server_vad", "threshold": 0.6, "prefix_padding_ms": 300,
+                "turn_detection": {"type": "server_vad", "threshold": VAD_THRESHOLD, "prefix_padding_ms": 300,
                                    # silence 500 = 공식 예시값 (700 → 500: 말 끝 판단 0.2초 빨리)
                                    "silence_duration_ms": 500, "create_response": reply == "all",
                                    "interrupt_response": True},
@@ -191,7 +194,7 @@ class Bridge:
         self._lags: list[float] = []
         self.stats: dict = {"frames_in": 0, "frames_out_voice": 0, "frames_out_silence": 0, "send_dropped": 0,
                             "late_ticks": 0, "max_late_ms": 0, "resyncs": 0, "interrupts": 0, "reconnects": 0,
-                            "rt_errors": {}}
+                            "speech_events": 0, "empty_transcripts": 0, "rt_errors": {}}
         self._energy: dict[int, float] = {}
         self.speaker: int | None = None                 # 마지막 말의 주인 ssrc (한 사람이 SPEAKER_SHARE 이상일 때만, 아니면 None)
         self.tools = tools or {}                        # 이름 → async (인자) -> 결과 글
@@ -363,6 +366,7 @@ class Bridge:
                     self._first_audio.append(now - self._stopped_at)
                 self._stopped_at = None
         elif t == "input_audio_buffer.speech_started":
+            self.stats["speech_events"] += 1             # 말 감지 수 ↔ user_turns(받아쓴 수) 비교 = 씹힘 계측
             self._last_voice = self._speech_t = self.clock()
             self._speaking, self._energy, self._loud_from = True, {}, None
             self._stopped_at = None
@@ -376,6 +380,7 @@ class Bridge:
         elif t == "conversation.item.input_audio_transcription.completed":
             text = (ev.transcript or "").strip()
             if not text:
+                self.stats["empty_transcripts"] += 1
                 return
             self._last_voice = self.clock()
             self._loud_from = None
@@ -482,6 +487,16 @@ class Bridge:
             await self._reply()
         except Exception as e:
             log.warning("도구 결과 전달 실패: %s", e)
+
+    async def note(self, text: str) -> None:
+        """통화 중 모델에게 맥락 한 줄 (말하게 하진 않음) — 처음 말한 사람 이름·기억 (voice/context.speaker_note)."""
+        if not text or self.conn is None or self.done:
+            return
+        try:
+            await self.conn.conversation.item.create(
+                item={"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]})
+        except Exception as e:
+            log.info("맥락 전달 실패 (통화는 계속): %s", e)
 
     async def _interrupt(self) -> None:
         """누가 말을 시작함 → 들려주던 답을 멈추고, 모델 쪽 기록도 답마다 실제로 들려준 데까지 자름."""

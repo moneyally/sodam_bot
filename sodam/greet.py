@@ -63,6 +63,8 @@ def _render_buttons(value: Any) -> str:
 register_setting("greet_media_type", "", "인사 미디어 종류")
 register_setting("greet_media_id", "", "인사 미디어")
 register_setting("greet_buttons", [], "인사 URL 버튼", render_fn=_render_buttons)
+# 끄면 이름을 멘션(태그) 대신 글자로만, 인사말에 {names} 가 없으면 이름 없이 인사말만 (오너 요청 2026-10-01 베베방)
+register_setting("greet_mention", True, "입장 인사 이름 태그")
 register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
 
 
@@ -140,6 +142,11 @@ def button_rows(s: dict) -> list[list[InlineKeyboardButton]]:
     return [[InlineKeyboardButton(t, url=u)] for t, u in clean_buttons(s.get("greet_buttons"))]
 
 
+def with_names(template: str, tag: bool = True) -> str:
+    """{names} 가 없는 인사말: 태그 켜짐 → 앞에 이름을 붙임, 꺼짐 → 인사말 그대로 (이름 없이)."""
+    return template if "{names}" in template or not tag else "{names} " + template
+
+
 def fill(template: str, names_html: str) -> str:
     """인사말(관리자·AI 가 쓴 글)은 이스케이프하고, {names} 자리에만 코드가 만든 멘션을 넣는다."""
     return esc(template).replace(esc("{names}"), names_html)
@@ -200,11 +207,12 @@ class Greeter:
         people = self._pending.pop(chat_id, [])
         if not people:
             return
-        names = ", ".join(mention(uid, name) for uid, name in people[:15])
+        s = await self.svc.db.get_settings(chat_id)
+        tag = bool(s.get("greet_mention", True))
+        names = ", ".join(mention(uid, name) if tag else esc(name) for uid, name in people[:15])
         if len(people) > 15:
             names += f" 외 {len(people) - 15}분"
-        template = await self._template(chat_id, len(people))
-        s = await self.svc.db.get_settings(chat_id)
+        template = with_names(await self._template(chat_id, len(people)), tag)
         try:
             sent = await send_greeting(bot, chat_id, s, fill(template, names))
             # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
@@ -219,8 +227,7 @@ class Greeter:
     async def _template(self, chat_id: int, count: int) -> str:
         s = await self.svc.db.get_settings(chat_id)
         if s["greet_template"]:
-            tpl = s["greet_template"]
-            return tpl if "{names}" in tpl else "{names} " + tpl
+            return s["greet_template"]               # {names} 없을 때 이름 붙이기는 with_names (태그 설정)
         if self.svc.llm is None:
             return random.choice(FALLBACKS)
         try:

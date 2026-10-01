@@ -272,22 +272,38 @@ class Worker:
         except Exception:
             await self._leave(chat_id)
             raise
-        bridge.on_line = self._recorder(chat_id, call_id)
+        bridge.on_line = self._recorder(chat_id, call_id, bridge)
         self.bridges[chat_id] = bridge
         self.tasks[chat_id] = asyncio.create_task(self._run_call(chat_id, call_id, bridge, video))
         return True, "started"
 
-    def _recorder(self, chat_id: int, call_id: int):
-        """통화 대화 → voice_lines (7일, 오너만 봄). 말한 사람은 소리 번호 → 계정 표로."""
+    def _recorder(self, chat_id: int, call_id: int, bridge: Any = None):
+        """통화 대화 → voice_lines (7일, 오너만 봄). 말한 사람은 소리 번호 → 계정 표로.
+        처음 말한 사람이 확인되면 그 사람 이름·채팅 기억을 모델에 한 번 알려 줌 (voice/context.speaker_note)."""
         users = self.ssrc_users.setdefault(chat_id, {})
         bg = self.__dict__.setdefault("_line_tasks", set())
+        noted: set[int] = set()
+
+        def spawn(coro) -> None:
+            t = asyncio.create_task(coro)
+            bg.add(t)
+            t.add_done_callback(bg.discard)
 
         def record(who: str, text: str, ssrc: int | None) -> None:
             uid = users.get(ssrc) if ssrc is not None else None
-            t = asyncio.create_task(store.add_line(self.db, call_id, chat_id, who, uid, text))
-            bg.add(t)
-            t.add_done_callback(bg.discard)
+            spawn(store.add_line(self.db, call_id, chat_id, who, uid, text))
+            if who == "user" and uid and uid not in noted and bridge is not None and len(noted) < 30:
+                noted.add(uid)
+                spawn(self._note_speaker(bridge, chat_id, uid))
         return record
+
+    async def _note_speaker(self, bridge: Any, chat_id: int, uid: int) -> None:
+        from . import context
+        try:
+            note = await context.speaker_note(self.db, chat_id, uid, await self.db.get_settings(chat_id))
+            await bridge.note(note)
+        except Exception as e:
+            log.info("말한 사람 맥락 실패 (통화는 계속) %s/%s: %r", chat_id, uid, e)
 
     async def _toolset(self, chat_id: int, starter: int) -> dict:
         """Bridge 에 줄 도구: 채팅 소담 읽기 전용 도구 + 웹 검색 (toolset.py 방어 규칙)."""
@@ -349,10 +365,21 @@ class Worker:
             await self._leave(chat_id)
         await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns, res.stats)
         await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds, self.model, res.usage)
+        if self.svc is not None:                       # 통화에서 한 자기 얘기 → 채팅과 같은 멤버 기억
+            await asyncio.gather(*self.__dict__.get("_line_tasks", ()), return_exceptions=True)   # 줄 저장 먼저
+            from . import context
+            try:
+                n = await context.remember_call(self.svc, chat_id, call_id)
+                if n:
+                    log.info("통화 기억 정리 %s: %s명", chat_id, n)
+            except Exception as e:
+                log.warning("통화 기억 정리 실패 %s: %r", chat_id, e)
         st = res.stats or {}
-        log.info("통화 끝 %s %.0f초 %s · 늦은 재생 %s번(최대 %sms) · 루프 지연 최대 %sms · 끼어들기 %s · 오류 %s · 재연결 %s",
+        log.info("통화 끝 %s %.0f초 %s · 늦은 재생 %s번(최대 %sms) · 루프 지연 최대 %sms · 끼어들기 %s · 오류 %s · 재연결 %s"
+                 " · 말 감지 %s → 받아씀 %s (빈 받아쓰기 %s)",
                  chat_id, res.seconds, res.reason, st.get("late_ticks"), st.get("max_late_ms"), st.get("loop_lag_max_ms"),
-                 st.get("interrupts"), st.get("rt_errors"), st.get("reconnects"))
+                 st.get("interrupts"), st.get("rt_errors"), st.get("reconnects"),
+                 st.get("speech_events"), res.user_turns, st.get("empty_transcripts"))
 
     async def _leave(self, chat_id: int) -> None:
         try:

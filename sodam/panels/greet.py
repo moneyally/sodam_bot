@@ -16,13 +16,14 @@ from telegram.error import TelegramError
 
 from .. import menu
 from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, fill,
-                     media_of, parse_buttons, send_greeting)
+                     media_of, parse_buttons, send_greeting, with_names)
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, josa, mention, user_name
 
 PARTS = {"t": "📄 인사말", "m": "🖼 미디어", "b": "🔗 URL 버튼"}
 MEDIA_OBJ = {"photo": "사진을", "video": "영상을", "animation": "GIF를"}
 CLOSE_TTL = 48 * 3600    # 봇은 48시간 지난 메시지를 못 지운다
+menu.register_toggle("greet_mention", "w")   # 🏷 이름 태그 켜기/끄기 → 편집기로 다시
 
 
 def _kb(rows):
@@ -63,6 +64,8 @@ async def s_editor(c: PanelCtx) -> Screen:
         lines.append("📄 인사말: 비어 있음 → AI가 매번 새로 써요")
     lines.append(f"🖼 미디어: {MEDIA_TYPES[media[0]] if media else '없음'}")
     lines.append(f"🔗 URL 버튼: {len(btns)}개" if btns else "🔗 URL 버튼: 없음")
+    lines.append("🏷 이름 태그: " + ("켜짐 — 새 멤버 이름을 멘션(파란 글씨)으로" if s["greet_mention"]
+                                    else "꺼짐 — 멘션 없이 (인사말에 {names} 가 없으면 이름도 안 붙여요)"))
     cid = c.cid
     rows = [[B("📄 인사말 수정" if tpl else "📄 인사말 쓰기", f"m:in:{cid}:wt"), B("👀 보기", f"m:wt:{cid}")]
             + ([B("🗑 삭제", f"m:wd:{cid}:t")] if tpl else []),
@@ -70,6 +73,7 @@ async def s_editor(c: PanelCtx) -> Screen:
             + ([B("👀 보기", f"m:wm:{cid}"), B("🗑 삭제", f"m:wd:{cid}:m")] if media else []),
             [B("🔗 URL 버튼 수정" if btns else "🔗 URL 버튼 추가", f"m:in:{cid}:wb")]
             + ([B("👀 보기", f"m:wb:{cid}"), B("🗑 삭제", f"m:wd:{cid}:b")] if btns else []),
+            [B(("✅" if s["greet_mention"] else "❌") + " 이름 태그", f"m:t:{cid}:greet_mention:{0 if s['greet_mention'] else 1}")],
             [B("👀 전체 미리보기 (1:1로 받기)", f"m:wv:{cid}:all")],
             [B("⬅️ 뒤로", f"m:g:{cid}")]]
     return Screen("\n".join(lines), _kb(rows))
@@ -140,8 +144,10 @@ async def r_view(c: PanelCtx) -> Screen:
     else:
         ai = not s["greet_template"]
         tpl = FALLBACKS[0] if ai else s["greet_template"]
-        tpl = tpl if "{names}" in tpl else "{names} " + tpl
-        sent = await send_greeting(c.bot, c.uid, s, fill(tpl, mention(c.uid, await _admin_name(c))), close)
+        tag = bool(s["greet_mention"])
+        name = await _admin_name(c)
+        sent = await send_greeting(c.bot, c.uid, s, fill(with_names(tpl, tag), mention(c.uid, name) if tag else esc(name)),
+                                   close)
         toast = "1:1 로 미리보기를 보냈어요 👇" + (" (AI 인사는 매번 달라서 예시 문구로 보여드려요)" if ai else "")
     ids.extend(m.message_id for m in sent)
     return Screen(None, toast=toast)

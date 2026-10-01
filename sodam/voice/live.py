@@ -298,6 +298,15 @@ class LiveBridge(Bridge):
             else:
                 self._on_error(err)
 
+    async def note(self, text: str) -> None:
+        """Live 엔 system 메시지 대신 session.instructions.append (live-prompting)."""
+        if not text or self.conn is None or self.done:
+            return
+        try:
+            await self.conn.session.instructions.append(content=text[:APPEND_CHARS], delegation_id=None)
+        except Exception as e:
+            log.info("Live 맥락 전달 실패 (통화는 계속): %s", e)
+
     async def _on_started(self) -> None:
         greet = getattr(self, "_greet_live", None)
         if greet:
