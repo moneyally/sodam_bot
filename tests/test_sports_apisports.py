@@ -14,7 +14,7 @@ from fakes import FakeBot, make_db, make_svc, runner
 
 from sodam.sports import Sports
 from sodam.sports.leagues import LEAGUES, canon, find_team, ko_name, same_team
-from sodam.sports.providers import APS_RESERVE, KST, APISports, SportsError
+from sodam.sports.providers import APS_RESERVE, BACKGROUND, KST, APISports, SportsError
 
 test, run_all = runner()
 DATA = Path(__file__).parent / "fixtures" / "sports"
@@ -98,7 +98,7 @@ async def kbo_finished_games_korean_names_scores():
 async def concurrent_leagues_share_one_request():
     p, f = provider(ts(2026, 9, 30, 23, 0))
     d = datetime(2026, 9, 30).date()
-    a, b, c = await asyncio.gather(p.day(LEAGUES["kbo"], d), p.day(LEAGUES["npb"], d), p.day(LEAGUES["mlb"], d))
+    a, b, c = await asyncio.gather(p.day(LEAGUES["kbo"], d), p.day(LEAGUES["npb"], d), p.day(LEAGUES["kbo"], d))
     assert a and b and c and f.calls == [("baseball", "2026-09-30")], f.calls
 
 
@@ -157,6 +157,11 @@ async def live_period_details_inning_top_bottom_quarter_set():
     assert (g.state, g.detail, g.home_score, g.away_score) == ("in", "5회초", 2, 3), g
     x["scores"]["home"]["innings"]["5"] = 0
     assert p.parse(LEAGUES["kbo"], "baseball", x).detail == "5회말"
+    x["status"]["short"] = "IN10"                  # 연장은 innings 의 'extra' 한 칸
+    x["scores"]["away"]["innings"]["extra"] = 1
+    assert p.parse(LEAGUES["kbo"], "baseball", x).detail == "10회초"
+    x["scores"]["home"]["innings"]["extra"] = 0
+    assert p.parse(LEAGUES["kbo"], "baseball", x).detail == "10회말"
     b = json.loads(json.dumps(load("apisports_basketball_20261001.json")["response"][0]))
     b["status"] = {"long": "Quarter 3", "short": "Q3", "timer": "4"}
     assert p.parse(LEAGUES["kbl"], "basketball", b).detail == "3쿼터 4'"
@@ -203,12 +208,24 @@ async def reserve_kept_for_commands_and_exhausted_stops_calls():
     d = datetime(2026, 10, 1).date()
     await p.day(LEAGUES["kbo"], d)                 # 사람 명령 = 예비분까지 씀
     p._raw.clear()
+    tok = BACKGROUND.set(True)                     # 자동 알림 폴링 = 예비분은 남김
     try:
-        await p.day(LEAGUES["kbo"], d, only={"aps:baseball:2026-10-01"})   # 알림 폴링 = 예비분은 남김
+        await p.day(LEAGUES["kbo"], d)
         raise AssertionError("예비분을 알림이 쓰면 안 됨")
     except SportsError:
         pass
+    finally:
+        BACKGROUND.reset(tok)
     assert len(f.calls) == 1
+    # 알림 몫이 바닥나도(간격 = 무한) 사람 명령은 30분마다 예비분으로 새로 받음 (영원히 얼지 않게)
+    p.clock.t = now + 1
+    await p.day(LEAGUES["kbo"], d)
+    p.clock.t = now + 900
+    await p.day(LEAGUES["kbo"], d)
+    assert len(f.calls) == 2, f.calls
+    p.clock.t = now + 1802
+    await p.day(LEAGUES["kbo"], d)
+    assert len(f.calls) == 3, f.calls
     p2, f2 = provider(now)
     f2.override[("baseball", "2026-10-01")] = {"errors": {"requests": "You have reached the request limit for the day"},
                                                "response": []}
@@ -266,6 +283,33 @@ async def suspended_account_disables_until_key_changes():
         assert not p.enabled(), "키 없으면 꺼짐"
     finally:
         os.environ.pop("APISPORTS_KEY", None)
+
+
+@test
+async def new_key_resets_budget_and_free_flag():
+    now = ts(2026, 10, 1, 15, 0)
+    f = ApsFetch()
+    p = APISports(f, None, 7500, clock=Clock(now))
+    os.environ["APISPORTS_KEY"] = KEY
+    try:
+        assert p.enabled()
+        p.exhausted["baseball"] = p._utc_day()
+        p.free = True
+        assert p.remaining("baseball") == 0
+        os.environ["APISPORTS_KEY"] = KEY + "x"      # 오너가 유료 키로 바꿈
+        assert p.enabled() and p.remaining("baseball") == 7500 and not p.free
+    finally:
+        os.environ.pop("APISPORTS_KEY", None)
+
+
+@test
+async def stale_day_outside_window_returns_cached():
+    now = ts(2026, 10, 1, 15, 0)
+    p, f = provider(now)
+    d = datetime(2026, 10, 1).date()
+    await p.day(LEAGUES["kbo"], d)
+    p.clock.t = now + 3 * 86400                     # 그 날이 창 밖으로 — 남은 게 있으면 오류 대신 그것
+    assert await p.day(LEAGUES["kbo"], d) and len(f.calls) == 1
 
 
 @test
@@ -389,13 +433,14 @@ async def alert_polling_stops_at_reserve_but_command_works():
     start = ts(2026, 10, 1, 18, 20)
     svc, db, f, clock = await room(start)
     aps = next(p for p in svc.sports.providers if p.name == "apisports")
-    aps._daily = APS_RESERVE + 2
+    aps._daily = APS_RESERVE + 1           # 알림 몫 1번뿐
     await svc.sports.alerts.follow(CHAT, "kbo", "", "KBO", 1)
     bot = FakeBot()
     for _ in range(30):
         clock.t += 600          # 18:20 → 23:20 (같은 날)
         await svc.sports.run_alerts(bot)
-    assert aps.remaining("baseball") >= APS_RESERVE, aps.remaining("baseball")
+    assert aps.remaining("baseball") == APS_RESERVE, aps.remaining("baseball")   # 5시간 폴링해도 예비분은 그대로
+    assert len([c for c in f.calls if c[0] == "baseball"]) == 1, f.calls
     from sodam.sports.ui import UI
     clock.t += 60
     svc.sports.feed._cache.clear()

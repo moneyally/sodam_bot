@@ -28,7 +28,7 @@ from ..util import esc
 from . import fmt
 from .feed import Feed
 from .leagues import GOAL_SPORTS, LEAGUES, ko_name, same_team
-from .providers import KST, Game, SportsError
+from .providers import BACKGROUND, KST, Game, SportsError
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +246,7 @@ class Alerts:
             return []
         self.last_fetch[code] = now
         games: list[Game] = []
+        bg = BACKGROUND.set(True)          # 자동 폴링 = 명령용 예비 한도는 안 씀 (API-Sports)
         try:
             for d in days:
                 if sched_due or not any(g.src for g in live):
@@ -259,6 +260,8 @@ class Alerts:
             if sched_due:   # 실패해도 다음 일정 받기는 RETRY_EVERY 뒤로
                 self.last_sched[code] = now - SCHEDULE_EVERY + RETRY_EVERY
             return []
+        finally:
+            BACKGROUND.reset(bg)
         if sched_due:
             self.last_sched[code] = now
         return games

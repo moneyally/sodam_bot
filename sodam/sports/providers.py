@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import re
@@ -416,12 +417,16 @@ class SportsDB(Provider):
 #   야구 NS·IN1~9·POST·CANC·INTR·ABD·FT / 농구 NS·Q1~4·OT·BT·HT·FT·AOT·POST·CANC·SUSP·AWD·ABD /
 #   배구 NS·S1~5·FT·AW·POST·CANC·INTR·ABD (API-Sports 문서 표 — 문서 사이트는 Cloudflare 로 막혀 검색 결과·실제 응답으로 확인).
 # - 순위(standings)는 season 이 꼭 필요해서 무료 등급은 이번 시즌을 못 봄 → 유료 키에서만 (응답 샘플 확인 뒤 구현, 지금은 없음).
+# 자동 알림 폴링 중인지 (alerts._poll_league 가 켬) — 그동안 API-Sports 는 명령용 예비 한도를 안 씀 (리뷰 2026-10-01:
+# 일정 폴링이 사람 명령처럼 예비분까지 쓰던 것)
+BACKGROUND: contextvars.ContextVar[bool] = contextvars.ContextVar("sports_background", default=False)
 APS_HOST = {"football": "https://v3.football.api-sports.io", "baseball": "https://v1.baseball.api-sports.io",
             "basketball": "https://v1.basketball.api-sports.io", "volleyball": "https://v1.volleyball.api-sports.io"}
 APS_PATH = {"football": "fixtures", "baseball": "games", "basketball": "games", "volleyball": "games"}
 APS_RESERVE = 8            # 하루 한도 중 명령('.스포츠 내일' 등)용으로 남겨 둘 몫 — 알림 폴링은 이만큼 남으면 쉼
 APS_MIN_GAP = 60           # 같은 (종목, 날짜) 다시 받는 최소 간격(초). 무료 등급은 남은 한도로 더 늘어남 (_gap)
 APS_OTHER_TTL = 3600       # 오늘·어제가 아닌 날(내일 일정 등)은 1시간
+APS_CMD_TTL = 1800         # 알림용 한도를 다 쓴 뒤 사람 명령이 새로 받는 간격
 _FB = {"NS": "pre", "TBD": "pre", "1H": "in", "HT": "in", "2H": "in", "ET": "in", "BT": "in", "P": "in", "LIVE": "in",
        "SUSP": "suspended", "INT": "suspended", "FT": "post", "AET": "post", "PEN": "post", "AWD": "post", "WO": "post",
        "PST": "postponed", "CANC": "cancel", "ABD": "cancel"}
@@ -444,6 +449,7 @@ class APISports(Provider):
         self.free = False                                 # 'Free plans …' 오류를 한 번이라도 봄 → 날짜 창 검사
         self.blocked = ""                                 # 계정 정지·키 오류 (그 키로는 더 안 부름)
         self._blocked_key = ""
+        self._last_key = ""                               # 키가 바뀌면 한도·무료 표시·막힘을 새로 (유료 키로 바꾼 직후 등)
         self._raw: dict[tuple[str, date], tuple[float, list]] = {}
         self._locks: dict[tuple[str, date], asyncio.Lock] = {}   # '.스포츠 야구' 처럼 KBO·NPB 를 동시에 물어도 요청 1번
         self._season: dict[str, object] = {}              # 리그 → 응답에 실린 이번 시즌 (순위용)
@@ -464,8 +470,14 @@ class APISports(Provider):
 
     def enabled(self) -> bool:
         k = self.key
-        if self.blocked and k != self._blocked_key:      # 키를 바꾸면 다시 시도
-            self.blocked = ""
+        if k != self._last_key:          # 오너가 '.키' 로 키를 바꿈 → 이 키 기준으로 처음부터 (재시작 없이)
+            self._last_key = k
+            self.used.clear()
+            self.exhausted.clear()
+            self.free = False
+            self._raw.clear()
+            if k != self._blocked_key:
+                self.blocked = ""
         return bool(k) and not self.blocked
 
     def supports(self, lg: League) -> bool:
@@ -537,7 +549,9 @@ class APISports(Provider):
         hit = self._raw.get(k)
         today = datetime.fromtimestamp(now, KST).date()
         ttl = self._gap(sport) if d in (today, today - timedelta(days=1)) else APS_OTHER_TTL
-        if hit and now - hit[0] < ttl:
+        if essential and ttl == float("inf"):
+            ttl = APS_CMD_TTL      # 알림 몫은 다 썼어도 사람 명령은 예비분으로 가끔 새로 (영원히 얼어 있지 않게)
+        if hit and (now - hit[0] < ttl or not self._in_window(d)):   # 날짜 창을 벗어난 날은 마지막 것을 그대로
             return hit[1]
         if not self._in_window(d):
             raise SportsError("무료 등급이라 어제~내일 경기만 볼 수 있어요.")
@@ -619,7 +633,8 @@ class APISports(Provider):
             return ""
         n = int(m.group(2))
         if m.group(1) == "IN":                              # 원정만 그 회 점수가 있으면 초, 홈까지 있으면 말
-            inn = lambda side: ((((x.get("scores") or {}).get(side) or {}).get("innings")) or {}).get(str(n))  # noqa: E731
+            col = str(n) if n <= 9 else "extra"           # 10회부터는 'extra' 한 칸 (실측 응답의 innings 키)
+            inn = lambda side: ((((x.get("scores") or {}).get(side) or {}).get("innings")) or {}).get(col)  # noqa: E731
             return f"{n}회{'말' if inn('home') is not None else '초'}"
         if m.group(1) == "Q":
             timer = st.get("timer")
@@ -651,8 +666,8 @@ class APISports(Provider):
         src = self._src(sport, d)
         if only is not None and src not in only:
             return []
-        # 알림 폴링(only 가 있음 = 라이브 재조회)은 예비분을 남김. 명령·일정은 예비분까지.
-        return self._games(lg, await self._raw_day(sport, d, essential=only is None), src, d)
+        # 자동 알림 폴링(BACKGROUND)은 명령용 예비분을 남김. 사람 명령·AI 도구는 예비분까지.
+        return self._games(lg, await self._raw_day(sport, d, essential=not BACKGROUND.get()), src, d)
 
     async def standings(self, lg: League) -> list[Row]:
         # 순위는 season 이 꼭 필요 → 무료 등급은 이번 시즌 불가. 유료 키가 생기면 실제 응답 샘플을 받아 구현 (추측 파싱 금지).

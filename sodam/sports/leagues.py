@@ -6,8 +6,7 @@
 - sdb   = TheSportsDB 리그 ID (유료 키일 때만)
 - aps   = API-Sports (종목 API, 리그 ID) — 실측 2026-10-01 (/leagues?country=South-Korea·Japan, 경기 응답의 league.id).
           국내: K리그1 292 · K리그2 293 · KBO 5 · NPB 2 · KBL 91 · WKBL 92 · V리그 남 151 · 여 152. MLB 1 (경기 응답에서 확인).
-          해외 축구(39·140·135·78·61·2·3·98)·NBA(12)는 API-Sports 에서 널리 쓰이는 ID — 실측 못 함(계정 잠김),
-          ESPN 이 먼저라 ESPN 이 막힐 때만 씀. 틀리면 그 리그 경기가 0개로 나올 뿐 (다른 리그 영향 없음).
+          해외 리그는 ESPN 전용 (API-Sports 를 대신 쓰면 라이브 재조회 src·영어 팀 이름표가 안 맞음 — 리뷰 2026-10-01).
 """
 from __future__ import annotations
 
@@ -39,29 +38,29 @@ SPORT_WORDS = {"축구": "soccer", "해외축구": "soccer", "soccer": "soccer",
 GOAL_SPORTS = {"soccer", "hockey"}
 
 _L = [
-    League("epl", "EPL", "soccer", "soccer/eng.1", "epl", "4328", ("football", 39),
+    League("epl", "EPL", "soccer", "soccer/eng.1", "epl", "4328", None,
            ("epl", "프리미어리그", "프리미어", "프리미어 리그", "premier league", "잉글랜드", "prem", "프리미어리그epl")),
-    League("laliga", "라리가", "soccer", "soccer/esp.1", "primera", "4335", ("football", 140),
+    League("laliga", "라리가", "soccer", "soccer/esp.1", "primera", "4335", None,
            ("라리가", "la liga", "laliga", "스페인", "프리메라리가")),
-    League("seriea", "세리에A", "soccer", "soccer/ita.1", "seria", "4332", ("football", 135),
+    League("seriea", "세리에A", "soccer", "soccer/ita.1", "seria", "4332", None,
            ("세리에a", "세리에", "serie a", "seriea", "이탈리아")),
-    League("bundesliga", "분데스리가", "soccer", "soccer/ger.1", "bundesliga", "4331", ("football", 78),
+    League("bundesliga", "분데스리가", "soccer", "soccer/ger.1", "bundesliga", "4331", None,
            ("분데스리가", "분데스", "bundesliga", "독일")),
-    League("ligue1", "리그1", "soccer", "soccer/fra.1", "ligue1", "4334", ("football", 61),
+    League("ligue1", "리그1", "soccer", "soccer/fra.1", "ligue1", "4334", None,
            ("리그1", "리그앙", "ligue1", "ligue 1", "프랑스")),
-    League("ucl", "챔스", "soccer", "soccer/uefa.champions", "champs", "4480", ("football", 2),
+    League("ucl", "챔스", "soccer", "soccer/uefa.champions", "champs", "4480", None,
            ("ucl", "챔스", "챔피언스리그", "챔피언스 리그", "champions league", "챔스리그")),
-    League("uel", "유로파", "soccer", "soccer/uefa.europa", None, "4481", ("football", 3),
+    League("uel", "유로파", "soccer", "soccer/uefa.europa", None, "4481", None,
            ("uel", "유로파", "유로파리그", "europa league")),
-    League("jleague", "J리그", "soccer", "soccer/jpn.1", None, "4633", ("football", 98), ("j리그", "j1", "제이리그", "일본축구", "j league")),
+    League("jleague", "J리그", "soccer", "soccer/jpn.1", None, "4633", None, ("j리그", "j1", "제이리그", "일본축구", "j league")),
     League("kleague", "K리그1", "soccer", None, "kleague", "4689", ("football", 292),
            ("k리그", "k리그1", "케이리그", "kleague", "k league", "k리그 1"), korean=True),
     League("kleague2", "K리그2", "soccer", None, "kleague2", None, ("football", 293), ("k리그2", "케이리그2", "k league 2"), korean=True),
-    League("mlb", "MLB", "baseball", "baseball/mlb", "mlb", "4424", ("baseball", 1),
+    League("mlb", "MLB", "baseball", "baseball/mlb", "mlb", "4424", None,
            ("mlb", "메이저리그", "메이저 리그", "엠엘비", "미국야구", "빅리그")),
     League("kbo", "KBO", "baseball", None, "kbo", "4830", ("baseball", 5), ("kbo", "크보", "국야", "프로야구", "한국야구"), korean=True),
     League("npb", "NPB", "baseball", None, "npb", "4591", ("baseball", 2), ("npb", "일본야구", "일야", "일본 프로야구"), korean=True),
-    League("nba", "NBA", "basketball", "basketball/nba", "nba", "4387", ("basketball", 12), ("nba", "엔비에이", "미국농구", "미농")),
+    League("nba", "NBA", "basketball", "basketball/nba", "nba", "4387", None, ("nba", "엔비에이", "미국농구", "미농")),
     League("kbl", "KBL", "basketball", None, "kbl", None, ("basketball", 91), ("kbl", "프로농구", "한국농구", "남자농구"), korean=True),
     League("wkbl", "WKBL", "basketball", None, "wkbl", None, ("basketball", 92), ("wkbl", "여자농구", "여농"), korean=True),
     League("vleague", "V리그 남자", "volleyball", None, "kovo", None, ("volleyball", 151),
@@ -205,13 +204,13 @@ _T = [
     ("kleague2", "부천", "부천FC", "부천", "부천fc"), ("kleague2", "경남", "경남FC", "경남", "경남fc"),
     ("kleague2", "부산", "부산 아이파크", "부산", "부산아이파크"), ("kleague2", "성남", "성남FC", "성남", "성남fc"),
     ("kleague2", "안산", "안산 그리너스", "안산", "안산그리너스"), ("kleague2", "전남", "전남 드래곤즈", "전남", "전남드래곤즈"),
-    ("kleague2", "수원", "수원 삼성", "수원삼성", "수원 블루윙즈"), ("kleague2", "천안", "천안시티", "천안"),
+    ("kleague2", "수원삼성", "수원 삼성", "수원 블루윙즈"), ("kleague2", "천안", "천안시티", "천안"),
     ("kleague2", "충북청주", "충북청주", "청주"), ("kleague2", "김포", "김포FC", "김포", "김포fc"),
     # KBL (API-Sports 이름 2024-25 실측)
     ("kbl", "정관장", "안양 정관장", "정관장", "안양정관장", "kgc"), ("kbl", "소노", "고양 소노", "소노", "고양소노"),
     ("kbl", "KCC", "부산 KCC", "kcc", "부산kcc"), ("kbl", "가스공사", "한국가스공사", "가스공사", "대구 한국가스공사"),
-    ("kbl", "LG", "창원 LG", "창원lg", "lg세이커스"), ("kbl", "현대모비스", "울산 현대모비스", "현대모비스", "모비스"),
-    ("kbl", "SK", "서울 SK", "서울sk", "sk나이츠"), ("kbl", "삼성", "서울 삼성", "서울삼성", "삼성썬더스"),
+    ("kbl", "LG", "창원 LG", "창원lg"), ("kbl", "현대모비스", "울산 현대모비스", "현대모비스", "모비스"),
+    ("kbl", "SK", "서울 SK", "서울sk"), ("kbl", "삼성", "서울 삼성", "서울삼성", "삼성썬더스"),
     ("kbl", "KT", "수원 KT", "수원kt", "kt소닉붐"), ("kbl", "DB", "원주 DB", "원주db", "db프로미"),
     # WKBL
     ("wkbl", "BNK", "BNK 썸", "bnk", "bnk썸"), ("wkbl", "하나은행", "하나은행", "하나원큐"),
@@ -225,7 +224,7 @@ _T = [
     # V리그 여자
     ("wvleague", "정관장", "정관장", "정관장레드스파크스"), ("wvleague", "한국도로공사", "한국도로공사", "도로공사", "도공"),
     ("wvleague", "GS칼텍스", "GS칼텍스", "gs칼텍스"), ("wvleague", "흥국생명", "흥국생명", "핑크스파이더스"),
-    ("wvleague", "현대건설", "현대건설", "힐스테이트"), ("wvleague", "IBK기업은행", "IBK기업은행", "ibk", "기업은행"),
+    ("wvleague", "현대건설", "현대건설", "현대건설힐스테이트"), ("wvleague", "IBK기업은행", "IBK기업은행", "ibk", "기업은행"),
     ("wvleague", "페퍼저축은행", "페퍼저축은행", "페퍼"),
 ]
 
@@ -241,7 +240,7 @@ _APS_NAMES = {
                 "FC Anyang": "안양"},
     "kleague2": {"Seoul E-Land FC": "서울E", "Asan Mugunghwa": "충남아산", "Bucheon FC 1995": "부천", "Gyeongnam FC": "경남",
                  "Busan I Park": "부산", "Seongnam FC": "성남", "Ansan Greeners": "안산", "Jeonnam Dragons": "전남",
-                 "Suwon Bluewings": "수원", "Cheonan City": "천안", "Cheongju": "충북청주", "Gimpo Citizen": "김포",
+                 "Suwon Bluewings": "수원삼성", "Cheonan City": "천안", "Cheongju": "충북청주", "Gimpo Citizen": "김포",
                  "FC Anyang": "안양"},
     "kbl": {"Anyang JungKwanJang": "정관장", "Goyang Sono": "소노", "KCC Egis": "KCC", "KoGas": "가스공사", "LG Sakers": "LG",
             "Mobis Phoebus": "현대모비스", "Seoul Knights": "SK", "Seoul Thunders": "삼성", "Suwon KT": "KT", "Wonju DB": "DB"},
@@ -305,8 +304,14 @@ def find_team(text: str) -> Team | None:
         return None
     if q in _TEAM_ALIAS:
         return _TEAM_ALIAS[q]
-    hits = {t for a, t in _TEAM_ALIAS.items() if len(q) >= 3 and (a.startswith(q) or q in a)}
-    return next(iter(hits)) if len(hits) == 1 else None
+    if len(q) < 3:
+        return None
+    hits = [(not a.startswith(q), len(a), t) for a, t in _TEAM_ALIAS.items() if a.startswith(q) or q in a]
+    if not hits:
+        return None
+    best = min(h[:2] for h in hits)            # 앞부분이 같은 것 먼저, 그다음 가장 짧은 이름 (국내 농구·배구 팀이 늘어도
+    top = {h[2] for h in hits if h[:2] == best}  # '울산현' → 울산 현대(K리그), '레이커' → 레이커스 그대로)
+    return next(iter(top)) if len(top) == 1 else None
 
 
 def same_team(name: str, team_src: str, league: str = "") -> bool:
