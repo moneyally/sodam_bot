@@ -44,6 +44,8 @@ class FakeFetch:
         self.calls.append((url, dict(params)))
         if url.endswith("soccer/eng.1/scoreboard"):
             return load("espn_eng1_scoreboard.json") if params.get("dates") == "20260920" else {"events": []}
+        if url.endswith("soccer/uefa.nations/scoreboard"):   # 실제 2026-10-01 네이션스리그 (A매치 기간)
+            return load("espn_unl_scoreboard.json") if params.get("dates") == "20261001" else {"events": []}
         if url.endswith("baseball/mlb/scoreboard"):
             return load("espn_mlb_scoreboard.json") if params.get("dates") == "20260929" else {"events": []}
         if url.endswith("mma/ufc/scoreboard"):
@@ -106,6 +108,19 @@ async def espn_scoreboard_parses_scores_state_and_scorers():
     assert all(g.state == "pre" and g.home_score is None for g in mlb), "시작 전 '0' 점수는 점수 없음으로"
     ufc = ESPN(None).parse_event(LEAGUES["ufc"], load("espn_ufc_scoreboard.json")["events"][0])
     assert ufc.title.startswith("Dana White") and not ufc.home, ufc
+
+
+@test
+async def national_team_games_show_in_soccer_during_international_break():
+    # 실제 2026-10-01 베베방: '.스포츠 내일 축구' → '축구 경기가 없어요' (클럽 리그만 봐서). 네이션스리그 경기가 있었음
+    svc, db, fetch, clock = await setup(ts(2026, 10, 1, 23, 36))
+    out = await cmd(svc, ".스포츠 내일 축구")
+    assert "UEFA 네이션스리그" in out and "아제르바이잔" in out and "리히텐슈타인" in out and "독일" in out, out
+    assert "01:00" in out, out                                     # 16:00Z = 한국 10/2 01:00
+    out = await cmd(svc, ".스포츠 내일 네이션스리그")
+    assert "덴마크" in out and "포르투갈" in out, out
+    assert find_league("a매치").code == "friendly" and find_league("국대").code == "friendly"
+    assert ko_name("South Korea") == "대한민국" and ko_name("Liverpool") == "리버풀"
 
 
 @test

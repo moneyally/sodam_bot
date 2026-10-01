@@ -52,6 +52,25 @@ _L = [
            ("ucl", "챔스", "챔피언스리그", "챔피언스 리그", "champions league", "챔스리그")),
     League("uel", "유로파", "soccer", "soccer/uefa.europa", None, "4481", None,
            ("uel", "유로파", "유로파리그", "europa league")),
+    # 국가대표 대회 (A매치 기간엔 클럽 리그가 쉼 → 2026-10-01 베베방 '축구 경기 없어요' 실측: 네이션스리그 8경기가 있었음)
+    # ESPN 경로 실측 2026-10-01 (dates=하루, 200). afc.asian·afc.asian.qual 은 400 이라 뺌
+    League("unl", "UEFA 네이션스리그", "soccer", "soccer/uefa.nations", None, None, None,
+           ("네이션스리그", "uefa네이션스리그", "nations league", "유럽네이션스리그", "unl")),
+    League("friendly", "A매치 친선", "soccer", "soccer/fifa.friendly", None, None, None,
+           ("a매치", "친선", "친선경기", "평가전", "국대", "국가대표", "a매치친선")),
+    League("worldcup", "월드컵", "soccer", "soccer/fifa.world", None, None, None, ("월드컵", "world cup", "fifa월드컵")),
+    League("wcq_afc", "월드컵 아시아 예선", "soccer", "soccer/fifa.worldq.afc", None, None, None,
+           ("월드컵아시아예선", "아시아예선", "월드컵예선")),
+    League("wcq_uefa", "월드컵 유럽 예선", "soccer", "soccer/fifa.worldq.uefa", None, None, None, ("월드컵유럽예선", "유럽예선")),
+    League("euro", "유로", "soccer", "soccer/uefa.euro", None, None, None, ("유로", "euro", "유로대회")),
+    League("euroq", "유로 예선", "soccer", "soccer/uefa.euroq", None, None, None, ("유로예선", "euro qualifying")),
+    League("copa", "코파 아메리카", "soccer", "soccer/conmebol.america", None, None, None, ("코파", "코파아메리카", "copa america")),
+    League("afcon", "아프리카 네이션스컵", "soccer", "soccer/caf.nations", None, None, None,
+           ("아프리카네이션스컵", "afcon", "아프리카컵")),
+    League("afcon_q", "아프리카 네이션스컵 예선", "soccer", "soccer/caf.nations_qual", None, None, None,
+           ("아프리카네이션스컵예선", "아프리카예선", "afcon예선")),
+    League("uecl", "컨퍼런스리그", "soccer", "soccer/uefa.europa.conf", None, None, None,
+           ("컨퍼런스리그", "uecl", "컨퍼런스", "conference league")),
     League("jleague", "J리그", "soccer", "soccer/jpn.1", None, "4633", None, ("j리그", "j1", "제이리그", "일본축구", "j league")),
     League("kleague", "K리그1", "soccer", None, "kleague", "4689", ("football", 292),
            ("k리그", "k리그1", "케이리그", "kleague", "k league", "k리그 1"), korean=True),
@@ -276,6 +295,40 @@ for _t, _row in zip(TEAMS, _T):
     _KO_OF.setdefault(norm(_row[1]), _row[2])
     _KO_BY[(_row[0], norm(_row[1]))] = _row[2]
 _APS_CANON = {lg: {norm(k): v for k, v in names.items()} for lg, names in _APS_NAMES.items()}
+
+
+# 국가대표 팀 (ESPN displayName → 한국어). 클럽 이름표 뒤에 setdefault — 클럽과 겹치면 클럽 우선
+_NATIONS = {
+    "South Korea": "대한민국", "Korea Republic": "대한민국", "Japan": "일본", "China PR": "중국", "China": "중국",
+    "Australia": "호주", "Iran": "이란", "Saudi Arabia": "사우디", "Qatar": "카타르", "Iraq": "이라크",
+    "United Arab Emirates": "UAE", "Uzbekistan": "우즈베키스탄", "Jordan": "요르단", "Oman": "오만", "Syria": "시리아",
+    "Lebanon": "레바논", "Vietnam": "베트남", "Thailand": "태국", "Indonesia": "인도네시아", "Maldives": "몰디브",
+    "North Korea": "북한", "Kuwait": "쿠웨이트", "Bahrain": "바레인", "Palestine": "팔레스타인", "India": "인도",
+    "England": "잉글랜드", "France": "프랑스", "Germany": "독일", "Spain": "스페인", "Italy": "이탈리아",
+    "Portugal": "포르투갈", "Netherlands": "네덜란드", "Belgium": "벨기에", "Croatia": "크로아티아", "Denmark": "덴마크",
+    "Switzerland": "스위스", "Austria": "오스트리아", "Poland": "폴란드", "Sweden": "스웨덴", "Norway": "노르웨이",
+    "Serbia": "세르비아", "Scotland": "스코틀랜드", "Wales": "웨일스", "Ireland": "아일랜드",
+    "Republic of Ireland": "아일랜드", "Northern Ireland": "북아일랜드", "Turkey": "튀르키예", "Türkiye": "튀르키예",
+    "Greece": "그리스", "Czechia": "체코", "Czech Republic": "체코", "Ukraine": "우크라이나", "Hungary": "헝가리",
+    "Romania": "루마니아", "Slovakia": "슬로바키아", "Slovenia": "슬로베니아", "Finland": "핀란드", "Iceland": "아이슬란드",
+    "Albania": "알바니아", "Georgia": "조지아", "Bosnia-Herzegovina": "보스니아", "North Macedonia": "북마케도니아",
+    "Montenegro": "몬테네그로", "Bulgaria": "불가리아", "Israel": "이스라엘", "Kosovo": "코소보", "Armenia": "아르메니아",
+    "Azerbaijan": "아제르바이잔", "Kazakhstan": "카자흐스탄", "Liechtenstein": "리히텐슈타인", "Luxembourg": "룩셈부르크",
+    "Cyprus": "키프로스", "Estonia": "에스토니아", "Latvia": "라트비아", "Lithuania": "리투아니아", "Belarus": "벨라루스",
+    "Moldova": "몰도바", "Malta": "몰타", "Andorra": "안도라", "San Marino": "산마리노", "Gibraltar": "지브롤터",
+    "Faroe Islands": "페로 제도",
+    "Brazil": "브라질", "Argentina": "아르헨티나", "Uruguay": "우루과이", "Colombia": "콜롬비아", "Chile": "칠레",
+    "Peru": "페루", "Ecuador": "에콰도르", "Paraguay": "파라과이", "Bolivia": "볼리비아", "Venezuela": "베네수엘라",
+    "Mexico": "멕시코", "United States": "미국", "USA": "미국", "Canada": "캐나다", "Costa Rica": "코스타리카",
+    "Panama": "파나마", "Jamaica": "자메이카", "Honduras": "온두라스",
+    "Morocco": "모로코", "Senegal": "세네갈", "Egypt": "이집트", "Nigeria": "나이지리아", "Ghana": "가나",
+    "Cameroon": "카메룬", "Algeria": "알제리", "Tunisia": "튀니지", "Ivory Coast": "코트디부아르", "Cote d'Ivoire": "코트디부아르",
+    "Mali": "말리", "South Africa": "남아공", "Guinea": "기니", "Kenya": "케냐", "Burkina Faso": "부르키나파소",
+    "DR Congo": "콩고민주공화국", "Zambia": "잠비아", "Cape Verde": "카보베르데", "Gabon": "가봉", "Angola": "앙골라",
+    "New Zealand": "뉴질랜드",
+}
+for _en, _ko in _NATIONS.items():
+    _KO_OF.setdefault(norm(_en), _ko)
 
 
 def ko_name(name: str, league: str = "") -> str:
