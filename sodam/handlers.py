@@ -865,9 +865,12 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
     if ctx.mentions:
         body = " ".join(mention(uid, name) for uid, name in dict(ctx.mentions).items()) + " " + body
     # 기다리는 동안 원본이 지워져도 답은 가게 (1:1 은 원래대로 인용 없이)
-    reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if chat_id < 0 else None
+    # 방 설정 ai_quote 끄면 인용 없이 (do_quote=False 가 없으면 PTB 가 그룹에선 알아서 인용함)
+    group = chat_id < 0
+    reply = ReplyParameters(msg.message_id, allow_sending_without_reply=True) if group and s["ai_quote"] else None
     try:
         sent = await send_retry(lambda: msg.reply_text(body, parse_mode="HTML", reply_parameters=reply,
+                                                       do_quote=None if reply else False,
                                                        link_preview_options=security.NO_PREVIEW))
     except NetworkError as e:
         if not surely_unsent(e):   # 응답만 끊김 = 이미 올라갔을 수 있음 → 다시 안 보냄 (중복 방지)
@@ -875,9 +878,10 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         await aiqueue.keep_answer(svc.db, bot, chat_id, msg.message_id, body)   # 연결이 돌아오면 sweep 이 보냄
         log.warning("답 전송 실패(연결 끊김) → 대기열에 보관 chat=%s msg=%s", chat_id, msg.message_id)
         return
-    await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,   # 누구에게 한 답인지
-                                     reply_to_msg_id=msg.message_id if reply else None,
-                                     reply_to_user=user.id if reply else None))
+    # 누구에게 한 답인지 — 인용을 껐어도 기록은 남김 (aiqueue '이미 답함'·이어 말하기가 이걸 봄)
+    await _record(svc.db.log_message(chat_id, bot.id, sent.message_id, out, is_bot=True,
+                                     reply_to_msg_id=msg.message_id if group else None,
+                                     reply_to_user=user.id if group else None))
     asked = "\n".join([request, *steer.taken])   # 실행 중 이어 보낸 말까지 (한 답이 둘 다 반영)
     await memory.record_turn(svc.db, chat_id, user.id, via, asked, out, sent.message_id)  # 이어 말하기·'아까 그거'용
 

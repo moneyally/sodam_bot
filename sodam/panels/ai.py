@@ -26,7 +26,7 @@ menu.register_preset("reply_max_chars", [(v, f"답변 {v}자") for v in ("200", 
 menu.register_preset("user_rate_per_min", [(v, f"분당 {v}회") for v in ("2", "3", "5")], "ai")
 
 # 🧠 기억·대화 방식 (sodam/memory.py · social.py 의 설정)
-SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_chime_in", "ai_spicy"]
+SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_quote", "ai_chime_in", "ai_spicy"]
 for _k in SOCIAL_TOGGLES:
     menu.register_toggle(_k, "aip")
 menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
@@ -41,6 +41,8 @@ async def s_ai_social(c: PanelCtx) -> Screen:
              "본인이 <code>.기억 지우기</code> 로 지울 수 있어요.",
              "• <b>방 흐름 기억</b>: 요즘 방에서 오가는 이야기를 짧게 요약해 두고 참고해요.",
              "• <b>이어 말하기</b>: 방금 소담과 얘기한 사람이 이어서 물으면 이름을 안 불러도 답해요.",
+             "• <b>답장 인용</b>: 켜면 소담 답이 요청한 메시지를 인용(답글)해서 달려요. "
+             "끄면 인용 없이 그냥 메시지로 올라가요.",
              "• <b>먼저 끼어들기</b>: 아무도 답하지 않은 질문이나 아침 인사에 가끔 먼저 한마디해요.",
              f"  (지금: {menu.human_minutes(s['ai_chime_gap_min'])}에 한 번, 하루 최대 {s['ai_chime_daily']}번)",
              "• <b>욕 받아치기</b>: 누가 소담을 욕하면 사과하지 않고 받아쳐요. "

@@ -99,7 +99,9 @@ async def sweep(context, now: float | None = None) -> int:
             continue
         n += 1
         if r["answer"] is not None:
-            reply = ReplyParameters(r["msg_id"], allow_sending_without_reply=True) if r["chat_id"] < 0 else None
+            group = r["chat_id"] < 0
+            quote = group and (await db.get_settings(r["chat_id"]))["ai_quote"]   # 방 설정 ai_quote (handlers 와 같게)
+            reply = ReplyParameters(r["msg_id"], allow_sending_without_reply=True) if quote else None
             try:
                 sent = await bot.send_message(r["chat_id"], r["answer"], parse_mode="HTML", reply_parameters=reply,
                                               link_preview_options=security.NO_PREVIEW)
@@ -110,8 +112,8 @@ async def sweep(context, now: float | None = None) -> int:
                 pass
             else:
                 await db.log_message(r["chat_id"], bot.id, sent.message_id, "(다시 보낸 답)", is_bot=True,
-                                     reply_to_msg_id=r["msg_id"] if reply else None,
-                                     reply_to_user=r["user_id"] if reply else None)
+                                     reply_to_msg_id=r["msg_id"] if group else None,
+                                     reply_to_user=r["user_id"] if group else None)
             await db._write("DELETE FROM ai_queue WHERE bot_id=? AND chat_id=? AND msg_id=?", key)
             continue
         msg = Message.de_json(json.loads(r["msg"]), bot)
