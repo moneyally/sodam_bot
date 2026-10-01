@@ -527,6 +527,12 @@
   새 커밋 없는 다음 타이머에서 통화 없으면 재시작 (테스트용 VOICE_SETUP=1).
   **라이브 통화로만 확인할 것**: 재생 여유(프리버퍼)·20ms 조각(ntgcalls 가 받는지), 에코·음악봇 끼어들기(threshold·semantic_vad·봇 ssrc 빼기),
   ntgcalls GIL 교착(github.com/pytgcalls/ntgcalls/issues/62 — record 중 무거운 I/O).
+- **🆕 GPT-Live 엔진 (2026-10-01, `sodam/voice/live.py` LiveBridge, 설계 docs/VOICE_LIVE.md, tests/test_voice_live.py · 뮤테이션 20개)**:
+  `VOICE_ENGINE=live`(기본 realtime — 안 바꾸면 지금 그대로) → gpt-live-1(VOICE_LIVE_MODEL) 전이중 + Responses 백엔드(VOICE_BACKEND_MODEL gpt-6-luna)가
+  우리 함수 도구 호출(response.event 안 output_item.done → response.item.create + response.create). VAD·truncate·response.create 없음:
+  끼어들기 = 우리 줄에 소담 소리 있을 때 큰 소리 0.3초(소리 길이로 셈) → 줄만 비움 · 받아쓰기 조각 1.2초 끊기면 한 줄 · '부를 때만'은 지시문뿐 ·
+  인사 = session.started 뒤 instructions.append · 소리는 started 뒤(3.11 wait_for 는 취소를 삼켜 asyncio.timeout 씀) · **조용해도 분당 $0.05** →
+  idle 60초가 중요 · 요금 = usage.seconds(누적) + 백엔드 토큰. 켜기 전 실제 통화로 확인할 것(끼어들기·여럿·부를 때만).
 - 봇 계정은 통화(phone.*) 불가 → 음악봇(오픈소스 YukkiMusicBot 구조 참고, 코드는 새로)처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.
@@ -538,7 +544,7 @@
   (봇에 '관리자 추가' 권한 없으면 사람이 켜야 → 안내). 결과·끝남은 방에 한 줄.
 - 소리: 텔레그램 48k 모노 10ms ↔ OpenAI Realtime(gpt-realtime-2.1-mini, VOICE_MODEL) 24k PCM. server_vad·far_field 잡음 제거·끼어들면 truncate(들려준 ms).
   목소리 VOICE_VOICE 기본 marin (**소담 = 여자 AI 비서**). PERSONA + 📝 AI 방 안내. '소담아 나가' 로 끝.
-- 한도: 통화 15분·60초 조용하면 끝·방마다 한 달 120분(VOICE_ROOM_MONTH_MIN)·동시 3통화·이용 중인 방만. 요금은 분당 추정(VOICE_USD_PER_MIN 0.08)을
+- 한도: 통화 15분·60초 조용하면 끝·방마다 한 달 120분(VOICE_ROOM_MONTH_MIN)·동시 3통화·이용 중인 방만. 요금은 **실제 토큰**(response.done usage 를 음성·글자·캐시로 나눠 `store.cost_micro` 요금표 + 받아쓰기 분당 $0.003, tests/test_voice_cost.py — 2026-10-01 전엔 usage 를 버리고 추정만 썼음), 요금표에 없는 모델·usage 없음이면 분당 추정(VOICE_USD_PER_MIN 0.08)을
   하루 AI 예산 counters 에 더함 → 예산 다 차면 못 부름.
 - **실제 통화 확인은 VPS 에서만** (컨테이너는 UDP·MTProto 막힘). 테스트는 가짜 Realtime·py-tgcalls.
 - 도우미 계정 = **@Sodam_bot2** (사람 계정, 2026-09-29 오너가 만듦). 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
@@ -546,9 +552,9 @@
   (서버 MTPROTO 키 사용, 전용 키는 [🔑 고급] m:vcla). 멜론봇과 같음: 오너 한 번 로그인 → 방 관리자는 권한만 주고 '소담아 음성방 들어와'. 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
   스킬 `.claude/skills/telegram-voice-assistant/SKILL.md`. 봇 계정으로 음성채팅 제한을 우회·탐색하지 않음 (정책·토큰 위험).
 - 말투별 목소리(voice_setup): 부른 사람 .말투 > 방 기본 말투, AI 도구 style 인자('여친 모드로 와 줘'). 남친 = 남자 캐릭터·voice_male(기본 cedar),
-  나머지 = 여자 비서 소담·voice_female(기본 marin). 🎙 화면에서 10개 중 선택(다음 통화부터). 한 답 max_output_tokens 400 + '최대 2문장'.
+  나머지 = 여자 비서 소담·voice_female(기본 marin). 🎙 화면에서 10개 중 선택(다음 통화부터). 한 답 max_output_tokens 600(bridge.MAX_OUT, 400 은 도구 설명이 잘림) + '최대 2문장'.
 - 실측 `tools/voice_live.py [--style girlfriend] "말1" "말2"` (실제 Realtime·TTS, 텔레그램만 가짜, 비용 조금 — 오너 허락): 2026-09-29
-  말 끝→첫 소리 0.6~1.4초(VAD 0.7초 포함), 한 통화 2문장씩 2번 ≈ 입력 2.2k·출력 0.7~0.8k 토큰. 도구 재감사(음악봇·py-tgcalls 3.0 소스) 반영.
+  말 끝→첫 소리 0.6~1.4초(그때 VAD 0.7초 포함 — 지금 silence 500ms), 한 통화 2문장씩 2번 ≈ 입력 2.2k·출력 0.7~0.8k 토큰. 도구 재감사(음악봇·py-tgcalls 3.0 소스) 반영.
 - 영상대화 개선(OpenAI 실시간 프롬프트 가이드·VAD·costs 문서 근거, 2026-09-29): reasoning effort minimal(2.1-mini 는 추론 모델) ·
   server_vad silence 500 · truncation retention_ratio 0.8(캐시 덜 깸) · 지시문 섹션(길이·언어·말하는 법·도구·규칙), 반복 금지·말투 하나로 고정 ·
   **web_search 함수 도구**(bridge._call_tool → llm.web_search 같은 격리 검색·같은 예산, 한국 시각 기준 붙임). 실측: '서울 날씨' → '잠깐만요, 찾아볼게요'
