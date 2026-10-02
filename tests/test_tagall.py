@@ -176,6 +176,28 @@ async def stop_button_halts_midway():
 
 
 @test
+async def any_admin_can_say_stop_and_member_false_claim_is_rechecked():
+    # 실제 2026-10-03 일루왕: 전체 태그 중 '소담아 멈춰' → 멈추는 기능이 없어 '멈췄습니다' 거짓말, 256명 끝까지
+    ADM2 = fake_user(2, "부방장")
+    r = await world(ScriptedLLM([tool_call("mention_all", {"action": "stop"}), reply("멈췄어요")]))
+    r.svc.perms.admins.add(ADM2.id)
+    tagall._running[Room.CHAT] = {"stop": False, "sent": 10, "total": 12}
+    await r.say(ADM2, "소담아 멈춰")                                # 요청한 관리자가 아니어도 관리자면 말로
+    assert tagall._running[Room.CHAT]["stop"] is True
+    tool_out = [m["content"] for m in r.llm.of("chat")[-1]["messages"] if m["role"] == "tool"]
+    assert "10/12명" in tool_out[0], tool_out
+    tagall._running.pop(Room.CHAT, None)
+    assert "없음" in tagall.stop(Room.CHAT) and "말하지 말 것" in tagall.stop(Room.CHAT)
+    # 멤버: 도구가 없는데 '멈췄습니다' → 보내기 전 검사가 한 번 다시 물음
+    r2 = await world(ScriptedLLM([reply("멈췄습니다, 대표님."), reply("그건 관리자만 멈출 수 있어요.")]))
+    tagall._running[Room.CHAT] = {"stop": False, "sent": 3, "total": 12}
+    m = await r2.say(PEOPLE[0], "소담아 멈춰")
+    assert m.replies == ["그건 관리자만 멈출 수 있어요."], m.replies
+    assert tagall._running[Room.CHAT]["stop"] is False, "멤버 말로는 안 멈춤"
+    tagall._running.pop(Room.CHAT, None)
+
+
+@test
 async def dot_command_for_admins():
     r = await world()
     msg = r.msg(BOSS, ".전체태그 모여주세요")
