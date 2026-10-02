@@ -84,6 +84,10 @@ _L = [
            ("아시안게임축구", "아겜축구", "아시안게임 축구"), naver_codes=("FBL",)),
     League("ag_volley", "아시안게임 배구", "volleyball", None, "asiangames2026", None, None,
            ("아시안게임배구", "아겜배구", "아시안게임 배구", "아시안게임"), naver_codes=("VVO", "VBV")),
+    # 2026-10-03 방 요청: 북중미 네이션스리그 (ESPN 실측 — 조별 9/23~10/6, 8강 11월, 결승 3월)
+    League("concacaf_nl", "북중미 네이션스리그", "soccer", "soccer/concacaf.nations.league", None, None, None,
+           ("북중미네이션스리그", "북중미 네이션스", "콘카카프", "콘카카프네이션스리그", "concacaf", "concacaf nations league",
+            "북중미")),
     League("uecl", "컨퍼런스리그", "soccer", "soccer/uefa.europa.conf", None, None, None,
            ("컨퍼런스리그", "uecl", "컨퍼런스", "conference league")),
     League("jleague", "J리그", "soccer", "soccer/jpn.1", None, "4633", None, ("j리그", "j1", "제이리그", "일본축구", "j league")),
@@ -96,12 +100,14 @@ _L = [
     League("npb", "NPB", "baseball", None, "npb", "4591", ("baseball", 2), ("npb", "일본야구", "일야", "일본 프로야구"), korean=True),
     League("nba", "NBA", "basketball", "basketball/nba", "nba", "4387", None, ("nba", "엔비에이", "미국농구", "미농")),
     League("kbl", "KBL", "basketball", None, "kbl", None, ("basketball", 91), ("kbl", "프로농구", "한국농구", "남자농구"), korean=True),
-    League("wkbl", "WKBL", "basketball", None, "wkbl", None, ("basketball", 92), ("wkbl", "여자농구", "여농"), korean=True),
+    League("wkbl", "WKBL", "basketball", None, "wkbl", None, ("basketball", 92), ("wkbl", "한국여자농구", "국내여자농구"), korean=True),
+    League("wnba", "WNBA", "basketball", "basketball/wnba", None, None, None,
+           ("wnba", "미국여자농구", "미국 여자농구", "여자nba")),
     League("vleague", "V리그 남자", "volleyball", None, "kovo", None, ("volleyball", 151),
            ("v리그", "브이리그", "kovo", "남자배구", "v리그 남자", "v리그남자", "남배"), korean=True),
     League("wvleague", "V리그 여자", "volleyball", None, "wkovo", None, ("volleyball", 152),
            ("여자배구", "v리그 여자", "v리그여자", "wkovo", "여배"), korean=True),
-    League("nhl", "NHL", "hockey", "hockey/nhl", None, "4380", None, ("nhl", "북미하키")),
+    League("nhl", "NHL", "hockey", "hockey/nhl", None, "4380", None, ("nhl", "북미하키", "엔에이치엘", "미국하키")),
     League("ufc", "UFC", "mma", "mma/ufc", "ufc", None, None, ("ufc", "유에프씨")),
 ]
 LEAGUES: dict[str, League] = {lg.code: lg for lg in _L}
@@ -117,6 +123,15 @@ _ALIAS: dict[str, str] = {}
 for _lg in _L:
     for _a in (_lg.code, _lg.name) + _lg.aliases:
         _ALIAS.setdefault(norm(_a), _lg.code)
+
+
+# 여러 리그를 한 번에 보는 말 (예: '여자농구' = 국내 WKBL + 미국 WNBA — 시즌이 서로 달라 하나만 고르면 빈 화면)
+GROUPS: dict[str, tuple[str, ...]] = {"여자농구": ("wkbl", "wnba"), "여농": ("wkbl", "wnba")}
+
+
+def find_group(text: str) -> list[League] | None:
+    codes = GROUPS.get(norm(text))
+    return [LEAGUES[c] for c in codes] if codes else None
 
 
 def find_league(text: str) -> League | None:
@@ -201,6 +216,15 @@ _T = [
     ("mlb", "Kansas City Royals", "캔자스시티", "로열스"),
     # NBA (30)
     ("nba", "Los Angeles Lakers", "레이커스", "LA 레이커스", "lakers"), ("nba", "LA Clippers", "클리퍼스"),
+    # WNBA (2026 시즌 팀, ESPN displayName)
+    ("wnba", "Atlanta Dream", "애틀랜타 드림"), ("wnba", "Chicago Sky", "시카고 스카이"),
+    ("wnba", "Connecticut Sun", "코네티컷 선"), ("wnba", "Dallas Wings", "댈러스 윙스"),
+    ("wnba", "Golden State Valkyries", "골든스테이트 발키리스", "발키리스"), ("wnba", "Indiana Fever", "인디애나 피버", "피버"),
+    ("wnba", "Las Vegas Aces", "라스베이거스 에이시스", "에이시스"), ("wnba", "Los Angeles Sparks", "LA 스파크스", "스파크스"),
+    ("wnba", "Minnesota Lynx", "미네소타 링크스", "링크스"), ("wnba", "New York Liberty", "뉴욕 리버티", "리버티"),
+    ("wnba", "Phoenix Mercury", "피닉스 머큐리", "머큐리"), ("wnba", "Seattle Storm", "시애틀 스톰"),
+    ("wnba", "Washington Mystics", "워싱턴 미스틱스", "미스틱스"), ("wnba", "Portland Fire", "포틀랜드 파이어"),
+    ("wnba", "Toronto Tempo", "토론토 템포"),
     ("nba", "Golden State Warriors", "골든스테이트", "워리어스", "gsw"), ("nba", "Boston Celtics", "셀틱스", "보스턴 셀틱스"),
     ("nba", "Miami Heat", "마이애미 히트", "히트"), ("nba", "Chicago Bulls", "불스", "시카고 불스"),
     ("nba", "New York Knicks", "닉스"), ("nba", "Brooklyn Nets", "브루클린", "네츠"),
@@ -336,6 +360,17 @@ _NATIONS = {
     "Peru": "페루", "Ecuador": "에콰도르", "Paraguay": "파라과이", "Bolivia": "볼리비아", "Venezuela": "베네수엘라",
     "Mexico": "멕시코", "United States": "미국", "USA": "미국", "Canada": "캐나다", "Costa Rica": "코스타리카",
     "Panama": "파나마", "Jamaica": "자메이카", "Honduras": "온두라스",
+    # 북중미 네이션스리그 (ESPN 실측 2026-10-02 + 콘카카프 회원국)
+    "El Salvador": "엘살바도르", "Guatemala": "과테말라", "Haiti": "아이티", "Trinidad and Tobago": "트리니다드토바고",
+    "Curacao": "퀴라소", "Curaçao": "퀴라소", "Suriname": "수리남", "Nicaragua": "니카라과", "Cuba": "쿠바",
+    "Dominican Republic": "도미니카공화국", "Martinique": "마르티니크", "Guadeloupe": "과들루프", "St. Lucia": "세인트루시아",
+    "Saint Lucia": "세인트루시아", "St. Kitts and Nevis": "세인트키츠네비스", "Grenada": "그레나다", "Bermuda": "버뮤다",
+    "Puerto Rico": "푸에르토리코", "French Guiana": "프랑스령 기아나", "Guyana": "가이아나", "Belize": "벨리즈",
+    "Barbados": "바베이도스", "Antigua and Barbuda": "앤티가바부다", "Aruba": "아루바", "Bonaire": "보네르",
+    "St. Vincent and the Grenadines": "세인트빈센트그레나딘", "Dominica": "도미니카연방", "Montserrat": "몬트세랫",
+    "Cayman Islands": "케이맨제도", "Bahamas": "바하마", "Turks and Caicos Islands": "터크스케이커스",
+    "US Virgin Islands": "미국령 버진아일랜드", "British Virgin Islands": "영국령 버진아일랜드", "Anguilla": "앵귈라",
+    "Sint Maarten": "신트마르턴", "Saint Martin": "생마르탱",
     "Morocco": "모로코", "Senegal": "세네갈", "Egypt": "이집트", "Nigeria": "나이지리아", "Ghana": "가나",
     "Cameroon": "카메룬", "Algeria": "알제리", "Tunisia": "튀니지", "Ivory Coast": "코트디부아르", "Cote d'Ivoire": "코트디부아르",
     "Mali": "말리", "South Africa": "남아공", "Guinea": "기니", "Kenya": "케냐", "Burkina Faso": "부르키나파소",

@@ -46,6 +46,10 @@ class FakeFetch:
             return load("espn_eng1_scoreboard.json") if params.get("dates") == "20260920" else {"events": []}
         if url.endswith("soccer/uefa.nations/scoreboard"):   # 실제 2026-10-01 네이션스리그 (A매치 기간)
             return load("espn_unl_scoreboard.json") if params.get("dates") == "20261001" else {"events": []}
+        if url.endswith("soccer/concacaf.nations.league/scoreboard"):   # 실제 2026-10-02 (미국 날짜) 북중미 네이션스리그, 1경기 진행 중
+            return load("espn_concacaf_nl_scoreboard.json") if params.get("dates") == "20261002" else {"events": []}
+        if url.endswith("basketball/wnba/scoreboard"):
+            return load("espn_wnba_scoreboard.json") if params.get("dates") == "20261002" else {"events": []}
         if url.endswith("baseball/mlb/scoreboard"):
             return load("espn_mlb_scoreboard.json") if params.get("dates") == "20260929" else {"events": []}
         if url.endswith("mma/ufc/scoreboard"):
@@ -124,6 +128,26 @@ async def national_team_games_show_in_soccer_during_international_break():
     assert "덴마크" in out and "포르투갈" in out, out
     assert find_league("a매치").code == "friendly" and find_league("국대").code == "friendly"
     assert ko_name("South Korea") == "대한민국" and ko_name("Liverpool") == "리버풀"
+
+
+@test
+async def concacaf_nations_wnba_and_hockey_clock_requested_2026_10_03():
+    """방 요청 2026-10-03: 하키·여자농구·북중미 네이션스리그 — 시간과 지금 점수."""
+    from sodam.sports.providers import espn_detail
+    svc, db, fetch, clock = await setup(ts(2026, 10, 3, 4, 55))
+    out = await cmd(svc, ".스포츠 북중미네이션스리그")
+    assert "북중미 네이션스리그" in out and "🔴 54&#x27; 세인트루시아 2-0 과들루프" in out, out
+    assert "쿠바" in out and "06:00" in out, out                       # 21:00Z = 한국 06:00
+    out = await cmd(svc, ".스포츠 여자농구")
+    assert "WNBA" in out and "댈러스 윙스" in out and "골든스테이트 발키리스" in out and "10:00" in out, out
+    assert find_league("콘카카프").code == "concacaf_nl" and find_league("wnba").code == "wnba"
+    assert find_league("하키") is None and find_league("nhl").code == "nhl"
+    st = lambda sd: {"type": {"name": "STATUS_IN_PROGRESS", "shortDetail": sd}}   # noqa: E731
+    assert espn_detail(st("12:34 - 2nd"), "hockey") == "2피리어드 12:34"
+    assert espn_detail(st("End of 1st"), "hockey") == "1피리어드 끝"
+    assert espn_detail(st("3:21 - OT"), "hockey") == "연장 3:21"
+    assert espn_detail(st("5:02 - 4th"), "basketball") == "4쿼터 5:02"
+    assert espn_detail(st("Bot 7th"), "baseball") == "7회말"
 
 
 @test

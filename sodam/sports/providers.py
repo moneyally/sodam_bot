@@ -152,16 +152,35 @@ def espn_state(st: dict) -> str:
     return "pre"
 
 
+# 하키·농구 진행 시간 (ESPN shortDetail: '12:34 - 2nd' · 'End of 1st' · '3:21 - OT' · 'Halftime') → '2피리어드 12:34'
+_PERIOD_CLOCK = re.compile(r"^(\d{1,2}:\d{2}|\d{1,2}(?:\.\d)?)\s*-\s*(\d)(?:st|nd|rd|th)$", re.I)
+_OT_CLOCK = re.compile(r"^(\d{1,2}:\d{2}|\d{1,2}(?:\.\d)?)\s*-\s*(\d?)OT$", re.I)
+_END_OF = re.compile(r"^End of (?:the )?(\d)(?:st|nd|rd|th)", re.I)
+PERIOD_KO = {"hockey": "피리어드", "basketball": "쿼터"}
+
+
 def espn_detail(st: dict, sport: str) -> str:
     t = st.get("type") or {}
     if "HALFTIME" in (t.get("name") or ""):
         return "하프타임"
     if sport == "soccer":
         return st.get("displayClock") or ""
-    short = t.get("shortDetail") or ""
+    short = (t.get("shortDetail") or "").strip()
     m = _INNING.match(short)
     if m:
         return f"{m.group(2)}회{'초' if m.group(1) == 'Top' else '말'}"
+    unit = PERIOD_KO.get(sport)
+    if unit:
+        if m := _PERIOD_CLOCK.match(short):
+            return f"{m.group(2)}{unit} {m.group(1)}"
+        if m := _OT_CLOCK.match(short):
+            return f"연장{m.group(2) or ''} {m.group(1)}".replace("연장1 ", "연장 ")
+        if m := _END_OF.match(short):
+            return f"{m.group(1)}{unit} 끝"
+        if short.upper() in ("SO", "SHOOTOUT") or "shootout" in short.lower():
+            return "승부치기(슛아웃)"
+        if "intermission" in short.lower():
+            return "휴식"
     return short
 
 
