@@ -303,17 +303,22 @@ class Naver(Provider):
                     self._unknown.add(code)
                     log.warning("naver 모르는 statusCode %s", code)
                 state = "in"
-        scored = state in ("in", "post", "suspended")
+        # 종합대회(아시안게임) 경기는 팀 이름·점수 없이 오고 점수 0:0 → 점수 없음으로 (제목만)
+        scored = state in ("in", "post", "suspended") and bool(g.get("homeTeamName"))
         return Game(f"naver:{g.get('gameId')}", lg.code, start, g.get("homeTeamName") or "", g.get("awayTeamName") or "",
                     _int(g.get("homeTeamScore")) if scored else None, _int(g.get("awayTeamScore")) if scored else None,
                     state, "" if state == "post" else (g.get("statusInfo") or ""),
-                    title="" if g.get("homeTeamName") else lg.name)
+                    title="" if g.get("homeTeamName") else (g.get("title") or lg.name))
 
     async def _games(self, lg: League, a: date, b: date) -> list[Game]:
-        data = await self.fetch(f"{NAVER}/schedule/games", {"fields": "basic", "categoryId": lg.naver,
-                                                            "fromDate": a.isoformat(), "toDate": b.isoformat()},
-                                NAVER_HEADERS)
-        games = [self.parse_game(lg, g) for g in (data.get("result") or {}).get("games") or []]
+        params = {"fields": "basic", "categoryId": lg.naver, "fromDate": a.isoformat(), "toDate": b.isoformat()}
+        if lg.naver_codes:      # 종합대회: 하루 수백 경기(전 종목) → 크게 받아서 종목 코드로 거름 (기본 50개면 잘림, 실측)
+            params |= {"fields": "all", "size": 1000}
+        data = await self.fetch(f"{NAVER}/schedule/games", params, NAVER_HEADERS)
+        raw = (data.get("result") or {}).get("games") or []
+        if lg.naver_codes:
+            raw = [g for g in raw if str(g.get("gameId") or "")[4:7] in lg.naver_codes]
+        games = [self.parse_game(lg, g) for g in raw]
         return sorted([g for g in games if g], key=lambda g: (g.start, g.key))
 
     async def day(self, lg: League, d: date, only: set[str] | None = None) -> list[Game]:
