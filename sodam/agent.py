@@ -201,6 +201,9 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         cont = await route.recent_heavy(svc.db, ctx.chat_id, getattr(ctx.caller, "id", 0), time.time())
         lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings, recent_heavy=cont),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
+    if think0 and ctx.role >= Role.ADMIN and lane.why not in route.THINK_WHY \
+            and not (_WHY.search(request or "") or _CHAIN.search(request or "")):
+        think0 = False   # 관리자 잡담·이어진 짧은 말은 추론 없이 (일·분석·여러 단계일 때만 생각)
     ctx_tools = _ToolSet(schemas, allowed)
     run.event("route", lane=lane.lane, why=lane.why, think=think0 and lane.lane == "heavy")
     run.event("tools", shown=len(schemas), usable=len(allowed))

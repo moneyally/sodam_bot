@@ -110,7 +110,7 @@ def _resolver(kind: str):
             else:
                 rows[row["user_id"]] = row
         if errors:
-            return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors)
+            return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors) + tools.REFUSE_SAY
         return list(rows.values()), None
     return resolve
 
@@ -387,7 +387,8 @@ TOOLS = [
     tools.Tool("kick_member", "[관리자] 멤버를 내보낸다(강퇴·킥) — 다시 들어올 수 있음 (확인 버튼 한 장). '내보내·강퇴·쫓아내' 는 이것, "
                "'밴·영구 차단·다시 못 오게' 는 ban_member. 여러 명이면 names 에 한 번에. " + tools.WHO_HINT,
                {**NAMES, "reason": {"type": "string"}}, ["names", "reason"], t_kick, Role.ADMIN, where="room"),
-    tools.Tool("member_action", "[관리자] 멤버 조치 풀기·예외 (확인 버튼 한 장): unban=밴 해제(방에 없는 밴된 사람도 ID·@·이름) · "
+    tools.Tool("member_action", "[관리자] 멤버 조치 풀기·예외 (확인 버튼 한 장): unban=밴 해제(방에 없는 밴된 사람도 ID·@·이름. "
+               "'추방한 사람이 링크로 못 들어와·만료된 링크라고 떠' = 밴 상태라 초대 링크가 막힌 것 → unban) · "
                "unwarn=경고 1회 취소 · reset_warns=경고 전부 지우기 · free=자유 멤버(자동 통제 제외, 관리자 권한 아님) · "
                "unfree=자유 멤버 해제 · captcha_pass=캡차 통과. 채팅 금지 풀기는 unmute_member.",
                {"action": {"type": "string", "enum": list(ACTIONS)}, **NAMES, "reason": {"type": "string"}},

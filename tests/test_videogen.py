@@ -328,9 +328,12 @@ async def one_per_answer_one_per_room():
     again = await fn(c, {"prompt": "A dog", "mode": "text"})
     assert "시작" in first and "한 답변에 하나만" in again
     other = await fn(await ctx(svc, bot, OWNER, Role.OWNER), {"prompt": "A dog", "mode": "text"})
-    assert "만드는 중" in other, "방마다 동시에 1개"
+    assert "만드는 중" in other and "태그해서 알려" in other, "방마다 동시에 1개"
     await finish()
     assert len([r for r in api.reqs if r.method == "POST"]) == 1
+    await asyncio.sleep(0.05)
+    told = [x for x in bot.named("send_message") if "이제 영상 다시" in x[2]]
+    assert told and f"id={OWNER.id}" in told[-1][2] and not videogen.WAITING, "기다린 사람 태그"
 
 
 @test

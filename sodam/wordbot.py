@@ -56,7 +56,16 @@ def follow_count(word: str) -> int:
     return sum(len(games._BY_FIRST.get(ch, ())) for ch in games.starts_for(word))
 
 
-def why_not(word: str, prev: str, used: set[str]) -> str | None:
+def common_follow(word: str) -> int:
+    """이 낱말 뒤에 이을 수 있는 '흔한' 낱말 수 — 사람이 실제로 떠올릴 수 있는 정도 (사전 전체 수는 '르'처럼 어려운 글자도 크게 나옴).
+    실제 2026-10-03 베베: 소담이 '르'로 끝나는 말 → 사람은 '릇무꽃·릇다·읏듬'을 지어내다 6번 다시 시작하고 화냄."""
+    return sum(len(games._COMMON.get(ch, ())) for ch in games.starts_for(word))
+
+
+MIN_COMMON = {"easy": 8, "normal": 3, "hard": 1}   # 소담이 둔 말 뒤에 흔한 말이 이만큼은 있어야 (있는 후보가 있을 때)
+
+
+def why_not(word: str, prev: str, used: set[str], level: str = "normal") -> str | None:
     """둘 수 없으면 이유 (코드 판정)."""
     if not games.is_word(word):
         return "사전에 없는 낱말"
@@ -66,16 +75,23 @@ def why_not(word: str, prev: str, used: set[str]) -> str | None:
         return "이미 나온 낱말"
     if not games.can_follow(word):
         return "한방 단어(뒤에 이을 말이 없음)는 안 둠"
+    need = MIN_COMMON.get(level, 3)
+    if common_follow(word) < need and any(common_follow(w) >= need for w, _ in candidates(prev, used, n=60)):
+        return f"이 말 뒤엔 사람이 아는 흔한 말이 거의 없음 (흔한 말 {common_follow(word)}개) — 이을 만한 말로"
     return None
 
 
-def candidates(prev: str, used: set[str], hard: bool = False, n: int = 15) -> list[tuple[str, int]]:
+def candidates(prev: str, used: set[str], hard: bool = False, n: int = 15, min_common: int = 0) -> list[tuple[str, int]]:
+    """이을 후보 (낱말, 뒤에 이을 '흔한' 말 수). min_common = 그보다 적은 후보는 뺌 (그런 후보만 있으면 그대로)."""
     out: list[str] = []
     for src in (games._COMMON, games._BY_FIRST):
         out = [w for ch in games.starts_for(prev) for w in src.get(ch, ()) if w not in used and games.can_follow(w)]
         if out:        # 흔한 말 먼저 (어려움도 '무늬'처럼 아는 말로 몰아붙이기 — 과레늄산나트륨 같은 말은 흔한 말이 없을 때만)
             break
-    scored = [(w, follow_count(w)) for w in set(out)]
+    scored = [(w, common_follow(w)) for w in set(out)]
+    if min_common:
+        fair = [x for x in scored if x[1] >= min_common]
+        scored = fair or scored
     if hard:
         scored.sort(key=lambda x: x[1])
         return scored[:n]
@@ -83,15 +99,17 @@ def candidates(prev: str, used: set[str], hard: bool = False, n: int = 15) -> li
     return scored[:n]
 
 
-def _listing(prev: str, used: set[str], hard: bool) -> str:
-    return "\n".join(f"{w} (이을 말 {n}개)" for w, n in candidates(prev, used, hard=hard, n=12)) or "후보 없음"
+def _listing(prev: str, used: set[str], hard: bool, level: str = "normal") -> str:
+    return "\n".join(f"{w} (이을 흔한 말 {n}개)" for w, n in candidates(prev, used, hard=hard, n=12,
+                                                                 min_common=MIN_COMMON.get(level, 3))) or "후보 없음"
 
 
 def code_move(prev: str, used: set[str], level: str) -> str | None:
     """LLM 없이 둘 때 (늦거나 실패). 어려움 = 이을 말이 가장 적은 것, 보통 = 까다로운 절반 중 무작위, 쉬움 = 흔한 말 무작위."""
     if level == "easy":
-        return games.pick_next(prev, used)
-    hard = candidates(prev, used, hard=True, n=40)
+        easy = candidates(prev, used, n=40, min_common=MIN_COMMON["easy"])
+        return random.choice(easy)[0] if easy else games.pick_next(prev, used)
+    hard = candidates(prev, used, hard=True, n=40, min_common=MIN_COMMON.get(level, 3))
     if not hard:
         return None
     return hard[0][0] if level == "hard" else random.choice(hard[:max(1, len(hard) // 2)])[0]
@@ -103,7 +121,7 @@ async def _llm_move(svc: Services, chat_id: int, prev: str, used: set[str], leve
                  + style_block(s["style"])},
                 {"role": "user", "content": f"상대 낱말: {prev}\n이어야 할 첫 글자: {'/'.join(sorted(games.starts_for(prev)))}\n"
                                             f"지금까지 나온 낱말 {len(used)}개\nfind_words 결과:\n"
-                                            + _listing(prev, used, level == "hard")}]
+                                            + _listing(prev, used, level == "hard", level)}]
     for _ in range(MAX_STEPS):
         msg = await svc.llm.chat(messages, tools=TOOLS, model=svc.cfg.guard_model, max_tokens=400,
                                  purpose="wordchain", chat_id=chat_id)
@@ -120,12 +138,12 @@ async def _llm_move(svc: Services, chat_id: int, prev: str, used: set[str], leve
                 args = {}
             word = str(args.get("word", "")).strip()
             if c.function.name == "find_words":
-                result = _listing(prev, used, bool(args.get("hard")) or level == "hard")
+                result = _listing(prev, used, bool(args.get("hard")) or level == "hard", level)
             elif c.function.name == "check_word":
-                err = why_not(word, prev, used)
+                err = why_not(word, prev, used, level)
                 result = f"안 됨: {err}" if err else f"둘 수 있음 (이을 말 {follow_count(word)}개)"
             elif c.function.name == "play":
-                err = why_not(word, prev, used)
+                err = why_not(word, prev, used, level)
                 if not err:
                     line = filter_output(str(args.get("line", ""))[:40], max_chars=40, allowed_usernames=set())
                     return word, "" if line.startswith("음…") else line

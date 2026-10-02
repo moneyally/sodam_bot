@@ -199,6 +199,17 @@ def pick_next(word: str, used: set[str]) -> str | None:
 
 
 REACT = {"late": "🙈", "used": "🤨", "unknown": "🤔"}
+# '소담아 읏듬' · '릇다 소담아' 처럼 이름을 붙여 친 답도 게임 답으로 (실제 2026-10-03 베베: 이름 붙인 답은 AI 가 받아 버림)
+_CALL = re.compile(r"^(?:소담아|소담이|소담)[\s,!~]+|[\s,]+(?:소담아|소담이|소담)[\s!~?.]*$")
+
+
+def examples(starts: set[str], used: set[str], n: int = 2) -> list[str]:
+    """이 글자들로 시작하는 흔한 말 예시 (없으면 사전 전체에서)."""
+    for src in (_COMMON, _BY_FIRST):
+        pool = [w for ch in starts for w in src.get(ch, ()) if w not in used]
+        if pool:
+            return random.sample(pool, min(n, len(pool)))
+    return []
 register_setting("wc_level", "normal", "끝말잇기 소담이 난이도",
                  choices={"easy": "easy", "쉬움": "easy", "normal": "normal", "보통": "normal", "hard": "hard", "어려움": "hard"},
                  choice_labels={"easy": "쉬움", "normal": "보통", "hard": "어려움"})
@@ -251,6 +262,23 @@ class WordChain(Game):
             pass
         return True
 
+    async def stuck(self, msg: Message) -> bool:
+        """맞는 글자로 시작했는데 사전에 없는 말 (지어낸 말): 🤔 + 사람마다 한 문제에 한 번 '이런 말이 있어요' 예시
+        (실제 2026-10-03 베베: '릇무꽃·릇다·읏듬'만 계속 거절되다 화냄)."""
+        await self.react(msg, "unknown")
+        seen = self.__dict__.setdefault("stuck_seen", set())
+        key = (msg.from_user.id, self.last)
+        if key in seen:
+            return True
+        seen.add(key)
+        ex = examples(starts_for(self.last), self.used)
+        try:
+            await msg.reply_text(f"🤔 사전에 없는 말이에요. '{self._starts_text()}'(으)로 시작하는 말 예: "
+                                 + (", ".join(ex) if ex else "(거의 없음 — 시간 지나면 제가 져요)"))
+        except TelegramError:
+            pass
+        return True
+
     async def react(self, msg: Message, kind: str) -> bool:
         try:
             await self.bot.set_message_reaction(self.chat_id, msg.message_id, REACT[kind])
@@ -290,12 +318,14 @@ class WordChain(Game):
         return None if is_word(word) else "unknown"
 
     async def on_text(self, msg: Message, text: str) -> bool:
-        word = text.strip()
+        word = _CALL.sub("", text.strip()).strip()
         why = self.check(word)
         if why == "no":
             return False
         if why == "wrong":
             return await self.hint(msg)
+        if why == "unknown" and word[:1] in starts_for(self.last):
+            return await self.stuck(msg)
         if why:
             return await self.react(msg, why)
         from . import wordbot   # 늦게 import (wordbot → games)

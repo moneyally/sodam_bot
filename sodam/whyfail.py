@@ -27,7 +27,7 @@ _GATES = (
     ("card", ("확인 카드", "확인 버튼", "버튼을 방에", "카드를 방에", "카드 올림", "할까요")),
     ("error", ("실행 중 오류", "도구 입력 오류", "입력 형식 오류", "오류가 났")),
     ("soft", ("찾을 수 없", "못 찾", "찾지 못", "특정하지 못", "기록 없음", "기록이 없음", "결과 없음", "여러 명이",
-              "여러 개 찾음", "사용할 수 없음")),
+              "여러 개 찾음", "사용할 수 없음", "지금은 못", "못 가져옴", "고칠 사진이 없음")),
 )
 GATE_KO = {"ok": "통과", "security": "보안 규칙에 막힘", "perm": "권한 없어서 막힘", "off": "기능 꺼짐/이용 기간",
            "limit": "한도", "card": "확인 카드 올림", "error": "도구 오류", "soft": "못 찾음/실패"}
@@ -36,6 +36,9 @@ STAGE = {"claim": "답변", "error": "실행", "soft": "찾기", "off": "설정"
          "complaint": "결과", "empty": "답변", "crash": "실행"}
 REDO_SEC = 600
 COMPLAINT_SEC = 180
+# 한 번 잘 된 뒤 또 부탁하는 게 자연스러운 일 (게임 한 판 더·그림 하나 더) → '다시 요청'을 실패로 안 셈
+AGAIN_OK = frozenset({"start_game", "point_game", "make_image", "make_sticker", "make_profile_video", "make_video",
+                      "mention_members", "greet_members", "sports", "news_headlines", "web_search"})
 COMPLAINT = re.compile(r"안\s?되(네|잖|냐|는데|노)|안\s?돼|안됨|틀렸|거짓말|아니\s?라고|왜\s?안|못\s?하(네|냐)|멍청|바보야|뭐\s?하냐|"
                        r"그게\s?아니|아니\s?그거|다시\s?해")
 
@@ -116,7 +119,8 @@ def analyze(row, later_runs: list | None = None, replies: list | None = None) ->
             out.append(Finding("cap", {"usd": "한 번에 쓸 요금 상한에 걸려 중간에 답함",
                                        "time": "시간 상한(단톡방 25초)에 걸려 중간에 답함"}.get(e.get("kind"), "상한에 걸림")))
     trig = row["trigger"] or ""
-    for nxt in later_runs or []:
+    did_ok = any(s.get("tool") in AGAIN_OK and s.get("gate", "ok") == "ok" for s in st)
+    for nxt in ([] if did_ok or trig.startswith("(이름만") else later_runs or []):
         if 0 < nxt["ts"] - row["ts"] <= REDO_SEC and similar(trig, nxt["trigger"] or "") >= 0.5:
             out.append(Finding("redo", f"같은 사람이 {max(1, (nxt['ts'] - row['ts']) // 60)}분 뒤 비슷한 요청을 다시 함 "
                                        f"(#{nxt['id']}) — 첫 답이 해결 못 한 것"))
