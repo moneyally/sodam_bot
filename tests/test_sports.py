@@ -151,6 +151,30 @@ async def concacaf_nations_wnba_and_hockey_clock_requested_2026_10_03():
 
 
 @test
+async def every_espn_league_added_2026_10_03_parses_real_data():
+    """'우리 없는 데이터 전부' (방 요청 계속): 새 리그·종목이 실제 ESPN 응답으로 한 줄씩 나오고, 종목 전체 보기엔 큰 리그만."""
+    from sodam.sports import fmt
+    from sodam.sports.leagues import find_group, leagues_of_sport
+    cases = {"nfl": "football_nfl", "f1": "racing_f1", "pga": "golf_pga", "atp": "tennis_atp",
+             "afl": "australian-football_afl", "ligamx": "soccer_mex_1"}
+    for code, f in cases.items():
+        games = [ESPN(None).parse_event(LEAGUES[code], e) for e in load(f"espn_{f}_scoreboard.json")["events"]]
+        assert games and all(g and fmt.line(g) for g in games), code
+    nfl = [ESPN(None).parse_event(LEAGUES["nfl"], e) for e in load("espn_football_nfl_scoreboard.json")["events"]]
+    assert any(g.state == "post" and g.home_score is not None for g in nfl)
+    f1 = ESPN(None).parse_event(LEAGUES["f1"], load("espn_racing_f1_scoreboard.json")["events"][0])
+    assert f1.title and not f1.home, "레이스는 대회 이름 한 줄"
+    for word, code in (("미식축구", "nfl"), ("f1", "f1"), ("fa컵", "facup"), ("mls", "mls"), ("리베르타도레스", "libertadores"),
+                       ("사우디리그", "saudi"), ("대학농구", "ncaab"), ("wbc", "wbc"), ("에레디비지", "eredivisie")):
+        assert find_league(word).code == code, word
+    soccer = {lg.code for lg in leagues_of_sport("soccer")}
+    assert "epl" in soccer and "facup" not in soccer and "facup" in {lg.code for lg in leagues_of_sport("soccer", minor=True)}
+    assert [lg.code for lg in leagues_of_sport("golf")] == ["pga"], "큰 리그 없는 종목은 전부"
+    assert {lg.code for lg in find_group("여자축구")} >= {"uwcl", "nwsl"}
+    assert len({lg.code for lg in LEAGUES.values()}) >= 80
+
+
+@test
 async def asian_games_and_afc_show_by_title_and_alert_start_end():
     # 실제 2026-10-02 베베방 "축구는 피파아시안컵 배구도 아시아" → 아시안게임(네이버, 팀·점수 없이 제목만) + AFC(ESPN)
     svc, db, fetch, clock = await setup(ts(2026, 10, 2, 18, 40), naver=True)
@@ -629,8 +653,13 @@ async def panel_adds_league_team_changes_settings_and_deletes():
     q = await press(svc, bot, MEMBER, f"m:spt:{CHAT}")
     assert not q.edits and q.answers[-1][1], "멤버는 못 엶"
     q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}")
+    assert any(t.startswith("⚽ 축구") for t, _ in buttons(q)) and "준비 중" in q.edits[-1] and "KBO" in q.edits[-1]
+    assert len(buttons(q)) <= 14, "리그가 80개 넘어도 첫 화면은 종목만"
+    q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}:soccer")
     labels = [t for t, _ in buttons(q)]
-    assert "EPL" in labels and "KBO" not in labels and "준비 중" in q.edits[-1], "네이버 꺼짐 → 국내 리그 버튼 없음"
+    assert "EPL" in labels and "북중미 네이션스리그" in labels and "FA컵" in labels and "KBO" not in labels, labels
+    q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}:baseball")
+    assert "KBO" not in [t for t, _ in buttons(q)], "네이버 꺼짐 → 국내 리그 버튼 없음"
     q = await press(svc, bot, ADMIN, f"m:spta:{CHAT}:epl")
     assert ("✅ EPL", f"m:spta:{CHAT}:epl") in buttons(q)
     q = await press(svc, bot, ADMIN, f"m:spta:{CHAT}:kbo")
