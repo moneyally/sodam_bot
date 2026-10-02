@@ -248,9 +248,10 @@ async def in_buttons(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 
 async def in_copy(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     """전달(또는 직접 보낸) 글 = 이 1:1 대화의 그 글을 그대로 복사해서 인사. 이 대화에서 글을 지우면 복사가 안 됨."""
-    if not (msg.text or msg.caption or msg.photo or msg.video or msg.animation or msg.document):
-        return False, "인사로 쓸 글을 이 대화에 전달(forward)해 주세요."
-    await _save(c, f"greet_copy={msg.message_id}", greet_copy=[msg.chat_id, msg.message_id])
+    src = msg.reply_to_message or msg        # 이 대화에 이미 있는 글(전달해 둔 글)에 답장해도 됨
+    if not (src.text or src.caption or src.photo or src.video or src.animation or src.document):
+        return False, "인사로 쓸 글을 이 대화에 전달(forward)하거나, 이미 있는 그 글에 답장으로 아무 말이나 보내 주세요."
+    await _save(c, f"greet_copy={src.message_id}", greet_copy=[msg.chat_id, src.message_id])
     return True, ("✅ 이 글을 그대로 복사해서 입장 인사로 올려요 (영상·움직이는 이모지·서식·버튼 그대로).\n"
                   "⚠️ 이 1:1 대화에서 이 글을 지우면 복사가 안 되고 보통 인사로 돌아가요.")
 
@@ -276,6 +277,7 @@ menu.register_input("wm", (
     "인사말은 그 미디어의 설명으로 붙어요."), "w", in_media, s_editor, media=True)
 menu.register_input("wc", (
     "📋 입장 인사로 <b>그대로 올릴 글</b>을 이 대화에 <b>전달(forward)</b>해 주세요.\n"
+    "(이미 이 대화에 전달해 둔 글이면 그 글에 <b>답장</b>으로 아무 말이나 보내도 돼요)\n"
     "다른 봇이 올린 안내 글도 돼요. 영상·움직이는 이모지·서식이 그대로 복사돼요 (이름 태그는 안 붙어요)."),
     "w", in_copy, s_editor, media=True)
 menu.register_input("wb", (
