@@ -76,6 +76,8 @@ class Api:
             return httpx.Response(302, headers={"location": "https://storage.googleusercontent.com/v/abc.mp4"})
         if u == "https://storage.googleusercontent.com/v/abc.mp4":
             return httpx.Response(200, content=MP4)
+        if req.method == "POST" and json.loads(req.content or b"{}").get("model") in getattr(self, "fail_models", ()):
+            return httpx.Response(500, json={"error": "internal"})
         if req.method == "POST" and u in ("https://api.x.ai/v1/videos/generations", "https://api.x.ai/v1/videos/edits",
                                           "https://api.x.ai/v1/videos/extensions"):
             return httpx.Response(200, json={"request_id": "r1"})
@@ -180,14 +182,36 @@ async def xai_image_to_video_uses_replied_photo_and_no_key_to_download_host():
     out = await run(c, mode="image", seconds=10, aspect="1:1")
     assert "시작" in out, out
     body = api.body()
-    assert body["model"] == "grok-imagine-video" and body["duration"] == 6 and body["aspect_ratio"] == "1:1"
+    assert body["model"] == "grok-imagine-video-1.5-lite" and body["duration"] == 6 and body["aspect_ratio"] == "1:1", body
     assert body["image"]["url"] == "data:image/jpeg;base64," + base64.b64encode(photo).decode(), "답장한 사진이 첫 장면"
     assert api.reqs[0].headers["authorization"] == f"Bearer {XKEY}"
     dl = [r for r in api.reqs if r.url.host == "vidgen.x.ai"]
     assert dl and "authorization" not in dl[0].headers
     assert len(bot.named("send_video")) == 1
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
-    assert await svc.db.counter(day, CHAT, costs.ROOM_USD) == 300_000
+    assert await svc.db.counter(day, CHAT, costs.ROOM_USD) == 120_000, "라우터 기본 = lite $0.02×6초"
+
+
+@test
+async def router_cheap_by_default_quality_words_go_up_and_lite_failure_retries_once():
+    """오너 2026-10-03 '한 모델 말고 라우터로': 기본 lite($0.02), 화질을 말하면 기본 모델($0.05), lite 가 그냥 실패하면 기본 모델로 한 번."""
+    prov = video.Provider("xai", XKEY, "grok-imagine-video", tuple(range(1, 16)), ("1:1",))
+    set_env(XAI_API_KEY=XKEY)
+    assert video.route_model(prov, "고양이 춤추는 영상")[0].model == video.XAI_CHEAP
+    assert video.route_model(prov, "영화처럼 고화질로 만들어줘")[0].model == "grok-imagine-video"
+    assert video.route_model(prov, "make it cinematic and detailed")[1] == "quality"
+    set_env(XAI_API_KEY=XKEY, VIDEO_MODEL="grok-imagine-video-1.5")
+    assert video.route_model(prov, "고양이")[1] == "fixed", "VIDEO_MODEL 을 적으면 라우터 끔"
+    api = Api()
+    api.fail_models = {video.XAI_CHEAP}
+    svc, bot = await world(api, env={"XAI_API_KEY": XKEY})
+    out = await run(await ctx(svc, bot), prompt="A cat dancing", mode="text")
+    assert "시작" in out, out
+    models = [json.loads(r.content)["model"] for r in api.reqs if r.method == "POST"]
+    assert models == [video.XAI_CHEAP, "grok-imagine-video"], models
+    assert len(bot.named("send_video")) == 1
+    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+    assert await svc.db.counter(day, CHAT, costs.ROOM_USD) == 300_000, "실제로 만든 모델 값으로 청구"
 
 
 @test
