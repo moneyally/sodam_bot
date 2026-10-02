@@ -58,6 +58,9 @@ class FakeFetch:
             return load("espn_eng1_teams.json")
         if url.endswith("/teams/367/schedule"):
             return load("espn_tot_fixture.json" if params.get("fixture") else "espn_tot_schedule.json")
+        if "sports.naver.com/schedule/games" in url and params.get("categoryId") == "asiangames2026":
+            assert params.get("size", 0) >= 500, "종합대회는 하루 수백 경기 → 크게 받아야 축구·배구가 안 잘림"
+            return load("naver_asiangames_20261002.json") if params.get("fromDate") == "2026-10-02" else {"result": {"games": []}}
         if "sports.naver.com/schedule/games" in url:
             assert "upperCategoryId" not in params and headers.get("Referer"), "네이버는 categoryId 만 + Referer"
             return load("naver_kbo_games.json") if params.get("categoryId") == "kbo" else {"result": {"games": []}}
@@ -121,6 +124,34 @@ async def national_team_games_show_in_soccer_during_international_break():
     assert "덴마크" in out and "포르투갈" in out, out
     assert find_league("a매치").code == "friendly" and find_league("국대").code == "friendly"
     assert ko_name("South Korea") == "대한민국" and ko_name("Liverpool") == "리버풀"
+
+
+@test
+async def asian_games_and_afc_show_by_title_and_alert_start_end():
+    # 실제 2026-10-02 베베방 "축구는 피파아시안컵 배구도 아시아" → 아시안게임(네이버, 팀·점수 없이 제목만) + AFC(ESPN)
+    svc, db, fetch, clock = await setup(ts(2026, 10, 2, 18, 40), naver=True)
+    out = await cmd(svc, ".스포츠 아시안게임 배구")
+    assert "남자 준결승" in out and "19:20" in out and "동메달전" in out, out      # 배구 + 비치발리볼
+    assert "kg급" not in out and "0:0" not in out, out                          # 유도는 거르고 0:0 점수는 안 보임
+    out = await cmd(svc, ".스포츠 축구")
+    assert "아시안게임 축구" in out and "여자 금메달전" in out and "19:30" in out, out
+    assert "AFC 아시안컵" not in out, "경기 없는 리그는 안 보임"
+    asked = {u.split("/sports/")[-1] for u, _ in fetch.calls if "espn" in u}
+    assert {"soccer/afc.asian.cup/scoreboard", "soccer/afc.champions/scoreboard"} <= asked, asked
+    assert find_league("피파아시안컵").code == "asiancup" and find_league("아챔").code == "acl"
+    assert find_league("아시안게임").code == "ag_volley" and find_league("아겜축구").code == "ag_soccer"
+    # 알림: 제목뿐인 경기도 시작·종료 (점수 없음 → 골·점수 알림 없음)
+    g = await svc.sports.feed.day(LEAGUES["ag_volley"], datetime(2026, 10, 2).date())
+    semi = next(x for x in g if x.title == "남자 준결승")
+    assert semi.home_score is None and semi.state == "pre"
+    done = next(x for x in g if x.title == "남자 준결승 36경기")
+    assert done.state == "post" and done.home_score is None and done.away_score is None, "종합대회 0:0 은 점수 아님"
+    from dataclasses import replace
+    live = replace(semi, state="in")
+    [ev] = diff(Snap("pre", None, None, 0), live)
+    assert "경기 시작" in ev.text and "남자 준결승" in ev.text and "아시안게임 배구" in ev.text, ev.text
+    [ev] = diff(Snap("in", None, None, 0), replace(semi, state="post"))
+    assert "경기 종료" in ev.text and "남자 준결승" in ev.text, ev.text
 
 
 @test

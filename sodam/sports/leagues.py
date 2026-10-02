@@ -25,6 +25,7 @@ class League:
     aps: tuple[str, int] | None = None   # (API-Sports 종목: football/baseball/basketball/volleyball, 리그 ID)
     aliases: tuple[str, ...] = field(default=())
     korean: bool = False      # 국내 리그 (ESPN 에 없음)
+    naver_codes: tuple[str, ...] = ()   # 네이버 종합대회(아시안게임 등): gameId[4:7] 종목 코드로 거름 (FBL 축구 · VVO 배구 · VBV 비치발리볼)
 
 
 SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊"}
@@ -69,6 +70,20 @@ _L = [
            ("아프리카네이션스컵", "afcon", "아프리카컵")),
     League("afcon_q", "아프리카 네이션스컵 예선", "soccer", "soccer/caf.nations_qual", None, None, None,
            ("아프리카네이션스컵예선", "아프리카예선", "afcon예선")),
+    # 아시아 축구 (ESPN 리그 목록 실측 2026-10-02 sports.core.api.espn.com/v2/sports/soccer/leagues — 전부 200)
+    League("acl", "AFC 챔피언스리그", "soccer", "soccer/afc.champions", None, None, None,
+           ("acl", "afc챔피언스리그", "아챔", "아시아챔피언스리그", "챔피언스리그엘리트", "acl엘리트")),
+    League("acl2", "AFC 챔피언스리그2", "soccer", "soccer/afc.cup", None, None, None, ("acl2", "afc컵", "afc챔피언스리그2", "아챔2")),
+    League("asiancup", "AFC 아시안컵", "soccer", "soccer/afc.asian.cup", None, None, None,
+           ("아시안컵", "afc아시안컵", "asian cup", "피파아시안컵")),
+    League("w_asiancup", "AFC 여자 아시안컵", "soccer", "soccer/afc.w.asian.cup", None, None, None, ("여자아시안컵", "여자 아시안컵")),
+    # 아시안게임 (아이치·나고야 2026, ~10/4): ESPN 에 없음 → 네이버 종합대회 일정 (SPORTS_NAVER=1).
+    # 실측 2026-10-02: 팀 이름·점수가 비어 옴(제목 '여자 금메달전'·시각·진행 상태만) → 경기 이름으로 시작·종료만 알림.
+    # 다음 대회는 네이버 categoryId 가 바뀜 (asiangames2030 등) — 그때 이 두 줄만 고치면 됨
+    League("ag_soccer", "아시안게임 축구", "soccer", None, "asiangames2026", None, None,
+           ("아시안게임축구", "아겜축구", "아시안게임 축구"), naver_codes=("FBL",)),
+    League("ag_volley", "아시안게임 배구", "volleyball", None, "asiangames2026", None, None,
+           ("아시안게임배구", "아겜배구", "아시안게임 배구", "아시안게임"), naver_codes=("VVO", "VBV")),
     League("uecl", "컨퍼런스리그", "soccer", "soccer/uefa.europa.conf", None, None, None,
            ("컨퍼런스리그", "uecl", "컨퍼런스", "conference league")),
     League("jleague", "J리그", "soccer", "soccer/jpn.1", None, "4633", None, ("j리그", "j1", "제이리그", "일본축구", "j league")),
