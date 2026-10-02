@@ -383,6 +383,12 @@ async def greet_copies_chosen_post_as_is():
     assert bot.named("copy")[-1][1:] == (CHAT, 1, 777) and not bot.named("send_message"), bot.calls
     logged = await db._one("SELECT text FROM messages WHERE chat_id=? AND is_bot=1 ORDER BY id DESC", (CHAT,))
     assert "그대로" in logged["text"]
+    await press(svc, bot, 1, f"m:in:{CHAT}:wc")                                   # 이미 있는 글에 답장으로도
+    old_post = FakeMsg(1, fake_user(1, "방장"), "", video=SimpleNamespace(file_id="v2"), message_id=555)
+    await dm("이거", reply_to=old_post, message_id=778)
+    assert (await db.get_settings(CHAT))["greet_copy"] == [1, 555]
+    await press(svc, bot, 1, f"m:in:{CHAT}:wc")
+    await dm("😉 이벤트 안내", video=SimpleNamespace(file_id="v"), message_id=777)
     q = await press(svc, bot, 1, f"m:w:{CHAT}")
     assert "글 복사 인사: 켜짐" in q.edits[-1]
     await press(svc, bot, 1, f"m:wv:{CHAT}:all")                                  # 미리보기 = 1:1 로 복사
