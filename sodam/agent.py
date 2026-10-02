@@ -209,7 +209,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
     started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
     if lane.lane == "light":
-        snap = (ctx.tainted, ctx.bot_tainted, list(ctx.mentions), list(ctx.name_notes), ctx.quiet)
+        snap = (ctx.tainted, ctx.bot_tainted, list(ctx.mentions), list(ctx.name_notes), ctx.quiet, ctx.room_read)
         try:
             return await _attempt(ctx, run, list(base), "light", purpose, ctx_tools, request, mode, steer,
                                   started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
@@ -221,7 +221,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 log.exception("agent log step failed")
             # heavy 는 light 가 읽은 것을 모름 → light 의 읽기로 켜진 표시(tainted 등)는 되돌림 (안 그러면 heavy 의 제재·설정이
             # '방 기록을 읽은 답변' 으로 막힘 — 리뷰 재현). light 가 이미 한 가벼운 쓰기가 있으면 그 결과(quiet·멘션)는 남기고 heavy 에 알림.
-            ctx.tainted, ctx.bot_tainted = snap[0], snap[1]
+            ctx.tainted, ctx.bot_tainted, ctx.room_read = snap[0], snap[1], snap[5]
             ctx.name_notes[:] = snap[3]
             if not e.done:
                 ctx.mentions[:], ctx.quiet = snap[2], snap[4]
