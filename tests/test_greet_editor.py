@@ -370,6 +370,38 @@ async def greet_replies_to_trusted_bot_welcome():
 
 
 @test
+async def greet_copies_chosen_post_as_is():
+    """실제 2026-10-03 베베방: 문지기 봇은 봇 글을 무시 → '안내' 대신 문지기 이벤트 안내 글(영상·움직이는 이모지)을 그대로 복사."""
+    db, svc, bot, _ = await setup()
+    dm = dm_sender(svc, bot)
+    q = await press(svc, bot, 1, f"m:w:{CHAT}")
+    await press(svc, bot, 1, find(q.kb, "글 그대로 복사").callback_data)
+    reply = await dm("😉 이벤트 안내", video=SimpleNamespace(file_id="v"), message_id=777)
+    assert "그대로 복사" in reply[0], reply
+    assert (await db.get_settings(CHAT))["greet_copy"] == [1, 777]
+    await greet(svc, bot, [(20, "새사람")])
+    assert bot.named("copy")[-1][1:] == (CHAT, 1, 777) and not bot.named("send_message"), bot.calls
+    logged = await db._one("SELECT text FROM messages WHERE chat_id=? AND is_bot=1 ORDER BY id DESC", (CHAT,))
+    assert "그대로" in logged["text"]
+    q = await press(svc, bot, 1, f"m:w:{CHAT}")
+    assert "글 복사 인사: 켜짐" in q.edits[-1]
+    await press(svc, bot, 1, f"m:wv:{CHAT}:all")                                  # 미리보기 = 1:1 로 복사
+    assert bot.named("copy")[-1][1:] == (1, 1, 777)
+
+    class Gone(FakeBot):                                                             # 원본이 지워짐 → 보통 인사
+        async def copy_message(self, *a, **kw):
+            raise BadRequest("Message to copy not found")
+    gone = Gone()
+    await db.set_setting(CHAT, "greet_template", "{names} 어서 오세요")
+    await greet(svc, gone, [(21, "로이")])
+    assert "어서 오세요" in gone.named("send_message")[-1][2]
+    q = await press(svc, bot, 1, f"m:w:{CHAT}")
+    q = await press(svc, bot, 1, find(q.kb, "복사 끄기").callback_data)              # 끄기 → 확인 → 토큰
+    await press(svc, bot, 1, find(q.kb, "삭제").callback_data)
+    assert (await db.get_settings(CHAT))["greet_copy"] == []
+
+
+@test
 async def greeter_falls_back_and_revalidates():
     db, svc, bot, _ = await setup()
 

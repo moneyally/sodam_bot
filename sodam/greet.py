@@ -70,6 +70,9 @@ register_setting("greet_mention", True, "입장 인사 이름 태그")
 # 켜면 ✅ 믿는 봇(🤝 다른 봇 연동)이 방금 올린 글에 답장으로 인사 — 봇끼리는 답장이어야 그 봇에게 감 (Bot-to-Bot).
 # 실제 사례 2026-10-03 베베방: 소담 인사 '안내' 를 문지기 봇이 키워드로 받아 안내 글을 올려야 하는데, 그냥 글이라 문지기에게 안 감.
 register_setting("greet_reply_bot", False, "다른 봇 환영 글에 답장")
+# 입장 인사 = 정해 둔 글을 그대로 복사 ([보낸 대화 ID, 글 ID]). 움직이는 이모지·영상·서식이 그대로 감 (copyMessage, 실측 2026-10-03).
+# 베베방: 문지기 봇이 봇 글을 무시해서 '안내' 로 못 부름 → 문지기 이벤트 안내 글을 소담이 복사.
+register_setting("greet_copy", [], "입장 인사 글 복사")
 register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
 
 
@@ -140,6 +143,14 @@ def media_of(s: dict) -> tuple[str, str] | None:
     kind, file_id = s.get("greet_media_type"), s.get("greet_media_id")
     if kind in MEDIA_TYPES and isinstance(file_id, str) and file_id:
         return kind, file_id
+    return None
+
+
+def copy_of(s: dict) -> tuple[int, int] | None:
+    v = s.get("greet_copy")
+    if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in v) \
+            and v[1] > 0:
+        return v[0], v[1]
     return None
 
 
@@ -218,6 +229,9 @@ class Greeter:
         if not people:
             return
         s = await self.svc.db.get_settings(chat_id)
+        if await self._copy(bot, chat_id, s):
+            self._again(bot, chat_id)
+            return
         reply_to = await self._bot_welcome(chat_id, since) if s.get("greet_reply_bot") else None
         tag = bool(s.get("greet_mention", True))
         names = ", ".join(mention(uid, name) if tag else esc(name) for uid, name in people[:15])
@@ -234,8 +248,25 @@ class Greeter:
             log.warning("greet send failed: %s", e)
             for uid, _ in people:           # 못 보냈으면 AI 인사까지 막지 않게
                 self._greeted.pop((chat_id, uid), None)
+        self._again(bot, chat_id)
+
+    def _again(self, bot: Bot, chat_id: int) -> None:
         if self._pending.get(chat_id):      # 봇 글을 기다리는 사이 또 들어온 사람 (이 작업이 아직 안 끝나 queue 가 새로 안 띄움)
             self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
+
+    async def _copy(self, bot: Bot, chat_id: int, s: dict) -> bool:
+        """greet_copy 가 있으면 그 글을 그대로 복사해 인사 (이름 없음). 원본이 지워졌으면 False → 보통 인사."""
+        src = copy_of(s)
+        if src is None:
+            return False
+        try:
+            sent = await send_retry(lambda: bot.copy_message(chat_id, src[0], src[1]))
+        except TelegramError as e:
+            log.warning("greet copy failed %s (%s/%s): %s — 보통 인사로", chat_id, src[0], src[1], e)
+            return False
+        await self.svc.db.log_message(chat_id, bot.id, getattr(sent, "message_id", None),
+                                      "[입장 인사: 관리자가 정한 글을 그대로 올림]", is_bot=True)
+        return True
 
     async def _bot_welcome(self, chat_id: int, since: float) -> int | None:
         """✅ 믿는 봇이 이번 입장 즈음 올린 마지막 글 ID (🤝 연동이 켜져 있어야 기록됨). 아직 없으면 BOT_WAIT 초까지 기다림.

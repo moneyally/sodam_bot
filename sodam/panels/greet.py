@@ -3,7 +3,7 @@
 m:w:<방>            편집기 (그룹 허브에서)
 m:wt / m:wm / m:wb  인사말 · 미디어 · URL 버튼 보기 (글자 입력 kind 이름과 같아서 입력 뒤 '⬅️ 메뉴로' 도 여기로)
 m:in:<방>:wt|wm|wb  새로 입력 (미디어는 사진·영상·GIF 만 온 메시지도 받음)
-m:wd:<방>:t|m|b     삭제 확인 → 1회용 토큰(m:k, 권한 새로 확인)
+m:wd:<방>:t|m|b|c   삭제 확인 → 1회용 토큰(m:k, 권한 새로 확인)
 m:wv:<방>:m|all     1:1 로 새 메시지 미리보기 + [🗑 닫기](토큰, 누르면 그 메시지 삭제)
 
 실제 인사는 sodam/greet.py 의 send_greeting 이 보낸다 (미리보기도 같은 함수 → 보이는 그대로 나감).
@@ -15,12 +15,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
 from .. import menu
-from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, fill,
+from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, copy_of, fill,
                      media_of, parse_buttons, send_greeting, with_names)
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, josa, mention, user_name
 
-PARTS = {"t": "📄 인사말", "m": "🖼 미디어", "b": "🔗 URL 버튼"}
+PARTS = {"t": "📄 인사말", "m": "🖼 미디어", "b": "🔗 URL 버튼", "c": "📋 글 복사 인사"}
 MEDIA_OBJ = {"photo": "사진을", "video": "영상을", "animation": "GIF를"}
 CLOSE_TTL = 48 * 3600    # 봇은 48시간 지난 메시지를 못 지운다
 menu.register_toggle("greet_mention", "w")   # 🏷 이름 태그 켜기/끄기 → 편집기로 다시
@@ -48,7 +48,7 @@ async def _save(c: PanelCtx, detail: str, **values) -> None:
 
 
 def _has(s: dict, part: str) -> bool:
-    return bool({"t": s["greet_template"], "m": media_of(s), "b": clean_buttons(s["greet_buttons"])}[part])
+    return bool({"t": s["greet_template"], "m": media_of(s), "b": clean_buttons(s["greet_buttons"]), "c": copy_of(s)}[part])
 
 
 # ── 화면 ─────────────────────────────────────────────────
@@ -67,6 +67,10 @@ async def s_editor(c: PanelCtx) -> Screen:
     lines.append(f"🔗 URL 버튼: {len(btns)}개" if btns else "🔗 URL 버튼: 없음")
     lines.append("🏷 이름 태그: " + ("켜짐 — 새 멤버 이름을 멘션(파란 글씨)으로" if s["greet_mention"]
                                     else "꺼짐 — 멘션 없이 (인사말에 {names} 가 없으면 이름도 안 붙여요)"))
+    copied = copy_of(s)
+    if copied:
+        lines.insert(3, "📋 <b>글 복사 인사: 켜짐</b> — 정해 둔 글을 그대로 복사해서 올려요 (영상·움직이는 이모지·서식 그대로, "
+                        "이름 태그 없음). 아래 인사말·미디어·버튼은 원본 글이 지워졌을 때만 써요.\n")
     if s["greet_reply_bot"]:
         lines.append("🤝 봇 글에 답장: 켜짐 — ✅ 믿는 봇이 방금 올린 글(환영 글 등)에 답장으로 인사해요. 그 봇이 인사말을 명령처럼 받아요"
                      + ("" if s["botlink_mode"] != "off" else "\n⚠️ 🤝 다른 봇 연동이 꺼져 있어서 지금은 그냥 인사해요"))
@@ -77,6 +81,8 @@ async def s_editor(c: PanelCtx) -> Screen:
             + ([B("👀 보기", f"m:wm:{cid}"), B("🗑 삭제", f"m:wd:{cid}:m")] if media else []),
             [B("🔗 URL 버튼 수정" if btns else "🔗 URL 버튼 추가", f"m:in:{cid}:wb")]
             + ([B("👀 보기", f"m:wb:{cid}"), B("🗑 삭제", f"m:wd:{cid}:b")] if btns else []),
+            [B("📋 글 그대로 복사 바꾸기" if copied else "📋 글 그대로 복사해서 인사", f"m:in:{cid}:wc")]
+            + ([B("🗑 복사 끄기", f"m:wd:{cid}:c")] if copied else []),
             [B(("✅" if s["greet_mention"] else "❌") + " 이름 태그", f"m:t:{cid}:greet_mention:{0 if s['greet_mention'] else 1}")],
             [B(("✅" if s["greet_reply_bot"] else "❌") + " 봇 글에 답장",
                f"m:t:{cid}:greet_reply_bot:{0 if s['greet_reply_bot'] else 1}")],
@@ -147,6 +153,14 @@ async def r_view(c: PanelCtx) -> Screen:
         send = {"photo": c.bot.send_photo, "video": c.bot.send_video, "animation": c.bot.send_animation}[kind]
         sent = [await send(c.uid, file_id, reply_markup=InlineKeyboardMarkup(close))]
         toast = "1:1 로 미디어를 보냈어요 👇"
+    elif copy_of(s):
+        src = copy_of(s)
+        try:
+            sent = [await c.bot.copy_message(c.uid, src[0], src[1])]
+        except TelegramError:
+            return Screen(None, toast="복사할 원본 글이 지워졌어요. 📋 글을 다시 정해 주세요.", alert=True)
+        sent.append(await c.bot.send_message(c.uid, "👆 입장 인사 미리보기 (글 복사)", reply_markup=InlineKeyboardMarkup(close)))
+        toast = "1:1 로 미리보기를 보냈어요 👇"
     else:
         ai = not s["greet_template"]
         tpl = FALLBACKS[0] if ai else s["greet_template"]
@@ -177,7 +191,7 @@ async def r_ask_delete(c: PanelCtx) -> Screen:
         screen = await s_editor(c)
         screen.toast = "이미 비어 있어요."
         return screen
-    note = {"t": "\n(비우면 AI가 매번 새로 인사해요)", "m": "", "b": ""}[part]
+    note = {"t": "\n(비우면 AI가 매번 새로 인사해요)", "m": "", "b": "", "c": "\n(끄면 다시 보통 인사로 해요)"}[part]
     tok = menu.token(c.svc, c.uid, c.cid, "w_del", part)
     return Screen(f"{josa(PARTS[part])} 삭제할까요?{note}",
                   _kb([[B("🗑 삭제", f"m:k:{tok}"), B("취소", f"m:w:{c.cid}")]]))
@@ -190,6 +204,8 @@ async def t_delete(c: PanelCtx, part) -> Screen:
         await _save(c, "greet_media=", greet_media_type="", greet_media_id="")
     elif part == "b":
         await _save(c, "greet_buttons=", greet_buttons=[])
+    elif part == "c":
+        await _save(c, "greet_copy=", greet_copy=[])
     screen = await s_editor(c)
     screen.toast = "삭제했어요."
     return screen
@@ -230,6 +246,15 @@ async def in_buttons(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     return True, f"✅ URL 버튼 {len(btns)}개를 저장했어요."
 
 
+async def in_copy(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    """전달(또는 직접 보낸) 글 = 이 1:1 대화의 그 글을 그대로 복사해서 인사. 이 대화에서 글을 지우면 복사가 안 됨."""
+    if not (msg.text or msg.caption or msg.photo or msg.video or msg.animation or msg.document):
+        return False, "인사로 쓸 글을 이 대화에 전달(forward)해 주세요."
+    await _save(c, f"greet_copy={msg.message_id}", greet_copy=[msg.chat_id, msg.message_id])
+    return True, ("✅ 이 글을 그대로 복사해서 입장 인사로 올려요 (영상·움직이는 이모지·서식·버튼 그대로).\n"
+                  "⚠️ 이 1:1 대화에서 이 글을 지우면 복사가 안 되고 보통 인사로 돌아가요.")
+
+
 # ── 등록 ──────────────────────────────────────────────────
 menu.register_hub(HubItem(21, "w", "✏️ 인사 편집기"))
 menu.register_screen("w", s_editor)
@@ -249,6 +274,10 @@ menu.register_input("wt", (
 menu.register_input("wm", (
     "🖼 인사에 붙일 <b>사진·영상·GIF</b> 하나를 보내주세요.\n"
     "인사말은 그 미디어의 설명으로 붙어요."), "w", in_media, s_editor, media=True)
+menu.register_input("wc", (
+    "📋 입장 인사로 <b>그대로 올릴 글</b>을 이 대화에 <b>전달(forward)</b>해 주세요.\n"
+    "다른 봇이 올린 안내 글도 돼요. 영상·움직이는 이모지·서식이 그대로 복사돼요 (이름 태그는 안 붙어요)."),
+    "w", in_copy, s_editor, media=True)
 menu.register_input("wb", (
     f"🔗 <b>URL 버튼</b>을 한 줄에 하나씩 보내주세요. (최대 {MAX_BUTTONS}개, 기존 버튼은 보낸 것으로 전부 바뀌어요)\n"
     "<code>공지 채널 - https://t.me/sodam_notice</code>\n"
