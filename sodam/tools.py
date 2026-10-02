@@ -1051,7 +1051,8 @@ TOOLS: list[Tool] = [
          {"what": {"type": "string", "description": "지울 기억의 핵심 단어. 비우면 전부 지움"}}, [], t_forget_my_memory),
     Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다 ('기본' 이면 개인 말투를 지워 방 기본 말투로).",
          {"style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}}, ["style"], t_set_my_style),
-    Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로.",
+    Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로. "
+         "방 전체·모두를 태그하라는 말이면 이게 아니라 mention_all.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_greet),
     Tool("start_game", "방에서 끝말잇기를 시작한다. '끝말잇기' = 아무나 먼저 치는 사람이 이어가며 봇과 대결, "
