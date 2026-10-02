@@ -145,11 +145,28 @@ async def _busy(bot, chat_id: int) -> None:
         await asyncio.sleep(4)
 
 
+EDIT_MAX_SEC = 10   # 고치기는 결과 = 원본 길이만큼 청구 → 긴 영상으로 요금이 커지지 않게 (오너는 15초)
+
+
+def _source_video(ctx: tools.ToolCtx):
+    """고칠·이어 붙일 영상: 요청 글에 붙은 것 > 답장한 글 > 3분 안 같은 사람이 방금 올린 것 (vision.recent_media)."""
+    from .. import vision
+    msg = ctx.request_msg
+    for m in (msg, getattr(msg, "reply_to_message", None)):
+        md = vision._media_of(m) if m is not None else None
+        if md and md.kind in ("video", "gif", "video_note"):
+            return md
+    recent = vision.recent_media(msg) if msg is not None else None
+    md = vision._media_of(recent) if recent is not None else None
+    return md if md and md.kind in ("video", "gif", "video_note") else None
+
+
 async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
     prov = video.active()
     if prov is None:
         return NO_KEY
-    if back := mediaintent.redirect(getattr(ctx, "media_intent", None), "make_video"):
+    mode = str(a.get("mode") or "text")
+    if mode not in ("edit", "extend") and (back := mediaintent.redirect(getattr(ctx, "media_intent", None), "make_video")):
         return back
     if ctx.chat_id > 0:
         return "영상은 그룹방에서만 만들 수 있음. 그룹방에서 '소담아 …영상 만들어줘' 하라고 안내."
@@ -158,7 +175,8 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
     prompt = str(a.get("prompt", "")).strip()[:1500]
     if not prompt:
         return "만들 영상 설명(prompt)이 비어 있음."
-    uses_photo = a.get("mode") == "image" or bool(a.get("photo_of"))
+    # 고치기·이어 붙이기의 원본 영상은 실제 사람일 수도 있어서 사진과 같은 선으로 봄
+    uses_photo = mode in ("image", "edit", "extend") or bool(a.get("photo_of"))
     if why := hard_line(prompt + "\n" + str(getattr(ctx.request_msg, "text", "") or ""), uses_photo):
         return why
     if getattr(ctx, "_video_asked", False):
@@ -172,6 +190,8 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
     hold = asyncio.get_running_loop().create_future()
     RUNNING[cid] = hold
     try:
+        if mode in ("edit", "extend"):
+            return await _start_edit(ctx, a, prov, prompt, mode)
         return await _start(ctx, a, prov, prompt, uses_photo)
     finally:
         if RUNNING.get(cid) is hold:   # 뒤 작업으로 못 넘겼으면(거절·실패) 자리 풂
@@ -179,7 +199,65 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
         hold.cancel()
 
 
+async def _start_edit(ctx: tools.ToolCtx, a: dict, prov, prompt: str, mode: str) -> str:
+    """🎬 영상 고치기(edit: '옷 빨간색으로') · 이어 붙이기(extend: '5초 더'). xAI 만, 한 주 개수·하루 요금 한도는 만들기와 같이 셈."""
+    svc = ctx.svc
+    if not prov.edits:
+        return f"지금 영상 AI({prov.label})는 영상 고치기·이어 붙이기를 못 함. 새로 만드는 것만 된다고 안내."
+    md = _source_video(ctx)
+    if md is None:
+        return "고칠 영상이 없음: 영상에 답장하면서 부탁하거나 영상과 함께 보내 달라고 안내 (방금 올린 영상이면 3분 안)."
+    if md.size and md.size > video.MAX_IN_BYTES:
+        return "원본 영상이 20MB 를 넘어서 못 받음. 더 짧거나 작은 영상으로 다시 부탁하라고 안내."
+    limit, used = weekly_limit(ctx.settings), await used_this_week(svc, ctx.chat_id)
+    if ctx.role < Role.OWNER and used >= limit:
+        return f"이번 주 영상 {used}/{limit}개 (고치기·이어 붙이기도 1개로 셈) — 한도를 다 썼음. 월요일에 다시 된다고 안내."
+    room_sec = int(ctx.settings.get("video_seconds") or 6)
+    src_sec = int(-(-float(md.duration or 0) // 1)) or room_sec
+    if mode == "edit":
+        cap = 15 if ctx.role >= Role.OWNER else EDIT_MAX_SEC
+        if src_sec > cap:
+            return f"고치기는 {cap}초 이하 영상만 (원본 {src_sec}초 — 결과도 원본 길이만큼 요금이 듦). 짧게 잘라서 다시 부탁하라고 안내."
+        seconds = src_sec
+    else:
+        try:
+            want = int(a.get("seconds") or room_sec)
+        except (TypeError, ValueError):
+            want = room_sec
+        seconds = max(1, min(want, room_sec if ctx.role < Role.OWNER else 15))
+    micro = costs.video_usd_micro(video.XAI_VIDEO_IN, seconds)
+    try:
+        await svc.llm.can_spend(ctx.chat_id, micro)
+    except BudgetExceeded:
+        return "오늘 AI 사용량 한도가 모자라서 못 함 (영상은 비쌈). 내일 다시 가능하다고 안내할 것."
+    try:
+        f = await ctx.bot.get_file(md.file_id)
+        data = bytes(await f.download_as_bytearray())
+    except TelegramError as e:
+        return f"원본 영상을 못 받음 ({e.message}). 다시 올려서 부탁하라고 안내."
+    ctx._video_asked = True
+    req_id = getattr(ctx.request_msg, "message_id", None)
+    reply = ReplyParameters(req_id, allow_sending_without_reply=True) if req_id else None
+    doing = "고치는" if mode == "edit" else f"{seconds}초 이어 붙이는"
+    try:
+        status = await ctx.bot.send_message(ctx.chat_id, f"🎬 영상 {doing} 중… (1~3분 걸려요)", reply_parameters=reply)
+    except TelegramError as e:
+        return f"영상 안내를 방에 못 보냄: {e.message}"
+    make = (lambda: prov.edit(data, prompt)) if mode == "edit" else (lambda: prov.extend(data, prompt, seconds))
+    job = _job(svc, ctx.bot, ctx.chat_id, ctx.caller, prov, prompt, None, seconds, None, micro, reply,
+               getattr(status, "message_id", None), make=make, model=video.XAI_VIDEO_IN)
+    task = persist.spawn(job)
+    if task is None:
+        return "지금은 영상을 못 만듦. 잠시 후 다시 부탁하라고 안내."
+    RUNNING[ctx.chat_id] = task
+    task.add_done_callback(lambda t, cid=ctx.chat_id, bot=ctx.bot: _free(cid, t, bot))
+    ctx.quiet = True
+    return (f"영상 {'고치기' if mode == 'edit' else '이어 붙이기'}를 시작했고 방에 안내를 올렸음 (1~3분 뒤 따로 올라감). "
+            f"이번 주 영상 {used + 1}/{limit}개. 다 됐다고 말하지 말 것.")
+
+
 async def _start(ctx: tools.ToolCtx, a: dict, prov, prompt: str, uses_photo: bool) -> str:
+
     svc = ctx.svc
     limit, used = weekly_limit(ctx.settings), await used_this_week(svc, ctx.chat_id)
     if ctx.role < Role.OWNER and used >= limit:
@@ -237,12 +315,15 @@ async def _say(bot, chat_id: int, status_id: int | None, text: str, reply) -> No
         log.warning("video: notice failed %s: %s", chat_id, e)
 
 
-async def _job(svc, bot, chat_id, caller, prov, prompt, image, seconds, aspect, micro, reply, status_id) -> None:
+async def _job(svc, bot, chat_id, caller, prov, prompt, image, seconds, aspect, micro, reply, status_id,
+               make=None, model: str | None = None) -> None:
+    """make = 고치기·이어 붙이기 (없으면 새로 만들기). model = 요금·기록에 쓸 모델 (고치기는 영상 입력 모델)."""
     agentlog.current.set(None)   # 에이전트 실행은 이미 끝남 → 요금은 방·전체 하루 달러에만 (llm.charge)
     busy = asyncio.create_task(_busy(bot, chat_id))
+    model = model or prov.model
     try:
         try:
-            data = await prov.generate(prompt, image, seconds, aspect)
+            data = await (make() if make else prov.generate(prompt, image, seconds, aspect))
         except video.VideoError as e:
             log.warning("video %s failed (%s): %s", prov.name, e.kind, video.redact(e.detail))
             await _say(bot, chat_id, status_id, FAIL_TEXT.get(e.kind, FAIL_TEXT["failed"]), reply)
@@ -252,10 +333,10 @@ async def _job(svc, bot, chat_id, caller, prov, prompt, image, seconds, aspect, 
             await _say(bot, chat_id, status_id, FAIL_TEXT["failed"], reply)
             return
         # 만들어졌으면 제공자가 청구함 → 전송 성공 여부와 상관없이 셈
-        await svc.llm.charge(chat_id, micro, "video", prov.model)
+        await svc.llm.charge(chat_id, micro, "video", model)
         tz = svc.cfg.tz
         await svc.db.bump(week_start(tz), chat_id, KEY)
-        await svc.db.bump(datetime.now(tz).strftime("%Y-%m-%d"), 0, f"video_sec:{prov.model}", seconds)
+        await svc.db.bump(datetime.now(tz).strftime("%Y-%m-%d"), 0, f"video_sec:{model}", seconds)
         name = esc(display_name(caller.first_name, caller.last_name, caller.username))
         try:
             sent = await bot.send_video(chat_id, video=data, filename="sodam.mp4", supports_streaming=True,
@@ -279,10 +360,12 @@ tools.register_tool(tools.Tool(
     "짧은 AI 영상(소리 포함)을 새로 만들어 방에 올린다 (1~3분 걸림, 방마다 한 주 개수 한도). "
     "prompt 는 **영어로**: 사용자의 한국어 부탁을 영상 프롬프트로 옮기고 구체적으로 한 문단 (피사체·동작·카메라 움직임·장소·조명·분위기·"
     "들릴 소리나 대사). mode=text 는 글로만, mode=image 는 붙은·답장한 사진(누가 올렸든)이나 photo_of 멤버 프사(없으면 요청자 프사)를 "
-    f"첫 장면으로 움직인다. {POLICY_TEXT}. 한 답변에 한 번만. 결과는 따로 올라가니 '다 됐다'고 말하지 말 것. "
+    "첫 장면으로 움직인다. mode=edit 는 답장한·붙은·방금 올린 **영상**을 말대로 고친다(옷 색·소품 추가·배경 등, prompt 는 바꿀 것만 영어로), "
+    "mode=extend 는 그 영상 끝에서 이어서 seconds 초 더 만든다(prompt 는 이어질 내용). "
+    f"{POLICY_TEXT}. 한 답변에 한 번만. 결과는 따로 올라가니 '다 됐다'고 말하지 말 것. "
     "앞에서 한도·실패였어도 다시 부탁하면 이 도구를 다시 부른다 (관리자가 한도를 바꿨을 수 있음).",
     {"prompt": {"type": "string", "description": "영어 영상 프롬프트 (구체적으로, 1,000자 안)"},
-     "mode": {"type": "string", "enum": ["text", "image"]},
+     "mode": {"type": "string", "enum": ["text", "image", "edit", "extend"]},
      "photo_of": {"type": "string", "description": "이 방 멤버 프사를 첫 장면으로 (이름·@아이디·ID). 있으면 image"},
      "seconds": {"type": "integer", "description": "길이(초). 비우면 방 설정값, 그보다 길게는 안 됨"},
      "aspect": {"type": "string", "enum": ["9:16", "16:9", "1:1"], "description": "세로 9:16(휴대폰)·가로 16:9·정사각 1:1(지원할 때만)"}},

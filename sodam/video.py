@@ -23,7 +23,11 @@
     → {"request_id"}
   GET https://api.x.ai/v1/videos/{request_id} → {"status": pending|done|expired|failed, "video":{"url","duration","respect_moderation"},
     "error":{"code","message"}} (moderation 으로 막히면 respect_moderation=false·url 빔, 또는 error.code invalid_argument)
-  요금 https://docs.x.ai/developers/models/grok-imagine-video ($0.05/초) · …/grok-imagine-video-1.5 ($0.08/초).
+  요금 https://docs.x.ai/developers/models/grok-imagine-video ($0.05/초) · …/grok-imagine-video-1.5 ($0.08/초) ·
+  …/grok-imagine-video-1.5-lite ($0.02/초, 글·사진 → 영상만). 해상도는 값에 영향 없음(모델·초로만 청구, 480p 는 빠르기만).
+  영상 고치기 POST /v1/videos/edits {"model","prompt","video":{"url"}} (결과 = 원본 길이, 최대 720p) ·
+  이어 붙이기 POST /v1/videos/extensions {"model","prompt","video":{"url"},"duration"(늘릴 초만)} — 영상 입력은 grok-imagine-video 만
+  (모델 페이지 'text, image, video → video'). 둘 다 같은 GET /v1/videos/{id} 로 기다림 (2026-10-03 문서 확인).
 
 키는 로그·오류 글에 절대 안 남김(`redact`). 다운로드 주소가 다른 호스트로 넘어가면 키 헤더를 떼고 따라감.
 """
@@ -45,6 +49,8 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 XAI_BASE = "https://api.x.ai/v1"
 GEMINI_DEFAULT = "veo-3.1-lite-generate-preview"
 XAI_DEFAULT = "grok-imagine-video"
+XAI_VIDEO_IN = "grok-imagine-video"     # 영상을 입력으로 받는 모델 (고치기·이어 붙이기)
+MAX_IN_BYTES = 20 * 1024 * 1024         # 봇이 받을 수 있는 파일 = 우리가 넘길 수 있는 원본 영상
 TIMEOUT_SEC = float(os.getenv("VIDEO_TIMEOUT_SEC", "") or 300)   # 시작→완성 전체 (Veo 문서: 보통 11초~최대 6분)
 POLL_GEMINI = 10.0      # 문서 예제 간격
 POLL_XAI = 5.0
@@ -194,6 +200,30 @@ class Provider:
             raise VideoError("failed", "영상 주소가 없음")
         return await _download(c, video["uri"], auth, urlsplit(GEMINI_BASE).hostname)
 
+    @property
+    def edits(self) -> bool:
+        """영상 고치기·이어 붙이기가 되는 제공자 (xAI 만)."""
+        return self.name == "xai"
+
+    async def edit(self, video_mp4: bytes, prompt: str) -> bytes:
+        return await self._xai_video("edits", {"prompt": prompt}, video_mp4)
+
+    async def extend(self, video_mp4: bytes, prompt: str, seconds: int) -> bytes:
+        return await self._xai_video("extensions", {"prompt": prompt, "duration": int(seconds)}, video_mp4)
+
+    async def _xai_video(self, path: str, body: dict, video_mp4: bytes) -> bytes:
+        if not self.edits:
+            raise VideoError("unsupported", self.name)
+        if len(video_mp4) > MAX_IN_BYTES:
+            raise VideoError("failed", "원본 영상이 너무 큼")
+        deadline = time.monotonic() + TIMEOUT_SEC
+        auth = {"Authorization": f"Bearer {self.key}"}
+        body = {"model": XAI_VIDEO_IN, **body,
+                "video": {"url": "data:video/mp4;base64," + base64.b64encode(video_mp4).decode()}}
+        async with _client() as c:
+            r = await c.post(f"{XAI_BASE}/videos/{path}", headers=auth, json=body)
+            return await self._xai_wait(c, r, auth, deadline)
+
     # ── xAI Grok Imagine Video ──
     async def _xai(self, c, prompt, image, seconds, aspect, deadline) -> bytes:
         auth = {"Authorization": f"Bearer {self.key}"}
@@ -203,6 +233,10 @@ class Provider:
         if image:
             body["image"] = {"url": f"data:{image[1]};base64,{base64.b64encode(image[0]).decode()}"}
         r = await c.post(f"{XAI_BASE}/videos/generations", headers=auth, json=body)
+        return await self._xai_wait(c, r, auth, deadline)
+
+    async def _xai_wait(self, c, r, auth: dict, deadline: float) -> bytes:
+        """시작 응답 r → request_id 로 끝날 때까지 기다려 영상 bytes (만들기·고치기·이어 붙이기 공통)."""
         if r.status_code >= 400:
             raise _http_error(r)
         rid = (r.json() or {}).get("request_id")

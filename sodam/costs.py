@@ -31,6 +31,7 @@ VIDEO_PER_SEC: dict[str, float] = {
     "veo-3.1-lite-generate-preview": 0.05,
     "veo-3.1-fast-generate-preview": 0.10,
     "veo-3.1-generate-preview": 0.40,
+    "grok-imagine-video-1.5-lite": 0.02,   # 2026-10-03 xAI 요금표 (글·사진 → 영상만, 영상 입력 X)
     "grok-imagine-video": 0.05,
     "grok-imagine-video-1.5": 0.08,
 }
