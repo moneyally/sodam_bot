@@ -76,7 +76,8 @@ class Api:
             return httpx.Response(302, headers={"location": "https://storage.googleusercontent.com/v/abc.mp4"})
         if u == "https://storage.googleusercontent.com/v/abc.mp4":
             return httpx.Response(200, content=MP4)
-        if req.method == "POST" and u == "https://api.x.ai/v1/videos/generations":
+        if req.method == "POST" and u in ("https://api.x.ai/v1/videos/generations", "https://api.x.ai/v1/videos/edits",
+                                          "https://api.x.ai/v1/videos/extensions"):
             return httpx.Response(200, json={"request_id": "r1"})
         if u == "https://api.x.ai/v1/videos/r1":
             if self.mode == "pending" or self.left > 0:
@@ -415,6 +416,53 @@ async def run_all():
     finally:
         set_env(**{k: v for k, v in saved.items() if v is not None})
         video.TRANSPORT, video.POLL_GEMINI, video.POLL_XAI, video.TIMEOUT_SEC = mod
+
+
+@test
+async def edit_and_extend_existing_video_with_grok():
+    """2026-10-03 오너: 그록 API 의 영상 고치기·이어 붙이기 (비용은 만들기와 같은 초당 요금·주 개수)."""
+    api = Api()
+    svc, bot = await world(api, env={"XAI_API_KEY": XKEY, "VIDEO_MODEL": "grok-imagine-video-1.5-lite"})
+    src = b"\x00\x00\x00\x18ftypmp42" + b"s" * 50
+    bot.files = {"src": src}
+    clip = SimpleNamespace(file_id="src", file_size=len(src), duration=5.2, mime_type="video/mp4", thumbnail=None)
+    posted = SimpleNamespace(from_user=USER, text=None, caption=None, photo=(), document=None, animation=None, video_note=None,
+                             sticker=None, video=clip, message_id=40, chat_id=CHAT)
+    c = await ctx(svc, bot)
+    c.request_msg = SimpleNamespace(message_id=55, text="소담아 옷 빨간색으로", photo=(), video=None, animation=None,
+                                    video_note=None, sticker=None, document=None, reply_to_message=posted, chat_id=CHAT,
+                                    from_user=USER)
+    out = await run(c, prompt="Change the outfit color to red", mode="edit")
+    assert "고치기를 시작" in out and "1/6" in out, out
+    post = [r for r in api.reqs if r.method == "POST"][-1]
+    body = json.loads(post.content)
+    assert str(post.url).endswith("/videos/edits") and body["model"] == "grok-imagine-video", "영상 입력은 기본 모델 (lite 는 못 받음)"
+    assert body["video"]["url"] == "data:video/mp4;base64," + base64.b64encode(src).decode() and "duration" not in body
+    sent = bot.named("send_video")
+    assert sent and sent[-1][2] == MP4
+    assert await svc.db.counter(videogen.week_start(svc.cfg.tz), CHAT, videogen.KEY) == 1
+    today = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+    assert await svc.db.counter(today, 0, "video_sec:grok-imagine-video") == 6, "5.2초 → 6초로 청구"
+    # 이어 붙이기: 늘릴 초 = 방 설정까지
+    c2 = await ctx(svc, bot)
+    c2.request_msg = c.request_msg
+    out = await run(c2, prompt="She turns and walks away", mode="extend", seconds=30)
+    body = json.loads([r for r in api.reqs if r.method == "POST"][-1].content)
+    assert "이어 붙이기를 시작" in out and body["duration"] == 6, (out, body)
+    # 영상이 없으면 / 너무 긴 영상
+    c3 = await ctx(svc, bot)
+    out = await run(c3, prompt="x", mode="edit")
+    assert "고칠 영상이 없음" in out
+    clip.duration = 14
+    c4 = await ctx(svc, bot)
+    c4.request_msg = c.request_msg
+    assert "10초 이하" in await run(c4, prompt="x", mode="edit")
+    # Veo 는 고치기 없음
+    svc2, bot2 = await world(Api(), env={"GEMINI_API_KEY": GKEY})
+    c5 = await ctx(svc2, bot2)
+    c5.request_msg = c.request_msg
+    assert "못 함" in await run(c5, prompt="x", mode="edit")
+    assert costs.video_usd_micro("grok-imagine-video-1.5-lite", 10) == 200_000
 
 
 if __name__ == "__main__":
