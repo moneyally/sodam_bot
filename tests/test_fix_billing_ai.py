@@ -122,7 +122,7 @@ async def classify_injection_counts_room_tokens():
     await db.set_setting(CHAT, "ai_room_daily_tokens", 10_000)
     await db.bump(llm._today(), CHAT, ROOM_TOKENS, 10_000)
     n = len(calls)
-    assert await llm.classify_injection("또", chat_id=CHAT) == (False, "")   # 방 한도 넘으면 OpenAI 안 부름
+    assert await llm.classify_injection("또", chat_id=CHAT) == (False, "unverified")   # 방 한도 넘으면 OpenAI 안 부름 → 판별 못 함(쓰기 닫힘)
     assert len(calls) == n
 
 

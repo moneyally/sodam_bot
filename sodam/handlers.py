@@ -33,7 +33,7 @@ from .db import disk_full
 from .moderation import owner_kb
 from .panels import members as members_panel
 from .commands import CmdCtx
-from .llm import BudgetExceeded, out_of_credit
+from .llm import UNVERIFIED, BudgetExceeded, out_of_credit
 from .permissions import Role, may, no_right_text
 from .services import Services
 from .tools import ToolCtx
@@ -779,6 +779,9 @@ def _steer_text(svc: Services, bot: Bot, msg: Message, request: str) -> str:
     return f"{request}\n(↩ 답장한 글 — {who}: {(r.text or r.caption)[:200]})"
 
 
+_UNVERIFIED: set[tuple[int, int]] = set()   # (방, 메시지) 인젝션 2층 판별이 실패한 요청 → 답할 때 카드 없는 쓰기 막음
+
+
 async def _injection_blocked(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, request: str,
                              scan: security.ScanResult, s: dict) -> bool:
     """인젝션 방어: 1층 규칙 → 애매하거나 긴 요청만 2층 AI 판별. 막았으면 안내·기록하고 True."""
@@ -789,6 +792,10 @@ async def _injection_blocked(context: ContextTypes.DEFAULT_TYPE, msg: Message, r
     blocked, reason = scan.blocked, ", ".join(scan.hits)
     if not blocked and (scan.suspicious or len(request) > 150):
         blocked, reason = await svc.llm.classify_injection(request, chat_id=chat_id)
+        if not blocked and reason == UNVERIFIED:      # 판별 실패 = 통과는 시키되 카드 없는 쓰기는 막음 (fail-closed, 읽기·카드는 됨)
+            if len(_UNVERIFIED) > 1000:              # 답까지 안 간 요청(속도 한도 등)이 남아도 무한히 쌓이지 않게
+                _UNVERIFIED.clear()
+            _UNVERIFIED.add((chat_id, msg.message_id))
     if not blocked:
         return False
     await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
@@ -840,6 +847,9 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         hints = [*hints, "게임 단서: " + recent + " (필요하면 game_control 로 다시 시작)"]
     image = await vision.fetch(bot, msg)   # 요청·답장한 메시지의 사진·영상 (영상은 장면 여러 장, 고쳐 달라면 대표 장면을 원본으로)
     ctx = ToolCtx(svc, bot, chat_id, user, role, s, image=image, reply_msg_id=reply_ref(msg)[0], request_msg=msg)
+    if (chat_id, msg.message_id) in _UNVERIFIED:      # 인젝션 판별을 못 한 요청 → 처음부터 room_read 와 같은 제한
+        _UNVERIFIED.discard((chat_id, msg.message_id))
+        ctx.room_read = True
     typing = asyncio.create_task(_keep_typing(bot, chat_id))   # 텔레그램 '입력 중'은 5초면 꺼짐 → 답이 나올 때까지 4초마다
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,

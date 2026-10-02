@@ -16,6 +16,7 @@ from .db import DB
 from .security import nonce, wrap
 
 log = logging.getLogger(__name__)
+UNVERIFIED = "unverified"   # classify_injection 이 판별 못 함 (OpenAI 오류·한도) — 쓰기 도구는 닫힌 쪽으로
 
 
 ROOM_TOKENS = "room_tokens"  # counters 키: 방별 하루 토큰 (전체 합계는 chat_id=0 의 "tokens")
@@ -384,5 +385,5 @@ class LLM:
             result = await self.json(system, wrap("message", text[:1500], n), max_tokens=600, chat_id=chat_id)
         except (OpenAIError, BudgetExceeded) as e:
             log.warning("injection classifier failed: %s", e)
-            return False, ""
+            return False, UNVERIFIED   # 막지는 않되 handlers 가 이 요청을 '확인 못 함'으로 → 카드 없는 쓰기 도구 막음
         return bool(result.get("injection")), str(result.get("reason", ""))[:100]
