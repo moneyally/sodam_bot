@@ -513,6 +513,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if text:
         await _record(svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg),
                                          reply_to_msg_id=reply_msg, reply_to_user=reply_user))
+    vision.remember(msg)        # 사진·영상 올리고 답장 없이 '소담아 이거 어때' 해도 그걸 보게 (3분)
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
     exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음
@@ -1165,6 +1166,7 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         role = await svc.perms.role(bot, msg.chat_id, user.id)
         await commands.name_lookup_forward(CmdCtx(svc, bot, msg, msg.chat_id, user, role, [], ""))
         return
+    vision.remember(msg)                  # 영상·스티커만 보내고 다음 말로 '이건어떰' 해도 그걸 보게
     if not text and not vision.has_photo(msg):
         return
     text = text or "이 사진 봐줘"          # 1:1 에 사진만 보내면 사진을 읽고 답함
