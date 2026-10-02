@@ -37,8 +37,9 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -264,6 +265,23 @@ class Provider:
             raise VideoError("policy", "moderation")
         host = urlsplit(XAI_BASE).hostname
         return await _download(c, video["url"], auth, host)   # vidgen.x.ai 등 다른 호스트엔 키 안 보냄
+
+
+# 🧭 영상 모델 라우터 (오너 결정 2026-10-03 '한 모델 말고 라우터로'): xAI 글·사진 → 영상은 기본 싼 lite($0.02/초),
+# 화질을 콕 집어 말하면 기본 모델($0.05/초). 비싼 1.5($0.08)는 안 씀. 고치기·이어 붙이기는 영상 입력이 되는 기본 모델만.
+# .env VIDEO_MODEL 을 직접 적으면 라우터 끔 (그 모델 고정).
+XAI_CHEAP = "grok-imagine-video-1.5-lite"
+_QUALITY = re.compile(r"고화질|화질|퀄리티|고퀄|영화(처럼|같이|급)|시네마|cinematic|디테일|정교|고급스럽|실사|사실적|리얼하게|"
+                      r"\b(hd|4k|1080p?|high quality|realistic|detailed)\b|광고(용|처럼)|프로(급|처럼)", re.I)
+
+
+def route_model(prov: Provider, request: str) -> tuple[Provider, str]:
+    """(이번에 쓸 제공자, 이유). xAI·VIDEO_MODEL 안 정했을 때만 고름."""
+    if prov.name != "xai" or os.getenv("VIDEO_MODEL", "").strip():
+        return prov, "fixed"
+    if _QUALITY.search(request or ""):
+        return replace(prov, model=XAI_DEFAULT), "quality"
+    return replace(prov, model=XAI_CHEAP), "cheap"
 
 
 def active() -> Provider | None:

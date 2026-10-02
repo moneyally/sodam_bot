@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from telegram import ReplyParameters
@@ -257,8 +258,8 @@ async def _start_edit(ctx: tools.ToolCtx, a: dict, prov, prompt: str, mode: str)
 
 
 async def _start(ctx: tools.ToolCtx, a: dict, prov, prompt: str, uses_photo: bool) -> str:
-
     svc = ctx.svc
+    prov, _why = video.route_model(prov, str(getattr(ctx.request_msg, "text", "") or "") + "\n" + prompt)
     limit, used = weekly_limit(ctx.settings), await used_this_week(svc, ctx.chat_id)
     if ctx.role < Role.OWNER and used >= limit:
         return (f"이번 주 영상 {used}/{limit}개 (월요일 0시에 초기화) — 이번 주 한도를 다 썼음. 월요일에 다시 된다고 안내. "
@@ -323,7 +324,17 @@ async def _job(svc, bot, chat_id, caller, prov, prompt, image, seconds, aspect, 
     model = model or prov.model
     try:
         try:
-            data = await (make() if make else prov.generate(prompt, image, seconds, aspect))
+            try:
+                data = await (make() if make else prov.generate(prompt, image, seconds, aspect))
+            except video.VideoError as e:
+                # 싼 모델이 그냥 실패(정책·키·한도 말고)면 기본 모델로 한 번 더 — 실패한 건 청구 안 됨
+                if make or e.kind != "failed" or prov.model != video.XAI_CHEAP:
+                    raise
+                log.info("video lite failed (%s) → %s 로 다시", video.redact(e.detail), video.XAI_DEFAULT)
+                prov = replace(prov, model=video.XAI_DEFAULT)
+                model = prov.model
+                micro = costs.video_usd_micro(model, seconds)
+                data = await prov.generate(prompt, image, seconds, aspect)
         except video.VideoError as e:
             log.warning("video %s failed (%s): %s", prov.name, e.kind, video.redact(e.detail))
             await _say(bot, chat_id, status_id, FAIL_TEXT.get(e.kind, FAIL_TEXT["failed"]), reply)
