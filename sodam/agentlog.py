@@ -14,7 +14,8 @@ import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 
-from .db import register_schema
+from .db import register_columns, register_schema
+from .whyfail import gate_of
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ TRIGGER_CHARS = 200
 ARGS_CHARS = 120
 RESULT_CHARS = 120
 MAX_STEPS_KEPT = 12       # 도구 라운드는 최대 8번(agent.MAX_STEPS), 보통 1~3번
+MAX_EVENTS = 20
+ANSWER_CHARS = 300
 PRUNE_EVERY = 3600
 STATUS = {"answered": "✅ 답함", "tool_only": "🛠️ 도구만", "empty": "💤 빈 답", "error": "❌ 오류", "budget": "⛔ 한도"}
 
@@ -47,6 +50,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 CREATE INDEX IF NOT EXISTS idx_agent_runs_chat ON agent_runs(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_ts ON agent_runs(ts);
 """, migrate={"agent_runs": "plain"})
+# 🧠 왜 틀렸나 (sodam/whyfail.py): 단계(길·올려 보냄·검사·상한) + 최종 답 — 개발자(오너·Claude)만 봄
+register_columns("agent_runs", {"events": "TEXT NOT NULL DEFAULT '[]'", "answer": "TEXT NOT NULL DEFAULT ''"})
 
 # 기록에 남기면 안 되는 값: 인자 이름이 비밀값 같거나, 값이 API 키·봇 토큰 모양이면 가린다
 _SECRET_NAME = re.compile(r"key|token|secret|passw|seed|private|mnemonic", re.I)
@@ -85,6 +90,8 @@ class Run:
     purpose: str = ""
     started: float = field(default_factory=time.monotonic)
     steps: list[dict] = field(default_factory=list)
+    events: list[dict] = field(default_factory=list)
+    answer: str = ""
     models: dict[str, int] = field(default_factory=dict)   # 모델 → 호출 수
     tok_in: int = 0
     tok_cached: int = 0
@@ -102,9 +109,18 @@ class Run:
         self.tok_out += out
         self.usd_micro += micro
 
-    def step(self, name: str, args: str | None, result: str) -> None:
+    def step(self, name: str, args: str | None, result: str, write: bool = False) -> None:
+        """write = 읽기 도구가 아님 (실제로 무언가 바꾸거나 보내는 도구). gate = 결과 문구로 본 관문 (whyfail.gate_of)."""
         if len(self.steps) < MAX_STEPS_KEPT:
-            self.steps.append({"tool": clip(name, 40), "args": summarize_args(args), "result": clip(result, RESULT_CHARS)})
+            item = {"tool": clip(name, 40), "args": summarize_args(args), "result": clip(result, RESULT_CHARS),
+                    "gate": gate_of(result)}
+            if write:
+                item["w"] = 1
+            self.steps.append(item)
+
+    def event(self, name: str, **data) -> None:
+        if len(self.events) < MAX_EVENTS:
+            self.events.append({"e": name, **{k: (clip(v, 120) if isinstance(v, str) else v) for k, v in data.items()}})
 
 
 current: ContextVar[Run | None] = ContextVar("sodam_agent_run", default=None)
@@ -150,11 +166,12 @@ async def save(db, run: Run, status: str) -> int:
     models = ",".join(f"{m}×{n}" if n > 1 else m for m, n in run.models.items())
     row = (run.chat_id, run.user_id, now, int((time.monotonic() - run.started) * 1000), clip(run.mode, 20),
            clip(run.purpose, 40), run.trigger, clip(models, 120), json.dumps(run.steps, ensure_ascii=False),
-           status if status in STATUS else "error", run.tok_in, run.tok_cached, run.tok_out, run.usd_micro)
+           status if status in STATUS else "error", run.tok_in, run.tok_cached, run.tok_out, run.usd_micro,
+           json.dumps(run.events, ensure_ascii=False), clip(run.answer, ANSWER_CHARS))
 
     def work(c) -> int:
         cur = c.execute("INSERT INTO agent_runs(chat_id, user_id, ts, ms, mode, purpose, trigger, models, steps, status, "
-                        "tok_in, tok_cached, tok_out, usd_micro) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                        "tok_in, tok_cached, tok_out, usd_micro, events, answer) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
         if prune:
             c.execute("DELETE FROM agent_runs WHERE ts<?", (now - KEEP_DAYS * 86400,))
         return cur.lastrowid

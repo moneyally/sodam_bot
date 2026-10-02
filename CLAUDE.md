@@ -396,6 +396,12 @@
   intent=other(뜻 모름)면 절대 자동 선택 안 함 (실제 사례: '포인트지급' → '/ㅂㅋ 포인트지급' 뱅커 배팅이 나감). 없는 명령 검사는
   그 봇이 최근 글에서 직접 말한 명령('먼저 /등록 명령어로 …')은 통과 (`botskills.named_by_bot`).
   아는 명령이 하나도 없는 봇은 bot_command 가 '/help@봇' 을 방·봇마다 하루 1번(claims blhelp:) 보내 답에서 배움 · 🎓 템플릿·직접.
+## 🧠 소담이 왜 틀렸나 (`whyfail.py`, `mistakes.py`, 창구 `why`, tests/test_whyfail.py, 2026-10-03 오너 결정 — 오너·Claude 만 봄)
+- agent_runs 에 events(길·보여 준 도구 수·올려 보냄·보내기 전 검사·상한) + answer(최종 답 300자) + 도구마다 gate(통과·보안·권한·꺼짐·한도·카드·오류·못 찾음)·w(쓰기).
+- 판정은 코드(AI 0원): '했다'고 했는데 된 쓰기 없음 · 도구 오류 · 못 찾고 끝남 · 꺼진 기능 · 상한 · 10분 안 비슷한 재요청 · 답 뒤 3분 불만(소담 답장·이름만).
+- Claude: `python tools/diag.py why hours=24 [chat=…]` 목록 → `why run=<번호>` 단계별. 오너: 매일 9시 1:1 '🧠 어제 소담 실수 N건' (없으면 안 보냄, #번호로 고쳐 요청).
+- 보내기 전 '했다' 검사 정규식은 whyfail.CLAIM 하나 (agent 도 이걸 씀).
+
 ## 📮 AI 요청 대기열 (`aiqueue.py`, Codex ext/queue, tests/test_aiqueue.py · 뮤테이션 8개)
 - 검사 통과한 요청은 ai_queue(봇·방·메시지) 한 줄 → 답 보내면 지움. 종료(취소)로 끊기면 줄을 남김 → persist.job_sweep(30초)이 다시 실행.
   답은 만들었는데 연결 실패(surely_unsent)면 답을 저장 → sweep 이 AI 없이 다시 보냄. 응답만 끊긴 건 이미 갔을 수 있어 안 보냄.

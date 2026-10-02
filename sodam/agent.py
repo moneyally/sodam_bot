@@ -14,6 +14,7 @@ from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_mess
 from .security import nonce, wrap
 from .tools import READ_ONLY, ToolCtx, available, execute, offered
 from .util import clip_mid
+from .whyfail import CLAIM as _CLAIM
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +33,7 @@ CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 _WHY = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|(하|올리|바꾸|켜|끄|걸|주|먹이|보내|정리하)고[\s,](?!\s*싶)|"
                     r"그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각|하면\s|(?<![가-힣])(걔|쟤|그\s?사람|저\s?사람)(?![가-힣])")
-# 도구를 하나도 안 불렀는데 '했어요' 라고 하는 답 (Claude Code 의 stop hook 처럼 보내기 전에 코드가 한 번 검사)
-_CLAIM = re.compile(r"(뮤트|밴|경고|차단|내보냈|예약|등록|저장|삭제|지웠|켰|껐|바꿨|보냈|걸어|걸었|알림)[^\n.?!]{0,6}"
-                    r"(했어|했습니다|완료|처리했|해\s?드렸|뒀어|놨어|뒀습니다|됐어요|되었습니다)"
-                    # 멈춤 주장 (2026-10-03 일루왕: 전체 태그 중 멤버 '소담아 멈춰' → 도구 없이 '멈췄습니다' 두 번, 실제론 256명 끝까지)
-                    r"|멈췄|멈춘\s?거|중지했|중단했|그만뒀")
+# 도구를 하나도 안 불렀는데 '했어요' 라고 하는 답 (Claude Code 의 stop hook 처럼 보내기 전에 코드가 한 번 검사) = whyfail.CLAIM
 VERIFY_NOTE = ("검사: 이번 답에서 도구를 하나도 부르지 않았는데 무언가를 '했다'고 말했습니다. 실제로 해야 하는 일이면 지금 도구를 부르세요. "
                "기록에 있는 과거 사실을 전한 것이면 그대로 답하되, 도구로 한 일이 아니면 '했다'고 하지 마세요.")
 # 조회 도구를 쓴 답의 숫자 검사: '12명·3건·40%' 같은 숫자가 이번 도구 결과(또는 요청)에 하나도 없으면 한 번 다시 물음
@@ -143,6 +140,7 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
         answer = await _run(ctx, run, style_key=style_key, notes=notes, history=history, reply_to=reply_to,
                             request=request, mode=mode, extras=extras, hints=hints, images=images, steer=steer)
         status = "answered" if answer.strip() else ("tool_only" if run.steps else "empty")
+        run.answer = answer
         return answer
     except BudgetExceeded:
         status = "budget"
@@ -204,6 +202,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         lane = route.decide(route.Req(request or "", ctx.role, mode, ctx.chat_id > 0, media, ctx.settings, recent_heavy=cont),
                             mode=await route.room_mode(svc.db, ctx.chat_id), light_model=light_model)
     ctx_tools = _ToolSet(schemas, allowed)
+    run.event("route", lane=lane.lane, why=lane.why, think=think0 and lane.lane == "heavy")
+    run.event("tools", shown=len(schemas), usable=len(allowed))
     # 🎞️ 움프 vs 🎬 AI 영상: AI 영상 도구가 없는 방은 '애매'도 움프로 (물어볼 게 없음)
     ctx.media_intent = mediaintent.classify(request, reply_to)
     if ctx.media_intent == "ambiguous" and "make_video" not in allowed:
@@ -217,6 +217,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                                   started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
         except _Escalate as e:
             log.info("🧭 light → heavy (chat=%s, %s)", ctx.chat_id, e.reason)
+            run.event("escalate", why=e.reason)
             try:
                 run.step(route.ESCALATE_TOOL, e.reason, "큰 모델로 올려 보냄")
             except Exception:
@@ -317,9 +318,11 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     for step in range(rounds):
         if step and run.usd_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
+            run.event("cap", kind="usd", round=step)
             break
         if step and time.monotonic() - started > deadline:        # 시간 상한: 기다리게 하지 말고 지금까지로 답
             log.warning("에이전트 시간 상한 %d초 (chat=%s, %d라운드) → 도구 없이 마무리", deadline, ctx.chat_id, step)
+            run.event("cap", kind="time", round=step)
             break
         inject()
         msg = await call()
@@ -339,12 +342,14 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 if checked or not allowed or mode not in ("call", "follow") or not _CLAIM.search(text):
                     return text
                 checked = True                   # 한 번만 다시 물음 (추가 호출은 이 경우만)
+                run.event("check", kind="claim")
                 messages += [{"role": "assistant", "content": text}, {"role": "system", "content": VERIFY_NOTE}]
                 continue
             # 조회 도구를 쓴 답: 결과에 없는 숫자를 세어 말하면 한 번만 다시 (도구 안 쓴 실행은 검사 비용 0)
             if num_checked or not read or not (bad := unsupported_numbers(text, [*results, request])):
                 return text
             num_checked = True
+            run.event("check", kind="number", nums=", ".join(bad[:5]))
             messages += [{"role": "assistant", "content": text},
                          {"role": "system", "content": NUMBER_NOTE.format(nums=", ".join(bad[:5]))}]
             continue
@@ -371,7 +376,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             log.info("도구 %s chat=%s user=%s 인자=%s → %s", c.function.name, ctx.chat_id, ctx.caller.id,
                      (c.function.arguments or "")[:200], result[:200].replace("\n", " "))
             try:
-                run.step(c.function.name, c.function.arguments, result)
+                run.step(c.function.name, c.function.arguments, result, write=c.function.name not in READ_ONLY)
             except Exception:   # 기록용 요약이 답을 막으면 안 됨
                 log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
