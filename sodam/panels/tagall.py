@@ -203,11 +203,9 @@ async def t_no(c: PanelCtx, spec) -> Screen:
 
 
 async def t_stop(c: PanelCtx, spec) -> Screen:
-    st = _running.get(c.cid)
-    if not st:
+    if c.cid not in _running:
         return Screen("이미 끝났어요.", None)
-    st["stop"] = True
-    return Screen(f"⏹ 멈췄어요 ({st['sent']}/{st['total']}명까지 보냄).", None)
+    return Screen(stop(c.cid), None)
 
 
 menu.register_token_action("tagall_go", t_go, fresh=True)
@@ -215,13 +213,26 @@ menu.register_token_action("tagall_no", t_no)
 menu.register_token_action("tagall_stop", t_stop)
 
 
+def stop(chat_id: int) -> str:
+    """도는 중인 전체 태그 멈춤 (말로 '소담아 멈춰' · 버튼 둘 다). 결과 글은 AI·버튼이 그대로 전함."""
+    st = _running.get(chat_id)
+    if not st:
+        return "지금 보내는 중인 전체 태그 없음 (이미 끝났거나 시작 안 함). 멈췄다고 말하지 말 것."
+    st["stop"] = True
+    return f"⏹ 전체 태그 멈춤 ({st['sent']}/{st['total']}명까지 보냄)."
+
+
 async def t_mention_all(ctx: ToolCtx, a: dict) -> str:
+    if str(a.get("action") or "") == "stop":      # 관리자 누구나 (도구가 관리자 전용) — 버튼은 요청한 사람만이라 말로도
+        return stop(ctx.chat_id)
     return await offer(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, str(a.get("text") or ""))
 
 
 tools.register_tool(Tool(
     "mention_all",
     "방 전체 멤버를 태그(멘션)해서 부름 — '전체 태그해줘', '모두 불러줘', '다 태그해'. 확인 카드를 보냄 (관리자만). "
-    "새로 들어온 사람만 부르는 인사는 greet_members. text = 태그와 함께 올릴 할 말(없으면 비움).",
-    {"text": {"type": "string", "description": "함께 올릴 할 말 (선택)"}}, [], t_mention_all,
+    "보내는 중에 '멈춰·그만·중지' = action=stop (관리자 누구나). 새로 들어온 사람만 부르는 인사는 greet_members. "
+    "text = 태그와 함께 올릴 할 말(없으면 비움).",
+    {"action": {"type": "string", "enum": ["start", "stop"], "description": "start(기본) · stop = 보내는 중인 전체 태그 멈춤"},
+     "text": {"type": "string", "description": "함께 올릴 할 말 (선택)"}}, [], t_mention_all,
     min_role=Role.ADMIN, where="room"))
