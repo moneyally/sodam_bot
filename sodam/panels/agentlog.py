@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from functools import wraps
 
-from .. import agentlog, costs, menu
+from .. import agentlog, costs, menu, mistakes  # noqa: F401 (mistakes = 🧠 오너 하루 실수 보고 tick 등록)
 from ..ai_settings import ROOM_TOKENS_MAX
 from ..llm import ROOM_TOKENS
 from ..menu import OWNER, B, HubItem, PanelCtx, Route, Screen

@@ -350,6 +350,52 @@ def r_agent_runs(d: Diag, q: dict) -> dict:
         return {"chat_id": cid, "runs": _rows(cur)}
 
 
+def _why_context(c: sqlite3.Connection, run: sqlite3.Row) -> tuple[list, list[str]]:
+    """같은 방·사람의 다음 실행(10분 안) + 답 뒤 3분 안 그 사람이 소담에게(답장·이름) 한 말."""
+    from .whyfail import COMPLAINT_SEC, REDO_SEC
+    later = c.execute("SELECT id, ts, trigger FROM agent_runs WHERE chat_id=? AND user_id=? AND id>? AND ts<=? "
+                      "ORDER BY id LIMIT 5", (run["chat_id"], run["user_id"], run["id"], run["ts"] + REDO_SEC)).fetchall()
+    replies = [r["text"] for r in c.execute(
+        "SELECT text FROM messages WHERE chat_id=? AND user_id=? AND is_bot=0 AND ts>? AND ts<=? AND "
+        "(text LIKE '%소담%' OR reply_to_user IN (SELECT DISTINCT user_id FROM messages WHERE chat_id=? AND is_bot=1)) "
+        "ORDER BY id LIMIT 10", (run["chat_id"], run["user_id"], run["ts"], run["ts"] + COMPLAINT_SEC, run["chat_id"]))]
+    return later, replies
+
+
+def r_why(d: Diag, q: dict) -> dict:
+    """🧠 소담이 왜 틀렸나 (sodam/whyfail.py). run=ID → 그 실행 단계별 + 판정. 아니면 hours(기본 24) 안 실수 있는 실행 목록
+    (chat= 로 방 하나만, all=1 이면 실수 없는 것도)."""
+    from .whyfail import analyze, timeline
+    with d.db() as c:
+        if q.get("run"):
+            row = c.execute("SELECT * FROM agent_runs WHERE id=?", (_int(q, "run", 0, 0, 10**12),)).fetchone()
+            if row is None:
+                raise BadRequest("그 실행 기록 없음 (14일 지나면 지워짐)")
+            later, replies = _why_context(c, row)
+            return {"run": row["id"], "timeline": [redact(x) for x in timeline(row)],
+                    "findings": [{"stage": f.stage, "code": f.code, "why": redact(f.why)} for f in analyze(row, later, replies)],
+                    "replies_after": [redact(t) for t in replies]}
+        hours = _int(q, "hours", 24, 1, 336)
+        limit = _int(q, "limit", 50, 1, 300)
+        sql, args = "SELECT * FROM agent_runs WHERE ts>=?", [int(time.time()) - hours * 3600]
+        if q.get("chat"):
+            sql += " AND chat_id=?"
+            args.append(d.chat_id(c, q))
+        out, codes, total = [], {}, 0
+        for row in c.execute(sql + " ORDER BY id DESC LIMIT 3000", args).fetchall():
+            total += 1
+            later, replies = _why_context(c, row)
+            found = analyze(row, later, replies)
+            for f in found:
+                codes[f.code] = codes.get(f.code, 0) + 1
+            if (found or q.get("all")) and len(out) < limit:
+                title = c.execute("SELECT title FROM chats WHERE chat_id=?", (row["chat_id"],)).fetchone()
+                out.append({"run": row["id"], "room": title["title"] if title else row["chat_id"], "ts": row["ts"],
+                            "request": redact(row["trigger"]), "answer": redact(row["answer"] or "")[:160],
+                            "findings": [f"{f.stage}: {redact(f.why)}" for f in found]})
+        return {"hours": hours, "runs_checked": total, "by_code": codes, "runs": out}
+
+
 def _call_stats(call: dict) -> dict:
     """voice_calls.stats(JSON 글) → dict (통화 계측: 늦은 재생·루프 지연·오류 코드·끼어들기·CPU — bridge.Bridge._summary)."""
     raw = call.get("stats")
@@ -480,7 +526,7 @@ def r_cleanup(d: Diag, q: dict) -> dict:
         return {"scans": [one(c, r) for r in c.execute("SELECT * FROM cleanup_scans ORDER BY ts DESC LIMIT ?", (MAX_ROWS,))]}
 
 
-ROUTES = {"/v1/cleanup": r_cleanup, "/v1/user": r_user, "/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
+ROUTES = {"/v1/why": r_why, "/v1/cleanup": r_cleanup, "/v1/user": r_user, "/v1/health": r_health, "/v1/rooms": r_rooms, "/v1/settings": r_settings, "/v1/messages": r_messages,
           "/v1/agent_runs": r_agent_runs, "/v1/voice": r_voice, "/v1/modlog": r_modlog, "/v1/counters": r_counters,
           "/v1/tables": r_tables, "/v1/logs": r_logs}
 
