@@ -887,9 +887,10 @@ async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
     out = f"설정 변경: {LABELS.get(key, key)} = {render(key, parsed)}"
     if key == "ai_enabled" and parsed is False:
         out += "." + setkeys.AI_OFF_NOTE
-    if key in ("greet_template", "greet_mention"):   # 입장 인사: 문구·태그를 같이 묻는 경우가 많음 (2026-10-01 베베방)
+    if key in ("greet_template", "greet_mention", "greet_reply_bot"):   # 입장 인사: 문구·태그를 같이 묻는 경우가 많음 (2026-10-01 베베방)
         out += (". 참고: 입장 인사 이름 태그(멘션)는 greet_mention(켜기/끄기), 문구는 greet_template — 끄면 인사말에 "
-                "{names} 가 없을 때 이름 없이 문구만 보냄. 사진·버튼은 관리자 1:1 메뉴 ✏️ 인사 편집기")
+                "{names} 가 없을 때 이름 없이 문구만 보냄. 다른 봇(문지기 등)이 인사말을 명령으로 받게 하려면 greet_reply_bot 켜기 "
+                "(✅ 믿는 봇 글에 답장으로 인사, 🤝 다른 봇 연동 필요). 사진·버튼은 관리자 1:1 메뉴 ✏️ 인사 편집기")
     if key == "style":   # 방 기본 말투: 개인 말투를 따로 정한 사람은 그대로라는 걸 알려야 '방 전체'와 어긋나지 않음
         own = await ctx.svc.db._all(
             "SELECT u.first_name FROM members m JOIN users u USING(user_id) WHERE m.chat_id=? AND m.style IS NOT NULL",

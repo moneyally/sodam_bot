@@ -329,6 +329,47 @@ async def greet_without_tag_sends_template_only_and_editor_toggles():
 
 
 @test
+async def greet_replies_to_trusted_bot_welcome():
+    """실제 2026-10-03 베베방: 문지기 봇 환영 글 뒤 소담 '안내' 가 그냥 글이라 문지기에게 안 감 → 믿는 봇 글에 답장으로."""
+    import time as _t
+
+    from sodam import greet as greet_mod
+    db, svc, bot, _ = await setup()
+    greet_mod.BOT_WAIT = 0
+    await db.set_setting(CHAT, "greet_template", "안내")
+    await db.set_setting(CHAT, "greet_mention", False)
+    now = int(_t.time())
+
+    async def bot_msg(bot_id, msg_id, status, ts):
+        await db._write("INSERT OR IGNORE INTO botlink_bots(chat_id, bot_id, username, name, first_seen, last_seen, status) "
+                        "VALUES(?,?,?,?,?,?,?)", (CHAT, bot_id, f"b{bot_id}", "봇", ts, ts, status))
+        await db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text) VALUES(?,?,?,?,?)",
+                        (CHAT, bot_id, msg_id, ts, "환영합니다"))
+    await bot_msg(77, 500, "trusted", now - 2)          # 문지기 환영 글
+    await bot_msg(88, 501, "seen", now - 1)             # 다른 봇(순위봇) — 믿는 봇 아님
+    await bot_msg(77, 400, "trusted", now - 3600)       # 옛날 글
+
+    await greet(svc, bot, [(20, "새사람")])
+    kw = bot.named("send_message")[-1][3]
+    assert kw.get("reply_parameters") is None, "꺼져 있으면 그냥 인사"
+    await db.set_setting(CHAT, "greet_reply_bot", True)
+    await greet(svc, bot, [(21, "새사람2")])
+    assert bot.named("send_message")[-1][3].get("reply_parameters") is None, "🤝 연동이 꺼져 있으면 그냥"
+    await db.set_setting(CHAT, "botlink_mode", "observe")
+    await greet(svc, bot, [(22, "새사람3")])
+    m = bot.named("send_message")[-1]
+    rp = m[3]["reply_parameters"]
+    assert m[2] == "안내" and rp.message_id == 500 and rp.allow_sending_without_reply, m
+    await db._write("DELETE FROM botlink_msgs WHERE msg_id=500")
+    await greet(svc, bot, [(23, "새사람4")])
+    assert bot.named("send_message")[-1][3].get("reply_parameters") is None, "믿는 봇 새 글 없으면 그냥 (옛 글 X)"
+    q = await press(svc, bot, 1, f"m:w:{CHAT}")
+    assert "봇 글에 답장: 켜짐" in q.edits[-1]
+    q = await press(svc, bot, 1, find(q.kb, "봇 글에 답장").callback_data)
+    assert (await db.get_settings(CHAT))["greet_reply_bot"] is False
+
+
+@test
 async def greeter_falls_back_and_revalidates():
     db, svc, bot, _ = await setup()
 

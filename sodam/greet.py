@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from openai import OpenAIError
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 from telegram.error import BadRequest, TelegramError
 
 from .llm import BudgetExceeded
@@ -46,6 +46,8 @@ MAX_BUTTONS = 6
 MAX_BUTTON_TEXT = 30
 MAX_URL = 512
 CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
+BOT_WAIT = 10             # greet_reply_bot: 인사 차례에 믿는 봇 글이 아직 없으면 더 기다리는 최대 초
+BOT_LEAD = 5              # 첫 입장보다 이만큼 먼저 올라온 봇 글까지 (입장 알림 순서가 조금 엇갈려도)
 
 _URL_BAD = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
 _HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
@@ -65,6 +67,9 @@ register_setting("greet_media_id", "", "인사 미디어")
 register_setting("greet_buttons", [], "인사 URL 버튼", render_fn=_render_buttons)
 # 끄면 이름을 멘션(태그) 대신 글자로만, 인사말에 {names} 가 없으면 이름 없이 인사말만 (오너 요청 2026-10-01 베베방)
 register_setting("greet_mention", True, "입장 인사 이름 태그")
+# 켜면 ✅ 믿는 봇(🤝 다른 봇 연동)이 방금 올린 글에 답장으로 인사 — 봇끼리는 답장이어야 그 봇에게 감 (Bot-to-Bot).
+# 실제 사례 2026-10-03 베베방: 소담 인사 '안내' 를 문지기 봇이 키워드로 받아 안내 글을 올려야 하는데, 그냥 글이라 문지기에게 안 감.
+register_setting("greet_reply_bot", False, "다른 봇 환영 글에 답장")
 register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
 
 
@@ -158,9 +163,10 @@ def _plain_len(text_html: str) -> int:
 
 # ── 보내기 (실제 인사와 편집기 미리보기가 같이 씀) ─────────
 async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
-                        extra_rows: list[list[InlineKeyboardButton]] | None = None) -> list:
+                        extra_rows: list[list[InlineKeyboardButton]] | None = None, reply_to: int | None = None) -> list:
     """설정된 미디어·URL 버튼을 붙여 인사를 보낸다. 보낸 메시지 목록을 돌려준다.
-    미디어가 안 보내지면(지워진 파일 등) 글만 보낸다."""
+    미디어가 안 보내지면(지워진 파일 등) 글만 보낸다. reply_to = 그 메시지에 답장으로 (지워졌으면 그냥)."""
+    rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     rows = button_rows(s) + (extra_rows or [])
     kb = InlineKeyboardMarkup(rows) if rows else None
     media = media_of(s)
@@ -172,11 +178,12 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
         try:
             if fits:
                 return [await send_retry(lambda: send(chat_id, file_id, caption=text_html, parse_mode="HTML",
-                                                      reply_markup=kb))]
-            sent.append(await send_retry(lambda: send(chat_id, file_id)))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
+                                                      reply_markup=kb, reply_parameters=rp))]
+            sent.append(await send_retry(lambda: send(chat_id, file_id, reply_parameters=rp)))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
         except BadRequest as e:
             log.warning("greet media failed, sending text only: %s", e)
-    sent.append(await send_retry(lambda: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb)))
+    sent.append(await send_retry(lambda: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb,
+                                                          reply_parameters=rp)))
     return sent
 
 
@@ -186,6 +193,7 @@ class Greeter:
         self._pending: dict[int, list[tuple[int, str]]] = {}
         self._tasks: dict[int, asyncio.Task] = {}
         self._greeted: dict[tuple[int, int], float] = {}   # 자동 인사를 했거나 곧 할 사람 → 시각 (AI 인사 중복 방지)
+        self._since: dict[int, float] = {}                 # 방 → 이번 묶음 첫 입장 시각 (greet_reply_bot)
 
     def auto_greeted(self, chat_id: int, user_id: int, within: int = AUTO_GREET_WINDOW) -> bool:
         return time.time() - self._greeted.get((chat_id, user_id), 0) < within
@@ -195,6 +203,7 @@ class Greeter:
         if len(self._greeted) > 5000:
             self._greeted = {k: t for k, t in self._greeted.items() if now - t < AUTO_GREET_WINDOW}
         self._greeted[(chat_id, user_id)] = now
+        self._since.setdefault(chat_id, now)
         self._pending.setdefault(chat_id, []).append((user_id, name))
         if chat_id not in self._tasks or self._tasks[chat_id].done():
             self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
@@ -205,16 +214,18 @@ class Greeter:
 
     async def flush(self, bot: Bot, chat_id: int) -> None:
         people = self._pending.pop(chat_id, [])
+        since = self._since.pop(chat_id, time.time() - WAIT_SECONDS)
         if not people:
             return
         s = await self.svc.db.get_settings(chat_id)
+        reply_to = await self._bot_welcome(chat_id, since) if s.get("greet_reply_bot") else None
         tag = bool(s.get("greet_mention", True))
         names = ", ".join(mention(uid, name) if tag else esc(name) for uid, name in people[:15])
         if len(people) > 15:
             names += f" 외 {len(people) - 15}분"
         template = with_names(await self._template(chat_id, len(people)), tag)
         try:
-            sent = await send_greeting(bot, chat_id, s, fill(template, names))
+            sent = await send_greeting(bot, chat_id, s, fill(template, names), reply_to=reply_to)
             # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
             plain = ", ".join(name for _, name in people[:15])
             await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
@@ -223,6 +234,24 @@ class Greeter:
             log.warning("greet send failed: %s", e)
             for uid, _ in people:           # 못 보냈으면 AI 인사까지 막지 않게
                 self._greeted.pop((chat_id, uid), None)
+        if self._pending.get(chat_id):      # 봇 글을 기다리는 사이 또 들어온 사람 (이 작업이 아직 안 끝나 queue 가 새로 안 띄움)
+            self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
+
+    async def _bot_welcome(self, chat_id: int, since: float) -> int | None:
+        """✅ 믿는 봇이 이번 입장 즈음 올린 마지막 글 ID (🤝 연동이 켜져 있어야 기록됨). 아직 없으면 BOT_WAIT 초까지 기다림.
+        botlink 를 import 하지 않고 표만 읽음 (순환 import 방지)."""
+        s = await self.svc.db.get_settings(chat_id)
+        if s.get("botlink_mode", "off") == "off":
+            return None
+        end = time.monotonic() + BOT_WAIT
+        while True:
+            row = await self.svc.db._one(
+                "SELECT m.msg_id FROM botlink_msgs m JOIN botlink_bots b ON b.chat_id=m.chat_id AND b.bot_id=m.bot_id "
+                "WHERE m.chat_id=? AND b.status='trusted' AND m.ts>=? ORDER BY m.ts DESC, m.msg_id DESC LIMIT 1",
+                (chat_id, int(since) - BOT_LEAD))
+            if row or time.monotonic() >= end:
+                return row["msg_id"] if row else None
+            await asyncio.sleep(1)
 
     async def _template(self, chat_id: int, count: int) -> str:
         s = await self.svc.db.get_settings(chat_id)

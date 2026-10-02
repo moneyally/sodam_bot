@@ -24,6 +24,7 @@ PARTS = {"t": "📄 인사말", "m": "🖼 미디어", "b": "🔗 URL 버튼"}
 MEDIA_OBJ = {"photo": "사진을", "video": "영상을", "animation": "GIF를"}
 CLOSE_TTL = 48 * 3600    # 봇은 48시간 지난 메시지를 못 지운다
 menu.register_toggle("greet_mention", "w")   # 🏷 이름 태그 켜기/끄기 → 편집기로 다시
+menu.register_toggle("greet_reply_bot", "w")  # 🤝 다른 봇 글에 답장으로 인사
 
 
 def _kb(rows):
@@ -66,6 +67,9 @@ async def s_editor(c: PanelCtx) -> Screen:
     lines.append(f"🔗 URL 버튼: {len(btns)}개" if btns else "🔗 URL 버튼: 없음")
     lines.append("🏷 이름 태그: " + ("켜짐 — 새 멤버 이름을 멘션(파란 글씨)으로" if s["greet_mention"]
                                     else "꺼짐 — 멘션 없이 (인사말에 {names} 가 없으면 이름도 안 붙여요)"))
+    if s["greet_reply_bot"]:
+        lines.append("🤝 봇 글에 답장: 켜짐 — ✅ 믿는 봇이 방금 올린 글(환영 글 등)에 답장으로 인사해요. 그 봇이 인사말을 명령처럼 받아요"
+                     + ("" if s["botlink_mode"] != "off" else "\n⚠️ 🤝 다른 봇 연동이 꺼져 있어서 지금은 그냥 인사해요"))
     cid = c.cid
     rows = [[B("📄 인사말 수정" if tpl else "📄 인사말 쓰기", f"m:in:{cid}:wt"), B("👀 보기", f"m:wt:{cid}")]
             + ([B("🗑 삭제", f"m:wd:{cid}:t")] if tpl else []),
@@ -74,6 +78,8 @@ async def s_editor(c: PanelCtx) -> Screen:
             [B("🔗 URL 버튼 수정" if btns else "🔗 URL 버튼 추가", f"m:in:{cid}:wb")]
             + ([B("👀 보기", f"m:wb:{cid}"), B("🗑 삭제", f"m:wd:{cid}:b")] if btns else []),
             [B(("✅" if s["greet_mention"] else "❌") + " 이름 태그", f"m:t:{cid}:greet_mention:{0 if s['greet_mention'] else 1}")],
+            [B(("✅" if s["greet_reply_bot"] else "❌") + " 봇 글에 답장",
+               f"m:t:{cid}:greet_reply_bot:{0 if s['greet_reply_bot'] else 1}")],
             [B("👀 전체 미리보기 (1:1로 받기)", f"m:wv:{cid}:all")],
             [B("⬅️ 뒤로", f"m:g:{cid}")]]
     return Screen("\n".join(lines), _kb(rows))
