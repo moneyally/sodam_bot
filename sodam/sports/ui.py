@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 from ..util import esc
 from . import fmt
 from .alerts import LEVELS, MAX_FOLLOWS, QUIET
-from .leagues import LEAGUES, POPULAR, SPORT_KO, League, Team, find_league, find_sport, find_team, leagues_of_sport, same_team
+from .leagues import (LEAGUES, POPULAR, SPORT_KO, League, Team, find_group, find_league, find_sport, find_team, leagues_of_sport,
+                      same_team)
 from .providers import KST, SportsError
 
 EXAMPLES = "예: EPL · 라리가 · 챔스 · MLB · NBA · KBO · 토트넘 · 다저스"
@@ -22,6 +23,9 @@ def resolve(q: str) -> tuple[str, object] | None:
     q = (q or "").strip()
     if not q:
         return None
+    group = find_group(q)
+    if group:
+        return "sport", group
     lg = find_league(q)
     if lg:
         return "league", lg
