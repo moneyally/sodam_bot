@@ -68,7 +68,8 @@ async def s_editor(c: PanelCtx) -> Screen:
     lines.append("🏷 이름 태그: " + ("켜짐 — 새 멤버 이름을 멘션(파란 글씨)으로" if s["greet_mention"]
                                     else "꺼짐 — 멘션 없이 (인사말에 {names} 가 없으면 이름도 안 붙여요)"))
     if s["greet_reply_bot"]:
-        lines.append("🤝 봇 글에 답장: 켜짐 — ✅ 믿는 봇이 방금 올린 글(환영 글 등)에 답장으로 인사해요. 그 봇이 인사말을 명령처럼 받아요"
+        lines.append("🤝 봇 글에 답장: 켜짐 — ✅ 믿는 봇이 방금 올린 글(환영 글 등)에 답장으로 인사해요. 그 봇이 인사말을 명령처럼 받아요. "
+                     "그 봇이 봇 글을 무시하면, 사람이 같은 말을 쳤을 때 그 봇이 올렸던 답 글을 소담이 복사해 올려요"
                      + ("" if s["botlink_mode"] != "off" else "\n⚠️ 🤝 다른 봇 연동이 꺼져 있어서 지금은 그냥 인사해요"))
     cid = c.cid
     rows = [[B("📄 인사말 수정" if tpl else "📄 인사말 쓰기", f"m:in:{cid}:wt"), B("👀 보기", f"m:wt:{cid}")]

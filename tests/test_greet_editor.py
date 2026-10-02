@@ -363,6 +363,38 @@ async def greet_replies_to_trusted_bot_welcome():
     await db._write("DELETE FROM botlink_msgs WHERE msg_id=500")
     await greet(svc, bot, [(23, "새사람4")])
     assert bot.named("send_message")[-1][3].get("reply_parameters") is None, "믿는 봇 새 글 없으면 그냥 (옛 글 X)"
+    await asyncio.gather(*list(Greeter(svc)._bg))
+    assert not bot.named("copy"), "배운 답 글이 없으면 복사 안 함"
+
+    # 문지기가 봇 글을 무시함 → 사람이 '안내' 쳤을 때 문지기가 올린 답 글을 복사하고 신호 글 '안내' 는 지움
+    greet_mod.BOT_ANSWER_WAIT = 0
+    await db.log_message(CHAT, 30, 9000, " 안내 ")                                   # 사람이 안내
+    await db._write("UPDATE messages SET ts=? WHERE msg_id=9000", (now - 600,))
+    await db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text) VALUES(?,?,?,?,?)",
+                    (CHAT, 88, 9001, now - 599, "순위"))                              # 믿는 봇 아님
+    await db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text) VALUES(?,?,?,?,?)",
+                    (CHAT, 77, 9002, now - 598, "이벤트 안내"))                       # 문지기 답
+    await db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text) VALUES(?,?,?,?,?)",
+                    (CHAT, 77, 9003, now - 590, "다른 글"))                           # 5초 넘음
+    g = Greeter(svc)
+    g._pending[CHAT] = [(24, "새사람5")]
+    await g.flush(bot, CHAT)
+    await asyncio.gather(*list(g._bg))
+    mine = bot.named("send_message")[-1]
+    assert bot.named("copy")[-1][1:] == (CHAT, CHAT, 9002), bot.named("copy")
+    assert bot.named("delete"), "신호 글은 지움"
+    assert await db.get_state(CHAT, "greet_bot_answer:안내") == 9002
+    # 문지기가 이번엔 반응함 → 복사 안 함
+    n = len(bot.named("copy"))
+    greet_mod.BOT_ANSWER_WAIT = 0.3
+    g._pending[CHAT] = [(25, "새사람6")]
+    await g.flush(bot, CHAT)
+    await db._write("INSERT INTO botlink_msgs(chat_id, bot_id, msg_id, ts, text) VALUES(?,?,?,?,?)",
+                    (CHAT, 77, 10 ** 9, int(_t.time()), "이벤트 안내"))
+    await asyncio.gather(*list(g._bg))
+    assert len(bot.named("copy")) == n, "봇이 직접 답하면 복사 안 함"
+    del mine
+
     q = await press(svc, bot, 1, f"m:w:{CHAT}")
     assert "봇 글에 답장: 켜짐" in q.edits[-1]
     q = await press(svc, bot, 1, find(q.kb, "봇 글에 답장").callback_data)

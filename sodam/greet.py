@@ -48,6 +48,8 @@ MAX_URL = 512
 CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
 BOT_WAIT = 10             # greet_reply_bot: 인사 차례에 믿는 봇 글이 아직 없으면 더 기다리는 최대 초
 BOT_LEAD = 5              # 첫 입장보다 이만큼 먼저 올라온 봇 글까지 (입장 알림 순서가 조금 엇갈려도)
+BOT_ANSWER_WAIT = 6       # 답장으로 보낸 인사에 믿는 봇이 이 안에 아무 글도 안 올리면 → 배운 답 글을 복사
+BOT_ANSWER_GAP = 5        # 사람이 인사말과 같은 글을 친 뒤 이 초 안에 믿는 봇이 올린 첫 글 = 그 말의 답 (배우기)
 
 _URL_BAD = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
 _HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
@@ -194,6 +196,7 @@ class Greeter:
         self._tasks: dict[int, asyncio.Task] = {}
         self._greeted: dict[tuple[int, int], float] = {}   # 자동 인사를 했거나 곧 할 사람 → 시각 (AI 인사 중복 방지)
         self._since: dict[int, float] = {}                 # 방 → 이번 묶음 첫 입장 시각 (greet_reply_bot)
+        self._bg: set[asyncio.Task] = set()
 
     def auto_greeted(self, chat_id: int, user_id: int, within: int = AUTO_GREET_WINDOW) -> bool:
         return time.time() - self._greeted.get((chat_id, user_id), 0) < within
@@ -218,7 +221,8 @@ class Greeter:
         if not people:
             return
         s = await self.svc.db.get_settings(chat_id)
-        reply_to = await self._bot_welcome(chat_id, since) if s.get("greet_reply_bot") else None
+        via_bot = bool(s.get("greet_reply_bot")) and s.get("botlink_mode", "off") != "off"
+        reply_to = await self._bot_welcome(chat_id, since) if via_bot else None
         tag = bool(s.get("greet_mention", True))
         names = ", ".join(mention(uid, name) if tag else esc(name) for uid, name in people[:15])
         if len(people) > 15:
@@ -230,6 +234,11 @@ class Greeter:
             plain = ", ".join(name for _, name in people[:15])
             await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
                                           is_bot=True)
+            if via_bot:
+                trigger = template.replace("{names}", "").strip()
+                t = asyncio.create_task(self._bot_answer(bot, chat_id, sent[-1].message_id, trigger, int(time.time())))
+                self._bg.add(t)
+                t.add_done_callback(self._bg.discard)
         except TelegramError as e:
             log.warning("greet send failed: %s", e)
             for uid, _ in people:           # 못 보냈으면 AI 인사까지 막지 않게
@@ -252,6 +261,45 @@ class Greeter:
             if row or time.monotonic() >= end:
                 return row["msg_id"] if row else None
             await asyncio.sleep(1)
+
+    async def _learned_answer(self, chat_id: int, trigger: str) -> int | None:
+        """사람이 인사말과 똑같은 글('안내')을 쳤을 때 믿는 봇이 BOT_ANSWER_GAP 초 안에 올린 첫 글 = 그 말의 답 글 ID.
+        기록(봇 글 7일)에 없으면 지난번에 배운 것 (chat_state greet_bot_answer)."""
+        if not trigger or len(trigger) > 64:
+            return None
+        row = await self.svc.db._one(
+            "SELECT m.msg_id FROM messages h JOIN botlink_msgs m ON m.chat_id=h.chat_id AND m.ts BETWEEN h.ts AND h.ts+? "
+            "JOIN botlink_bots b ON b.chat_id=m.chat_id AND b.bot_id=m.bot_id AND b.status='trusted' "
+            "WHERE h.chat_id=? AND h.is_bot=0 AND trim(h.text)=? ORDER BY h.ts DESC, m.ts ASC, m.msg_id ASC LIMIT 1",
+            (BOT_ANSWER_GAP, chat_id, trigger))
+        key = f"greet_bot_answer:{trigger}"
+        if row:
+            await self.svc.db.set_state(chat_id, key, row["msg_id"])
+            return row["msg_id"]
+        return await self.svc.db.get_state(chat_id, key)
+
+    async def _bot_answer(self, bot: Bot, chat_id: int, mine: int, trigger: str, sent_at: int) -> None:
+        """답장으로 보낸 인사에 믿는 봇이 반응 안 하면(봇 글을 무시하는 봇 — 실제 2026-10-03 베베방 문지기),
+        그 봇이 같은 말에 사람에게 올렸던 답 글을 소담이 복사해 올리고 '안내' 같은 신호 글은 지움."""
+        try:
+            await asyncio.sleep(BOT_ANSWER_WAIT)
+            answered = await self.svc.db._one(
+                "SELECT 1 FROM botlink_msgs m JOIN botlink_bots b ON b.chat_id=m.chat_id AND b.bot_id=m.bot_id "
+                "WHERE m.chat_id=? AND b.status='trusted' AND m.ts>=? AND m.msg_id>?", (chat_id, sent_at, mine))
+            if answered:
+                return
+            src = await self._learned_answer(chat_id, trigger)
+            if not src:
+                return
+            await bot.copy_message(chat_id, chat_id, src)
+            try:
+                await bot.delete_message(chat_id, mine)
+            except TelegramError:
+                pass
+        except TelegramError as e:
+            log.warning("greet bot answer copy failed %s: %s", chat_id, e)
+        except Exception:
+            log.exception("greet bot answer failed %s", chat_id)
 
     async def _template(self, chat_id: int, count: int) -> str:
         s = await self.svc.db.get_settings(chat_id)
