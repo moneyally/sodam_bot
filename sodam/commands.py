@@ -1322,6 +1322,13 @@ async def c_report(ctx: CmdCtx) -> None:
                     await stats.ranking_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, "오늘", 5))
 
 
+async def c_tagall(ctx: CmdCtx) -> None:
+    from .panels import tagall   # 늦게 import (panels → commands 순환)
+    out = await tagall.offer(ctx.svc, ctx.bot, ctx.chat_id, ctx.user, ctx.argstr)
+    if not out.startswith("확인 카드"):
+        await ctx.reply(esc(out))
+
+
 COMMANDS: list[Cmd] = [
     Cmd(("도움말", "help", "start", "사용법"), c_help, help="소담에게 말하는 법 (예시)", dm_ok=True),
     Cmd(("명령어", "commands", "명령어목록"), c_commands, help="명령어 전체 목록", dm_ok=True),
@@ -1402,6 +1409,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("지식", "자료", "knowledge"), c_knowledge, Role.ADMIN, usage="[추가 제목|검색 단어|삭제 번호]",
         help="AI가 참고할 문서·자료 등록 (1:1 에선 모든 방 공통)", group="관리자", dm_ok=True),
     Cmd(("리포트", "report"), c_report, Role.ADMIN, help="오늘 집계 리포트", group="관리자"),
+    Cmd(("전체태그", "tagall"), c_tagall, Role.ADMIN, usage="[할 말]",
+        help="방 전체 멤버를 5명씩 태그 (확인 카드 · 6시간에 한 번)", group="관리자"),
     Cmd(("공동차단", "fedban"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
         help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
