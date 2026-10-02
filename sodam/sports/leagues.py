@@ -26,15 +26,19 @@ class League:
     aliases: tuple[str, ...] = field(default=())
     korean: bool = False      # 국내 리그 (ESPN 에 없음)
     naver_codes: tuple[str, ...] = ()   # 네이버 종합대회(아시안게임 등): gameId[4:7] 종목 코드로 거름 (FBL 축구 · VVO 배구 · VBV 비치발리볼)
+    minor: bool = False       # 이름으로 부를 때만 (종목 전체 '.스포츠 축구' 에선 빼서 ESPN 요청이 수십 개로 늘지 않게)
 
 
-SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊"}
+SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊",
+               "football": "🏈", "racing": "🏎️", "golf": "⛳", "tennis": "🎾", "afootball": "🏉"}
 SPORT_KO = {"soccer": "축구", "baseball": "야구", "basketball": "농구", "volleyball": "배구", "hockey": "아이스하키",
-            "mma": "격투기"}
+            "mma": "격투기", "football": "미식축구", "racing": "모터스포츠", "golf": "골프", "tennis": "테니스",
+            "afootball": "호주식 풋볼"}
 SPORT_WORDS = {"축구": "soccer", "해외축구": "soccer", "soccer": "soccer", "football": "soccer", "야구": "baseball",
                "baseball": "baseball", "농구": "basketball", "basketball": "basketball", "배구": "volleyball",
                "volleyball": "volleyball", "하키": "hockey", "아이스하키": "hockey", "hockey": "hockey",
-               "격투기": "mma", "종합격투기": "mma", "mma": "mma"}
+               "격투기": "mma", "종합격투기": "mma", "mma": "mma", "풋볼": "football", "골프": "golf", "golf": "golf",
+               "테니스": "tennis", "tennis": "tennis", "모터스포츠": "racing", "레이싱": "racing", "자동차경주": "racing"}
 # 골(득점 하나하나) 알림이 의미 있는 종목. 나머지(야구·농구·배구)는 기본 시작·결과만 (득점이 너무 잦음)
 GOAL_SPORTS = {"soccer", "hockey"}
 
@@ -109,6 +113,54 @@ _L = [
            ("여자배구", "v리그 여자", "v리그여자", "wkovo", "여배"), korean=True),
     League("nhl", "NHL", "hockey", "hockey/nhl", None, "4380", None, ("nhl", "북미하키", "엔에이치엘", "미국하키")),
     League("ufc", "UFC", "mma", "mma/ufc", "ufc", None, None, ("ufc", "유에프씨")),
+    # ── 2026-10-03 추가 ('우리 없는 데이터 전부' — 방 요청이 계속 옴). ESPN 실측으로 경기가 오는 것만, 이름으로 부를 때만 (minor)
+    League("championship", "잉글랜드 챔피언십", "soccer", "soccer/eng.2", None, None, None, ('챔피언십', 'efl챔피언십', '잉글랜드2부', 'championship'), minor=True),
+    League("facup", "FA컵", "soccer", "soccer/eng.fa", None, None, None, ('fa컵', 'facup', '에프에이컵'), minor=True),
+    League("carabao", "카라바오컵", "soccer", "soccer/eng.league_cup", None, None, None, ('카라바오컵', 'efl컵', '리그컵', 'carabao cup'), minor=True),
+    League("copadelrey", "코파 델 레이", "soccer", "soccer/esp.copa_del_rey", None, None, None, ('코파델레이', '국왕컵', '스페인국왕컵', 'copa del rey'), minor=True),
+    League("dfbpokal", "DFB 포칼", "soccer", "soccer/ger.dfb_pokal", None, None, None, ('dfb포칼', '포칼', '독일컵', 'dfb pokal'), minor=True),
+    League("coppaitalia", "코파 이탈리아", "soccer", "soccer/ita.coppa_italia", None, None, None, ('코파이탈리아', '이탈리아컵', 'coppa italia'), minor=True),
+    League("coupedefrance", "쿠프 드 프랑스", "soccer", "soccer/fra.coupe_de_france", None, None, None, ('쿠프드프랑스', '프랑스컵', 'coupe de france'), minor=True),
+    League("eredivisie", "에레디비시", "soccer", "soccer/ned.1", None, None, None, ('에레디비시', '에레디비지', '네덜란드리그', 'eredivisie'), minor=True),
+    League("primeira", "프리메이라리가", "soccer", "soccer/por.1", None, None, None, ('프리메이라리가', '포르투갈리그', 'primeira liga'), minor=True),
+    League("scotland", "스코틀랜드 프리미어십", "soccer", "soccer/sco.1", None, None, None, ('스코틀랜드리그', '스코티시프리미어십', 'spfl'), minor=True),
+    League("superlig", "튀르키예 쉬페르리그", "soccer", "soccer/tur.1", None, None, None, ('쉬페르리그', '터키리그', '튀르키예리그', 'super lig'), minor=True),
+    League("belgium", "벨기에 프로리그", "soccer", "soccer/bel.1", None, None, None, ('벨기에리그', '주필러리그', 'jupiler'), minor=True),
+    League("mls", "MLS", "soccer", "soccer/usa.1", None, None, None, ('mls', '미국축구', '메이저리그사커'), minor=True),
+    League("ligamx", "리가 MX", "soccer", "soccer/mex.1", None, None, None, ('리가mx', '멕시코리그', 'liga mx'), minor=True),
+    League("brasileirao", "브라질 세리에A", "soccer", "soccer/bra.1", None, None, None, ('브라질리그', '브라질레이랑', '브라질세리에a', 'brasileirao'), minor=True),
+    League("argentina", "아르헨티나 리가", "soccer", "soccer/arg.1", None, None, None, ('아르헨티나리그', '아르헨리그'), minor=True),
+    League("saudi", "사우디 프로리그", "soccer", "soccer/ksa.1", None, None, None, ('사우디리그', '사우디프로리그', 'spl'), minor=True),
+    League("csl", "중국 슈퍼리그", "soccer", "soccer/chn.1", None, None, None, ('중국슈퍼리그', '중국리그', 'csl'), minor=True),
+    League("aleague", "호주 A리그", "soccer", "soccer/aus.1", None, None, None, ('a리그', '호주리그', '에이리그', 'a-league'), minor=True),
+    League("cwc", "FIFA 클럽월드컵", "soccer", "soccer/fifa.cwc", None, None, None, ('클럽월드컵', '클월', 'club world cup'), minor=True),
+    League("goldcup", "골드컵", "soccer", "soccer/concacaf.gold", None, None, None, ('골드컵', '북중미골드컵', 'gold cup'), minor=True),
+    League("concacaf_cl", "북중미 챔피언스컵", "soccer", "soccer/concacaf.champions", None, None, None, ('북중미챔피언스컵', '콘카카프챔피언스컵', 'concacaf champions cup'), minor=True),
+    League("libertadores", "코파 리베르타도레스", "soccer", "soccer/conmebol.libertadores", None, None, None, ('리베르타도레스', '남미챔스', 'libertadores'), minor=True),
+    League("sudamericana", "코파 수다메리카나", "soccer", "soccer/conmebol.sudamericana", None, None, None, ('수다메리카나', 'sudamericana'), minor=True),
+    League("wcq_conmebol", "월드컵 남미 예선", "soccer", "soccer/fifa.worldq.conmebol", None, None, None, ('월드컵남미예선', '남미예선'), minor=True),
+    League("wcq_concacaf", "월드컵 북중미 예선", "soccer", "soccer/fifa.worldq.concacaf", None, None, None, ('월드컵북중미예선', '북중미예선'), minor=True),
+    League("wcq_caf", "월드컵 아프리카 예선", "soccer", "soccer/fifa.worldq.caf", None, None, None, ('월드컵아프리카예선', '아프리카예선'), minor=True),
+    League("uwcl", "UEFA 여자 챔스", "soccer", "soccer/uefa.wchampions", None, None, None, ('여자챔스', '여자챔피언스리그', 'uwcl'), minor=True),
+    League("wsl", "잉글랜드 여자 슈퍼리그", "soccer", "soccer/eng.w.1", None, None, None, ('wsl', '잉글랜드여자리그', '여자슈퍼리그'), minor=True),
+    League("wwc", "FIFA 여자 월드컵", "soccer", "soccer/fifa.wwc", None, None, None, ('여자월드컵', "women's world cup"), minor=True),
+    League("nwsl", "NWSL", "soccer", "soccer/usa.nwsl", None, None, None, ('nwsl', '미국여자축구'), minor=True),
+    League("supercup", "UEFA 슈퍼컵", "soccer", "soccer/uefa.super_cup", None, None, None, ('슈퍼컵', 'uefa슈퍼컵'), minor=True),
+    League("olympic_soccer", "올림픽 남자 축구", "soccer", "soccer/fifa.olympics", None, None, None, ('올림픽축구', '올림픽 축구'), minor=True),
+    League("ncaab", "NCAA 남자 농구", "basketball", "basketball/mens-college-basketball", None, None, None, ('ncaa농구', '미국대학농구', '대학농구', 'ncaab', 'march madness', '3월의광란'), minor=True),
+    League("ncaaw", "NCAA 여자 농구", "basketball", "basketball/womens-college-basketball", None, None, None, ('ncaa여자농구', '미국대학여자농구', '대학여자농구'), minor=True),
+    League("fiba", "FIBA 농구 월드컵", "basketball", "basketball/fiba", None, None, None, ('fiba', '농구월드컵', 'fiba월드컵'), minor=True),
+    League("olympic_bball", "올림픽 남자 농구", "basketball", "basketball/mens-olympics-basketball", None, None, None, ('올림픽농구',), minor=True),
+    League("ncaah", "NCAA 아이스하키", "hockey", "hockey/mens-college-hockey", None, None, None, ('대학하키', 'ncaa하키', '미국대학하키'), minor=True),
+    League("ncaabase", "NCAA 야구", "baseball", "baseball/college-baseball", None, None, None, ('대학야구', 'ncaa야구', '미국대학야구'), minor=True),
+    League("wbc", "WBC", "baseball", "baseball/world-baseball-classic", None, None, None, ('wbc', '월드베이스볼클래식', '야구월드컵'), minor=True),
+    League("nfl", "NFL", "football", "football/nfl", None, None, None, ('nfl', '미식축구', '슈퍼볼', '엔에프엘'), minor=True),
+    League("ncaaf", "NCAA 미식축구", "football", "football/college-football", None, None, None, ('대학미식축구', 'ncaa미식축구', '칼리지풋볼'), minor=True),
+    League("f1", "F1", "racing", "racing/f1", None, None, None, ('f1', '포뮬러원', '포뮬러1', 'formula 1', '에프원'), minor=True),
+    League("pga", "PGA 투어", "golf", "golf/pga", None, None, None, ('pga', 'pga투어', '남자골프', '미국골프'), minor=True),
+    League("atp", "ATP 테니스", "tennis", "tennis/atp", None, None, None, ('atp', '남자테니스'), minor=True),
+    League("wta", "WTA 테니스", "tennis", "tennis/wta", None, None, None, ('wta', '여자테니스'), minor=True),
+    League("afl", "AFL", "afootball", "australian-football/afl", None, None, None, ('afl', '호주풋볼', '호주식축구'), minor=True),
 ]
 LEAGUES: dict[str, League] = {lg.code: lg for lg in _L}
 # 인자 없이 '.스포츠 오늘' 이면 보여줄 리그 (쓸 수 있는 것만 남김)
@@ -126,7 +178,11 @@ for _lg in _L:
 
 
 # 여러 리그를 한 번에 보는 말 (예: '여자농구' = 국내 WKBL + 미국 WNBA — 시즌이 서로 달라 하나만 고르면 빈 화면)
-GROUPS: dict[str, tuple[str, ...]] = {"여자농구": ("wkbl", "wnba"), "여농": ("wkbl", "wnba")}
+GROUPS: dict[str, tuple[str, ...]] = {"여자농구": ("wkbl", "wnba"), "여농": ("wkbl", "wnba"),
+                                       "여자축구": ("uwcl", "wsl", "nwsl", "wwc", "w_asiancup"),
+                                       "컵대회": ("facup", "carabao", "copadelrey", "dfbpokal", "coppaitalia", "coupedefrance"),
+                                       "남미축구": ("libertadores", "sudamericana", "brasileirao", "argentina", "copa"),
+                                       "대학스포츠": ("ncaab", "ncaaw", "ncaaf", "ncaah")}
 
 
 def find_group(text: str) -> list[League] | None:
@@ -142,8 +198,11 @@ def find_sport(text: str) -> str | None:
     return SPORT_WORDS.get(norm(text))
 
 
-def leagues_of_sport(sport: str) -> list[League]:
-    return [lg for lg in _L if lg.sport == sport]
+def leagues_of_sport(sport: str, minor: bool = False) -> list[League]:
+    """종목 전체. 기본은 큰 리그만 (minor 는 이름으로 부를 때) — 큰 리그가 없는 종목(골프·F1…)은 전부."""
+    every = [lg for lg in _L if lg.sport == sport]
+    major = [lg for lg in every if not lg.minor]
+    return every if minor or not major else major
 
 
 # ── 팀 이름표: (리그, 소스가 쓰는 이름, 한국어 표시, 별칭…) ─────────────

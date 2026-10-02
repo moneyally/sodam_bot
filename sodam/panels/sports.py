@@ -13,7 +13,7 @@ from telegram import Message
 from .. import menu
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..sports.alerts import LEVELS, MAX_FOLLOWS, QUIET
-from ..sports.leagues import LEAGUES, League
+from ..sports.leagues import LEAGUES, SPORT_EMOJI, SPORT_KO, League
 from ..util import esc
 
 menu.register_preset("sports_alerts", [(k, v[0]) for k, v in LEVELS.items()], "spt")
@@ -52,14 +52,29 @@ async def s_spt(c: PanelCtx) -> Screen:
 
 
 async def s_leagues(c: PanelCtx) -> Screen:
+    """m:sptl:<방> = 종목 고르기 · m:sptl:<방>:<종목> = 그 종목 리그 버튼 (리그가 80개 넘어 한 화면에 다 못 넣음)."""
+    return await _league_screen(c, c.arg(0))
+
+
+async def _league_screen(c: PanelCtx, sport: str | None) -> Screen:
     followed = {r["league"] for r in await _follows(c) if not r["team"]}
+    usable = [lg for lg in LEAGUES.values() if _usable(c, lg)]
+    if sport not in SPORT_KO:
+        btns = []
+        for sp, ko in SPORT_KO.items():
+            lgs = [lg for lg in usable if lg.sport == sp]
+            if lgs:
+                on = sum(lg.code in followed for lg in lgs)
+                btns.append(B(f"{SPORT_EMOJI.get(sp, '')} {ko} ({len(lgs)})" + (f" ✅{on}" if on else ""), f"m:sptl:{c.cid}:{sp}"))
+        missing = [lg.name for lg in LEAGUES.values() if not _usable(c, lg)]
+        text = ["➕ <b>리그 구독</b>", "종목을 고르세요."]
+        if missing:
+            text.append(f"<i>아직 준비 중: {esc(', '.join(missing))}</i>")
+        return Screen("\n".join(text), menu._kb(menu._chunks(btns, 2) + [menu._back(c.cid, "spt")]))
     btns = [B(("✅ " if lg.code in followed else "") + lg.name, f"m:spta:{c.cid}:{lg.code}")
-            for lg in LEAGUES.values() if _usable(c, lg)]
-    missing = [lg.name for lg in LEAGUES.values() if not _usable(c, lg)]
-    text = ["➕ <b>리그 구독</b>", "누르면 켜고, 한 번 더 누르면 꺼요 (✅ = 구독 중)."]
-    if missing:
-        text.append(f"<i>아직 준비 중: {esc(', '.join(missing))}</i>")
-    return Screen("\n".join(text), menu._kb(menu._chunks(btns, 3) + [menu._back(c.cid, "spt")]))
+            for lg in usable if lg.sport == sport]
+    text = [f"➕ <b>{SPORT_EMOJI.get(sport, '')} {SPORT_KO[sport]} 리그 구독</b>", "누르면 켜고, 한 번 더 누르면 꺼요 (✅ = 구독 중)."]
+    return Screen("\n".join(text), menu._kb(menu._chunks(btns, 2) + [[B("⬅️ 종목", f"m:sptl:{c.cid}")]]))
 
 
 async def r_league(c: PanelCtx) -> Screen:
@@ -73,7 +88,7 @@ async def r_league(c: PanelCtx) -> Screen:
         r = await alerts.follow(c.cid, lg.code, "", lg.name, c.uid)
         toast = f"🔔 {lg.name} 구독" if r == "added" else f"구독은 {MAX_FOLLOWS}개까지예요."
     await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"sports_follow {lg.code}")
-    screen = await s_leagues(c)
+    screen = await _league_screen(c, lg.sport)
     screen.toast = toast
     return screen
 

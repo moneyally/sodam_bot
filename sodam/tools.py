@@ -1064,7 +1064,9 @@ TOOLS: list[Tool] = [
     Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),
     Tool("sports", "스포츠 경기 일정·스코어·진행 중 경기·리그 순위·팀 최근/다음 경기를 조회한다 (배당·베팅 정보 없음). "
-         "query 는 리그(EPL·라리가·세리에A·분데스리가·리그1·챔스·J리그·MLB·NBA·NHL·UFC·KBO·K리그·KBL·V리그)·종목(축구·야구·농구)·"
+         "query 는 리그(EPL·라리가·챔스·FA컵·MLS·리가MX·사우디·K리그·J리그·MLB·KBO·WBC·NBA·WNBA·KBL·NHL·NFL·F1·PGA·ATP·UFC·"
+         "국가대표·월드컵 예선·북중미 네이션스리그 등 80여 개 — 한국어 이름 그대로)·종목(축구·야구·농구·하키·미식축구·골프·테니스)·"
+         "묶음(여자농구·여자축구·컵대회·남미축구)·"
          "팀(한국어 '토트넘·맨유·레알·다저스·레이커스' 또는 영어) 그대로. 알림 구독은 관리자가 '.스포츠 구독 EPL' 또는 1:1 메뉴 ⚽ 스포츠 알림.",
          {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows"],
                      "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · follows=이 방 알림 구독"},
