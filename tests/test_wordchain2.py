@@ -183,7 +183,7 @@ async def ai_player_uses_tools_and_code_rejects_bad_words():
     assert (word, line) == (good, "이어보시죠 😏"), (word, line)
     msgs, kw = svc.llm.seen[-1]
     results = [m["content"] for m in msgs if m["role"] == "tool"]
-    assert "이을 말" in results[0] and results[1].startswith("안 됨"), results
+    assert "이을 흔한 말" in results[0] and results[1].startswith("안 됨"), results
     assert kw["tools"] and kw["purpose"] == "wordchain"
 
 
@@ -211,8 +211,33 @@ async def ai_player_falls_back_to_code_on_timeout_or_nonsense():
 async def hard_level_picks_fewest_follow_ups():
     games.load_words()
     word = wordbot.code_move("차표", {"차표"}, "hard")
-    counts = [n for _, n in wordbot.candidates("차표", {"차표"}, hard=True, n=10**6)]
-    assert wordbot.follow_count(word) == min(counts), (word, min(counts))
+    counts = [n for _, n in wordbot.candidates("차표", {"차표"}, hard=True, n=10**6) if n >= 1]
+    assert wordbot.common_follow(word) == min(counts) >= 1, (word, min(counts))   # 몰아붙여도 사람이 아는 말 1개는 남김
+
+
+@test
+async def bot_word_leaves_common_follow_ups_and_call_name_is_stripped():
+    """실제 2026-10-03 베베: 소담이 이을 흔한 말이 거의 없는 글자로 끝냄 → '릇무꽃·릇다·읏듬' 지어내다 6번 재시작·욕.
+    보통 난이도 = 흔한 말 3개 이상 남김 · '소담아 X' 도 게임 답 · 지어낸 말엔 예시 한 번."""
+    games.load_words()
+    for _ in range(30):
+        w = wordbot.code_move("차표", {"차표"}, "normal")
+        assert wordbot.common_follow(w) >= 3, (w, wordbot.common_follow(w))
+    assert "흔한 말" in (wordbot.why_not("표퓰리즘", "차표", {"차표"}, "normal") or "")
+    db, svc, bot, g = await setup()
+    g.cancel_timer()
+    g.last, g.used = "기차", {"기차"}
+    orig, wordbot.move = wordbot.move, plays("표범")
+    try:
+        ok, m = await text(svc, A, "소담아 차표")
+    finally:
+        wordbot.move = orig
+    assert ok and g.last == "표범" and "차표" in g.used, (g.last, g.used)
+    g.cancel_timer()
+    ok, m = await text(svc, A, "범릇꽃 소담아")
+    assert ok and reactions(bot)[-1] == (m.message_id, "🤔") and "예:" in m.replies[-1], m.replies
+    ok, m2 = await text(svc, A, "범가나다")
+    assert ok and not m2.replies, "같은 문제엔 예시 한 번만"
 
 
 @test

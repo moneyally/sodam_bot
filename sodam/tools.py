@@ -538,6 +538,29 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
     return result
 
 
+async def t_mention(ctx: ToolCtx, a: dict) -> str:
+    """특정 사람을 태그(멘션)해서 그 사람에게 말하기 — 인사가 아님 (실제 2026-10-03 일루왕: '토이든님 태그해서 플 뱅 골라줘' 를
+    greet_members 로 해서 '반갑습니다' 인사가 나감)."""
+    names = [str(n) for n in (a.get("names") or [])][:5]
+    found, missing = [], []
+    for n in names:
+        row, err = await _resolve(ctx, n)
+        if err:
+            missing.append(n)
+            continue
+        if (row["user_id"], _row_name(row)) not in ctx.mentions:
+            ctx.mentions.append((row["user_id"], _row_name(row)))
+        found.append(_row_name(row))
+    if not found:
+        return (f"못 찾은 이름: {', '.join(missing) or '없음'} → 방 기록에 없어 태그는 못 함. 이름 그대로 부르며 요청한 말을 할 것"
+                " (인사하지 말 것).")
+    out = (f"태그 대상: {', '.join(found)}. 답변 맨 앞에 멘션이 자동으로 붙으니 이름은 다시 쓰지 말고, 요청받은 말(골라 주기·응원·"
+           "질문 등)을 그 사람에게 하는 말로 바로 할 것. 인사·환영 문구는 넣지 말 것.")
+    if missing:
+        out += f" 못 찾은 이름: {', '.join(missing)} (태그 없이 이름만)."
+    return out
+
+
 async def t_start_game(ctx: ToolCtx, a: dict) -> str:
     result = await ctx.svc.games.start(ctx.bot, ctx.chat_id, ctx.caller.id, str(a.get("game", "")))
     if result.endswith("시작했어요!"):   # 시작 안내(첫 단어 등)는 게임이 이미 올림 → AI 답은 안 보냄 (다른 첫 단어를 말하지 않게)
@@ -634,6 +657,8 @@ async def t_points_ranking(ctx: ToolCtx, a: dict) -> str:
 SANCTION_ONCE = ("제재(경고·뮤트·밴) 확인 버튼은 한 번의 요청에 한 번만(한 장) 보낼 수 있음. 여러 명이면 names 에 한 번에 넣었어야 함. "
                  "관리자에게 다시 요청해 달라고 안내할 것.")
 MAX_TARGETS = 5
+# 거절 이유를 꼭 말하게 (실제 2026-10-02 이옌방: 관리자를 추방하라 → 거절됐는데 이유가 안 보여 '소담아 뭐하냐')
+REFUSE_SAY = " → 요청한 사람에게 왜 안 되는지 이 이유를 그대로 한 문장으로 말할 것 (관리자는 텔레그램 규칙상 봇이 제재 못 함)."
 NO_BOT_RIGHT = ("확인 버튼을 보내지 않았음: 이 방에서 봇이 '사용자 차단' 권한이 있는 관리자가 아니라서 제재를 실행할 수 없음. "
                 "'방장이 텔레그램 방 설정에서 봇을 관리자로 올리고 사용자 차단 권한을 켜 주셔야 해요'라고 안내할 것 "
                 "(된다고 말하지 말 것).")
@@ -668,7 +693,7 @@ async def _sanction_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
         else:
             rows[row["user_id"]] = row
     if errors:
-        return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors)
+        return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors) + REFUSE_SAY
     return list(rows.values()), None
 
 
@@ -1053,10 +1078,14 @@ TOOLS: list[Tool] = [
          {"what": {"type": "string", "description": "지울 기억의 핵심 단어. 비우면 전부 지움"}}, [], t_forget_my_memory),
     Tool("set_my_style", "말한 사람 본인에게 쓸 봇 말투를 바꾼다 ('기본' 이면 개인 말투를 지워 방 기본 말투로).",
          {"style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}}, ["style"], t_set_my_style),
-    Tool("greet_members", "특정 멤버들에게 인사하거나 부를 때 사용. 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로. "
-         "방 전체·모두를 태그하라는 말이면 이게 아니라 mention_all.",
+    Tool("greet_members", "특정 멤버들에게 '인사'할 때만 사용 (환영·안부). 멘션을 붙여준다. names 에는 <addressee_hints> 의 이름이나 ID 를 그대로. "
+         "인사가 아니라 '태그해서/불러서 ~해 줘'(골라 줘·응원·물어봐 등)면 mention_members. 방 전체·모두를 태그하라는 말이면 mention_all.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_greet),
+    Tool("mention_members", "특정 사람(1~5명)을 태그(멘션)해서 그 사람에게 말할 때. 예: 'OO님 태그해서 플 뱅 골라줘', 'OO 불러서 응원해 줘', "
+         "'OO한테 물어봐'. 인사가 아님 (인사는 greet_members). 방 전체는 mention_all.",
+         {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
+         ["names"], t_mention),
     Tool("start_game", "방에서 끝말잇기를 시작한다. '끝말잇기' = 아무나 먼저 치는 사람이 이어가며 봇과 대결, "
          "'끝말잇기 차례' = 참가 버튼으로 모여 차례대로·못 이으면 탈락·마지막 1명 우승 (여럿이 대결·이벤트). "
          "포인트 게임(출석·슬롯·홀짝·바카라 등)은 point_game.",

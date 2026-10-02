@@ -401,6 +401,11 @@
 - 판정은 코드(AI 0원): '했다'고 했는데 된 쓰기 없음 · 도구 오류 · 못 찾고 끝남 · 꺼진 기능 · 상한 · 10분 안 비슷한 재요청 · 답 뒤 3분 불만(소담 답장·이름만).
 - Claude: `python tools/diag.py why hours=24 [chat=…]` 목록 → `why run=<번호>` 단계별. 오너: 매일 9시 1:1 '🧠 어제 소담 실수 N건' (없으면 안 보냄, #번호로 고쳐 요청).
 - 보내기 전 '했다' 검사 정규식은 whyfail.CLAIM 하나 (agent 도 이걸 씀).
+- 2026-10-03 why 로 찾은 실수 고침 (tests/test_improve_1003.py): '태그해서 ~해 줘' = mention_members(인사 아님, greet 은 인사만) ·
+  route 'continue' 는 이어짐 말(_FOLLOW)이 있을 때만 · 관리자 추론은 route.THINK_WHY(일·분석·여러 단계·1:1) 일 때만 ·
+  끝말잇기 소담 말 뒤 흔한 말 최소(wordbot.MIN_COMMON 쉬움 8·보통 3·어려움 1), '소담아 X' 도 게임 답, 지어낸 말엔 예시 한 번 ·
+  음성 no_voice_right 안내 = 할 일 두 가지, 'not in a call' = chat_closed · 제재 거절엔 tools.REFUSE_SAY · 영상 대기자 끝나면 태그(videogen.WAITING) ·
+  whyfail 'redo' 는 잘 된 게임·그림 뒤 재요청(AGAIN_OK)·이름만 부름 제외.
 
 ## 📮 AI 요청 대기열 (`aiqueue.py`, Codex ext/queue, tests/test_aiqueue.py · 뮤테이션 8개)
 - 검사 통과한 요청은 ai_queue(봇·방·메시지) 한 줄 → 답 보내면 지움. 종료(취소)로 끊기면 줄을 남김 → persist.job_sweep(30초)이 다시 실행.

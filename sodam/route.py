@@ -29,7 +29,7 @@ DEFAULT_MODE = "hybrid"
 LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user", "my_ids"})
 # 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건).
 # light 가 이걸 실행한 뒤 올려 보내면 heavy 에 '이미 한 일' 로 알림 (agent.DONE_NOTE — 두 번 하지 않게)
-LIGHT_WRITE = frozenset({"greet_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
+LIGHT_WRITE = frozenset({"greet_members", "mention_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
                          "feature_request", "tag_alerts", "point_game", "stop_tag_all"})   # 멈추기는 빨라야 (큰 모델로 안 올림)
 LIGHT_EXTRA = LIGHT_READ | LIGHT_WRITE
 ESCALATE_TOOL = "ask_senior"
@@ -56,6 +56,12 @@ _DO = re.compile(
 _THINK = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)|계획|전략|추천해|정리해\s?줘|요약")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각")
 LONG_CHARS = 140
+# 큰 모델로 한 일 바로 뒤의 '이어지는 말' 신호 ('하나 더·다시·그거 말고·이걸로'). 이게 없으면 잡담 → 작은 모델
+# (실측 2026-10-03: 관리자 추론 실행 428번 중 상당수가 일 뒤 5분 안의 잡담·욕('오라버니야'·'넌 닥치고') — 실행당 $0.012)
+_FOLLOW = re.compile(r"다시|하나\s?더|한\s?번\s?더|말고|그걸로|이걸로|저걸로|그거|저거|이거|요거|이렇게|그렇게|저렇게|바꿔|수정|고쳐|"
+                     r"더\s?(크게|작게|밝게|어둡게|진하게|길게|짧게|멋|이쁘|예쁘|세게|약하게)|ㄱㄱ|고고|ㅇㅇ\s*$|해\s?줘|해\s?주|부탁|계속|이어서")
+# 관리자·오너 요청 중 추론(생각)까지 쓸 신호 (나머지 = 큰 모델이어도 추론 없이)
+THINK_WHY = frozenset({"off", "best", "dm_manage", "do", "think", "chain", "choice"})
 MEDIA_MARK = re.compile(r"\[(사진|영상|이미지|GIF|동그라미|스티커|움직이는|파일)")
 _LINK = re.compile(r"https?://|t\.me/|www\.", re.I)                            # 이보다 긴 요청 = 설명이 많은 일일 때가 많음
 
@@ -76,7 +82,7 @@ class Req:
 Signal = tuple[str, Callable[[Req], bool], str]
 SIGNALS: list[Signal] = [
     ("media", lambda r: r.has_media, "heavy"),
-    ("continue", lambda r: r.recent_heavy and len(r.request) <= 40, "heavy"),
+    ("continue", lambda r: r.recent_heavy and len(r.request) <= 40 and bool(_FOLLOW.search(r.request)), "heavy"),
     ("choice", lambda r: r.request.startswith("(선택"), "heavy"),              # 선택 버튼으로 이어진 일 (askchoice)
     ("dm_manage", lambda r: r.in_dm and r.role >= Role.ADMIN, "heavy"),       # 1:1 관리자·오너 = 운영 일
     ("do", lambda r: bool(_DO.search(r.request)), "heavy"),

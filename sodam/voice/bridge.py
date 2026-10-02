@@ -551,7 +551,8 @@ class Bridge:
                 raise
             except Exception as e:
                 log.warning("재생 실패: %s", e)
-                self.stop("error:play")
+                # 누가 음성채팅을 닫거나 도우미가 빠짐 = 오류가 아니라 통화 끝 (실제 2026-10-01 베베: 'The userbot is not in a call')
+                self.stop("chat_closed" if "not in a call" in str(e).lower() else "error:play")
                 return
             nxt += step
             now = self.clock()

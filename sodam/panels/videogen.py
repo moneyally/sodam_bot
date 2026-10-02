@@ -27,11 +27,30 @@ from .. import agentlog, costs, mediaintent, memory, persist, tools, video
 from ..llm import BudgetExceeded
 from ..permissions import Role
 from ..settings import OWNER_CAP, RANGES
-from ..util import display_name, esc
+from ..util import display_name, esc, mention, user_name
 
 log = logging.getLogger(__name__)
 KEY = "video_week"          # counters: (그 주 월요일 날짜, 방) 칸에 이번 주 만든 개수
 RUNNING: dict[int, asyncio.Future] = {}   # 방 → 자리 잡은 요청·만드는 중인 작업 (방마다 동시에 1개)
+# 만드는 중이라 거절당한 사람 → 끝나면 태그해서 '이제 돼요' (실제 2026-10-03 베베: 1분 뒤 같은 요청을 또 함)
+WAITING: dict[int, dict[int, str]] = {}
+
+
+def _free(cid: int, t, bot) -> None:
+    """만들던 작업이 끝남 → 자리 풂 + 기다린 사람 태그."""
+    if RUNNING.get(cid) is t:
+        RUNNING.pop(cid, None)
+    who = WAITING.pop(cid, None)
+    if who and bot is not None:
+        text = ", ".join(mention(uid, name) for uid, name in list(who.items())[:5]) + " 🎬 이제 영상 다시 부탁하셔도 돼요!"
+        persist.spawn(_tell(bot, cid, text))
+
+
+async def _tell(bot, cid: int, text: str) -> None:
+    try:
+        await bot.send_message(cid, text, parse_mode="HTML")
+    except TelegramError as e:
+        log.info("video wait notice failed %s: %s", cid, e)
 NO_KEY = "영상 AI 키가 아직 설정 안 됨 (운영자). 운영자가 영상 AI 를 켜야 한다고 짧게 안내하고, 대신 사진으로 움프·스티커는 된다고 한마디."
 # 우리 코드가 막는 건 딱 두 가지 (오너 결정 2026-09-30 — 성인 내용 자체는 영상 AI(xAI·Veo) 정책이 판단, 거절되면 한국어로 알림):
 # ① 미성년자 + 성적 내용 ② 실제 사람 사진(멤버 프사·붙은/답장한 사진)으로 만드는 성적·노출 영상 (동의 없는 딥페이크 위험).
@@ -146,7 +165,9 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
         return "영상은 한 답변에 하나만. 방금 부탁한 영상이 끝나면 다시 부탁하라고 안내."
     cid = ctx.chat_id
     if cid in RUNNING and not RUNNING[cid].done():
-        return "이 방에서 영상을 하나 만드는 중이라 끝난 뒤에 다시 부탁하라고 안내 (1~3분)."
+        WAITING.setdefault(cid, {})[ctx.caller.id] = user_name(ctx.caller) or "대표님"
+        return ("이 방에서 영상을 하나 만드는 중이라 지금은 못 만듦. 끝나면 소담이 이 사람을 태그해서 알려 준다고 짧게 안내 (1~3분). "
+                "다 됐다고 하거나 지금 만든다고 하지 말 것.")
     # 검사와 자리 잡기 사이에 await 없음 → 같은 방 동시 요청 두 개가 둘 다 통과(주 한도 7/6·요금 두 번) 못 함
     hold = asyncio.get_running_loop().create_future()
     RUNNING[cid] = hold
@@ -197,7 +218,7 @@ async def _start(ctx: tools.ToolCtx, a: dict, prov, prompt: str, uses_photo: boo
     if task is None:
         return "지금은 영상을 못 만듦. 잠시 후 다시 부탁하라고 안내."
     RUNNING[ctx.chat_id] = task   # 자리를 뒤 작업이 이어받음 (끝나면 풂)
-    task.add_done_callback(lambda t, cid=ctx.chat_id: RUNNING.pop(cid, None) if RUNNING.get(cid) is t else None)
+    task.add_done_callback(lambda t, cid=ctx.chat_id, bot=ctx.bot: _free(cid, t, bot))
     ctx.quiet = True   # '만드는 중' 답장을 이미 올림 → AI 답은 안 보냄 (다 됐다고 먼저 말하지 않게)
     return ("영상 만들기를 시작했고 방에 '만드는 중' 안내를 올렸음 (1~3분 뒤 영상이 따로 올라감). "
             f"이번 주 영상 {used + 1}/{limit}개. 다 됐다고 말하지 말 것.")
