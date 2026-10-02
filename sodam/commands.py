@@ -938,6 +938,12 @@ async def c_cas(ctx: CmdCtx) -> None:
 
 
 # ── 백업 (오너) ───────────────────────────────────────────
+async def c_botpic(ctx: CmdCtx) -> None:
+    """🖼 봇 프로필 바꾸기 (sodam/botpic.py, Bot API 9.4 setMyProfilePhoto — @BotFather 는 사진만 받음)."""
+    from . import botpic
+    await botpic.run(ctx)
+
+
 async def c_backup(ctx: CmdCtx) -> None:
     bk = ctx.svc.backup
     if ctx.args and ctx.args[0] in ("목록", "list"):
@@ -1414,6 +1420,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("공동차단", "fedban"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
         help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
+    Cmd(("봇프사", "botpic"), c_botpic, Role.OWNER, usage="(영상·사진에 답장) | 원래대로",
+        help="소담 프로필을 움직이는 영상·사진으로 (1:1)", group="오너", dm_ok=True),
     Cmd(("백업", "backup"), c_backup, Role.OWNER, usage="[목록]", help="DB 지금 백업 / 백업 목록", group="오너", dm_ok=True),
     Cmd(("AI모델", "airoute"), c_route, Role.OWNER, usage="[나눠|절약|최고] [방ID|전체]",
         help="방마다 AI 모델 길 (작은 모델로 비용 절약)", group="오너", dm_ok=True),
