@@ -13,8 +13,10 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 
 from telegram.error import TelegramError
@@ -52,6 +54,40 @@ class Attached:
         for t, jpg in self.frames:
             out += [{"type": "text", "text": f"[{t:.1f}초]"}, _img(jpg, "image/jpeg")]
         return out
+
+
+# 방금 올린 사진·영상 (같은 사람, RECENT_SEC 안): '영상 올리고 → 답장 없이 이건어떰' 도 그 영상을 봄
+# (실제 2026-10-03 오너 1:1: Grok 으로 만든 영상 보내고 '이건어떰' → '화면을 못 봐서' — 답장이 아니라 첨부를 몰랐음)
+RECENT_SEC = 180
+_RECENT: dict[tuple[int, int], tuple[float, object]] = {}
+_REFERS = re.compile(r"이거|이건|이게|요거|요건|이\s?(영상|사진|움짤|그림|짤|스티커|프사)|방금|어때|어떰|어떻|어떤가|봐\s?줘|평가")
+
+
+def remember(msg) -> None:
+    """사진·영상이 있는 사람 글이면 기억 (메모리만, 재시작하면 잊음 — 3분짜리라 괜찮음)."""
+    user = getattr(msg, "from_user", None)
+    try:
+        if user is None or getattr(user, "is_bot", False) or not _media_of(msg):
+            return
+    except Exception:   # 이상한 메시지 모양이어도 관리·대화 흐름은 그대로
+        return
+    now = time.time()
+    if len(_RECENT) > 2000:
+        for k in [k for k, (t, _) in _RECENT.items() if now - t > RECENT_SEC]:
+            del _RECENT[k]
+    _RECENT[(msg.chat_id, user.id)] = (now, msg)
+
+
+def recent_media(msg):
+    """이 요청이 가리키는 방금 올린 사진·영상 (같은 방·사람, 3분 안). 1:1 은 아무 말이나, 그룹은 '이거·어때' 같은 말이 있을 때만."""
+    user = getattr(msg, "from_user", None)
+    if user is None or getattr(msg, "reply_to_message", None) is not None:
+        return None
+    hit = _RECENT.get((msg.chat_id, user.id))
+    if not hit or time.time() - hit[0] > RECENT_SEC or hit[1] is msg:
+        return None
+    text = getattr(msg, "text", None) or getattr(msg, "caption", None) or ""
+    return hit[1] if msg.chat_id > 0 or _REFERS.search(text) else None
 
 
 def _img(data: bytes, mime: str) -> dict:
@@ -170,8 +206,18 @@ async def fetch(bot, msg) -> Attached | None:
     """요청 메시지의 사진·영상, 없으면 답장한 메시지의 것. 없거나 못 받으면 None."""
     src = msg if _media_of(msg) else getattr(msg, "reply_to_message", None)
     md = _media_of(src)
+    recent = False
+    if not md and (src := recent_media(msg)) is not None:
+        md, recent = _media_of(src), True
     if not md:
         return None
+    att = await _fetch(bot, src, md)
+    if att is not None and recent:
+        att.note = "방금 이 사람이 올린 " + (att.note or describe(src).strip("[]"))
+    return att
+
+
+async def _fetch(bot, src, md: Media) -> Attached | None:
     who = getattr(getattr(src, "from_user", None), "id", None)
     if md.kind in ("photo", "image") or (md.kind == "sticker" and md.mime == "image/webp"):
         if md.size > MAX_BYTES:

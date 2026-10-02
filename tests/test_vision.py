@@ -321,6 +321,45 @@ def sticker_or_video_alone_in_dm_is_not_a_question():
 
 
 @test
+async def video_then_separate_question_in_dm_sees_that_video():
+    """실제 2026-10-03 오너 1:1: Grok 영상만 보내고 → 답장 없이 '이건어떰' → '화면을 못 봐서'. 3분 안 방금 올린 영상을 봐야 함."""
+    from test_avatar import pattern
+    from sodam import avatar
+    r = await room()
+    mp4 = await avatar.make(pattern(), avatar.Spec("pan", "fast"))
+    r.bot.files["vid"] = mp4
+
+    def dm(text, mid, video=None):
+        m = FakeMsg(BOSS.id, BOSS, text, message_id=mid)
+        m.video, m.animation, m.video_note, m.sticker = video, None, None, None
+        m.chat = SimpleNamespace(id=BOSS.id, type="private")
+        m.forward_origin = None
+        return m
+    clip = SimpleNamespace(file_id="vid", file_size=len(mp4), duration=3, mime_type="video/mp4", thumbnail=None)
+    v = dm("", 900, clip)
+    await handlers.on_private(SimpleNamespace(message=v), r.ctx)
+    await r.settle()
+    assert not r.llm.of("chat"), "영상만 보낸 건 아직 질문 아님"
+    r.llm.script = ["야경 배경에 남자가 눈 감고 있는 영상이네요, 분위기 좋아요"]
+    q = dm("이건어떰", 901)
+    await handlers.on_private(SimpleNamespace(message=q), r.ctx)
+    await r.settle()
+    call = r.llm.of("chat")[-1]
+    assert len(image_parts(call)) >= 3 and "방금 이 사람이 올린" in str(call["messages"]), "방금 보낸 영상 장면들"
+    # 그룹: '이거·어때' 같은 말이 있을 때만, 다른 사람 영상은 X
+    g = group_msg(r, text="")
+    g.video, g.animation, g.video_note, g.sticker = clip, None, None, None
+    await say(r, g)
+    assert vision.recent_media(group_msg(r, text="소담아 오늘 날씨")) is None
+    assert vision.recent_media(group_msg(r, text="소담아 이거 어때")) is g
+    other = group_msg(r, text="소담아 이거 어때")
+    other.from_user = fake_user(55, "남")
+    assert vision.recent_media(other) is None
+    vision._RECENT[(r.CHAT, BOSS.id)] = (0, g)                                   # 3분 지남
+    assert vision.recent_media(group_msg(r, text="소담아 이거 어때")) is None
+
+
+@test
 async def new_drawing_becomes_source_for_profile_video_in_same_answer():
     """'새 그림 만들어서 저렇게 영상으로' → 그린 그림이 같은 답변의 움프 원본 (예전엔 프사로 만들었음)."""
     r = await room()
