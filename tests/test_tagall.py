@@ -98,6 +98,70 @@ async def member_cannot_and_tool_hidden_for_members():
     assert not tag_msgs(r), "누를 때 관리자 다시 확인"
 
 
+class FakeMT:
+    bot_ready = True
+
+    def __init__(self, users):
+        self.users = users
+
+    async def participants(self, chat_id):
+        return self.users
+
+
+def part(uid, name, **kw):
+    return {"id": uid, "first_name": name, "last_name": "", "username": "", "is_bot": False, "deleted": False,
+            "min": False, **kw}
+
+
+@test
+async def full_roster_from_mtproto_fills_db_then_tags_everyone():
+    r = await world()
+    before = await r.db._one("SELECT last_seen FROM members WHERE chat_id=? AND user_id=?", (Room.CHAT, PEOPLE[0].id))
+    users = ([part(BOSS.id, "방장")] + [part(u.id, u.first_name) for u in PEOPLE[:11]]      # PEOPLE[11] 은 명단에 없음 = 나감
+             + [part(200 + i, f"말없던사람{i}") for i in range(3)]                          # 한 번도 말 안 한 사람
+             + [part(300, "", deleted=True), part(BOT.id, "다른봇", is_bot=True), part(GONE.id, "돌아온사람")])
+    r.svc.mtproto = FakeMT(users)
+
+    async def count(chat_id):
+        return len(users)
+    r.bot.get_chat_member_count = count
+    await tagall.offer(r.svc, r.bot, Room.CHAT, BOSS, "")
+    c, data = card(r)
+    # 11(남은 기존) + 3(새로 앎) + 돌아온 사람 1 = 15 (방장·봇·탈퇴 계정 제외)
+    assert "텔레그램 전체 18명 중 멤버 <b>15명</b>" in c[2], c[2]
+    left = {x["user_id"] for x in await r.db._all("SELECT user_id FROM member_left WHERE chat_id=?", (Room.CHAT,))}
+    assert left == {PEOPLE[11].id}, left
+    new = await r.db._one("SELECT m.last_seen, m.joined_at, u.first_name FROM members m JOIN users u USING(user_id) "
+                          "WHERE m.chat_id=? AND m.user_id=200", (Room.CHAT,))
+    assert new and new["first_name"] == "말없던사람0" and new["last_seen"] is None and new["joined_at"] is None
+    after = await r.db._one("SELECT last_seen FROM members WHERE chat_id=? AND user_id=?", (Room.CHAT, PEOPLE[0].id))
+    assert after["last_seen"] == before["last_seen"], "마지막 말한 때는 안 바뀜"
+    assert not await r.db._one("SELECT 1 FROM users WHERE user_id=300"), "탈퇴 계정은 안 넣음"
+    await press(r, BOSS, data[0])
+    await done()
+    ids = " ".join(x[2] for x in tag_msgs(r))
+    assert all(f"id={i}\"" in ids for i in (200, 201, 202, GONE.id)) and f"id={PEOPLE[11].id}\"" not in ids, ids
+
+
+@test
+async def roster_not_complete_does_not_mark_anyone_left():
+    r = await world()
+    r.svc.mtproto = FakeMT([part(PEOPLE[0].id, "멤버0")])
+
+    async def count(chat_id):
+        return 290                                               # 명단이 덜 옴 → 나간 사람 판단 안 함
+    r.bot.get_chat_member_count = count
+    await tagall.offer(r.svc, r.bot, Room.CHAT, BOSS, "")
+    left = {x["user_id"] for x in await r.db._all("SELECT user_id FROM member_left WHERE chat_id=?", (Room.CHAT,))}
+    assert left == {GONE.id}, left
+    r.svc.mtproto = FakeMT(None)
+    assert await tagall.sync_members(r.svc, r.bot, Room.CHAT) is None, "헬퍼 실패 = DB 명단 그대로"
+    r.svc.mtproto = FakeMT([part(777, "새사람")])
+    r.svc.mtproto.bot_ready = False                              # 헬퍼 연결 전·flood 대기 중
+    assert await tagall.sync_members(r.svc, r.bot, Room.CHAT) is None
+    assert not await r.db._one("SELECT 1 FROM users WHERE user_id=777")
+
+
 @test
 async def stop_button_halts_midway():
     r = await world()
