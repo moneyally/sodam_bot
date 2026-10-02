@@ -222,17 +222,25 @@ def stop(chat_id: int) -> str:
     return f"⏹ 전체 태그 멈춤 ({st['sent']}/{st['total']}명까지 보냄)."
 
 
+async def t_stop_tag_all(ctx: ToolCtx, a: dict) -> str:
+    """'소담아 멈춰' — **누구나** (오너 결정 2026-10-03: 태그 폭탄을 맞는 쪽이 멤버). 멈추게 한 사람은 관리 기록에."""
+    out = stop(ctx.chat_id)
+    if out.startswith("⏹"):
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "tagall_stop", out[2:60])
+    return out
+
+
 async def t_mention_all(ctx: ToolCtx, a: dict) -> str:
-    if str(a.get("action") or "") == "stop":      # 관리자 누구나 (도구가 관리자 전용) — 버튼은 요청한 사람만이라 말로도
-        return stop(ctx.chat_id)
     return await offer(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, str(a.get("text") or ""))
 
 
 tools.register_tool(Tool(
     "mention_all",
     "방 전체 멤버를 태그(멘션)해서 부름 — '전체 태그해줘', '모두 불러줘', '다 태그해'. 확인 카드를 보냄 (관리자만). "
-    "보내는 중에 '멈춰·그만·중지' = action=stop (관리자 누구나). 새로 들어온 사람만 부르는 인사는 greet_members. "
-    "text = 태그와 함께 올릴 할 말(없으면 비움).",
-    {"action": {"type": "string", "enum": ["start", "stop"], "description": "start(기본) · stop = 보내는 중인 전체 태그 멈춤"},
-     "text": {"type": "string", "description": "함께 올릴 할 말 (선택)"}}, [], t_mention_all,
+    "멈추기는 stop_tag_all. 새로 들어온 사람만 부르는 인사는 greet_members. text = 태그와 함께 올릴 할 말(없으면 비움).",
+    {"text": {"type": "string", "description": "함께 올릴 할 말 (선택)"}}, [], t_mention_all,
     min_role=Role.ADMIN, where="room"))
+tools.register_tool(Tool(
+    "stop_tag_all",
+    "보내는 중인 전체 태그를 멈춤 — '소담아 멈춰·그만·중지·태그 그만' (누구나). 안 도는 중이면 그렇다고만.",
+    {}, [], t_stop_tag_all, where="room"))

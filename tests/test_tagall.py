@@ -176,25 +176,24 @@ async def stop_button_halts_midway():
 
 
 @test
-async def any_admin_can_say_stop_and_member_false_claim_is_rechecked():
-    # 실제 2026-10-03 일루왕: 전체 태그 중 '소담아 멈춰' → 멈추는 기능이 없어 '멈췄습니다' 거짓말, 256명 끝까지
-    ADM2 = fake_user(2, "부방장")
-    r = await world(ScriptedLLM([tool_call("mention_all", {"action": "stop"}), reply("멈췄어요")]))
-    r.svc.perms.admins.add(ADM2.id)
+async def anyone_can_say_stop_and_false_claim_is_rechecked():
+    # 실제 2026-10-03 일루왕: 전체 태그 중 멤버 '소담아 멈춰' → 멈추는 기능이 없어 '멈췄습니다' 거짓말, 256명 끝까지
+    # → 오너 결정: 일반 멤버도 멈출 수 있게 (태그 폭탄을 맞는 쪽이 멤버)
+    r = await world(ScriptedLLM([tool_call("stop_tag_all"), reply("멈췄어요")]))
     tagall._running[Room.CHAT] = {"stop": False, "sent": 10, "total": 12}
-    await r.say(ADM2, "소담아 멈춰")                                # 요청한 관리자가 아니어도 관리자면 말로
+    await r.say(PEOPLE[0], "소담아 멈춰")
     assert tagall._running[Room.CHAT]["stop"] is True
     tool_out = [m["content"] for m in r.llm.of("chat")[-1]["messages"] if m["role"] == "tool"]
     assert "10/12명" in tool_out[0], tool_out
+    log = await r.db._one("SELECT actor_id, detail FROM mod_log WHERE action='tagall_stop'")
+    assert log and log["actor_id"] == PEOPLE[0].id, "누가 멈췄는지 기록"
     tagall._running.pop(Room.CHAT, None)
     assert "없음" in tagall.stop(Room.CHAT) and "말하지 말 것" in tagall.stop(Room.CHAT)
-    # 멤버: 도구가 없는데 '멈췄습니다' → 보내기 전 검사가 한 번 다시 물음
-    r2 = await world(ScriptedLLM([reply("멈췄습니다, 대표님."), reply("그건 관리자만 멈출 수 있어요.")]))
-    tagall._running[Room.CHAT] = {"stop": False, "sent": 3, "total": 12}
-    m = await r2.say(PEOPLE[0], "소담아 멈춰")
-    assert m.replies == ["그건 관리자만 멈출 수 있어요."], m.replies
-    assert tagall._running[Room.CHAT]["stop"] is False, "멤버 말로는 안 멈춤"
-    tagall._running.pop(Room.CHAT, None)
+    assert "stop_tag_all" in {t.name for t in tools.available(Role.MEMBER, {}, False)}
+    # 도구 없이 '멈췄습니다' → 보내기 전 검사가 한 번 다시 물음
+    r2 = await world(ScriptedLLM([reply("멈췄습니다, 대표님."), tool_call("stop_tag_all"), reply("지금 도는 태그는 없어요.")]))
+    m = await r2.say(PEOPLE[1], "소담아 멈춰")
+    assert m.replies == ["지금 도는 태그는 없어요."], m.replies
 
 
 @test

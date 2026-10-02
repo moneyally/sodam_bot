@@ -30,7 +30,7 @@ LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide",
 # 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건).
 # light 가 이걸 실행한 뒤 올려 보내면 heavy 에 '이미 한 일' 로 알림 (agent.DONE_NOTE — 두 번 하지 않게)
 LIGHT_WRITE = frozenset({"greet_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
-                         "feature_request", "tag_alerts", "point_game"})
+                         "feature_request", "tag_alerts", "point_game", "stop_tag_all"})   # 멈추기는 빨라야 (큰 모델로 안 올림)
 LIGHT_EXTRA = LIGHT_READ | LIGHT_WRITE
 ESCALATE_TOOL = "ask_senior"
 ESCALATE_SCHEMA = {"type": "function", "function": {
