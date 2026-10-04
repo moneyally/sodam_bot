@@ -242,7 +242,7 @@ async def horse_paid_before_animation_so_shutdown_keeps_result():
         await hang.wait()
     env.bot.send_animation = gif
     env.clock.go.set()
-    await asyncio.wait_for(showing.wait(), 5)
+    await asyncio.wait_for(showing.wait(), 60)            # 서버 배포 테스트(1코어·병렬)에선 5초를 넘긴 적 있음 (2026-10-05)
     await multi.abandon_all()                              # 봇 종료
     assert await TM.bal(env, a) == core.START_POINTS - 1000 + 4700
     assert await TM.bal(env, b) == core.START_POINTS - 1000
