@@ -204,6 +204,12 @@
   msg.text 만 저장하면 custom_emoji 엔티티가 버려짐 → `util.rich_html(msg)` 로 텔레그램 HTML(<tg-emoji>) 보관, schedules.fmt='html'
   (예약공지 제목·내용·⏰ 알람·`.공지`). 목록·요약엔 `util.html_plain`. HTML 은 태그 중간을 자르지 말 것(길이는 보이는 글자로).
   봇이 움직이는 이모지를 쓰려면 봇 주인 텔레그램 프리미엄(또는 Fragment 아이디) — 거절(BadRequest)되면 글자로 다시 보냄.
+- **🗂️ 미디어 보관** (`mediastore.py`, tests/test_mediastore.py · 뮤테이션 6개, 2026-10-04 봇 토큰 교체 사고): 텔레그램 file_id 는 **봇마다 달라서**
+  봇이 바뀌면 예약공지·인사 미디어가 'Wrong file identifier'. 저장할 때 `remember_soon`(원본 data/media/<sha256>, 20MB·전체 500MB) +
+  30초 틱 `mediastore.tick`(시작 뒤 1번·6시간마다 backfill, 30일 안 쓰는 보관 정리) → 보낼 때 `mediastore.send` 가 파일 id 오류면 원본 업로드 +
+  media_alias(봇 ID, 원래 id → 새 id). 예약·설정 값은 안 바꿈. 원본 없으면 MediaLost(BadRequest 하위): 예약공지 = 글만 + 만든 관리자 1:1 하루 1번
+  + 📥 인박스(sched_media), 인사 = 글만 + 방 등록 관리자 1:1. 인사 글 복사는 사본 greet_copy_snap(rich_html·미디어)으로 대신 올림.
+  **미디어를 보내는 새 기능도 mediastore.send / remember_soon 을 쓸 것.** backup.sh 가 data/media 도 복사.
 - 방에 올리는 확인 카드(schedule_task·alert_rule)는 `menu.lasting_token` 으로 DB(menu_tokens)에도 저장 — 봇 재시작(배포) 뒤에도 30분 유효
   (실제 사례: OTC 방 예약 카드 → 1분 뒤 배포 재시작 → [✅ 예약] 만료). 예약 deliver room/me(만든 관리자 1:1), action post=정해진 글.
 - 메뉴 버튼은 1:1 전용이지만 방에 올리는 확인 카드(`m:k:<토큰>`)는 방에서 눌림 (2026-09-27 전엔 이것까지 막혀 방 예약·알림 카드가 안 먹혔음 — 테스트는 방에서 누를 것).

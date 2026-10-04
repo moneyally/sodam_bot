@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.error import BadRequest
 
+from . import mediastore, persist
 from .db import register_schema
 
 TEXT_LIMIT, CAPTION_LIMIT = 4096, 1024
@@ -242,10 +243,9 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
     kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d)),
               disable_notification=bool(d["silent"] if silent is None else silent))
     body = d["body"] or None
-    if d["media_type"] == "photo":
-        return await bot.send_photo(chat_id, d["media_id"], caption=body, **kw)
-    if d["media_type"] == "video":
-        return await bot.send_video(chat_id, d["media_id"], caption=body, **kw)
+    if d["media_type"] in ("photo", "video") and d["media_id"]:
+        # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
+        return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
     return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
 
 

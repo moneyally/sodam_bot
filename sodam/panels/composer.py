@@ -18,7 +18,7 @@ import json
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
-from .. import announce, channel, composer, menu, tools
+from .. import announce, channel, composer, mediastore, menu, tools
 from ..llm import BudgetExceeded
 from ..menu import PUBLIC, TG_ADMIN, B, PanelCtx, Route, Screen
 from ..security import nonce, strip_unsafe, wrap
@@ -310,6 +310,7 @@ async def in_body(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         return False, "본문 글자를 보내주세요."
     fields = {"body": body} | ({"media_type": media_type, "media_id": media_id} if media_type else {})
     await composer.update(c.svc.db, d["id"], **fields)
+    mediastore.remember_soon(c.bot, c.svc.db, media_type, media_id)
     return True, "✅ 본문을 넣었어요." + (f" (지원하지 않는 태그 {esc(', '.join(dropped))} 는 글자만 남겼어요)" if dropped else "")
 
 
@@ -323,6 +324,7 @@ async def in_media(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     if composer.utf16_len(composer.plain(d["body"])) > composer.CAPTION_LIMIT:
         return False, "본문이 1024자를 넘어서 사진·영상 설명으로 못 써요. 본문을 줄인 뒤 다시 해주세요."
     await composer.update(c.svc.db, d["id"], media_type=media_type, media_id=media_id)
+    mediastore.remember_soon(c.bot, c.svc.db, media_type, media_id)
     return True, f"✅ {composer.MEDIA[media_type]}을 붙였어요."
 
 

@@ -61,7 +61,8 @@ KEY_RE = re.compile(r"^[a-z]\d{1,19}$")
 PARALLEL = 8                     # 방마다 봇 권한을 텔레그램에 물음(10분 캐시) → 방이 많아도 버튼 응답 제한(약 15초) 안에
 
 SCHED_WHY = {"creator": "만든 관리자가 더는 관리자가 아니라 자동으로 꺼짐", "send": "보내기 실패 (텔레그램)",
-             "budget": "AI 하루 한도로 건너뜀", "error": "실행 중 오류", "missed": "봇이 꺼져 있던 사이 시각을 놓쳐 꺼짐"}
+             "budget": "AI 하루 한도로 건너뜀", "error": "실행 중 오류", "missed": "봇이 꺼져 있던 사이 시각을 놓쳐 꺼짐",
+             "media": "사진·영상이 사라져 글만 올림 — 다시 넣어 주세요"}
 # 방에 뜬 확인 카드 (menu.lasting_token): 확인 토큰 → (취소 토큰, 이름, 열 화면). 둘 다 남아 있어야 '아직 안 누름'
 CARDS: dict[str, tuple[str, str, str]] = {
     "cron_save": ("cron_no", "⏰ 예약 확인 카드", "sc"),

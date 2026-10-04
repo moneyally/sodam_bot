@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest, TelegramError
 
-from . import persist
+from . import mediastore, persist
 from .db import register_schema
 from .settings import parse_hhmm
 from .util import esc, html_plain, rich_html
@@ -271,6 +271,8 @@ class Announcer:
         html = render(title, text, has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz, fmt=fmt)
         try:
             return await self._send_html(bot, chat_id, html, media_type, media_id, reply_markup)
+        except mediastore.MediaLost:
+            raise
         except BadRequest as e:
             if fmt != "html":
                 raise
@@ -278,18 +280,12 @@ class Announcer:
             plain = render(html_plain(title), html_plain(text), has_media=bool(media_id), rules=rules, tz=self.svc.cfg.tz)
             return await self._send_html(bot, chat_id, plain, media_type, media_id, reply_markup)
 
-    @staticmethod
-    async def _send_html(bot: Bot, chat_id: int, html: str, media_type: str | None, media_id: str | None,
+    async def _send_html(self, bot: Bot, chat_id: int, html: str, media_type: str | None, media_id: str | None,
                          reply_markup) -> Message:
+        """미디어는 mediastore 로 (봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림)."""
         kw = {"parse_mode": "HTML", "reply_markup": reply_markup}
-        if media_type == "photo":
-            return await bot.send_photo(chat_id, media_id, caption=html, **kw)
-        if media_type == "video":
-            return await bot.send_video(chat_id, media_id, caption=html, **kw)
-        if media_type == "animation":
-            return await bot.send_animation(chat_id, media_id, caption=html, **kw)
-        if media_type == "document":
-            return await bot.send_document(chat_id, media_id, caption=html, **kw)
+        if media_type in mediastore.KINDS and media_id:
+            return await mediastore.send(bot, self.svc.db, media_type, chat_id, media_id, caption=html, **kw)
         return await bot.send_message(chat_id, html, **kw)
 
     async def publish(self, bot: Bot, row) -> None:
@@ -309,8 +305,14 @@ class Announcer:
                 pass
         msg_id = None
         try:
-            sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                   media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
+            try:
+                sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                       media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
+            except mediastore.MediaLost:
+                # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 공지는 글만이라도 올리고 만든 관리자에게 하루 한 번 알림
+                sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                       media_type=None, media_id=None, fmt=row["fmt"] or "")
+                await self._media_lost(bot, row)
             msg_id = sent.message_id
             await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
             if row["pin"]:
@@ -324,6 +326,16 @@ class Announcer:
             await opsdesk.schedule_failed(self.svc, row, "send", e.message)
         # 실패해도 기록: 안 그러면 다음 틱마다 계속 재시도하며 에러를 쏟아냄
         await self.svc.db.mark_schedule_sent(row["id"], now_ts, msg_id)
+
+    async def _media_lost(self, bot: Bot, row) -> None:
+        from . import opsdesk   # 늦게 import (순환 방지)
+        await opsdesk.schedule_failed(self.svc, row, "media")
+        what = {"photo": "사진", "video": "영상", "animation": "GIF"}.get(row["media_type"], "파일")
+        name = html_plain(row["title"] or "") or html_plain(row["text"] or "")[:20] or "(제목 없음)"
+        await mediastore.notify_lost(
+            bot, self.svc.db, f"s{row['id']}", row["created_by"],
+            f"🗓️ 예약공지 <b>#{row['id']}</b> {esc(name)} — {what}이 사라져서 <b>글만</b> 올렸어요.\n"
+            f"소담 1:1 → 🗓️ 예약공지에서 그 공지를 눌러 {what}을 다시 넣어 주세요.")
 
     async def run_due(self, bot: Bot) -> None:
         now_ts = int(time.time())
@@ -476,6 +488,7 @@ class Announcer:
                     return True
                 draft.text = self._take(draft, text, rich_html(msg), "text")
                 draft.media_type, draft.media_id = media_type, media_id
+                mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본
             draft.step = "when"
             now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                    f"<code>그대로</code>)") if editing else ""

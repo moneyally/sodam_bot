@@ -21,6 +21,7 @@ from openai import OpenAIError
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 from telegram.error import BadRequest, TelegramError
 
+from . import mediastore, persist
 from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import filter_output
@@ -72,7 +73,10 @@ register_setting("greet_mention", True, "입장 인사 이름 태그")
 register_setting("greet_reply_bot", False, "다른 봇 환영 글에 답장")
 # 입장 인사 = 정해 둔 글을 그대로 복사 ([보낸 대화 ID, 글 ID]). 움직이는 이모지·영상·서식이 그대로 감 (copyMessage, 실측 2026-10-03).
 # 베베방: 문지기 봇이 봇 글을 무시해서 '안내' 로 못 부름 → 문지기 이벤트 안내 글을 소담이 복사.
-register_setting("greet_copy", [], "입장 인사 글 복사")
+register_setting("greet_copy", [], "입장 인사 글 복사", render_fn=lambda v: "켜짐" if copy_of({"greet_copy": v}) else "(없음)")
+# 그 글의 내용 사본 {html, kind, file_id} — 원래 글이 지워지거나 봇이 바뀌어(1:1 글은 봇마다 따로) 복사가 안 되면 이걸로 (2026-10-04 봇 교체 사례)
+register_setting("greet_copy_snap", {}, "입장 인사 글 복사 (사본)",
+                 render_fn=lambda v: "저장됨" if copy_snap({"greet_copy_snap": v}) else "(없음)")
 register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
 
 
@@ -172,27 +176,84 @@ def _plain_len(text_html: str) -> int:
     return len(html.unescape(re.sub(r"<[^>]+>", "", text_html)))
 
 
+async def _media_lost_notice(bot: Bot, db, chat_id: int, what: str) -> None:
+    """원본이 없어 인사 미디어·복사 글을 못 올림 → 방을 등록한 관리자 1:1 에 하루 한 번."""
+    if db is None:
+        return
+    try:
+        sub = await db._one("SELECT added_by FROM subscriptions WHERE chat_id=?", (chat_id,))
+    except Exception:
+        sub = None
+    await mediastore.notify_lost(
+        bot, db, f"g{chat_id}:{what}", sub["added_by"] if sub else None,
+        f"👋 입장 인사의 <b>{esc(what)}</b>이 사라져서 기본 인사로 대신했어요.\n"
+        "소담 1:1 → 방 설정 → ✏️ 인사 편집기에서 다시 넣어 주세요.")
+
+
+def copy_snap(s: dict) -> dict | None:
+    """greet_copy 사본 {html, kind, file_id} — 형식이 맞을 때만."""
+    v = s.get("greet_copy_snap")
+    if not isinstance(v, dict):
+        return None
+    html_text = v.get("html") if isinstance(v.get("html"), str) else ""
+    kind, fid = v.get("kind"), v.get("file_id")
+    media = (kind, fid) if kind in mediastore.KINDS and isinstance(fid, str) and fid else None
+    if not html_text and not media:
+        return None
+    return {"html": html_text, "kind": media[0] if media else None, "file_id": media[1] if media else None}
+
+
+def snapshot_of(msg) -> dict:
+    """전달·답장으로 고른 글 → 사본 (움직이는 이모지·서식은 텔레그램 HTML 로)."""
+    from .announce import extract_media
+    from .util import rich_html
+    kind, fid = extract_media(msg)
+    plain = getattr(msg, "text", None) or getattr(msg, "caption", None) or ""
+    try:
+        body = rich_html(msg) or esc(plain)
+    except (AttributeError, TypeError):   # 엔티티 정보가 없는 메시지
+        body = esc(plain)
+    return {"html": body, "kind": kind, "file_id": fid}
+
+
+async def send_snap(bot: Bot, db, chat_id: int, snap: dict):
+    """사본으로 같은 글 올리기 (미디어는 mediastore — 봇이 바뀌어도 보관 원본으로)."""
+    if snap["kind"]:
+        caption = snap["html"] if _plain_len(snap["html"]) <= CAPTION_LIMIT else None
+        sent = await mediastore.send(bot, db, snap["kind"], chat_id, snap["file_id"],
+                                     caption=caption or None, parse_mode="HTML" if caption else None)
+        if snap["html"] and caption is None:
+            sent = await bot.send_message(chat_id, snap["html"], parse_mode="HTML")
+        return sent
+    return await bot.send_message(chat_id, snap["html"], parse_mode="HTML")
+
+
 # ── 보내기 (실제 인사와 편집기 미리보기가 같이 씀) ─────────
 async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
-                        extra_rows: list[list[InlineKeyboardButton]] | None = None, reply_to: int | None = None) -> list:
+                        extra_rows: list[list[InlineKeyboardButton]] | None = None, reply_to: int | None = None,
+                        db=None) -> list:
     """설정된 미디어·URL 버튼을 붙여 인사를 보낸다. 보낸 메시지 목록을 돌려준다.
-    미디어가 안 보내지면(지워진 파일 등) 글만 보낸다. reply_to = 그 메시지에 답장으로 (지워졌으면 그냥)."""
+    미디어가 안 보내지면(지워진 파일 등) 글만 보낸다. reply_to = 그 메시지에 답장으로 (지워졌으면 그냥).
+    미디어는 mediastore 로 — 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림."""
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     rows = button_rows(s) + (extra_rows or [])
     kb = InlineKeyboardMarkup(rows) if rows else None
     media = media_of(s)
+    db = db if db is not None else persist.db_of(bot)
     sent = []
     if media:
         kind, file_id = media
-        send = {"photo": bot.send_photo, "video": bot.send_video, "animation": bot.send_animation}[kind]
         fits = _plain_len(text_html) <= CAPTION_LIMIT
         try:
             if fits:
-                return [await send_retry(lambda: send(chat_id, file_id, caption=text_html, parse_mode="HTML",
-                                                      reply_markup=kb, reply_parameters=rp))]
-            sent.append(await send_retry(lambda: send(chat_id, file_id, reply_parameters=rp)))  # 설명이 너무 길면 미디어 따로, 글+버튼 따로
+                return [await send_retry(lambda: mediastore.send(bot, db, kind, chat_id, file_id, caption=text_html,
+                                                                 parse_mode="HTML", reply_markup=kb, reply_parameters=rp))]
+            # 설명이 너무 길면 미디어 따로, 글+버튼 따로
+            sent.append(await send_retry(lambda: mediastore.send(bot, db, kind, chat_id, file_id, reply_parameters=rp)))
         except BadRequest as e:
             log.warning("greet media failed, sending text only: %s", e)
+            if isinstance(e, mediastore.MediaLost):
+                await _media_lost_notice(bot, db, chat_id, f"인사 {MEDIA_TYPES.get(kind, '미디어')}")
     sent.append(await send_retry(lambda: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb,
                                                           reply_parameters=rp)))
     return sent
@@ -239,7 +300,7 @@ class Greeter:
             names += f" 외 {len(people) - 15}분"
         template = with_names(await self._template(chat_id, len(people)), tag)
         try:
-            sent = await send_greeting(bot, chat_id, s, fill(template, names), reply_to=reply_to)
+            sent = await send_greeting(bot, chat_id, s, fill(template, names), reply_to=reply_to, db=self.svc.db)
             # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
             plain = ", ".join(name for _, name in people[:15])
             await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
@@ -255,15 +316,26 @@ class Greeter:
             self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
 
     async def _copy(self, bot: Bot, chat_id: int, s: dict) -> bool:
-        """greet_copy 가 있으면 그 글을 그대로 복사해 인사 (이름 없음). 원본이 지워졌으면 False → 보통 인사."""
+        """greet_copy 가 있으면 그 글을 그대로 복사해 인사 (이름 없음). 원래 글이 지워졌거나 봇이 바뀌어 복사가 안 되면
+        저장해 둔 사본(greet_copy_snap)으로 같은 글, 그것도 안 되면 False → 보통 인사."""
         src = copy_of(s)
         if src is None:
             return False
         try:
             sent = await send_retry(lambda: bot.copy_message(chat_id, src[0], src[1]))
         except TelegramError as e:
-            log.warning("greet copy failed %s (%s/%s): %s — 보통 인사로", chat_id, src[0], src[1], e)
-            return False
+            snap = copy_snap(s)
+            log.warning("greet copy failed %s (%s/%s): %s — %s", chat_id, src[0], src[1], e,
+                        "사본으로" if snap else "보통 인사로")
+            if snap is None:
+                await _media_lost_notice(bot, self.svc.db, chat_id, "복사해 둔 글")
+                return False
+            try:
+                sent = await send_retry(lambda: send_snap(bot, self.svc.db, chat_id, snap))
+            except TelegramError as e2:
+                log.warning("greet copy snapshot failed %s: %s — 보통 인사로", chat_id, e2)
+                await _media_lost_notice(bot, self.svc.db, chat_id, "복사해 둔 글")
+                return False
         await self.svc.db.log_message(chat_id, bot.id, getattr(sent, "message_id", None),
                                       "[입장 인사: 관리자가 정한 글을 그대로 올림]", is_bot=True)
         return True
