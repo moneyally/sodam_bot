@@ -179,7 +179,12 @@ async def ai_player_uses_tools_and_code_rejects_bad_words():
     good = wordbot.candidates("차표", used)[0][0]
     svc.llm = ScriptLLM([Call("find_words", "{}"), Call("play", '{"word": "표가나다라", "line": "x"}', "c2"),
                          Call("play", '{"word": "%s", "line": "이어보시죠 😏"}' % good, "c3")])
-    word, line = await wordbot.move(svc, CHAT, "차표", used)
+    # 서버 배포 테스트(CPU 1코어·병렬)에선 사전 후보 계산이 6초를 넘겨 코드 수로 빠진 적 있음 (2026-10-05) → 이 테스트만 넉넉히
+    orig, wordbot.TIMEOUT = wordbot.TIMEOUT, 120.0
+    try:
+        word, line = await wordbot.move(svc, CHAT, "차표", used)
+    finally:
+        wordbot.TIMEOUT = orig
     assert (word, line) == (good, "이어보시죠 😏"), (word, line)
     msgs, kw = svc.llm.seen[-1]
     results = [m["content"] for m in msgs if m["role"] == "tool"]
