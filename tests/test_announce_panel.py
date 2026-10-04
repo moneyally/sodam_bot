@@ -213,7 +213,7 @@ async def delete_needs_single_use_token():
 
 
 # ── 1:1 마법사 ────────────────────────────────────────────
-async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "매일 21:30"), pin="pin1", save=True):
+async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "없음", "매일 21:30"), pin="pin1", save=True):
     for a in answers:
         msg = await dm(a)
         assert not msg.replies, msg.replies                                # 마법사가 받음 (AI 로 새지 않음)
@@ -234,7 +234,7 @@ async def dm_wizard_creates_schedule_in_group_not_dm():
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]                            # 1:1 키 (menu.r_input 과 같은 약속)
     assert (draft.ui_chat_id, draft.chat_id, draft.user_id) == (ADMIN, CHAT, ADMIN)
     first = sent_to(bot, ADMIN)[-1][2]
-    assert "1/4 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
+    assert "1/5 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
 
     await _run_wizard(svc, bot, dm)
     rows = await db.schedules(CHAT)
@@ -251,13 +251,63 @@ async def dm_wizard_creates_schedule_in_group_not_dm():
 
 
 @test
+async def dm_wizard_takes_photo_as_separate_step():
+    """오너 요청 2026-10-05: 글을 먼저 쓰고 사진·영상을 따로 올리는 단계 (3/5). 사진에 설명을 붙여 한 번에 보내면 건너뜀."""
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("규칙 공지")
+    await dm("규칙 잘 지켜요")
+    ask = sent_to(bot, ADMIN)[-1]
+    assert "3/5 사진" in ask[2] and [b.text for b in buttons(ask[3]["reply_markup"])] == ["⏭ 사진 없이"]
+    msg = await dm("이건 사진 아님")                                          # 글만 오면 다시 물어봄
+    assert not msg.replies and "사진·영상·GIF" in sent_to(bot, ADMIN)[-1][2]
+    await dm(video=SimpleNamespace(file_id="VID"))
+    draft, _ = await _run_wizard(svc, bot, dm, answers=("반복 40",))
+    r = (await db.schedules(CHAT))[0]
+    assert (r["title"], r["text"], r["media_type"], r["media_id"], r["interval_min"]) == \
+        ("규칙 공지", "규칙 잘 지켜요", "video", "VID", 40), dict(r)
+
+    # 수정: 글은 그대로 두고 영상만 새로 (봇이 바뀌어 미디어를 다시 넣는 대표님 — 2026-10-04 백악관)
+    await press(svc, bot, f"m:sce:{CHAT}:{r['id']}")
+    for a in ("그대로", "그대로"):
+        await dm(a)
+    ask = sent_to(bot, ADMIN)[-1]
+    assert "지금 붙은 영상" in ask[2] and "지금 영상 그대로" in buttons(ask[3]["reply_markup"])[0].text
+    await dm(animation=SimpleNamespace(file_id="GIF2"))
+    await _run_wizard(svc, bot, dm, answers=("그대로",))
+    r = await db.get_schedule(CHAT, r["id"])
+    assert (r["text"], r["media_type"], r["media_id"]) == ("규칙 잘 지켜요", "animation", "GIF2")
+
+    # 수정: [✅ 그대로] 버튼 = 미디어 유지 / [⏭ 사진 없이] = 뺌
+    for action, want in (("keepmedia", "GIF2"), ("nomedia", None)):
+        await press(svc, bot, f"m:sce:{CHAT}:{r['id']}")
+        for a in ("그대로", "그대로"):
+            await dm(a)
+        d = svc.announcer.drafts[(ADMIN, ADMIN)]
+        await svc.announcer.on_callback(bot, FakeQuery(ADMIN, fake_user(ADMIN)), [d.token, action])
+        assert d.step == "when"
+        await _run_wizard(svc, bot, dm, answers=("그대로",))
+        assert (await db.get_schedule(CHAT, r["id"]))["media_id"] == want, action
+
+    # 설명이 1024자 넘는 글엔 사진을 못 붙임 → 안내하고 그 단계에 머묾
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("긴 공지")
+    await dm("가" * 1000)
+    await dm(photo=(SimpleNamespace(file_id="P"),))
+    d = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert d.step == "media" and d.media_id is None and "1024자" in sent_to(bot, ADMIN)[-1][2]
+    await db.close()
+
+
+@test
 async def dm_wizard_edits_existing_schedule():
     db, svc, bot, _ = await setup()
     dm = dm_ctx(svc, bot)
     sid = await add(db, CHAT, "원래 제목", text="원래 내용", kind="interval", at_time=None, interval_min=120, pin=True)
     await press(svc, bot, f"m:sce:{CHAT}:{sid}")
     assert "#%d 수정" % sid in sent_to(bot, ADMIN)[-1][2]
-    await _run_wizard(svc, bot, dm, answers=("새 제목", "그대로", "그대로"), pin="pin0")
+    await _run_wizard(svc, bot, dm, answers=("새 제목", "그대로", "없음", "그대로"), pin="pin0")
     r = await db.get_schedule(CHAT, sid)
     assert (r["title"], r["text"], r["interval_min"], r["pin"]) == ("새 제목", "원래 내용", 120, 0)
     assert len(await db.schedules(CHAT)) == 1
@@ -271,7 +321,7 @@ async def dm_wizard_edit_of_deleted_schedule_is_not_resurrected():
     sid = await add(db, CHAT, "곧 삭제")
     await press(svc, bot, f"m:sce:{CHAT}:{sid}")
     await db.delete_schedule(CHAT, sid)                                     # 수정하는 사이 다른 관리자가 삭제
-    await _run_wizard(svc, bot, dm, answers=("그대로", "그대로", "그대로"))
+    await _run_wizard(svc, bot, dm, answers=("그대로", "그대로", "없음", "그대로"))
     assert not await db.schedules(CHAT) and "삭제됐어요" in sent_to(bot, ADMIN)[-1][2]
     await db.close()
 
@@ -283,7 +333,7 @@ async def group_wizard_still_runs_in_group():
     await svc.announcer.start(bot, FakeMsg(CHAT, admin, ".예약공지 만들기", message_id=77))
     draft = svc.announcer.drafts[(CHAT, ADMIN)]
     assert draft.ui_chat_id == draft.chat_id == CHAT and not draft.in_dm
-    for i, a in enumerate(("그룹 공지", "내용", "반복 60")):
+    for i, a in enumerate(("그룹 공지", "내용", "없음", "반복 60")):
         assert await svc.announcer.handle_message(bot, FakeMsg(CHAT, admin, a, message_id=100 + i))
     assert not await svc.announcer.handle_message(bot, FakeMsg(ADMIN, admin, "1:1 메시지"))  # 1:1 은 별개
     q = FakeQuery(CHAT, admin)
@@ -316,7 +366,7 @@ async def demoted_admin_cannot_save():
     state.admins.add(ADMIN)
     admin = fake_user(ADMIN, "방장")
     await svc.announcer.start(bot, FakeMsg(CHAT, admin, ".예약공지 만들기"))
-    for a in ("t", "b", "매일 10:00"):
+    for a in ("t", "b", "없음", "매일 10:00"):
         await svc.announcer.handle_message(bot, FakeMsg(CHAT, admin, a))
     draft = svc.announcer.drafts[(CHAT, ADMIN)]
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])

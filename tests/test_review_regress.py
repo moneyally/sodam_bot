@@ -42,7 +42,7 @@ async def announce_save_double_press_creates_one_schedule():
     reason = await svc.announcer.start_dm(bot, ADMIN, CHAT)
     assert reason is None
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
-    for t in ("제목", "본문", "매일 09:00"):
+    for t in ("제목", "본문", "없음", "매일 09:00"):
         await handlers.on_private(SimpleNamespace(message=FakeMsg(ADMIN, fake_user(ADMIN), t)), ctx)
     d = svc.announcer.drafts[(ADMIN, ADMIN)]
     q0 = FakeQuery(ADMIN, fake_user(ADMIN), "")

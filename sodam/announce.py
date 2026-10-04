@@ -418,7 +418,7 @@ class Announcer:
         now_title = draft.title if draft.fmt == "html" else esc(draft.title)
         keep = f"\n(지금: {now_title or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
-                                    f"<b>1/4 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
+                                    f"<b>1/5 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
         self._saved(draft.key)
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
@@ -446,7 +446,7 @@ class Announcer:
 
     async def _handle_message(self, bot: Bot, msg: Message) -> bool:
         draft = self._get(msg.chat_id, msg.from_user.id)
-        if not draft or draft.step not in ("title", "body", "when"):
+        if not draft or draft.step not in ("title", "body", "media", "when"):
             return False
         text = (msg.text or msg.caption or "").strip()
         if text and text[0] in "./" and text not in CANCEL:
@@ -467,8 +467,8 @@ class Announcer:
             draft.step = "body"
             keep = " · 그대로 두려면 <code>그대로</code>" if editing else ""
             await self._say(bot, draft,
-                            "<b>2/4 내용</b>을 보내주세요.\n"
-                            "• 글만 보내도 되고, 사진·영상·GIF·파일에 설명을 붙여 보내도 돼요\n"
+                            "<b>2/5 내용</b>을 보내주세요.\n"
+                            "• 글만 보내면 다음 단계에서 사진·영상을 따로 받아요 (사진에 설명을 붙여 한 번에 보내도 돼요)\n"
                             "• <code>{규칙}</code> 을 쓰면 방 규칙이, <code>{날짜}</code> 를 쓰면 오늘 날짜가 들어가요"
                             + keep)
             return True
@@ -487,14 +487,29 @@ class Announcer:
                                                 f"{' (사진·영상 설명은 텔레그램 제한이 1024자예요)' if media_id else ''}.")
                     return True
                 draft.text = self._take(draft, text, rich_html(msg), "text")
+                if media_id:   # 사진에 설명을 붙여 한 번에 → 사진 단계 건너뜀 (글만이면 지금 붙은 사진은 다음 단계에서 정함)
+                    draft.media_type, draft.media_id = media_type, media_id
+                    mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본
+                    await self._ask_when(bot, draft)
+                    return True
+            await self._ask_media(bot, draft)
+            return True
+
+        if draft.step == "media":
+            media_type, media_id = extract_media(msg)
+            if media_id:
+                if len(html_plain(draft.text) if draft.fmt == "html" else draft.text) > CAPTION_LIMIT - 150:
+                    await self._say(bot, draft, f"내용이 길어서 사진·영상 설명으로 못 붙여요 (텔레그램 제한 1024자 → "
+                                                f"{CAPTION_LIMIT - 150}자 이내). 사진 없이 하려면 <code>없음</code>")
+                    return True
                 draft.media_type, draft.media_id = media_type, media_id
                 mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본
-            draft.step = "when"
-            now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
-                   f"<code>그대로</code>)") if editing else ""
-            await self._say(bot, draft, "<b>3/4 언제</b> 올릴까요?\n"
-                                        "• 매일 정해진 시각: <code>매일 09:00</code>\n"
-                                        "• 일정 간격: <code>반복 120</code> (분) / <code>반복 3시간</code>" + now)
+            elif text in ("없음", "-", "건너뛰기", "패스"):
+                draft.media_type = draft.media_id = None
+            elif text not in KEEP:   # 그대로 = 지금 상태 (붙은 게 있으면 그것, 없으면 없이)
+                await self._say(bot, draft, "사진·영상·GIF·파일을 보내주세요. 사진 없이 하려면 <code>없음</code>")
+                return True
+            await self._ask_when(bot, draft)
             return True
 
         # step == "when"
@@ -509,8 +524,29 @@ class Announcer:
             InlineKeyboardButton("📌 고정해서 올리기", callback_data=f"an:{draft.token}:pin1"),
             InlineKeyboardButton("고정 안 함", callback_data=f"an:{draft.token}:pin0"),
         ]])
-        await self._say(bot, draft, "<b>4/4 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
+        await self._say(bot, draft, "<b>5/5 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
         return True
+
+    async def _ask_media(self, bot: Bot, draft: Draft) -> None:
+        """3/5 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
+        draft.step = "media"
+        what = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}.get(draft.media_type or "", "")
+        rows = [[InlineKeyboardButton("⏭ 사진 없이", callback_data=f"an:{draft.token}:nomedia")]]
+        now = ""
+        if draft.media_id:
+            rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 {what} 그대로", callback_data=f"an:{draft.token}:keepmedia"))
+            now = f"\n(지금 붙은 {what}이 있어요 · 그대로 두려면 <code>그대로</code>)"
+        await self._say(bot, draft, "<b>3/5 사진·영상</b>을 같이 올릴까요?\n"
+                                    "• 사진·영상·GIF·파일을 보내주세요 (공지 글이 그 설명으로 붙어요)\n"
+                                    "• 없으면 <code>없음</code> 또는 아래 버튼" + now, InlineKeyboardMarkup(rows))
+
+    async def _ask_when(self, bot: Bot, draft: Draft) -> None:
+        draft.step = "when"
+        now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
+               f"<code>그대로</code>)") if draft.edit_id is not None else ""
+        await self._say(bot, draft, "<b>4/5 언제</b> 올릴까요?\n"
+                                    "• 매일 정해진 시각: <code>매일 09:00</code>\n"
+                                    "• 일정 간격: <code>반복 120</code> (분) / <code>반복 3시간</code>" + now)
 
     async def on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
         token = (parts + [""])[0]
@@ -541,6 +577,12 @@ class Announcer:
             await query.answer("만들고 있는 관리자만 누를 수 있어요.", show_alert=True)
             return
         draft.expires = time.time() + WIZARD_TTL
+        if action in ("nomedia", "keepmedia") and draft.step == "media":
+            await query.answer()
+            if action == "nomedia":
+                draft.media_type = draft.media_id = None
+            await self._ask_when(bot, draft)
+            return
         if action in ("pin1", "pin0") and draft.step == "pin":
             draft.pin = action == "pin1"
             draft.step = "confirm"

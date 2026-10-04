@@ -40,7 +40,8 @@ async def setup():
 
 
 async def wizard(svc, bot, title_msg, body_msg):
-    for m in (title_msg, body_msg, FakeMsg(ADMIN, fake_user(ADMIN), "매일 09:00", message_id=60)):
+    for m in (title_msg, body_msg, FakeMsg(ADMIN, fake_user(ADMIN), "없음", message_id=59),
+              FakeMsg(ADMIN, fake_user(ADMIN), "매일 09:00", message_id=60)):
         assert await svc.announcer.handle_message(bot, m), m.text
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]
     q = FakeQuery(ADMIN, fake_user(ADMIN))
