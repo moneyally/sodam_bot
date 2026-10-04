@@ -42,6 +42,41 @@ def html_plain(s: str) -> str:
     return html.unescape(_TAG.sub("", s or ""))
 
 
+_HTML_TOKEN = re.compile(r"<tg-emoji\b[^>]*>.*?</tg-emoji>|<[^>]+>|&#?\w+;|[^<&]", re.S)
+
+
+def html_truncate(s: str, limit: int) -> str:
+    """텔레그램 HTML 을 보이는 글자 limit 개까지 자르고 열린 태그를 닫음 (움직이는 이모지는 통째로 — 반쪽 태그 X).
+    짝이 안 맞는 HTML 이면 글자만 잘라서 이스케이프."""
+    s = s or ""
+    if not html_balanced(s):
+        p = html_plain(s)
+        return esc(p[:limit] + ("…" if len(p) > limit else ""))
+    out, stack, n = [], [], 0
+    for tok in _HTML_TOKEN.findall(s):
+        if tok.startswith("<tg-emoji"):
+            n += 1                     # 움직이는 이모지 하나 = 한 글자
+        elif tok.startswith("</"):
+            if stack:
+                stack.pop()
+            out.append(tok)
+            continue
+        elif tok.startswith("<"):
+            m = re.match(r"<([a-z-]+)", tok)
+            if m and not tok.endswith("/>"):
+                stack.append(m.group(1))
+            out.append(tok)
+            continue
+        else:
+            n += 1
+        if n > limit:
+            out.append("…")
+            break
+        out.append(tok)
+    out.extend(f"</{name}>" for name in reversed(stack))
+    return "".join(out)
+
+
 def display_name(first: str | None, last: str | None = None, username: str | None = None) -> str:
     name = " ".join(x for x in (first, last) if x).strip()
     return name or (f"@{username}" if username else "알 수 없음")

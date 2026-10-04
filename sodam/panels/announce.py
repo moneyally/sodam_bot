@@ -20,7 +20,7 @@ from telegram.error import TelegramError
 from .. import cards, cron, menu, persist
 from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
-from ..util import esc, html_balanced, html_plain, rich_html
+from ..util import esc, html_balanced, html_plain, html_truncate, rich_html
 
 PREVIEW_CHARS = 300
 
@@ -29,6 +29,16 @@ def _plain(row, key: str) -> str:
     """제목·내용 보이는 글자 (fmt=html 이면 태그 빼고 — 움직이는 이모지는 기본 이모지로 보임)."""
     v = row[key] or ""
     return html_plain(v) if row["fmt"] == "html" else v
+
+
+def _shown(row, key: str, limit: int) -> str:
+    """화면에 넣을 HTML. 서식 글(fmt=html)은 움직이는 이모지가 보이게 그대로 (실제 2026-10-05 일루왕 #11: 글자 모양 움직이는
+    이모지 99개가 화면에서 전부 ⬜️ 로 보여 '깨졌다'). 보이는 글자가 limit 넘거나 태그 짝이 안 맞으면 글자만 잘라서."""
+    v = (row[key] or "").strip()
+    if row["fmt"] == "html" and "<blockquote" not in v and "<pre" not in v:   # 인용 안에 인용·코드 블록은 텔레그램이 거절
+        return html_truncate(v, limit)
+    plain = (html_plain(v) if row["fmt"] == "html" else v).strip()
+    return esc(plain[:limit] + ("…" if len(plain) > limit else ""))
 
 
 def _name(row) -> str:
@@ -89,17 +99,15 @@ async def s_item(c: PanelCtx) -> Screen:
         screen.toast = GONE
         return screen
     tz = c.svc.cfg.tz
-    body = _plain(r, "text").strip()
-    if len(body) > PREVIEW_CHARS:
-        body = body[:PREVIEW_CHARS] + "…"
+    body = _shown(r, "text", PREVIEW_CHARS)
     media = f"[{MEDIA_LABEL.get(r['media_type'], '파일')}] " if r["media_type"] else ""
     last = datetime.fromtimestamp(r["last_sent"], tz).strftime("%m/%d %H:%M") if r["last_sent"] and r["last_msg_id"] else "아직 없음"
     lines = [f"🗓️ <b>예약공지 #{r['id']}</b>",
              f"상태: {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}",
              f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else ""),
-             f"제목: {esc(_plain(r, 'title')) if r['title'] else '(없음)'}",
+             f"제목: {_shown(r, 'title', 100) if r['title'] else '(없음)'}",
              f"최근 발송: {last}",
-             f"내용:\n<blockquote>{media}{esc(body) if body else '(글 없음)'}</blockquote>"]
+             f"내용:\n<blockquote>{media}{body or '(글 없음)'}</blockquote>"]
     sid = r["id"]
     if r["action"] != "post":   # 알람·AI 작업: 제목·사진 대신 종류·지시 (수정은 지우고 다시 만들기)
         lines[0] = f"{cron.describe(r)} <b>#{sid}</b>"
