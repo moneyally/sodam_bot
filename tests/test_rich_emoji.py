@@ -170,5 +170,30 @@ async def alarm_all_bold_is_not_cut_mid_tag_and_lists_hide_tags():
     await db.close()
 
 
+@test
+async def schedule_detail_screen_shows_animated_emoji_not_squares():
+    """실제 2026-10-05 일루왕 #11: 글자 모양 움직이는 이모지 99개 → 공지 화면에선 기본 이모지 ⬜️ 로 바뀌어 '다 깨짐'.
+    화면 HTML 에 움직이는 이모지를 그대로 넣고, 길면 태그 안 깨지게 자름."""
+    from sodam.util import html_balanced, html_truncate
+    db, svc, bot = await setup()
+    letter = '<tg-emoji emoji-id="6104937634897860055">⬜️</tg-emoji>'
+    text = f'{letter}{letter} 회원 모집 <b>신규 가입머니</b>\n' + ("가" * 400) + f"<b>{letter}끝</b>"
+    sid = await db.add_schedule(CHAT, kind="interval", at_time=None, interval_min=120, title=f"{letter} 공지",
+                                text=text, media_type=None, media_id=None, pin=False, created_by=ADMIN, fmt="html")
+    c = SimpleNamespace(svc=svc, bot=bot, cid=CHAT, uid=ADMIN, arg=lambda i: str(sid) if i == 0 else "")
+    screen = await panel.s_item(c)
+    assert screen.text.count(letter) == 3 and html_balanced(screen.text), screen.text   # 제목 1 + 내용 앞 2 (뒤는 잘림)
+    assert "…" in screen.text and "<b>신규 가입머니</b>" in screen.text
+    cut = html_truncate(f"<b>{letter}가나다</b>", 2)
+    assert cut == f"<b>{letter}가…</b>", cut                                          # 이모지 반쪽 태그 없음
+    assert html_truncate("<b>짝 안 맞음", 3) == "짝 안…"                               # 짝 안 맞으면 글자만
+    plain_sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="<i>그냥</i>",
+                                      text="a < b", media_type=None, media_id=None, pin=False, created_by=ADMIN)
+    c.arg = lambda i: str(plain_sid) if i == 0 else ""
+    screen = await panel.s_item(c)
+    assert "&lt;i&gt;그냥&lt;/i&gt;" in screen.text and "a &lt; b" in screen.text   # 서식 없는 글은 그대로 이스케이프
+    await db.close()
+
+
 if __name__ == "__main__":
     run_all()
