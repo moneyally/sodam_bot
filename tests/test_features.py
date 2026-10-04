@@ -393,7 +393,7 @@ async def announce_wizard_edit_keep_and_cancel():
     sid = await db.add_schedule(CHAT, kind="interval", at_time=None, interval_min=120, title="원래 제목",
                                 text="원래 내용", media_type=None, media_id=None, pin=True, created_by=1)
     await svc.announcer.start(bot, FakeMsg(CHAT, admin, ".예약공지 수정"), edit_row=await db.get_schedule(CHAT, sid))
-    for _ in range(3):
+    for _ in range(4):   # 제목·내용·사진·언제
         assert await _answer(svc, bot, admin, "그대로")
     draft = svc.announcer.drafts[(CHAT, 1)]
     q = FakeQuery(CHAT, admin)

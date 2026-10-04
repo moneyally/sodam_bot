@@ -253,12 +253,12 @@ async def announce_wizard_continues_after_restart():
     await svc.announcer.start_dm(bot, ADMIN.id, CHAT)
     await persist.drain()                                                  # 사람이 답하기 전 (저장은 뒤에서 이미 끝남)
     msg = FakeMsg(ADMIN.id, ADMIN, "월말 정산")
-    assert await svc.announcer.handle_message(bot, msg)                   # 1/4 제목 → 2/4 내용
+    assert await svc.announcer.handle_message(bot, msg)                   # 1/5 제목 → 2/5 내용
     svc2, bot2 = await restart(db)
     d = svc2.announcer.drafts[(ADMIN.id, ADMIN.id)]
     assert d.step == "body" and d.title == "월말 정산" and d.chat_id == CHAT
     assert await svc2.announcer.handle_message(bot2, FakeMsg(ADMIN.id, ADMIN, "매달 말일 정산해요"))
-    assert "3/4" in sent(bot2, ADMIN.id)[-1]
+    assert "3/5 사진" in sent(bot2, ADMIN.id)[-1]
 
 
 @test
