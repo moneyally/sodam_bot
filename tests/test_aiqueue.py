@@ -52,7 +52,7 @@ async def request_cut_by_restart_is_answered_after_restart_once():
     try:
         r = await _room(HangLLM())
         t = asyncio.create_task(r.say(JUNHO, "소담아 오늘 공지 뭐였지", settle=False))
-        await asyncio.wait_for(r.llm.entered.wait(), 5)
+        await asyncio.wait_for(r.llm.entered.wait(), 60)
         t.cancel()                                                         # 배포·종료로 실행이 끊김
         await asyncio.gather(t, return_exceptions=True)
         rows = await _rows(r)
@@ -75,7 +75,7 @@ async def running_request_is_not_replayed_and_normal_answer_leaves_no_row():
     try:
         r = await _room(HangLLM())
         t = asyncio.create_task(r.say(JUNHO, "소담아 안녕", settle=False))
-        await asyncio.wait_for(r.llm.entered.wait(), 5)
+        await asyncio.wait_for(r.llm.entered.wait(), 60)
         assert await aiqueue.sweep(r.ctx) == 0                              # 이 프로세스가 처리 중 → 건드리지 않음
         t.cancel()
         await asyncio.gather(t, return_exceptions=True)

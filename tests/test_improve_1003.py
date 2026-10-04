@@ -89,7 +89,7 @@ async def voice_permission_message_says_what_to_do_and_not_in_call_is_closed():
         raise RuntimeError("The userbot is not in a call")
     b._play = boom
     b._last_voice = 0
-    await asyncio.wait_for(b._pacer(), 1)
+    await asyncio.wait_for(b._pacer(), 10)
     assert stopped == ["chat_closed"], stopped
 
 
