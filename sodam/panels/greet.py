@@ -14,9 +14,9 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
-from .. import menu
-from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, copy_of, fill,
-                     media_of, parse_buttons, send_greeting, with_names)
+from .. import mediastore, menu
+from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, copy_of, copy_snap,
+                     fill, media_of, parse_buttons, send_greeting, send_snap, snapshot_of, with_names)
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, josa, mention, user_name
 
@@ -150,15 +150,23 @@ async def r_view(c: PanelCtx) -> Screen:
     close = [[B("🗑 닫기", f"m:k:{menu.token(c.svc, c.uid, c.cid, 'w_close', ids, CLOSE_TTL)}")]]
     if what == "m":
         kind, file_id = media
-        send = {"photo": c.bot.send_photo, "video": c.bot.send_video, "animation": c.bot.send_animation}[kind]
-        sent = [await send(c.uid, file_id, reply_markup=InlineKeyboardMarkup(close))]
+        try:
+            sent = [await mediastore.send(c.bot, c.svc.db, kind, c.uid, file_id, reply_markup=InlineKeyboardMarkup(close))]
+        except mediastore.MediaLost:
+            return Screen(None, toast="붙여 둔 미디어가 사라졌어요 (봇이 바뀐 경우). 🖼 미디어를 다시 넣어 주세요.", alert=True)
         toast = "1:1 로 미디어를 보냈어요 👇"
     elif copy_of(s):
         src = copy_of(s)
         try:
             sent = [await c.bot.copy_message(c.uid, src[0], src[1])]
         except TelegramError:
-            return Screen(None, toast="복사할 원본 글이 지워졌어요. 📋 글을 다시 정해 주세요.", alert=True)
+            snap = copy_snap(s)
+            try:
+                sent = [await send_snap(c.bot, c.svc.db, c.uid, snap)] if snap else None
+            except TelegramError:
+                sent = None
+            if not sent:
+                return Screen(None, toast="복사할 원본 글이 지워졌어요. 📋 글을 다시 정해 주세요.", alert=True)
         sent.append(await c.bot.send_message(c.uid, "👆 입장 인사 미리보기 (글 복사)", reply_markup=InlineKeyboardMarkup(close)))
         toast = "1:1 로 미리보기를 보냈어요 👇"
     else:
@@ -167,7 +175,7 @@ async def r_view(c: PanelCtx) -> Screen:
         tag = bool(s["greet_mention"])
         name = await _admin_name(c)
         sent = await send_greeting(c.bot, c.uid, s, fill(with_names(tpl, tag), mention(c.uid, name) if tag else esc(name)),
-                                   close)
+                                   close, db=c.svc.db)
         toast = "1:1 로 미리보기를 보냈어요 👇" + (" (AI 인사는 매번 달라서 예시 문구로 보여드려요)" if ai else "")
     ids.extend(m.message_id for m in sent)
     return Screen(None, toast=toast)
@@ -205,7 +213,7 @@ async def t_delete(c: PanelCtx, part) -> Screen:
     elif part == "b":
         await _save(c, "greet_buttons=", greet_buttons=[])
     elif part == "c":
-        await _save(c, "greet_copy=", greet_copy=[])
+        await _save(c, "greet_copy=", greet_copy=[], greet_copy_snap={})
     screen = await s_editor(c)
     screen.toast = "삭제했어요."
     return screen
@@ -234,6 +242,7 @@ async def in_media(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     else:
         return False, "사진·영상·GIF 중 하나를 보내주세요. (파일·스티커는 안 돼요)"
     await _save(c, f"greet_media={kind}", greet_media_type=kind, greet_media_id=file_id)
+    mediastore.remember_soon(c.bot, c.svc.db, kind, file_id)   # 봇이 바뀌어도 다시 올릴 원본
     note = "\n(같이 보낸 설명은 쓰지 않아요. 인사말은 📄 인사말에서 바꿔요)" if msg.caption else ""
     return True, f"✅ {MEDIA_OBJ[kind]} 인사에 붙였어요." + note
 
@@ -251,9 +260,11 @@ async def in_copy(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     src = msg.reply_to_message or msg        # 이 대화에 이미 있는 글(전달해 둔 글)에 답장해도 됨
     if not (src.text or src.caption or src.photo or src.video or src.animation or src.document):
         return False, "인사로 쓸 글을 이 대화에 전달(forward)하거나, 이미 있는 그 글에 답장으로 아무 말이나 보내 주세요."
-    await _save(c, f"greet_copy={src.message_id}", greet_copy=[msg.chat_id, src.message_id])
+    snap = snapshot_of(src)   # 원래 글이 지워지거나 봇이 바뀌어도 같은 글을 올릴 사본
+    await _save(c, f"greet_copy={src.message_id}", greet_copy=[msg.chat_id, src.message_id], greet_copy_snap=snap)
+    mediastore.remember_soon(c.bot, c.svc.db, snap["kind"], snap["file_id"])
     return True, ("✅ 이 글을 그대로 복사해서 입장 인사로 올려요 (영상·움직이는 이모지·서식·버튼 그대로).\n"
-                  "⚠️ 이 1:1 대화에서 이 글을 지우면 복사가 안 되고 보통 인사로 돌아가요.")
+                  "이 대화에서 글을 지워도 저장해 둔 사본으로 같은 글을 올려요 (버튼은 사본엔 없어요).")
 
 
 # ── 등록 ──────────────────────────────────────────────────

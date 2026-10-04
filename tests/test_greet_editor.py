@@ -394,12 +394,16 @@ async def greet_copies_chosen_post_as_is():
     await press(svc, bot, 1, f"m:wv:{CHAT}:all")                                  # 미리보기 = 1:1 로 복사
     assert bot.named("copy")[-1][1:] == (1, 1, 777)
 
-    class Gone(FakeBot):                                                             # 원본이 지워짐 → 보통 인사
+    class Gone(FakeBot):                                                             # 원본이 지워짐 → 사본으로 같은 글
         async def copy_message(self, *a, **kw):
             raise BadRequest("Message to copy not found")
     gone = Gone()
     await db.set_setting(CHAT, "greet_template", "{names} 어서 오세요")
     await greet(svc, gone, [(21, "로이")])
+    v = gone.named("send_video")[-1]
+    assert v[1:4] == (CHAT, "v", "😉 이벤트 안내") and not gone.named("send_message"), gone.calls
+    await db.set_setting(CHAT, "greet_copy_snap", {})                                # 사본도 없음(옛 설정) → 보통 인사
+    await greet(svc, gone, [(22, "로이2")])
     assert "어서 오세요" in gone.named("send_message")[-1][2]
     q = await press(svc, bot, 1, f"m:w:{CHAT}")
     q = await press(svc, bot, 1, find(q.kb, "복사 끄기").callback_data)              # 끄기 → 확인 → 토큰

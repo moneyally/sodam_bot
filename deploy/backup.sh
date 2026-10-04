@@ -46,6 +46,12 @@ PY
     echo "ok $out ($(du -h "$out" | cut -f1))"
 done
 
+# 예약·인사 미디어 원본 (sodam/mediastore.py, 파일 이름 = 내용 해시라 같은 이름은 같은 파일 → 새 것만 복사)
+if [ -d "$DATA_DIR/media" ]; then
+    mkdir -p "$BACKUP_DIR/media"
+    cp -n "$DATA_DIR"/media/* "$BACKUP_DIR/media/" 2>/dev/null || true
+fi
+
 # 오래된 백업 정리 (KEEP_DAYS 일 넘은 것)
 find "$BACKUP_DIR" -maxdepth 1 -name '*.db.gz' -type f -mtime +"$((KEEP_DAYS - 1))" -print -delete | sed 's/^/deleted /'
 

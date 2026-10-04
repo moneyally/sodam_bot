@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue, apikeys
-from . import modactions
+from . import mediastore, modactions
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -1239,6 +1239,7 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
             ("anomaly", lambda bot: anomaly.tick(svc, bot)),  # 이상징후 '보안 강화' 시간 끝나면 설정 되돌림
             ("joinreq", lambda bot: joinreq.expire(svc, bot)),  # 시간 지난 가입 신청 거절
             ("hooks", lambda bot: hooks.tick(svc, bot)),  # 채널 예약 글·구독자 수 등 (hooks.add_tick_hook)
+            ("media", lambda bot: mediastore.tick(bot, svc.db)),  # 예약·인사 미디어 원본 보관 (봇이 바뀌어도 다시 올림)
             ("sub_end", lambda bot: _notify_ended(context))]  # 이용 기간이 끝난 그 시각에 안내
     if svc.billing and svc.billing.enabled:
         jobs.append(("billing", lambda bot: subscription.run_check(svc, bot)))

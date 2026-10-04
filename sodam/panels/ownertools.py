@@ -53,7 +53,8 @@ MAX_PICK = 4                   # 방 고르기 버튼 최대
 ROOM_LINES = 20                # 매출 도구의 방별 만료 줄
 FR_LINES = 15
 # 다른 방 설정: 말로 바꾸면 안 되는 키 (내부 ID·파일 ID·URL 버튼 — 전용 화면에서만) + 끝말로 막는 키 (새로 생겨도 자동으로)
-BLOCKED_KEYS = frozenset({"gt_setter", "greet_media_id", "greet_media_type", "greet_buttons", "farewell_buttons"})
+BLOCKED_KEYS = frozenset({"gt_setter", "greet_media_id", "greet_media_type", "greet_buttons", "farewell_buttons",
+                          "greet_copy", "greet_copy_snap"})
 BLOCKED_SUFFIX = ("_id", "_setter", "_buttons", "_media_type")
 # 예산·AI 사용량 키: 줄이기만 (말 한마디로 비용이 늘지 않게 — 늘리려면 버튼 화면)
 # (이미지·웹검색 하루 한도는 settings.OWNER_CAP — 방 관리자는 못 올리니 오너가 여기서 확인 카드로 올림, 2026-09-30)
