@@ -18,7 +18,7 @@ wordcloud==1.9.6      # 방 단어 구름 (NanumGothic)
 bottleneck==1.6.0     # pandas 가속
 numexpr==2.14.2       # pandas 가속
 holidays==0.105       # 한국 공휴일 → 영업일·예약 계산
-korean-lunar-calendar==0.3.1  # 음력 생일·명절
+korean-lunar-calendar==0.4.0  # 음력 생일·명절
 emoji==2.16.0         # 이모지 통계
 squarify==0.4.5       # 트리맵 차트
 rapidfuzz==3.14.6     # 비슷한 이름·단어 빠르게 찾기
