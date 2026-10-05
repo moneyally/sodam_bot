@@ -1302,7 +1302,8 @@ FIND_TOOL = "find_tools"
 CORE_TOOLS = frozenset({
     "make_image", "make_profile_video", "make_video", "greet_members", "sports", "web_search", "sodam_guide",
     "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "point_game", "bot_command",
-    "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call"})
+    "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call",
+    "feature_request"})   # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
 
 
 def _short(desc: str, n: int = 70) -> str:

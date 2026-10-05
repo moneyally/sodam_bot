@@ -200,7 +200,7 @@ def admin_starts_with_core_tools_and_a_catalog_of_the_rest():
     import sodam.panels  # noqa: F401  (패널 도구까지 다 등록된 상태)
     shown = tools.offered(Role.ADMIN, False)
     core, deferred = tools.split_core(shown)
-    assert len(shown) > 40 and len(core) <= 20, (len(shown), len(core))          # 69개 → 20개 이하 + 목록
+    assert len(shown) > 40 and len(core) <= 21, (len(shown), len(core))          # 69개 → 21개 이하 + 목록
     names = {t.name for t in core}
     assert {"make_image", "greet_members", "change_setting", "mute_member", "read_chat"} <= names
     sch = tools.find_tools_schema(deferred)["function"]
