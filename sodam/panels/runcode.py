@@ -38,7 +38,7 @@ DESC = ("격리된 파이썬 작업실에서 코드를 실행한다 (인터넷 �
         "print 한 글이 결과로 돌아오고, 현재 폴더에 저장한 파일(png·jpg·gif = 사진, csv·xlsx·pdf·txt·json·md·svg = 파일, 5개까지)은 방에 바로 올라간다. "
         "라이브러리: numpy pandas matplotlib(한글 글꼴 NanumGothic 설정됨) seaborn openpyxl xlsxwriter duckdb pillow reportlab pypdf qrcode "
         "tabulate wordcloud squarify networkx rapidfuzz holidays korean_lunar_calendar emoji. "
-        "오류가 나면 고쳐서 한 번 더. 결과 숫자는 출력에 있는 그대로만 말한다. "
+        "room.db 는 sqlite3 나 pandas.read_sql 로 읽는다 (duckdb 는 인터넷이 없어 sqlite 파일을 직접 못 붙임 — DataFrame 에만). 오류가 나면 고쳐서 한 번 더. 결과 숫자는 출력에 있는 그대로만 말한다. "
         + snapshot.GUIDE)
 
 
