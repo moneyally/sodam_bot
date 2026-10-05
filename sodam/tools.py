@@ -1294,6 +1294,41 @@ def offered(role: Role, in_dm: bool = False) -> list[Tool]:
             and not (t.room_role is not None and not in_dm and role < t.room_role)]
 
 
+# ── 도구 고르기 (클로드 코드 deferred tools · OpenAI tool_search 방식, 2026-10-05) ─────────────
+# 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → 자주 쓰는 핵심만 처음부터, 나머지는 find_tools 목록(이름·한 줄)에서
+# 골라 불러오면 다음 라운드부터 쓸 수 있게 (OpenAI: '한 번에 20개 미만' 권장). 핵심 = 서버 30일 사용량 상위 + 늘 필요한 것.
+# 목록은 역할·대화 종류로만 정해지므로(방 설정 무관) 프롬프트 캐시는 그대로.
+FIND_TOOL = "find_tools"
+CORE_TOOLS = frozenset({
+    "make_image", "make_profile_video", "make_video", "greet_members", "sports", "web_search", "sodam_guide",
+    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "point_game", "bot_command",
+    "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call"})
+
+
+def _short(desc: str, n: int = 70) -> str:
+    """도구 설명 첫 문장 (목록 한 줄용)."""
+    first = re.split(r"(?<=[.。])\s|\n", desc.strip(), maxsplit=1)[0]
+    return first if len(first) <= n else first[: n - 1] + "…"
+
+
+def split_core(shown: list[Tool]) -> tuple[list[Tool], list[Tool]]:
+    """(처음부터 싣는 핵심, find_tools 로 불러오는 나머지)."""
+    return [t for t in shown if t.name in CORE_TOOLS], [t for t in shown if t.name not in CORE_TOOLS]
+
+
+def find_tools_schema(deferred: list[Tool]) -> dict:
+    lines = "\n".join(f"- {t.name}: {_short(t.schema()['function']['description'])}" for t in deferred)
+    return {"type": "function", "function": {
+        "name": FIND_TOOL,
+        "description": ("지금 실린 도구에 맞는 게 없을 때 쓴다: 아래 목록에서 필요한 도구 이름을 골라 불러오면 다음 단계부터 그 도구를 "
+                        "바로 부를 수 있다. 일을 하기 전에 '못 해요'라고 하지 말고 먼저 여기서 찾아볼 것. 잡담·이미 실린 도구로 되는 일엔 "
+                        "쓰지 않는다. 불러올 수 있는 도구:\n" + lines),
+        "parameters": {"type": "object", "properties": {
+            "names": {"type": "array", "items": {"type": "string", "enum": [t.name for t in deferred]},
+                      "description": "불러올 도구 이름들 (위 목록 그대로, 한 번에 여러 개 가능)"}},
+            "required": ["names"], "additionalProperties": False}}}
+
+
 # 다른 방 기록을 읽은 뒤에도 쓸 수 있는 도구 = 이 서버 데이터를 읽기만 (제재·전송·외부 검색·기억 저장 없음)
 READ_ONLY = {"owner_rooms", "owner_room_log", "my_rooms", "chat_stats", "search_chat", "read_chat", "member_info", "room_members",
              "room_rules", "points_ranking", "search_knowledge", "get_my_requests", "answer_sources"}

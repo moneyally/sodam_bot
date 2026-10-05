@@ -193,5 +193,49 @@ async def sports_not_found_points_to_web_search():
         sports_ui.UI = orig
 
 
+
+# ── 5) 도구 고르기: 핵심만 처음부터, 나머지는 find_tools (클로드 코드 deferred tools · OpenAI tool_search 방식) ──
+@test
+def admin_starts_with_core_tools_and_a_catalog_of_the_rest():
+    import sodam.panels  # noqa: F401  (패널 도구까지 다 등록된 상태)
+    shown = tools.offered(Role.ADMIN, False)
+    core, deferred = tools.split_core(shown)
+    assert len(shown) > 40 and len(core) <= 20, (len(shown), len(core))          # 69개 → 20개 이하 + 목록
+    names = {t.name for t in core}
+    assert {"make_image", "greet_members", "change_setting", "mute_member", "read_chat"} <= names
+    sch = tools.find_tools_schema(deferred)["function"]
+    assert "warn_member" in sch["description"] and "ban_member" in sch["description"]
+    assert set(sch["parameters"]["properties"]["names"]["items"]["enum"]) == {t.name for t in deferred}
+    assert all(len(line) < 120 for line in sch["description"].splitlines() if line.startswith("- ")), "목록은 한 줄씩 짧게"
+
+
+@test
+async def find_tools_loads_then_the_tool_runs_next_round():
+    old = fast_timers()
+    try:
+        r = await room([tool_call("find_tools", {"names": ["warn_member", "없는도구"]}),
+                        tool_call("warn_member", {"names": ["루피"], "reason": "도배"}, "c2"),
+                        "루피님 경고 줬어요."])
+        await r.say(BOSS, "소담아 루피 경고 줘")
+        calls = r.llm.of("chat")
+        first = [t["function"]["name"] for t in calls[0]["tools"]]
+        second = [t["function"]["name"] for t in calls[1]["tools"]]
+        assert "warn_member" not in first and "find_tools" in first
+        assert "warn_member" in second, "불러온 뒤 라운드부터 실림"
+        res = [m["content"] for m in calls[1]["messages"] if m["role"] == "tool"][0]
+        assert "불러옴: warn_member" in res and "없는 도구: 없는도구" in res, res
+        assert await r.db.warning_count(r.CHAT, RUFFY.id) == 1                 # 실제로 실행됨 (관리자 요청 = 바로)
+    finally:
+        restore_timers(old)
+
+
+@test
+async def find_tools_reports_room_disabled_tools():
+    from sodam.agent import _ToolSet
+    t = tools._BY_NAME["warn_member"]
+    ts = _ToolSet([{"function": {"name": "find_tools"}}], {"find_tools"}, {"warn_member": t})
+    out = ts.load(["warn_member"])
+    assert "꺼져 있는 기능" in out and any(s["function"]["name"] == "warn_member" for s in ts.schemas)
+
 if __name__ == "__main__":
     run_all()

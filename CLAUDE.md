@@ -798,3 +798,12 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
   ai_card_log 기록은 카드 누를 때와 같음). 밴·강퇴·푸는 조치는 카드. all: 예전처럼 전부 카드.
 - 설정과 무관하게 늘 카드: 멤버 글·다른 봇 글을 읽은 답변(tainted·room_read)·인젝션 판별 못 한 요청, 음성채팅(`ctx.via_voice`), 오너 1:1 의 다른 방 제재.
 - 텔레그램 '사용자 차단' 권한 없는 관리자는 지금처럼 거절 (오너 결정).
+
+## 도구 고르기: 핵심만 처음부터 + find_tools (2026-10-05, tests/test_harness_codex.py)
+- 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → `tools.CORE_TOOLS`(서버 30일 사용량 상위 20개)만 처음부터,
+  나머지는 `find_tools` 목록(이름·한 줄, `find_tools_schema`)에서 불러오면 `agent._ToolSet.load` 가 다음 라운드부터 싣는다
+  (클로드 코드 deferred tools · OpenAI tool_search 방식, 우리 코드라 모델·API·fallback 과 무관). 목록은 역할·대화 종류로만 정해져 캐시 그대로.
+- 이 방에서 꺼진 도구를 불러오면 '꺼져 있는 기능' 안내. 모델이 목록 이름을 바로 불러도 allowed 안이면 실행됨. light 길에서도 find_tools 됨.
+- 지시문: 8번 규칙을 항목으로 쪼개고 이유를 붙임, [일하는 방식](파악→도구로 확인→실제로 함→결과대로 짧게, 방법만 설명하고 끝내지 않음).
+- 기억: EXTRACT_SYSTEM 에 '안 뽑는 게 기본·농담/드립/과장 제외·싫다는 호칭은 remove', ROOM_SYSTEM = 이어받을 비서에게 주는 인수인계
+  (진행 중인 부탁·정정·싫다는 호칭).

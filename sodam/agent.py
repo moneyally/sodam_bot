@@ -1,5 +1,6 @@
 """에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다.
 실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
+import json
 import logging
 import re
 import time
@@ -12,7 +13,7 @@ from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
 from .security import nonce, wrap
-from .tools import READ_ONLY, ToolCtx, available, execute, offered
+from .tools import FIND_TOOL, READ_ONLY, ToolCtx, available, execute, find_tools_schema, offered, split_core
 from .util import clip_mid, name_key, user_name
 from .whyfail import CLAIM as _CLAIM
 
@@ -255,8 +256,9 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     usable = {t.name for t in available(ctx.role, ctx.settings, ctx.chat_id > 0)}
     if mode in ("chime", "morning"):
         shown = [t for t in shown if t.name in CHIME_TOOLS]
-    schemas = [t.schema() for t in shown]
-    allowed = {t.name for t in shown} & usable
+    core, deferred = split_core(shown) if mode not in ("chime", "morning") else (shown, [])
+    schemas = [t.schema() for t in core] + ([find_tools_schema(deferred)] if deferred else [])
+    allowed = ({t.name for t in shown} & usable) | ({FIND_TOOL} if deferred else set())
     purpose = f"agent:{role_label}" if mode not in ("chime", "morning") else "agent:chime"
     think0 = wants_thinking(getattr(svc.cfg, "agent_think", "off"), request, mode, ctx.role)
     light_model = getattr(svc.cfg, "light_model", "") or ""
@@ -276,7 +278,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
             log.exception("room people failed")
             ctx.room_people = []
         ctx.addr_sources = [reply_to or "", *(hints or [])]
-    ctx_tools = _ToolSet(schemas, allowed)
+    ctx_tools = _ToolSet(schemas, allowed, {t.name: t for t in deferred})
     run.event("route", lane=lane.lane, why=lane.why, think=think0 and lane.lane == "heavy")
     run.event("tools", shown=len(schemas), usable=len(allowed))
     # 🎞️ 움프 vs 🎬 AI 영상: AI 영상 도구가 없는 방은 '애매'도 움프로 (물어볼 게 없음)
@@ -338,6 +340,29 @@ def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set
 class _ToolSet:
     schemas: list
     allowed: set
+    deferred: dict = field(default_factory=dict)   # find_tools 로 불러올 수 있는 도구 (이름 → Tool)
+
+    def load(self, names: list) -> str:
+        """find_tools: 고른 도구를 이번 실행의 목록에 더함 (다음 라운드부터 부를 수 있음)."""
+        have = {s["function"]["name"] for s in self.schemas}
+        got, off, unknown = [], [], []
+        for n in dict.fromkeys(str(x) for x in (names or [])):
+            t = self.deferred.get(n)
+            if t is None:
+                unknown.append(n) if n not in have else got.append(n)
+                continue
+            if n not in have:
+                self.schemas.append(t.schema())
+                have.add(n)
+            (got if n in self.allowed else off).append(n)
+        parts = []
+        if got:
+            parts.append(f"불러옴: {', '.join(got)} — 이제 바로 부를 수 있음. 이 도구로 요청한 일을 이어서 할 것.")
+        if off:
+            parts.append(f"{', '.join(off)}: 이 방에서는 꺼져 있는 기능이라 못 씀 (관리자가 설정에서 켜야 함).")
+        if unknown:
+            parts.append(f"없는 도구: {', '.join(unknown)} (목록의 이름 그대로 고를 것).")
+        return " ".join(parts) or "불러올 도구 이름이 없음. 목록에서 골라 names 에 넣을 것."
 
     def restrict(self, extra: tuple[str, ...] = ()) -> list[str] | None:
         """allowed_tools 에 줄 이름 (싣는 목록이 전부 부를 수 있으면 None = 제한 없음)."""
@@ -372,15 +397,15 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     tag = {"light": ":light", "banter": ":banter"}.get(lane, "")
     run.purpose = purpose + (":think" if think else "") + tag + (":escalated" if escalated else "")
     call_purpose = purpose + tag            # 기록(counters prompt:·cached:)용 — 캐시 키는 도구 지문(ts.key)
-    schemas, allowed = ts.schemas, ts.allowed
-    restrict = ts.restrict()
+    allowed = ts.allowed
     chime = mode in ("chime", "morning")
-    if light and not chime:    # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
-        schemas = [*schemas, route.ESCALATE_SCHEMA]
-        restrict = ts.restrict((route.ESCALATE_TOOL,))
+    extra = (route.ESCALATE_TOOL,) if light and not chime else ()   # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
 
     async def call(tool_choice: str = "auto"):
         nonlocal think
+        # 매 라운드 새로: find_tools 로 불러온 도구가 ts.schemas 에 더해짐
+        schemas = [*ts.schemas, *([route.ESCALATE_SCHEMA] if extra else [])]   # 복사본 (불러오기가 지난 호출 목록을 안 바꾸게)
+        restrict = ts.restrict(extra)
         if think:
             try:
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
@@ -458,6 +483,15 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             **({"items": msg.items} if think else {}),   # 추론 항목을 다음 라운드로 (llm.to_input)
         })
         for c in calls:
+            if c.function.name == FIND_TOOL and ts.deferred:   # 도구 불러오기는 코드가 바로 (실행되는 일 없음)
+                try:
+                    names = json.loads(c.function.arguments or "{}").get("names") or []
+                except (ValueError, AttributeError):
+                    names = []
+                result = ts.load(names if isinstance(names, list) else [names])
+                run.event("find_tools", names=", ".join(map(str, names))[:120])
+                messages.append({"role": "tool", "tool_call_id": c.id, "content": wrap("tool_result", result, nonce())})
+                continue
             if c.function.name not in allowed:  # 이번 호출에 보여주지 않은 도구 · 방 설정으로 꺼진 도구
                 shown_names = {s["function"]["name"] for s in ts.schemas}
                 result = ("이 방에서는 꺼져 있는 기능이라 사용할 수 없음 (관리자가 설정에서 켜야 함)."

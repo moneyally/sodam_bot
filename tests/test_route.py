@@ -290,7 +290,7 @@ async def tool_list_is_stable_across_room_settings_for_cache():
             tools.append([t["function"]["name"] for t in call["tools"]])
             if settings:
                 assert call["allowed"] is not None and "make_image" not in call["allowed"]
-                assert "start_game" not in call["allowed"] and "warn_member" in call["allowed"]
+                assert "start_game" not in call["allowed"] and "find_tools" in call["allowed"]   # 경고 등은 find_tools 로
             else:
                 assert call["allowed"] is None                                   # 전부 부를 수 있으면 제한 없음
         assert tools[0] == tools[1] and keys[0] == keys[1]                        # 방 설정이 달라도 같은 앞부분·같은 캐시 키

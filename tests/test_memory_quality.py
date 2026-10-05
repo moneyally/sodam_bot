@@ -147,8 +147,12 @@ async def unused_facts_expire_after_max_unused_days():
 @test
 def extract_prompt_has_codex_style_rules():
     s = memory.EXTRACT_SYSTEM
-    for part in ("명시", "추정", "일반화", "replaces", "나중 말이 이긴다", "증거가 아니다"):
+    for part in ("명시", "추정", "일반화", "replaces", "나중 말이 이긴다", "증거가 아니다",
+                 "아무것도 뽑지 않는 게 기본", "농담·드립·과장", "애매하면 뽑지 않는다", "그 호칭 줄을 remove"):
         assert part in s, part
+    r = memory.ROOM_SYSTEM   # 방 흐름 메모 = 이어받을 비서에게 주는 인수인계 (진행 중인 부탁·정정·싫다는 호칭)
+    for part in ("인수인계", "진행 중인 일", "정정한 것", "싫다고 한 호칭", "방 규칙"):
+        assert part in r, part
 
 
 @test

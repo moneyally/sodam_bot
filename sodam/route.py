@@ -26,7 +26,8 @@ DEFAULT_MODE = "hybrid"
 
 # light 에서 실행해도 되는 도구 = 이 서버 데이터 읽기(tools.READ_ONLY, 실행 때 합침) + 바깥 조회만.
 # 이 밖의 도구(제재·설정·전송·그림·영상·게임·기억 저장…)를 부르면 heavy 로 올려 보냄.
-LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user", "my_ids"})
+LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide", "lookup_user", "my_ids",
+                        "find_tools"})   # 도구 불러오기 = 목록만 바꿈 (실행은 불러온 도구가 정함)
 # 가벼운 쓰기 (본인 것·인사·게임 — 멤버도 쓰는 도구, 틀려도 피해 작음. 09-30 실측 올려 보내기 16+건).
 # light 가 이걸 실행한 뒤 올려 보내면 heavy 에 '이미 한 일' 로 알림 (agent.DONE_NOTE — 두 번 하지 않게)
 LIGHT_WRITE = frozenset({"greet_members", "mention_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
