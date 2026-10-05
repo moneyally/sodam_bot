@@ -11,7 +11,7 @@ StartLimitIntervalSec=0
 Type=simple
 DynamicUser=yes
 ExecStart=/opt/sodam-sandbox/venv/bin/python3 -I /opt/sodam-sandbox/server.py /run/sodam-workshop/sock
-Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WS_BASE=/tmp/ws WS_MOUNT=/tmp/w
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WS_BASE=/tmp/ws WS_MOUNT=/tmp/w MPLCONFIGDIR=/tmp/.mpl
 RuntimeDirectory=sodam-workshop
 RuntimeDirectoryMode=0755
 Restart=always
@@ -41,8 +41,8 @@ RestrictAddressFamilies=AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service @mount
 SystemCallFilter=~@privileged:EPERM
-CapabilityBoundingSet=
-AmbientCapabilities=
+# CapabilityBoundingSet= 은 쓰지 않음: DynamicUser 에서 'Failed to drop bset capabilities'(실측 2026-10-06)이고,
+# 비어 있으면 작업마다 만드는 user namespace 안의 mount 도 막힘. 임시 사용자라 권한이 없고 NoNewPrivileges 로 못 얻음.
 UMask=0077
 MemoryMax=700M
 MemorySwapMax=0
