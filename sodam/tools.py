@@ -1056,7 +1056,21 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         return "AI 작업은 1시간 이상 간격으로만 반복할 수 있음."
     if len(await ctx.svc.db.schedules(ctx.chat_id)) >= MAX_PER_CHAT:
         return f"이 방 예약이 이미 {MAX_PER_CHAT}개라 더 못 만듦. 관리자 1:1 메뉴 🗓️ 에서 정리하라고 안내."
-    text, title = str(a.get("text", "")).strip()[:500], str(a.get("title", "")).strip()[:40]
+    code = action == "ai" and skill == "code"
+    text, title = str(a.get("text", "")).strip()[:4000 if code else 500], str(a.get("title", "")).strip()[:40]
+    preview = ""
+    if code:   # 🧪 레시피: 저장 전에 지금 데이터로 한 번 돌려 봄 (파일은 안 올림) — 오류면 고쳐서 다시
+        from .panels import runcode   # 늦게 import (panels → tools 순환 방지)
+        from .workshop.client import WorkshopDown
+        if not text:
+            return "skill=code 면 text 에 실행할 파이썬 코드를 넣을 것 (room.db = 이 방 사본, print 한 글·저장한 파일이 그 시각에 올라감)."
+        try:
+            res = await runcode.preview(ctx.svc, ctx.chat_id, text)
+        except WorkshopDown:
+            return "작업실(코드 실행 서버)이 지금 꺼져 있어 코드 예약을 미리 확인할 수 없음. 잠시 뒤 다시 부탁해 달라고 안내할 것."
+        if res.get("status") != "ok":
+            return f"미리 돌려 보니 실패({res.get('status')}): {(res.get('output') or '')[-800:]}\n코드를 고쳐서 schedule_task 를 다시 부를 것."
+        preview = runcode.preview_line(res)
     deliver = "me" if a.get("to") == "me" else "room"
     if action == "post" and deliver == "me":      # 공지는 방에 올리는 것 → 1:1 이면 알람과 같음
         action = "remind"
@@ -1074,7 +1088,7 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
                           ok_label="✅ 예약")
     await ctx.bot.send_message(
         ctx.chat_id, f"⏰ 이렇게 예약할까요?\n언제: <b>{describe_when(*when[:3])}</b>\n종류: {what}\n"
-                     f"내용: {esc(text) or '(없음)'}\n보낼 곳: {'요청한 분 1:1' if deliver == 'me' else '이 방'}\n"
+                     + (f"미리보기(지금 데이터): {esc(preview)}\n" if code else f"내용: {esc(text) or '(없음)'}\n") + f"보낼 곳: {'요청한 분 1:1' if deliver == 'me' else '이 방'}\n"
                      f"(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
         parse_mode="HTML", reply_markup=kb)
     return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 저장된다고 짧게 안내할 것. 아직 저장된 게 아니니 '했다'고 말하지 말 것."
@@ -1225,13 +1239,13 @@ TOOLS: list[Tool] = [
     Tool("schedule_task", "알람·공지·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘'(요청한 사람을 부름) → remind, "
          "'매일 아침 9시 방에 인사 올려'(정해진 글) → post, "
          "'매일 밤 10시에 오늘 대화 요약해서 올려' → ai+summary, '매일 아침 8시 비트코인 뉴스' → ai+search, "
-         "'매일 자정 수다 랭킹' → ai+stats, '매주 월요일 10시 지난주 신규 가입 통계' → ai+joins, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
+         "'매일 자정 수다 랭킹' → ai+stats, '매일 밤 11시 시간대별 채팅 차트 올려'·정해진 통계로 안 되는 계산·표·파일 → ai+code (text = 파이썬 코드, room.db = 이 방 사본, print·저장 파일이 그 시각에 올라감 — 저장 전에 한 번 돌려 봄), '매주 월요일 10시 지난주 신규 가입 통계' → ai+joins, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
          {"when": {"type": "string", "description": "매일 HH:MM / 매주 월 HH:MM (여러 요일: 매주 월,수,금 HH:MM) / 평일 HH:MM / 주말 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM (자정은 00:00)"},
           "action": {"type": "string", "enum": list(cron.ACTIONS)},
           "skill": {"type": "string", "enum": list(cron.SKILLS), "description": "action=ai 일 때만"},
           "text": {"type": "string", "description": "remind: 그 시각에 방에 그대로 올라갈 알림 내용 자체 (예: '회의 시간이에요', '치킨 도착!'), "
                                                     "'알려드릴게요' 같은 예약 말투 금지 / "
-                                                    "ai: 작업 지시·검색 주제"},
+                                                    "ai: 작업 지시·검색 주제 / ai+code: 실행할 파이썬 코드"},
           "title": {"type": "string"},
           "to": {"type": "string", "enum": ["room", "me"], "description": "room=방에 올림(기본), me=요청한 관리자 1:1 로만 "
                                                                         "('나한테 알려줘', '나한테 보고' 같은 말)"}},

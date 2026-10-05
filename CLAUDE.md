@@ -807,6 +807,9 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
 - AI 도구 run_code(code) (`panels/runcode.py`, find_tools 로 불러옴): 관리자·오너 바로, 멤버는 방 설정 run_code_members, 1:1 은 오너만(방 데이터 없음).
   방마다 하루 run_code_daily 30 (OWNER_CAP). 그룹방이면 room.db 사본(`workshop/snapshot.py`, 이 방만·90일·메시지 원문은 관리자 요청일 때만) → ctx.room_read.
   결과 그림은 사진, 나머지 파일은 문서로 방에. 작업실이 꺼져 있으면 안내만 (OpenAI 코드 인터프리터 대체는 아직 없음).
+- **🧪 코드 레시피** = 예약 작업 skill=code (schedule_task ai+code, text = 코드 4000자): 만들 때 지금 데이터로 한 번 돌려 보고(실패면 AI 가 고침)
+  카드에 미리보기 → 그 시각엔 **AI 없이** 저장된 코드만 작업실에서 (`runcode.fire_recipe`, 관리자 사본, 출력·파일 → 방 또는 만든 관리자 1:1).
+  만든 사람이 관리자가 아니면 끔(cron.fire). 하루 횟수는 run_code 와 같이 셈. manage_schedule op=run = AI 작업·코드 작업 지금 한 번(카드 없음).
 
 ## 도구 고르기: 핵심만 처음부터 + find_tools (2026-10-05, tests/test_harness_codex.py)
 - 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → `tools.CORE_TOOLS`(서버 30일 사용량 상위 20개)만 처음부터,

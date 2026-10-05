@@ -237,8 +237,10 @@ async def t_manage_schedule(ctx: tools.ToolCtx, a: dict) -> str:
         return "target 은 schedule(예약공지·알람·AI 작업) / alert_rule(알림 규칙) 중 하나."
     if op == "list":
         return await _list(ctx, what)
+    if op == "run" and what == "schedule":   # ▶️ 저장된 AI 작업·코드 레시피를 지금 한 번 (만든 관리자가 만든 것 → 카드 없이)
+        return await _run_now(ctx, to_int(str(a.get("id", "")).lstrip("#")))
     if op not in SCHED_OPS:
-        return "op 는 list / pause / resume / delete 중 하나."
+        return "op 는 list / pause / resume / delete / run(예약 AI 작업·코드 작업 지금 실행) 중 하나."
     iid = to_int(str(a.get("id", "")).lstrip("#"))
     r = await _item(ctx.svc, ctx.chat_id, what, iid) if iid else None
     if r is None:
@@ -252,6 +254,21 @@ async def t_manage_schedule(ctx: tools.ToolCtx, a: dict) -> str:
         ctx.chat_id, f"🗓️ 이걸 <b>{SCHED_OPS[op]}</b> 할까요?\n{esc(await _describe(ctx.svc, what, r))}\n"
                      f"(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)", parse_mode="HTML", reply_markup=kb)
     return "확인 버튼을 보냈음. " + DONE_NOTE
+
+
+async def _run_now(ctx: tools.ToolCtx, iid: int | None) -> str:
+    from .. import cron
+    r = await _item(ctx.svc, ctx.chat_id, "schedule", iid) if iid else None
+    if r is None:
+        return "그 번호가 이 방에 없음. 먼저 op=list 로 번호를 확인할 것."
+    if r["action"] != "ai":
+        return "지금 실행은 AI 작업·코드 작업 예약만 됨 (알람·공지는 정해진 시각에만)."
+    ok = await cron.fire(ctx.svc, ctx.bot, r)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, None, "schedule_run", f"#{r['id']} {'ok' if ok else 'fail'}")
+    if not ok:
+        return "지금 실행했지만 올라간 게 없음 (작업실 꺼짐·한도·오류일 수 있음 — 📥 운영 인박스에 이유). 짧게 안내할 것."
+    ctx.quiet = True
+    return "지금 한 번 실행해서 결과를 올렸음."
 
 
 async def sched_ok(c: PanelCtx, spec) -> Screen:
@@ -400,9 +417,9 @@ TOOLS = [
                 "items": {"type": "array", "items": {"type": "string"}, "description": f"낱말·도메인 (한 번에 {MAX_ITEMS}개까지)"}},
                ["list", "op"], t_edit_list, Role.ADMIN, where="room"),
     tools.Tool("manage_schedule", "[관리자] 이 방 예약(예약공지·알람·AI 작업 = schedule)·알림 규칙(alert_rule) 목록 보기(list) · "
-               "끄기(pause)·켜기(resume)·삭제(delete) (확인 버튼). 번호를 모르면 먼저 list. 새로 만들기는 schedule_task·alert_rule.",
+               "끄기(pause)·켜기(resume)·삭제(delete) (확인 버튼) · AI 작업·코드 작업 지금 한 번 실행(run). 번호를 모르면 먼저 list. 새로 만들기는 schedule_task·alert_rule.",
                {"target": {"type": "string", "enum": ["schedule", "alert_rule"]},
-                "op": {"type": "string", "enum": ["list", *SCHED_OPS]},
+                "op": {"type": "string", "enum": ["list", *SCHED_OPS, "run"]},
                 "id": {"type": "integer", "description": "list 에 나온 번호"}},
                ["target", "op"], t_manage_schedule, Role.ADMIN, where="room"),
     tools.Tool("room_control", "[관리자] 방 전체 조치 (확인 버튼): lock=방 잠그기(관리자만 채팅) · unlock=잠금 풀기 · "

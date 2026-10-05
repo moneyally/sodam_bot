@@ -95,6 +95,38 @@ async def daily_cap_and_workshop_down():
     assert "꺼져 있음" in out, out
 
 
+CHART = ("import sqlite3\nc = sqlite3.connect('room.db')\nn = c.execute('select count(*) from messages').fetchone()[0]\n"
+         "print('오늘 메시지', n)\nopen('chart.png','wb').write(b'\\x89PNG fake')")
+
+
+@test
+async def recipe_previews_before_saving_and_runs_without_ai():
+    from sodam import cron
+    svc, bot = await _setup()
+    svc.perms.admins.add(ADMIN)
+    c = tools.ToolCtx(svc, bot, ROOM, fake_user(ADMIN, "관리"), Role.ADMIN, await svc.db.get_settings(ROOM))
+    args = {"when": "매일 23:00", "action": "ai", "skill": "code", "text": "1/0"}
+    out = await tools.execute("schedule_task", json.dumps(args), c)
+    assert "미리 돌려 보니 실패" in out and "ZeroDivisionError" in out and not bot.named("send_message"), out
+    args["text"] = CHART
+    out = await tools.execute("schedule_task", json.dumps(args), c)
+    card = bot.named("send_message")[-1]
+    assert "확인 버튼" in out and "미리보기" in card[2] and "오늘 메시지 2" in card[2] and "chart.png" in card[2], card[2]
+    assert not bot.named("send_photo"), "미리보기는 방에 파일을 안 올림"
+    sid = (await cron.create(svc, [ROOM], uid=ADMIN, when=("daily", "23:00", None, None), action="ai", skill="code",
+                             text=CHART, title="밤 차트"))[0]
+    row = await svc.db.get_schedule(ROOM, sid)
+    svc.llm = None   # 그 시각엔 AI 를 안 씀 (부르면 터짐)
+    assert await cron.fire(svc, bot, row) is True
+    assert "오늘 메시지 2" in bot.named("send_message")[-1][2] and len(bot.named("send_photo")) == 1
+    c2 = tools.ToolCtx(svc, bot, ROOM, fake_user(ADMIN, "관리"), Role.ADMIN, await svc.db.get_settings(ROOM))
+    out = await tools.execute("manage_schedule", json.dumps({"target": "schedule", "op": "run", "id": sid}), c2)
+    assert "지금 한 번 실행" in out and len(bot.named("send_photo")) == 2, out          # ▶️ 지금 실행
+    svc.perms.admins.discard(ADMIN)
+    assert await cron.fire(svc, bot, row) is False                                    # 만든 사람이 관리자가 아니면 끄고 안 함
+    assert len(bot.named("send_photo")) == 2
+
+
 @test
 def tool_is_registered_with_guide_and_cap():
     t = tools._BY_NAME["run_code"]

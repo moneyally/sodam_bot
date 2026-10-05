@@ -47,6 +47,7 @@ SKILLS = {
     "search": Skill("🔎 웹 검색 소식", "검색할 주제 (예: 오늘 비트코인 시세 뉴스)"),
     "stats": Skill("📊 방 통계·랭킹", "(비워도 됨) 오늘 채팅 통계와 수다 랭킹"),
     "joins": Skill("📈 입장·퇴장 통계", "(비워도 됨) 지난번 실행 이후(최대 31일) 들어오고 나간 사람 수"),
+    "code": Skill("🧪 코드 작업", "작업실에서 돌릴 파이썬 코드 (room.db = 이 방 사본, print·파일이 올라감)"),
     "write": Skill("✍️ 글쓰기", "쓸 글 (예: 오늘의 명언 한 줄과 응원 한마디)",
                    "지금 할 일: 관리자가 예약해 둔 <task> 대로 방에 올릴 짧은 글을 쓴다. 10줄 이내, 지어낸 사실·수치는 쓰지 않는다."),
 }
@@ -65,7 +66,7 @@ async def run_skill(svc: Services, row) -> str:
     """스킬 파이프라인 1회. 방에 올릴 글 (빈 글이면 안 올림). 도구는 없음."""
     cid, tz, text = row["chat_id"], svc.cfg.tz, row["text"] or ""
     skill = SKILLS.get(row["skill"] or "")
-    if skill is None:
+    if skill is None or row["skill"] == "code":   # 코드 레시피는 fire → runcode.fire_recipe (글만 뽑는 길 없음)
         return ""
     if row["skill"] == "stats":
         return html.unescape(await stats.summary_text(svc.db, cid, tz, "오늘") + "\n"   # 보낼 때 한 번만 escape
@@ -122,6 +123,9 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
         elif row["action"] == "remind":
             name = await svc.db.first_name(creator) or "관리자"
             body = f"⏰ {mention(creator, name)} {said}"
+        elif row["skill"] == "code":   # 🧪 레시피: AI 없이 저장된 코드만 작업실에서 (panels/runcode.py)
+            from .panels import runcode   # 늦게 import (panels → tools → cron 순환 방지)
+            return await runcode.fire_recipe(svc, bot, row, creator if to_me else cid, title or SKILLS["code"].label)
         else:
             out = (await run_skill(svc, row)).strip()
             if not out:
