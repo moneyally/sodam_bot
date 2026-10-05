@@ -2,7 +2,7 @@
 
 길 3개:
 - heavy  = 지금까지와 같음 (cfg.model = gpt-5.4, 관리자·오너·분석 요청은 추론). 일·분석·사진·1:1 관리.
-- banter = 큰 모델, 추론 없이. 욕 받아치기(mirror)·19금 드립이 켜진 방에서 소담에게 욕·드립 — 방의 '명장면'이라 말맛 우선.
+- banter = 큰 모델, 추론 없이. 소담을 두고 하는 떠보기·놀림(tease), 욕 받아치기(mirror)·19금 드립이 켜진 방에서 소담에게 욕·드립 — 방의 '명장면'이라 말맛 우선.
 - light  = 작은 모델(cfg.light_model, 기본 gpt-5.4-mini), 추론 없이. 잡담·인사·짧은 질문·조회.
   light 로 돌다가 모델이 쓰기 도구(LIGHT_TOOLS 밖)를 부르거나 escalate 도구를 부르면 → 그 도구는 실행하지 않고
   같은 요청을 heavy 로 처음부터 한 번 다시 (agent._run). 판정이 틀려도 일은 큰 모델이 하게 되는 안전망.
@@ -63,6 +63,11 @@ _FOLLOW = re.compile(r"다시|하나\s?더|한\s?번\s?더|말고|그걸로|이�
                      r"더\s?(크게|작게|밝게|어둡게|진하게|길게|짧게|멋|이쁘|예쁘|세게|약하게)|ㄱㄱ|고고|ㅇㅇ\s*$|해\s?줘|해\s?주|부탁|계속|이어서")
 # 관리자·오너 요청 중 추론(생각)까지 쓸 신호 (나머지 = 큰 모델이어도 추론 없이)
 THINK_WHY = frozenset({"off", "best", "dm_manage", "do", "think", "chain", "choice"})
+# 소담 자신을 두고 하는 떠보기·놀림 (실제 2026-10-05 베베: '소담이 티씨 얼마냐'·'유방 색깔 알 수 있을까' → 작은 모델이
+# '정확히 모르겠어·확인이 필요합니다' 로 정색). 장난 받아치기는 말맛이라 큰 모델 (일 요청이면 위 신호가 먼저 heavy).
+_TEASE = re.compile(r"티씨|(?<![A-Za-z])tc(?![A-Za-z])|몸값|몸매|가슴|유방|유두|젖|꼭지|팬티|속옷|브라(?!우|질|더)|"
+                    r"색깔|몇\s?살|나이(?!스)|몸무게|키\s?(몇|얼마)|남친|여친|애인|사귀|사귈|결혼|뽀뽀|키스|섹시|예쁘|이쁘|못생|얼굴\s?(보여|공개)|"
+                    r"벗|만져|안아\s?(줘|주)|데이트|나랑\s?(자|놀|만나)", re.I)
 MEDIA_MARK = re.compile(r"\[(사진|영상|이미지|GIF|동그라미|스티커|움직이는|파일)")
 _LINK = re.compile(r"https?://|t\.me/|www\.", re.I)                            # 이보다 긴 요청 = 설명이 많은 일일 때가 많음
 
@@ -92,6 +97,7 @@ SIGNALS: list[Signal] = [
     ("long", lambda r: len(r.request) > LONG_CHARS, "heavy"),
     ("lines", lambda r: r.lines >= 3, "heavy"),                               # 여러 줄 = 목록·설명 붙은 일
     ("link", lambda r: bool(_LINK.search(r.request)), "heavy"),               # 링크 = 확인·판단할 거리
+    ("tease", lambda r: r.mode in ("call", "follow") and len(r.request) <= 60 and bool(_TEASE.search(r.request)), "banter"),
     ("banter", lambda r: (r.settings.get("ai_comeback") == "mirror" and bool(INSULT_RE.search(r.request)))
      or (bool(r.settings.get("ai_spicy")) and bool(SEX_RE.search(r.request))), "banter"),
 ]
