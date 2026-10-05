@@ -106,22 +106,27 @@ def _mount(src: bytes | None, dst: str, fstype: bytes | None, flags: int, data: 
 def isolate(work: str, lim: dict) -> bool:
     """작업 자식에서: 네임스페이스 + 세션 폴더만 보이게 + 한도. 성공하면 True (테스트 허용 모드에선 실패해도 False 로 진행)."""
     uid, gid = os.getuid(), os.getgid()
-    iso = libc.unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWPID) == 0
-    if iso:
-        for name, text in (("setgroups", "deny"), ("uid_map", f"0 {uid} 1"), ("gid_map", f"0 {gid} 1")):
-            with open(f"/proc/self/{name}", "w") as f:
-                f.write(text)
-        _mount(b"none", "/", None, MS_REC | MS_PRIVATE, None)
-        os.makedirs(MOUNT, exist_ok=True)
-        _mount(work.encode(), MOUNT, None, MS_BIND | MS_REC, None)     # 이 방 세션만
-        for p in [BASE, os.path.dirname(os.environ.get("WS_SOCKET", "")) or "", *HIDE]:
-            if p and os.path.isdir(p) and not os.path.realpath(MOUNT).startswith(os.path.realpath(p) + os.sep):
-                _mount(b"tmpfs", p, b"tmpfs", 0, b"size=4k,mode=000")   # 다른 방 세션·소켓·숨길 폴더 = 빈 칸
-        os.chdir(MOUNT)
-    elif not ALLOW_NO_ISO:
-        raise PermissionError("격리를 못 걸어서 실행 안 함 (user namespace 차단 — AppArmor 프로필 확인)")
-    else:
+    if ALLOW_NO_ISO:   # 테스트 전용: 격리를 아예 시도하지 않음 (반쯤 걸린 네임스페이스에서 돌지 않게)
         os.chdir(work)
+        iso = False
+    else:
+        # 하나라도 실패하면 실행 안 함 (fail closed). Ubuntu AppArmor 는 unshare 는 되는데 그 뒤 설정을 막기도 함 (실측 2026-10-05)
+        try:
+            if libc.unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWPID) != 0:
+                raise OSError(ctypes.get_errno(), "unshare")
+            for name, text in (("setgroups", "deny"), ("uid_map", f"0 {uid} 1"), ("gid_map", f"0 {gid} 1")):
+                with open(f"/proc/self/{name}", "w") as f:
+                    f.write(text)
+            _mount(b"none", "/", None, MS_REC | MS_PRIVATE, None)
+            os.makedirs(MOUNT, exist_ok=True)
+            _mount(work.encode(), MOUNT, None, MS_BIND | MS_REC, None)     # 이 방 세션만
+            for p in [BASE, os.path.dirname(os.environ.get("WS_SOCKET", "")) or "", *HIDE]:
+                if p and os.path.isdir(p) and not os.path.realpath(MOUNT).startswith(os.path.realpath(p) + os.sep):
+                    _mount(b"tmpfs", p, b"tmpfs", 0, b"size=4k,mode=000")   # 다른 방 세션·소켓·숨길 폴더 = 빈 칸
+            os.chdir(MOUNT)
+        except OSError as e:
+            raise PermissionError(f"격리를 못 걸어서 실행 안 함 ({e} — AppArmor 프로필 확인)") from None
+        iso = True
     resource.setrlimit(resource.RLIMIT_CPU, (lim["cpu"], lim["cpu"] + 1))
     mem = lim["mem_mb"] * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_DATA, (mem, mem))
@@ -141,8 +146,10 @@ def _child(job: dict, work: str, wfd: int, lim: dict) -> None:
     out = io.StringIO()
     status = "ok"
     before: dict = {}
+    ready = False   # 세션 폴더 안에 들어왔는지 — 아니면 결과 파일을 절대 안 모음 (서버가 뜬 폴더 파일이 새는 것 방지)
     try:
         iso = isolate(work, lim)
+        ready = True
         if iso:   # pid 네임스페이스는 다음 자식부터 → 한 번 더 fork (안쪽은 PID 1, 서버가 안 보임)
             inner = os.fork()
             if inner != 0:
@@ -166,6 +173,8 @@ def _child(job: dict, work: str, wfd: int, lim: dict) -> None:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
     files = {}
     try:
+        if not ready:
+            raise OSError("not in session dir")
         given = {os.path.basename(str(n)) for n in (job.get("files") or {})}
         for name in sorted(os.listdir(".")):
             if len(files) >= OUT_FILES or name in given or name.startswith("."):
