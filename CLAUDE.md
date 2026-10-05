@@ -396,6 +396,11 @@
 - 원칙: **재시작돼도 사용자가 뭔가 잃거나 이상하면 DB, 아니면 메모리 캐시.** 잠깐 공지 삭제(temp_msgs)·1:1 입력 대기·예약 마법사 초안·
   제재 확인 카드·진행 중 게임(재시작 시 안내하고 끝냄+환불)·퇴장 인사 차지·기억 추출 큐·결제 장애 횟수·오너 코드 실패·MTProto 한도 = DB.
   `persist.restore`(post_init) · `job_sweep` 30초 · `flush_on_stop`. 짧은 도배/속도 창·캐시는 메모리 (표는 persist.py 머리말).
+## 이름 찾기 정리 (`util.name_key`, tests/test_name_key.py · 뮤테이션 5개, 2026-10-05)
+- 이름 비교는 NFKC(꾸밈 글꼴 𝕊𝔼ℂ𝕆ℕ𝔻→second) + 투명 글자(한글 채움 U+3164 등)·이모지·기호·낱자모 빼고 소문자. 실제: 베베 'ㅤㅤ춘식이'·'ㅤㅤㅤㅤ정실장'
+  (멤버 4,553명 중 167명이 투명 글자·이모지). `tools._resolve` → DB 정확 → 호칭 뗌 → `_keyed_members`(정리한 글자로 정확, 인사·조회는 일부도,
+  제재는 정확만) → LIKE → 예전 이름. AI 가 단서 모양 '이름(ID)' 로 넘기면 ID 로. addressee._squash 도 name_key.
+
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·
   숫자 검증(읽기 도구를 쓴 실행에서 결과에 없는 숫자면 한 번 다시) · 자료끼리 다르면 최신 기준+다름 표시 · `answer_sources`(직전 답 근거).

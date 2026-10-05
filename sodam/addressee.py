@@ -9,7 +9,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from .util import display_name
+from .util import display_name, name_key
 
 if TYPE_CHECKING:
     from .services import Services
@@ -53,7 +53,8 @@ def _name(first, last, username) -> str:
 
 
 def _squash(s: str) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]", "", s or "").lower()
+    """이름 비교용 (투명 글자·이모지·꾸밈 글꼴 정리 — util.name_key)."""
+    return name_key(s)
 
 
 async def collect(svc: Services, bot, msg, chat_id: int, caller, request: str) -> list[str]:
