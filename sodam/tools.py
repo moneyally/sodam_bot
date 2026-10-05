@@ -381,10 +381,16 @@ async def _uploading(ctx: ToolCtx) -> None:
 
 
 async def t_make_image(ctx: ToolCtx, a: dict) -> str:
-    prompt = str(a.get("prompt", "")).strip()
+    from . import mediapolicy   # 영상과 같은 규칙 (오너 결정 2026-10-05 — 성인 내용 판단은 그림 AI 에게)
+    request = mediapolicy.source_text(ctx)
+    prompt = mediapolicy.passthrough(request) or str(a.get("prompt", "")).strip()
     if not prompt:
         return "그릴 내용이 비어 있음."
+    if drift := mediapolicy.style_drift(request, prompt):
+        return mediapolicy.drift_back(drift)
     edit = a.get("mode") == "edit"
+    if why := mediapolicy.hard_line(prompt + "\n" + request, edit or bool(a.get("photo_of"))):
+        return why
     if a.get("photo_of"):                          # 이 방 멤버 누구든 프사를 원본으로 (움프·스티커와 같은 규칙)
         from .panels.avatar import source_photo
         src, err = await source_photo(ctx, a)
@@ -1086,6 +1092,9 @@ TOOLS: list[Tool] = [
     Tool("room_rules", "이 방의 규칙/공지를 확인한다.", ROOM_PARAM, [], room_scoped(t_room_rules)),
     Tool("make_image", "그림을 새로 만들거나(new) 붙은·답장한 사진(누가 올렸든)을 부탁대로 고친다(edit). "
          "이 방 다른 멤버 프사로 하려면 photo_of 에 그 사람 이름. 결과는 방에 사진으로 간다. "
+         "prompt 는 사용자 말을 그대로 옮긴다 (실사는 실사로, 사용자가 말하지 않은 화풍·완곡 문장을 더하지 말고 넣을 글자는 따옴표 그대로). "
+         "성인 내용을 스스로 거절·순화하지 말 것 — 되고 안 되고는 그림 AI 가 판단. 부르지 않는 건 미성년자 성적·노출, "
+         "실제 사람 사진으로 성적·노출 두 가지뿐. "
          "앞에서 한도·실패였어도 다시 부탁하면 기억으로 '막혔다'고 답하지 말고 이 도구를 다시 부른다 (관리자가 한도를 바꿨을 수 있음).",
          {"prompt": {"type": "string", "description": "원하는 그림을 구체적으로 (피사체·분위기·색·글자·구도)"},
           "mode": {"type": "string", "enum": ["new", "edit"]},

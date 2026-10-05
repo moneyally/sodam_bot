@@ -516,6 +516,15 @@
 - 원본 사진(mode=image): photo_of > 붙은·답장한 사진 > 요청자 프사 (panels/avatar.source_photo 규칙을 videogen 에 복사 — avatar 는 다른 작업이 고치는 중이었음).
 - 점검(room_checkup) '영상 이번 주 n/한도개' (+키 없으면 표시) · 안내서 `guide/video.md` · 프롬프트 규칙 9 = 도구가 없을 때만 '영상 생성 안 됨'. 음성 도구엔 안 넣음.
 
+## 🎬🎨 영상·그림 요청 규칙 (`mediapolicy.py`, tests/test_mediapolicy.py·test_videogen.py · 뮤테이션 7개, 2026-10-05 오너 결정)
+- 고객 '퀄리티 별로'(같은 문장을 그록 앱에 넣으면 훨씬 좋음) → 원인: 소담 AI 가 실사 요청에 'non-photorealistic' 를 스스로 붙이거나(#2564)
+  2,000자 원문을 다시 쓰며 디테일을 뺌(#2567). **성인 내용은 소담 AI 가 거절·순화하지 않고 영상·그림 AI 정책에 맡김** (도구 설명·prompt.py [사진]).
+- 막는 건 코드·지시문 같게 두 가지만: 미성년+성적, **실제 사람 사진+성적·노출(유지 — 오너가 풀자고 했지만 동의 없는 딥페이크라 Claude 가 거절)**.
+- 원문 보존: 요청(짧으면 답장한 글까지 `source_text`)에 영어 프롬프트(라틴 250자↑)가 있으면 그 원문을 그대로(`passthrough`, 2,000자).
+  사용자가 말 안 한 화풍(stylized·cartoon·anime·non-photorealistic…)을 AI 가 넣으면 `style_drift` 로 돌려보냄. make_image 도 같음.
+- 화질 말(실사·고퀄·realistic·cinematic…)이 있으면 grok-imagine-video-1.5(XAI_BEST, $0.08/초), 없으면 lite. 해상도 720p 그대로
+  (그록이 말한 해상도별 요금표는 공식 문서에서 확인 안 됨 — 1080p 는 실제 청구 확인 뒤).
+
 ## 🎞️ 움프 vs 🎬 AI 영상 의도 (`mediaintent.py`, tests/test_mediaintent.py · 뮤테이션 7개, 2026-10-01 오너 '복불복으로 만들어줌')
 - 실제 사례: '원형테두리 없애주고 영상으로 움직이게'(움프 고치던 중) → AI 영상(주 한도), '움직이는영상프로필' → 사람이 '프로필말고 영상' 다시.
 - `classify(request, reply_to)` 코드 판정: '~말고' 부정 먼저 → 움프 말(프사·프로필·gif·테두리·효과 이름)만 = ump · 영상 말(영상 제작·장면·동작·소리)만 = video ·

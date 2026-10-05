@@ -198,7 +198,7 @@ async def router_cheap_by_default_quality_words_go_up_and_lite_failure_retries_o
     prov = video.Provider("xai", XKEY, "grok-imagine-video", tuple(range(1, 16)), ("1:1",))
     set_env(XAI_API_KEY=XKEY)
     assert video.route_model(prov, "고양이 춤추는 영상")[0].model == video.XAI_CHEAP
-    assert video.route_model(prov, "영화처럼 고화질로 만들어줘")[0].model == "grok-imagine-video"
+    assert video.route_model(prov, "영화처럼 고화질로 만들어줘")[0].model == video.XAI_BEST == "grok-imagine-video-1.5"
     assert video.route_model(prov, "make it cinematic and detailed")[1] == "quality"
     set_env(XAI_API_KEY=XKEY, VIDEO_MODEL="grok-imagine-video-1.5")
     assert video.route_model(prov, "고양이")[1] == "fixed", "VIDEO_MODEL 을 적으면 라우터 끔"
@@ -398,7 +398,7 @@ async def only_two_hard_lines_rest_goes_to_provider():
     api = Api()
     svc, bot = await world(api)
     fn = tools._BY_NAME["make_video"].fn
-    out = await fn(await ctx(svc, bot), {"prompt": "A sexy woman in lingerie dancing, fictional character", "mode": "text"})
+    out = await fn(await ctx(svc, bot), {"prompt": "A sexy woman in lingerie dancing on a neon stage", "mode": "text"})
     await finish()
     assert "시작" in out and len([r for r in api.reqs if r.method == "POST"]) == 1, "가상 인물 성인 내용은 영상 AI 에 그대로"
     Bot.photos = {2: b"\xff\xd8FACE"}
@@ -406,6 +406,39 @@ async def only_two_hard_lines_rest_goes_to_provider():
     assert out == videogen.REFUSE_REAL and len([r for r in api.reqs if r.method == "POST"]) == 1, out
     out = await fn(await ctx(svc, bot), {"prompt": "sexy dance of a schoolgirl", "mode": "text"})
     assert out == videogen.REFUSE_MINOR and not videogen.RUNNING
+
+
+LONG_EN = ("Create a highly realistic photorealistic profile video designed as a circular Telegram portrait. "
+           "Thin glowing gold circular border, dark black outer background, night city bokeh behind a Korean woman "
+           "in an elegant black dress, cinematic lighting, natural skin pores, shallow depth of field. "
+           "Place the Korean name \"자이\" in elegant gold typography at the right-center. Slow push-in camera.")
+
+
+@test
+async def users_own_english_prompt_goes_to_grok_verbatim_and_no_style_is_injected():
+    """실제 2026-10-05 베베 #2564·#2567: 2,000자 영어 원문 → AI 가 다시 쓰며 'non-photorealistic' 를 붙이거나 디테일을 뺌 → 고객 '퀄리티 별로'.
+    원문을 그대로 넘기고, 사용자가 안 말한 화풍을 끼우면 돌려보냄."""
+    api = Api()
+    svc, bot = await world(api, env={"XAI_API_KEY": XKEY})
+    c = await ctx(svc, bot)
+    c.request_text = LONG_EN + "\n소담아 영상제작해줘"
+    out = await run(c, prompt="A short rewritten prompt that drops details")
+    assert "시작" in out, out
+    body = json.loads([r for r in api.reqs if r.method == "POST"][-1].content)
+    assert body["prompt"] == LONG_EN and "소담" not in body["prompt"], body["prompt"]
+    assert body["model"] == video.XAI_BEST, "photorealistic·cinematic → 1.5"
+    c2 = await ctx(svc, bot)                                       # 영어 글에 답장으로 '이걸로 영상' (실제 #2567 모양)
+    c2.request_text, c2.reply_text = "소담아 이걸로 영상 만들어줘", LONG_EN
+    await run(c2, prompt="whatever")
+    assert json.loads([r for r in api.reqs if r.method == "POST"][-1].content)["prompt"] == LONG_EN
+    n = len([r for r in api.reqs if r.method == "POST"])
+    c3 = await ctx(svc, bot)
+    c3.request_text = "소담아 실사 느낌 프로필 영상 만들어줘 야경 배경으로"
+    out = await run(c3, prompt="A stylized fictional female character, clearly non-photorealistic, night city")
+    assert "화풍" in out and "non-photorealistic" in out and len([r for r in api.reqs if r.method == "POST"]) == n, out
+    c4 = await ctx(svc, bot)
+    c4.request_text = "소담아 애니 느낌으로 고양이 영상"
+    assert "시작" in await run(c4, prompt="An anime style cat jumping"), "사용자가 말한 화풍은 됨"
 
 
 @test
