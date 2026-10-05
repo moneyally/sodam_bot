@@ -199,6 +199,72 @@ sshws_setup() {
     fi
 }
 
+# 🧪 작업실(sodam-workshop): 격리 코드 실행 서버 (sodam/workshop/server.py). 실패해도 본체는 그대로.
+# venv 는 --copies (진짜 실행 파일이어야 AppArmor 프로필이 붙음 → user namespace 허용). 패키지는 목록이 바뀔 때만.
+WORKSHOP_DIR=${WORKSHOP_DIR:-/opt/sodam-sandbox}
+APPARMOR_DIR=${APPARMOR_DIR:-/etc/apparmor.d}
+workshop_check() {   # 작업실에 실제로 일을 시켜 봄: 계산·인터넷 막힘·봇 폴더 안 보임
+    "$WORKSHOP_DIR/venv/bin/python3" -I - "$APP_DIR" <<'EOF'
+import json, socket, sys
+def ask(req):
+    s = socket.socket(socket.AF_UNIX); s.settimeout(60); s.connect("/run/sodam-workshop/sock")
+    s.sendall(json.dumps(req).encode() + b"\n"); data = b""
+    while not data.endswith(b"\n"):
+        chunk = s.recv(65536)
+        if not chunk: break
+        data += chunk
+    return json.loads(data)
+run = lambda code: ask({"op": "run", "session": "_check", "code": code, "files": {}, "limits": {}})
+bad = []
+r = run("print(6*7)")
+if r.get("output", "").strip() != "42": bad.append("calc:" + r.get("status", "?"))
+r = run("import socket\nsocket.create_connection(('1.1.1.1', 53), timeout=3)\nprint('NET_OPEN')")
+if "NET_OPEN" in r.get("output", ""): bad.append("net_open")
+r = run(f"import os\nprint('APP_SEEN' if os.listdir({sys.argv[1]!r}) else 'APP_EMPTY')")
+if "APP_SEEN" in r.get("output", ""): bad.append("app_dir_visible")
+print("ok" if not bad else "fail " + ",".join(bad))
+EOF
+}
+workshop_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] && [ -f "$APP_DIR/sodam/workshop/server.py" ] || return 0
+    local vpy="$WORKSHOP_DIR/venv/bin/python3" req="$APP_DIR/deploy/sandbox-requirements.txt" changed=0 res
+    mkdir -p "$WORKSHOP_DIR" && chmod 755 "$WORKSHOP_DIR"
+    if [ ! -x "$vpy" ] || [ -L "$vpy" ]; then
+        log "workshop: venv 새로 (--copies)"
+        rm -rf "$WORKSHOP_DIR/venv"
+        python3 -m venv --copies "$WORKSHOP_DIR/venv" \
+            || { log "workshop: venv 실패"; report workshop_setup.status "workshop_fail venv"; return 0; }
+        rm -f "$WORKSHOP_DIR/requirements.installed"; changed=1
+    fi
+    if ! cmp -s "$req" "$WORKSHOP_DIR/requirements.installed"; then
+        if "$vpy" -m pip install -q --disable-pip-version-check --no-cache-dir -r "$req"; then
+            cp "$req" "$WORKSHOP_DIR/requirements.installed"; changed=1; log "workshop: 패키지 설치"
+        else
+            log "workshop: 패키지 설치 실패"; report workshop_setup.status "workshop_fail pip"; return 0
+        fi
+    fi
+    if ! cmp -s "$APP_DIR/sodam/workshop/server.py" "$WORKSHOP_DIR/server.py"; then
+        install -m 644 "$APP_DIR/sodam/workshop/server.py" "$WORKSHOP_DIR/server.py"; changed=1
+    fi
+    if [ -f "$APP_DIR/deploy/apparmor-sodam-workshop" ] && command -v apparmor_parser >/dev/null 2>&1; then
+        if ! cmp -s "$APP_DIR/deploy/apparmor-sodam-workshop" "$APPARMOR_DIR/sodam-workshop"; then
+            install -m 644 "$APP_DIR/deploy/apparmor-sodam-workshop" "$APPARMOR_DIR/sodam-workshop"; changed=1
+        fi
+        apparmor_parser -r "$APPARMOR_DIR/sodam-workshop" 2>/dev/null \
+            || { log "workshop: AppArmor 프로필 적용 실패"; report workshop_setup.status "workshop_fail apparmor"; return 0; }
+    fi
+    if ! cmp -s "$APP_DIR/deploy/sodam-workshop.service" "$UNIT_DIR/sodam-workshop.service"; then
+        cp "$APP_DIR/deploy/sodam-workshop.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload; changed=1
+    fi
+    $SYSTEMCTL is-enabled -q sodam-workshop 2>/dev/null || $SYSTEMCTL enable -q sodam-workshop
+    if [ "$changed" -eq 1 ] || ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null; then
+        $SYSTEMCTL restart sodam-workshop || { log "workshop: 시작 실패 (journalctl -u sodam-workshop)"; report workshop_setup.status "workshop_fail 시작"; return 0; }
+        sleep 3
+    fi
+    res=$(workshop_check 2>&1 | tail -n 1)
+    log "workshop: 점검 $res"; report workshop_setup.status "workshop_$res"
+}
+
 # 자동 갱신 유닛(시간 제한 등)이 바뀌었으면 설치 — 지금 도는 갱신은 옛 설정 그대로 끝나고 다음부터 적용
 unit_setup() {
     [ -n "$RUN_AS" ] || return 0
@@ -248,6 +314,11 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
         diag_setup
         sshws_setup
     fi
+    # 작업실이 안 떠 있거나 마지막 점검이 실패면 10분마다 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] \
+        && { ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null || ! grep -q ' workshop_ok' "$APP_DIR/data/workshop_setup.status" 2>/dev/null; }; then
+        workshop_setup
+    fi
     exit 0
 fi
 if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
@@ -289,6 +360,7 @@ if restart_and_verify "$VER"; then
     voice_setup
     diag_setup
     sshws_setup
+    workshop_setup
     unit_setup
     exit 0
 fi

@@ -171,6 +171,24 @@ async def room_snapshot_holds_only_that_room_and_text_only_for_admins():
     assert tables == {"people", "messages", "casino", "moderation"}, tables              # 설정·토큰·결제 표 없음
 
 
+@test
+def deploy_installs_workshop_behind_both_walls():
+    root = SERVER.parent.parent.parent
+    up = (root / "deploy" / "update.sh").read_text()
+    body = up[up.index("workshop_setup() {"):up.index("\n}\n", up.index("workshop_setup() {"))]
+    assert "venv --copies" in body and '[ -L "$vpy" ]' in body                  # 심볼릭 링크 venv 면 AppArmor 프로필이 안 붙음
+    assert "apparmor_parser -r" in body and "workshop_check" in body
+    assert "workshop_setup\n    unit_setup" in up                               # 본체 재시작 성공 뒤
+    chk = up[up.index("workshop_check() {"):up.index("workshop_setup() {")]
+    assert "NET_OPEN" in chk and "APP_SEEN" in chk                              # 설치 뒤 인터넷·봇 폴더 막힘 실제 확인
+    unit = (root / "deploy" / "sodam-workshop.service").read_text()
+    for need in ("DynamicUser=yes", "PrivateNetwork=yes", "InaccessiblePaths=/opt/sodam ", "RestrictAddressFamilies=AF_UNIX",
+                 "CapabilityBoundingSet=\n", "MemoryMax=", "ProtectSystem=strict"):
+        assert need in unit, need
+    prof = (root / "deploy" / "apparmor-sodam-workshop").read_text()
+    assert "/opt/sodam-sandbox/venv/bin/python3" in prof and "userns," in prof and "/opt/sodam-sandbox/venv/bin/python3" in unit
+
+
 def _stop():
     p = _srv.get("proc")
     if p and p.poll() is None:
