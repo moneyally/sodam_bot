@@ -237,5 +237,14 @@ async def find_tools_reports_room_disabled_tools():
     out = ts.load(["warn_member"])
     assert "꺼져 있는 기능" in out and any(s["function"]["name"] == "warn_member" for s in ts.schemas)
 
+@test
+def prompt_reads_jokes_before_fact_rules():
+    """실제 2026-10-05 베베: '소담이 티씨 얼마냐' → '정확히 모르겠어', '유방 색깔' → 건강 상담. 사실 규칙이 장난에도 걸렸음."""
+    from sodam import prompt
+    s = prompt.SYSTEM
+    assert "[장난 읽기" in s and "건강 상담처럼 답하지 말고" in s
+    assert "정보를 물을 때 모르면" in s and "장난엔 되묻지 않는다" in s      # 사실·되묻기 규칙은 정보 요청에만
+
+
 if __name__ == "__main__":
     run_all()
