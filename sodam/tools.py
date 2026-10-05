@@ -773,9 +773,12 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
         return err
     if _sanction_used(ctx):
         return SANCTION_ONCE
-    await attempt("확인 카드" + (f"({minutes}분)" if minutes else ""))
     reason = str(a.get("reason", "관리자 판단"))[:100]
     targets = [(r["user_id"], _row_name(r)) for r in rows]
+    if kind in DIRECT_KINDS and card_chat is None and ctx.settings.get("ai_sanction_card", "risky") != "all" \
+            and not (ctx.tainted or ctx.bot_tainted or ctx.room_read or getattr(ctx, "via_voice", False)):
+        return await _do_sanction(ctx, kind, targets, reason, minutes, attempt)
+    await attempt("확인 카드" + (f"({minutes}분)" if minutes else ""))
     key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes,
                                             extra=tuple(targets[1:]), from_dm=card_chat is not None))
     label = modactions.label(kind, minutes)
@@ -792,6 +795,38 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
             InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n")]]))
     return (f"확인 버튼을 보냈음 (대상 {len(targets)}명: {', '.join(n for _, n in targets)}). "
             "관리자가 눌러야 실행된다고 짧게 안내할 것. 아직 실행된 게 아니니 '했다'고 말하지 말 것.")
+
+
+# 오너 결정 2026-10-05: 확인 카드는 위험한 것(밴·강퇴·대량 삭제·푸는 조치)만. 관리자가 이 방에서 직접 시킨 경고·뮤트는 바로 실행.
+# 단 이 답변이 멤버 글·다른 봇 글을 읽었거나 요청 확인을 못 했으면(숨은 지시 가능) 예전처럼 카드. 오너 1:1 의 다른 방 제재도 카드.
+DIRECT_KINDS = frozenset({"warn", "mute"})
+
+
+async def _do_sanction(ctx: ToolCtx, kind: str, targets: list, reason: str, minutes: int, attempt) -> str:
+    """카드 없이 바로 (실행 함수·관리자 보호·결과 기록은 카드를 눌렀을 때와 같음 — handlers._confirm_action)."""
+    spec = modactions.KINDS[kind]
+    await attempt("바로 실행" + (f"({minutes}분)" if minutes else ""))
+    act = PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes, extra=tuple(targets[1:]))
+    lines, done = [], []
+    for uid, name in targets:
+        if spec.punitive and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
+            lines.append(f"{name}: 관리자라서 제재 안 함")
+            continue
+        try:
+            ok, line = await spec.run(ctx.svc, ctx.bot, ctx.chat_id, uid, name, ctx.caller.id, act)
+        except TelegramError as e:
+            log.warning("direct sanction %s failed: chat %s user %s: %s", kind, ctx.chat_id, uid, e)
+            lines.append(f"{name}: 실패 ({e.message}) — 봇에게 '사용자 차단' 권한이 있는지 확인 필요")
+            continue
+        lines.append(html.unescape(re.sub(r"<[^>]+>", "", line)))
+        if ok:
+            done.append(name)
+    label = modactions.record_label(kind, minutes)
+    names = ", ".join(n for _, n in targets)[:60]
+    await cards.record(ctx.svc, ctx.chat_id, ctx.caller.id, kind,
+                       (f"✅ {label} 실행됨 — {len(done)}명" if done else f"⚠️ {label} 실행 안 됨") + f" — {names}"
+                       + f" (요청: {display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)})")
+    return ("실행 결과 (관리자가 직접 시킨 일이라 확인 버튼 없이 바로 함 — 이 결과대로만 짧게 전할 것): " + " / ".join(lines))
 
 
 # ── 오너 전용: 1:1 에서 다른 방 관리 ───────────────────────
@@ -1162,9 +1197,9 @@ TOOLS: list[Tool] = [
     Tool("report_to_admin", "멤버가 관리자에게 전하고 싶은 말·신고·건의를 관리자 개인 텔레그램으로 전달한다 (1인 하루 5회).",
          {"message": {"type": "string", "description": "전달할 내용 요약 (500자 이내)"}}, ["message"], t_report_to_admin),
     # 관리자 전용
-    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_warn, Role.ADMIN, where="room"),
-    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "minutes": {"type": "integer", "description": "1~10080"},
           "reason": {"type": "string"}}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN,

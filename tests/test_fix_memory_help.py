@@ -214,7 +214,8 @@ async def image_cost_uses_image_prices():
     assert costs.usd_micro("gpt-image-2.5-flare", 100, 0, 1056) == 100 * 8 + 1056 * 30 == 32_480
     assert costs.usd_micro("gpt-image-2.5-sunburst", 1200, 200, 1056) == 1000 * 8 + 200 * 2 + 1056 * 30
     assert costs.usd_micro("gpt-image-9", 0, 0, 1000, "gpt-5.4") == 30_000, "모르는 이미지 모델 = 이미지 요금(대화 모델 값 아님)"
-    assert costs.usd_micro("모름", 0, 0, 1000) == 15_000, "모르는 대화 모델은 여전히 대화 모델 최고값"
+    top = max(p[2] for m, p in costs.PRICES.items() if not m.startswith(costs.IMAGE_PREFIX))   # 지금 gpt-6-astra $50
+    assert costs.usd_micro("모름", 0, 0, 1000) == round(top * 1000), "모르는 대화 모델은 여전히 대화 모델 최고값"
     db = await make_db()
     llm = LLM(cfg(db.path), db)
     calls = []

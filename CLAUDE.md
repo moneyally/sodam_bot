@@ -781,3 +781,20 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - edit_list(금지어·허용 도메인 add/remove/list, **바로 저장** — change_setting·.금지어 와 같은 규칙, 200/50개, 한 번에 20개) ·
   manage_schedule(schedules·alert_rules list 바로 / pause·resume·delete 는 요청자 카드 sched_ok) · room_control(lock/unlock/purge/notice 카드 room_ok,
   누를 때 may 다시 — 잠금 restrict·청소 delete, 청소 범위 = 도구 부를 때 messages 의 최신 msg_id 부터 N개). 전부 ADMIN·room·READ_ONLY 아님(tainted 면 막힘).
+
+## GPT-6 (sol·luna) 전환 (tests/test_gpt6.py · 뮤테이션 10개, 2026-10-05)
+OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.rs build_responses_request, models.json) 대조.
+- `llm.responses_only`: gpt-6* 는 chat() 도 전부 Responses(think) 로 — Chat Completions 는 추론 none 일 때만 도구(6-sol·luna),
+  6.1-sol·astra 는 도구 없음. 추론 값: 도구면 none, 아니면 지정값·.env·none. `fix_effort`: minimal→low(GPT-6), none 없는 모델→low.
+- 캐시: GPT-6 은 prompt_cache_retention(24h) 대신 `prompt_cache_options={"mode":"explicit"}` + `with_breakpoint` = 맨 앞 system
+  묶음 끝에만 `prompt_cache_breakpoint` (도구+고정 지시만 캐시에 씀, 요청·대화는 1.25배 쓰기 요금 없이 일반 입력). 보관 30분 고정.
+  거절되면 `cache_opts_off` → 자동 캐시. 캐시 쓰기 토큰(input_tokens_details.cache_write_tokens)은 `costs.CACHE_WRITE_MULT` 1.25배.
+- 모델 거절(model_not_found 등) → `FALLBACK`(luna→gpt-5.4-mini, 그 외 gpt-6→gpt-5.4) 으로 이 프로세스 동안 (`models_off`). web_search 도.
+- 서버 .env: OPENAI_MODEL=gpt-6-sol · AGENT_LIGHT_MODEL=gpt-6-luna. 안전 판별(OPENAI_GUARD_MODEL: 스팸·사기·패드립·인젝션)은 gpt-5.4-mini 그대로
+  (오탐 성격이 바뀌는 건 따로 판단). 텍스트 verbosity=low (codex 기본값).
+
+## AI 제재 확인 카드 범위 (오너 결정 2026-10-05, 방 설정 `ai_sanction_card`)
+- risky(기본): 관리자가 이 방에서 직접 시킨 경고·뮤트는 바로 실행 (`tools.DIRECT_KINDS`, `_do_sanction` — 실행 함수·관리자 보호·
+  ai_card_log 기록은 카드 누를 때와 같음). 밴·강퇴·푸는 조치는 카드. all: 예전처럼 전부 카드.
+- 설정과 무관하게 늘 카드: 멤버 글·다른 봇 글을 읽은 답변(tainted·room_read)·인젝션 판별 못 한 요청, 음성채팅(`ctx.via_voice`), 오너 1:1 의 다른 방 제재.
+- 텔레그램 '사용자 차단' 권한 없는 관리자는 지금처럼 거절 (오너 결정).

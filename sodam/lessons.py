@@ -43,7 +43,7 @@ def check(text: str) -> str | None:
     if len(text) > MAX_CHARS:
         return f"{MAX_CHARS}자까지 (지금 {len(text)}자)."
     if SANCTION.search(text):
-        return "제재·권한에 관한 건 교훈으로 저장하지 않음 (제재는 항상 확인 버튼)."
+        return "제재·권한에 관한 건 교훈으로 저장하지 않음 (제재는 정해진 규칙대로 — 밴·강퇴는 확인 버튼)."
     if security.scan(text).blocked or security.defang(text) != text:
         return "봇 규칙을 바꾸려는 지시문 같은 문장이라 안 됨."
     if security.find_links(text) or any(w.search(text) for w in security.WALLETS):

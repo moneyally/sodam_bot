@@ -21,7 +21,7 @@ Q = {"question": "어느 철수님을 1시간 뮤트할까요?", "options": ["�
 
 
 async def room():
-    r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False})
+    r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False, "ai_sanction_card": "all"})
     for u in (BOSS, A, B):
         await r.join(u)
     return r

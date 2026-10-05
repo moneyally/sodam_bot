@@ -19,7 +19,7 @@ MUTE_PERM = lambda r, uid: [c for c in r.bot.named("restrict") if c[2] == uid]  
 
 
 async def room(**kw):
-    r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False, **kw})
+    r = await Room().open(admins={BOSS.id}, settings={"captcha_enabled": False, "ai_sanction_card": "all", **kw})
     for u in (BOSS, A, B):
         await r.join(u)
     return r
@@ -140,6 +140,42 @@ async def room_style_change_mentions_personal_styles_and_reset():
     res = await ask(r, BOSS, [tool_call("reset_member_styles", {})])
     assert "1명" in res[0] and (await r.db.get_member(Room.CHAT, BOSS.id))["style"] is None
 
+
+
+# ── 오너 결정 2026-10-05: 확인 카드는 위험한 것만 (ai_sanction_card 기본 risky) ──────────────
+@test
+async def risky_mode_runs_warn_and_mute_right_away_but_ban_still_asks():
+    r = await room(ai_sanction_card="risky")
+    res = await ask(r, BOSS, [tool_call("mute_member", {"names": ["캎이바라요", "조이킨"], "minutes": 3, "reason": "욕설"})])
+    assert not r.svc.pending and MUTE_PERM(r, A.id) and MUTE_PERM(r, B.id), "카드 없이 두 명 다 바로"
+    assert "바로 함" in res[0] and "3분" in res[0] and "<a " not in res[0] and "href" not in res[0], res   # 태그 뗀 결과 줄
+    lines = [x["text"] for x in await r.db._all("SELECT text FROM ai_card_log WHERE chat_id=?", (Room.CHAT,))]
+    assert lines and lines[-1].startswith("✅ 뮤트 3분 실행됨 — 2명"), lines                  # 다음 답의 근거로 남음
+    audit = [x["detail"] for x in await r.db._all("SELECT detail FROM mod_log WHERE action='ask_mute'")]
+    assert any("바로 실행(3분)" in d for d in audit), audit
+    r2 = await room(ai_sanction_card="risky")
+    await ask(r2, BOSS, [tool_call("warn_member", {"name": "조이킨", "reason": "도배"})])
+    assert await r2.db.warning_count(Room.CHAT, B.id) == 1 and not r2.svc.pending
+    r3 = await room(ai_sanction_card="risky")
+    res = await ask(r3, BOSS, [tool_call("ban_member", {"names": ["조이킨"], "reason": "사기"})])
+    assert "확인 버튼을 보냈음" in res[0] and r3.svc.pending, "밴은 여전히 카드"
+
+
+@test
+async def risky_mode_still_asks_after_reading_member_text_or_for_admin_targets():
+    r = await room(ai_sanction_card="risky")
+    r.llm.script = [tool_call("read_chat", {"hours": 1}, "c1"),
+                    tool_call("mute_member", {"names": ["조이킨"], "minutes": 3, "reason": "x"}, "c2"), reply("ok")]
+    ctx = ToolCtx(r.svc, r.bot, Room.CHAT, BOSS, Role.ADMIN, await r.db.get_settings(Room.CHAT))
+    await run_agent(ctx, style_key="polite", notes={}, history=[], reply_to=None, request="뮤트", extras={})
+    assert r.svc.pending and not MUTE_PERM(r, B.id), "멤버 글을 읽은 답변 = 숨은 지시 가능 → 카드"
+    r2 = await room(ai_sanction_card="risky")
+    r2.svc.perms.admins.add(B.id)
+    res = await ask(r2, BOSS, [tool_call("mute_member", {"names": ["조이킨"], "minutes": 3})])
+    assert "제재할 수 없어요" in res[0] and not r2.bot.named("restrict"), res              # 관리자는 바로 실행도 안 됨
+    r3 = await room(ai_sanction_card="all")
+    await ask(r3, BOSS, [tool_call("mute_member", {"names": ["조이킨"], "minutes": 3})])
+    assert r3.svc.pending and not MUTE_PERM(r3, B.id), "방이 '전부' 를 고르면 예전처럼 카드"
 
 if __name__ == "__main__":
     run_all()

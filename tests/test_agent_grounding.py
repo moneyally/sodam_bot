@@ -20,7 +20,7 @@ NUM_HEAD = NUMBER_NOTE.split("{")[0]
 async def room(script, *extra):
     r = Room()
     r.llm = ScriptedLLM(script)
-    await r.open(admins=(BOSS.id,), settings={"captcha_enabled": False})
+    await r.open(admins=(BOSS.id,), settings={"captcha_enabled": False, "ai_sanction_card": "all"})
     for u in (BOSS, JUNHO, KIM, *extra):
         await r.join(u)
     await namehist.record(r.db, OLD_JUNHO)     # 준호킹(@jh_old) → 박준호(@junho)
