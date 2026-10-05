@@ -132,6 +132,34 @@ async def client_round_trip_and_down_detection():
 
 
 @test
+def failed_isolation_refuses_and_returns_no_files():
+    """격리 설정이 중간에 실패하면 실행 안 하고(refused), 서버가 뜬 폴더의 파일을 결과로 돌려주지 않음 (2026-10-05 서버 실측 버그)."""
+    if not ISO:
+        return
+    d = tempfile.mkdtemp(prefix="wsbad-")
+    Path(d, "secret.md").write_text("서버 폴더 파일")
+    sock = os.path.join(d, "sock")
+    env = {**os.environ, "WS_BASE": os.path.join(d, "ws"), "WS_MOUNT": "/proc/sodam-cannot-mkdir"}
+    env.pop("WS_ALLOW_NO_ISOLATION", None)
+    proc = subprocess.Popen([sys.executable, str(SERVER), sock], env=env, cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(200):
+            if os.path.exists(sock):
+                break
+            time.sleep(0.05)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(sock)
+        s.sendall(json.dumps({"op": "run", "session": "x", "code": "print('뚫림')", "files": {}, "limits": {}}).encode() + b"\n")
+        data = b""
+        while not data.endswith(b"\n"):
+            data += s.recv(1 << 20)
+        r = json.loads(data)
+        assert r["status"] == "refused" and r["files"] == {} and "뚫림" not in r["output"], r
+    finally:
+        proc.kill()
+
+
+@test
 def output_is_clipped_head_and_tail():
     s = "가" * 3000 + "끝줄"
     out = clip(s, 1000)
