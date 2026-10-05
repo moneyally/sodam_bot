@@ -31,7 +31,7 @@ from .services import PendingAction, Services
 from .prompt import reply_mark
 from .settings import DEFAULTS, LABELS, OWNER_CAP, RANGES, coerce, over_cap, render
 from .styles import STYLES, resolve_style
-from .util import display_name, esc, fmt_time, human_minutes, mention, period_range
+from .util import display_name, esc, fmt_time, human_minutes, mention, name_key, period_range
 
 log = logging.getLogger(__name__)
 
@@ -93,9 +93,14 @@ PERIOD = {"type": "string", "enum": ["오늘", "어제", "주간", "월간", "�
 
 async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
     """이름/@username/ID → 방 멤버 1명. 실패하면 에러 문자열."""
+    # AI 가 단서 모양 그대로 '이름(ID)' 로 넘기는 경우 (실제 2026-10-04 베베 #2347 '춘식이(8893699859)' → 못 찾음) → ID 로
+    if (m := re.search(r"\((\d{5,15})\)\s*$", name or "")) and (rows := await ctx.svc.db.find_members(ctx.chat_id, m.group(1))):
+        name = m.group(1)
     rows = await ctx.svc.db.find_members(ctx.chat_id, name)
     if not rows and (bare := _strip_title(name)) and bare != name.strip().lstrip("@"):
         rows = await ctx.svc.db.find_members(ctx.chat_id, bare)   # '지영님' → '지영' 정확히 (음성·채팅 모두 흔함, 제재도 정확 일치만)
+    if not rows:   # 투명 글자·이모지·꾸밈 글꼴 이름 ('ㅤㅤ춘식이'·'💗지영💗'·'𝕊𝔼ℂ𝕆ℕ𝔻') — 정리한 글자로 비교
+        rows = await _keyed_members(ctx, name, partial=not for_sanction)
     if not rows and not for_sanction:  # 인사·조회는 호칭 붙은 부분 이름으로도 (제재는 정확한 이름만)
         rows = await _fuzzy_members(ctx, name)
     former = None
@@ -160,6 +165,31 @@ async def _former_hits(ctx: ToolCtx, keys: list[str], marks: str) -> list:
 
 
 from .addressee import HONORIFICS as _HONORIFICS  # noqa: E402  (호칭 목록은 한 곳에서)
+
+
+async def _keyed_members(ctx: ToolCtx, name: str, *, partial: bool) -> list:
+    """util.name_key 로 정리한 이름끼리 비교. 정확히 같은 사람이 있으면 그 사람들, partial(인사·조회)이면
+    호칭 뗀 핵심(2자↑)이 들어간 사람까지 ('춘식팀장님' → '춘식' ⊂ 'ㅤㅤ춘식이'). 제재는 정확히 같을 때만."""
+    raw = name.strip().lstrip("@")
+    # 호칭을 뗀 여러 모양: '정실장님' → 정실장님 · 정실장('님'만) · 정('실장님'까지) — 이름 자체가 직함인 사람도 있음
+    cands = [k for k in dict.fromkeys((name_key(raw), name_key(re.sub(r"(님|씨)$", "", raw)), name_key(_strip_title(raw))))
+             if len(k) >= 2]
+    if not cands:
+        return []
+    exact, part = [], []
+    for r in await ctx.svc.db.member_names(ctx.chat_id):
+        keys = {k for k in (name_key(r["first_name"]), name_key(f"{r['first_name'] or ''}{r['last_name'] or ''}"),
+                            name_key(r["username"])) if k}
+        if any(c in keys for c in cands):
+            exact.append(r)
+        elif partial and any(c in k for c in cands for k in keys):
+            part.append(r)
+    rows = exact or part
+    if not rows:
+        return []
+    marks = ",".join("?" * len(rows[:6]))
+    return await ctx.svc.db._all(f"SELECT * FROM users WHERE user_id IN ({marks}) ORDER BY user_id",
+                                 tuple(r["user_id"] for r in rows[:6]))
 
 
 async def _fuzzy_members(ctx: ToolCtx, name: str):

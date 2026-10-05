@@ -77,6 +77,21 @@ def html_truncate(s: str, limit: int) -> str:
     return "".join(out)
 
 
+# 이름 꾸밈용 투명 글자 (실제 2026-10-05 베베방: 'ㅤㅤ춘식이'·'ㅤㅤㅤㅤ정실장' = 한글 채움 U+3164 — 멤버 4,553명 중 167명이 투명 글자·이모지)
+_NAME_FILLERS = frozenset("ㅤᅟᅠﾠ⠀​‌‍⁠﻿")
+
+
+def name_key(s: str | None) -> str:
+    """이름 비교용 열쇠: 꾸밈 글꼴(𝕊𝔼ℂ𝕆ℕ𝔻·𝐍𝐞𝐰)은 보통 글자로(NFKC), 투명 글자·이모지·기호·띄어쓰기는 빼고, 소문자.
+    'ㅤㅤ춘식이' → '춘식이', '💗지영💗' → '지영', '𝕊𝔼ℂ𝕆ℕ𝔻' → 'second'."""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", s or "")
+    out = "".join(ch for ch in t if ch.isalnum() and ch not in _NAME_FILLERS).lower()
+    # 'ㅣ로이ㅣ' 처럼 낱자모를 꾸밈 막대로 쓴 이름 → 낱자모 뺌 (이름이 낱자모뿐이면 그대로: 'ㅇㅇ')
+    bare = "".join(ch for ch in out if not ("ᄀ" <= ch <= "ᇿ" or "ㄱ" <= ch <= "ㆎ"))
+    return bare or out
+
+
 def display_name(first: str | None, last: str | None = None, username: str | None = None) -> str:
     name = " ".join(x for x in (first, last) if x).strip()
     return name or (f"@{username}" if username else "알 수 없음")
