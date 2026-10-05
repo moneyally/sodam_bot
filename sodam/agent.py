@@ -209,6 +209,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     run.event("tools", shown=len(schemas), usable=len(allowed))
     # 🎞️ 움프 vs 🎬 AI 영상: AI 영상 도구가 없는 방은 '애매'도 움프로 (물어볼 게 없음)
     ctx.media_intent = mediaintent.classify(request, reply_to)
+    ctx.request_text = request   # 합쳐진 요청 원문 (영상·그림 원문 보존 — sodam/mediapolicy.py)
+    ctx.reply_text = reply_to or ""   # 답장한 글 (영어 프롬프트 글에 답장으로 '영상 만들어줘' — 실제 베베 #2567)
     if ctx.media_intent == "ambiguous" and "make_video" not in allowed:
         ctx.media_intent = "ump"
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)

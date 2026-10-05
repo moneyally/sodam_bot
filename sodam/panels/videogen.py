@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -24,7 +23,7 @@ from telegram import ReplyParameters
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from .. import agentlog, costs, mediaintent, memory, persist, tools, video
+from .. import agentlog, costs, mediaintent, mediapolicy, memory, persist, tools, video
 from ..llm import BudgetExceeded
 from ..permissions import Role
 from ..settings import OWNER_CAP, RANGES
@@ -53,33 +52,9 @@ async def _tell(bot, cid: int, text: str) -> None:
     except TelegramError as e:
         log.info("video wait notice failed %s: %s", cid, e)
 NO_KEY = "영상 AI 키가 아직 설정 안 됨 (운영자). 운영자가 영상 AI 를 켜야 한다고 짧게 안내하고, 대신 사진으로 움프·스티커는 된다고 한마디."
-# 우리 코드가 막는 건 딱 두 가지 (오너 결정 2026-09-30 — 성인 내용 자체는 영상 AI(xAI·Veo) 정책이 판단, 거절되면 한국어로 알림):
-# ① 미성년자 + 성적 내용 ② 실제 사람 사진(멤버 프사·붙은/답장한 사진)으로 만드는 성적·노출 영상 (동의 없는 딥페이크 위험).
-# 낱말 검사는 최소한으로 (영어 prompt 는 낱말 경계, 한국어는 뜻이 분명한 말만 — '귤 껍질 벗기기'·'노출 과다 야경' 은 안 걸림).
-POLICY_TEXT = ("성인 내용도 부탁 그대로 prompt 에 담는다 (되고 안 되고는 영상 AI 가 판단). 단 두 가지는 부르지 않는다: "
-               "미성년자가 나오는 성적인 내용, 실제 사람 사진(프사·붙은 사진)으로 만드는 성적·노출 영상")
-_SEXUAL = re.compile(
-    r"\b(nude|nudes|nudity|naked|nsfw|porn\w*|sex|sexual\w*|sexy|erotic\w*|undress\w*|topless|bottomless|lingerie|"
-    r"strip(?:tease|ping)|seductive\w*|lewd|explicit|hentai|boobs?|breasts?|genitals?|intercourse|orgasm\w*)\b"
-    r"|알몸|나체|누드|옷\s*(?:을\s*)?벗|벗겨|섹시|야하|야한|19금|야동|섹스|성행위|성관계|음란|속옷|란제리|가슴\s*노출|젖꼭지", re.I)
-_MINOR = re.compile(
-    r"\b(child|children|kids?|minors?|underage|teen|teens|teenage\w*|preteen\w*|schoolgirls?|schoolboys?|loli\w*|shota\w*|"
-    r"toddlers?|infants?|juvenile)\b"
-    r"|미성년|초등학생|초딩|중학생|중딩|고등학생|고딩|여고생|남고생|여중생|남중생|어린이|아동|유아|꼬마|로리|쇼타|소녀|소년", re.I)
-REFUSE_MINOR = "미성년자가 나오는 성적인 영상은 못 만듦. 다른 내용이면 된다고 한마디만."
-REFUSE_REAL = ("실제 사람 사진(프사·붙은 사진)으로는 성적·노출 영상을 못 만듦 (그 사람 동의를 확인할 수 없음). "
-               "사진 없이 글로만(mode=text, 가상 인물) 만드는 건 된다고 한마디만.")
-
-
-def hard_line(text: str, real_photo: bool) -> str | None:
-    """우리가 막는 두 가지만. 나머지는 영상 AI 정책에 맡김."""
-    if not _SEXUAL.search(text):
-        return None
-    if _MINOR.search(text):
-        return REFUSE_MINOR
-    if real_photo:
-        return REFUSE_REAL
-    return None
+# 막는 선·지시문·원문 보존은 sodam/mediapolicy.py 한 곳 (make_image 와 공용, 오너 결정 2026-10-05)
+POLICY_TEXT, FIDELITY_TEXT = mediapolicy.POLICY_TEXT, mediapolicy.FIDELITY_TEXT
+REFUSE_MINOR, REFUSE_REAL, hard_line = mediapolicy.REFUSE_MINOR, mediapolicy.REFUSE_REAL, mediapolicy.hard_line
 
 
 FAIL_TEXT = {
@@ -173,12 +148,17 @@ async def t_make_video(ctx: tools.ToolCtx, a: dict) -> str:
         return "영상은 그룹방에서만 만들 수 있음. 그룹방에서 '소담아 …영상 만들어줘' 하라고 안내."
     if not await ctx.svc.paid_features(ctx.chat_id):
         return "이 방은 이용 기간이 아니라 영상을 못 만듦. 관리자가 구독을 연장하면 된다고 짧게 안내."
-    prompt = str(a.get("prompt", "")).strip()[:1500]
+    request = mediapolicy.source_text(ctx)
+    # 사용자가 영어 프롬프트를 통째로 줬으면 AI 가 다시 쓴 것 대신 그 원문 (실제 베베 #2567: 2,000자 원문 → AI 가 다시 쓰며 디테일 빠짐)
+    prompt = (mediapolicy.passthrough(request) if mode in ("text", "image") else None) \
+        or str(a.get("prompt", "")).strip()[:mediapolicy.PASS_MAX]
     if not prompt:
         return "만들 영상 설명(prompt)이 비어 있음."
+    if drift := mediapolicy.style_drift(request, prompt):   # 실제 베베 #2564: 실사 요청에 'non-photorealistic' 를 스스로 붙임
+        return mediapolicy.drift_back(drift)
     # 고치기·이어 붙이기의 원본 영상은 실제 사람일 수도 있어서 사진과 같은 선으로 봄
     uses_photo = mode in ("image", "edit", "extend") or bool(a.get("photo_of"))
-    if why := hard_line(prompt + "\n" + str(getattr(ctx.request_msg, "text", "") or ""), uses_photo):
+    if why := hard_line(prompt + "\n" + request, uses_photo):
         return why
     if getattr(ctx, "_video_asked", False):
         return "영상은 한 답변에 하나만. 방금 부탁한 영상이 끝나면 다시 부탁하라고 안내."
@@ -369,13 +349,14 @@ async def _job(svc, bot, chat_id, caller, prov, prompt, image, seconds, aspect, 
 tools.register_tool(tools.Tool(
     "make_video",
     "짧은 AI 영상(소리 포함)을 새로 만들어 방에 올린다 (1~3분 걸림, 방마다 한 주 개수 한도). "
-    "prompt 는 **영어로**: 사용자의 한국어 부탁을 영상 프롬프트로 옮기고 구체적으로 한 문단 (피사체·동작·카메라 움직임·장소·조명·분위기·"
-    "들릴 소리나 대사). mode=text 는 글로만, mode=image 는 붙은·답장한 사진(누가 올렸든)이나 photo_of 멤버 프사(없으면 요청자 프사)를 "
+    "prompt 는 **영어로**: 사용자의 부탁을 영상 프롬프트로 옮긴다 (피사체·동작·카메라 움직임·장소·조명·분위기·들릴 소리나 대사 — "
+    "사용자가 안 정한 것만 짧게 보충). "
+    f"{FIDELITY_TEXT}. mode=text 는 글로만, mode=image 는 붙은·답장한 사진(누가 올렸든)이나 photo_of 멤버 프사(없으면 요청자 프사)를 "
     "첫 장면으로 움직인다. mode=edit 는 답장한·붙은·방금 올린 **영상**을 말대로 고친다(옷 색·소품 추가·배경 등, prompt 는 바꿀 것만 영어로), "
     "mode=extend 는 그 영상 끝에서 이어서 seconds 초 더 만든다(prompt 는 이어질 내용). "
     f"{POLICY_TEXT}. 한 답변에 한 번만. 결과는 따로 올라가니 '다 됐다'고 말하지 말 것. "
     "앞에서 한도·실패였어도 다시 부탁하면 이 도구를 다시 부른다 (관리자가 한도를 바꿨을 수 있음).",
-    {"prompt": {"type": "string", "description": "영어 영상 프롬프트 (구체적으로, 1,000자 안)"},
+    {"prompt": {"type": "string", "description": "영어 영상 프롬프트 (번역·압축만, 900자 안)"},
      "mode": {"type": "string", "enum": ["text", "image", "edit", "extend"]},
      "photo_of": {"type": "string", "description": "이 방 멤버 프사를 첫 장면으로 (이름·@아이디·ID). 있으면 image"},
      "seconds": {"type": "integer", "description": "길이(초). 비우면 방 설정값, 그보다 길게는 안 됨"},
