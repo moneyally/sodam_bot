@@ -107,3 +107,49 @@ tools.register_tool(Tool(
     "run_code", DESC,
     {"code": {"type": "string", "description": "실행할 파이썬 코드 (결과는 print, 파일은 현재 폴더에 저장)"}},
     ["code"], t_run_code), read_only=True)
+
+
+# ── 🧪 코드 레시피 (예약 작업 skill=code): 만들 때 AI 가 쓴 코드를 저장 → 그 시각엔 AI 없이 코드만 작업실에서 ───────
+RECIPE_MAX = 4000
+
+
+async def preview(svc, chat_id: int, code: str) -> dict:
+    """저장 전 한 번 돌려 봄 (파일은 안 올림). 결과 dict 또는 WorkshopDown."""
+    files = {"room.db": await snapshot.build(svc.db, chat_id, True, svc.cfg.tz)} if chat_id < 0 else {}
+    return await client.run(f"c{abs(chat_id)}", code, files)
+
+
+def preview_line(res: dict) -> str:
+    out = " ".join((res.get("output") or "").split())[:200]
+    names = ", ".join(res.get("files") or {})
+    return (out or "(출력 없음)") + (f" · 파일: {names}" if names else "")
+
+
+async def fire_recipe(svc, bot, row, dest: int, title: str) -> bool:
+    """예약 시각에 한 번: 저장된 코드 실행 → 출력 글 + 파일을 dest(방 또는 만든 관리자 1:1)로. 만든 사람 권한은 cron.fire 가 확인."""
+    from ..security import NO_PREVIEW, filter_output
+    cid = row["chat_id"]
+    day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+    s = await svc.db.get_settings(cid)
+    if await svc.db.counter(day, cid, COUNTER) >= min(int(s.get("run_code_daily", 30)), OWNER_CAP["run_code_daily"]):
+        return False
+    files = {"room.db": await snapshot.build(svc.db, cid, True, svc.cfg.tz)} if cid < 0 else {}
+    res = await client.run(f"c{abs(cid)}", row["text"] or "", files)   # WorkshopDown 은 cron.fire 가 실패로 기록
+    await svc.db.bump(day, cid, COUNTER)
+    out = (res.get("output") or "").strip()
+    if res.get("status") != "ok":
+        raise RuntimeError(f"recipe {res.get('status')}: {out[-200:]}")
+    usernames = {r["username"].lower() for r in await svc.db.member_names(cid) if r["username"]} if cid < 0 else set()
+    sent = False
+    if out:
+        await bot.send_message(dest, f"🧪 <b>{title}</b>\n" + esc(filter_output(out, max_chars=1500, allowed_usernames=usernames)),
+                               parse_mode="HTML", link_preview_options=NO_PREVIEW)
+        sent = True
+    for name, data in (res.get("files") or {}).items():
+        cap = f"🧪 {title} · {esc(name)}"
+        if name.lower().endswith(PHOTO_EXT):
+            await bot.send_photo(dest, photo=data, caption=cap, parse_mode="HTML")
+        else:
+            await bot.send_document(dest, InputFile(io.BytesIO(data), filename=name), caption=cap, parse_mode="HTML")
+        sent = True
+    return sent
