@@ -123,8 +123,9 @@ async def notify_token(svc, bot, *, force: bool = False) -> bool:
 
 
 # ── 서버 갱신 결과 (deploy/update.sh report → data/*.status) → 실패면 오너 1:1 ─────────
-STATUS_FILES = {"update.status": "🛠 서버 갱신", "diag_setup.status": "🔌 원격 점검 설치"}
-FAIL_MARKS = ("tests_failed", "rollback", "diag_fail")
+STATUS_FILES = {"update.status": "🛠 서버 갱신", "diag_setup.status": "🔌 원격 점검 설치",
+                "workshop_setup.status": "🧪 작업실 설치"}
+FAIL_MARKS = ("tests_failed", "rollback", "diag_fail", "workshop_fail")
 
 
 async def report_server_status(svc, bot) -> int:
@@ -145,8 +146,9 @@ async def report_server_status(svc, bot) -> int:
             continue
         for uid in sorted(await svc.perms.owners()):
             try:
+                tail = "봇은 이전 버전으로 계속 돌아요. " if name == "update.status" else "봇 본체는 정상이에요. "
                 await bot.send_message(uid, f"{label} 실패\n<code>{esc(redact(line))}</code>\n"
-                                            "봇은 이전 버전으로 계속 돌아요. 클로드에게 이 메시지를 보여 주세요.", parse_mode="HTML")
+                                            f"{tail}클로드에게 이 메시지를 보여 주세요.", parse_mode="HTML")
                 sent += 1
             except Exception as e:
                 log.info("갱신 실패 알림 전송 실패 %s: %s", uid, e)

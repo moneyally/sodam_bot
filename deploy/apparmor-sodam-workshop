@@ -1,0 +1,10 @@
+# /etc/apparmor.d/sodam-workshop — Ubuntu 24.04 는 kernel.apparmor_restrict_unprivileged_userns=1 이 기본이라
+# 프로필 없는 프로그램은 user namespace 를 만들 수 없음. 작업실 파이썬(venv --copies 라 진짜 실행 파일)만 허용.
+# Ubuntu 공식 방식 (ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces). 다른 제한은 그대로(default_allow).
+abi <abi/4.0>,
+include <tunables/global>
+
+profile sodam-workshop /opt/sodam-sandbox/venv/bin/python3* flags=(default_allow) {
+  userns,
+  include if exists <local/sodam-workshop>
+}

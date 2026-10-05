@@ -1,0 +1,53 @@
+# /etc/systemd/system/sodam-workshop.service — 🧪 소담 작업실 (격리 코드 실행, sodam/workshop/server.py, CLAUDE.md '🧪 작업실')
+# 바깥 벽: 매번 다른 임시 사용자 · 인터넷 없음 · 봇 폴더(/opt/sodam: 비밀·원본 DB) 안 보임 · 메모리 700MB.
+# 안쪽 벽(작업마다)은 server.py 가 user·net·mount·pid 네임스페이스로 — /etc/apparmor.d/sodam-workshop 이 그걸 허용.
+# 설치·갱신: deploy/update.sh workshop_setup (venv /opt/sodam-sandbox/venv, 코드 /opt/sodam-sandbox/server.py).
+[Unit]
+Description=Sodam workshop (isolated code runner)
+After=local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/opt/sodam-sandbox/venv/bin/python3 -I /opt/sodam-sandbox/server.py /run/sodam-workshop/sock
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WS_BASE=/tmp/ws WS_MOUNT=/tmp/w
+RuntimeDirectory=sodam-workshop
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-workshop
+
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=/opt/sodam /root -/etc/sodam -/var/backups
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount
+SystemCallFilter=~@privileged:EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+MemoryMax=700M
+MemorySwapMax=0
+TasksMax=96
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
