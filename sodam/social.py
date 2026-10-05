@@ -129,6 +129,7 @@ async def on_group_message(svc: Services, bot, msg, role: Role) -> None:
         await maybe_chime(svc, bot, msg, role, text, s)
     if s.get("ai_memory", True):
         memory.observe(svc, chat_id, user.id, text)
+    await memory.drop_disliked_nickname(svc.db, chat_id, user.id, text)   # 소담을 안 불러도 '그렇게 부르지 마' 는 지킴
     if s.get("ai_room_memory", True):
         await memory.maybe_refresh_room(svc, chat_id)
 

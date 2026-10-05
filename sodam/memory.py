@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -193,6 +194,40 @@ async def clear_facts(db, chat_id: int, user_id: int, keyword: str = "") -> int:
     if ids:
         await db.atomic(run)
     return len(ids)
+
+
+# '팽부장 떠오르게 하지마라' · '그렇게 부르지 마' · '그 별명 빼' → 저장된 호칭을 바로 지움 (AI 가 '빼고 갈게' 라고만 하고 기억은 남던 문제)
+_NICK_OBJECT = re.compile(r"(부르지\s?마|그만\s?불러|떠오르게\s?하지\s?마|(별명|호칭)\s?(좀\s?)?(빼|지워|싫|그만|바꿔|쓰지\s?마)|"
+                          r"(이?라고|소리)\s?하지\s?마)")
+
+
+async def drop_disliked_nickname(db, chat_id: int, user_id: int, text: str) -> list[str]:
+    """싫다고 한 호칭(기억 '호칭: X' · .호칭 메모)을 지운다. 글에 그 호칭이 나오거나 '호칭·별명' 을 말했을 때만. 지운 호칭 목록."""
+    if not text or not _NICK_OBJECT.search(text):
+        return []
+    said, generic = _key(text), bool(re.search(r"호칭|별명", text))
+    gone, ids = [], []
+    for r in await get_facts(db, chat_id, user_id):
+        m = re.match(r"\s*호칭\s*[:：]\s*(.+)", r["fact"])
+        if m and (generic or (_key(m.group(1)) and _key(m.group(1)) in said)):
+            ids.append(r["id"])
+            gone.append(m.group(1).strip())
+
+    def run(c) -> None:
+        c.executemany("DELETE FROM member_memory WHERE id=?", [(i,) for i in ids])
+    if ids:
+        await db.atomic(run)
+    row = await db._one("SELECT notes FROM members WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    try:
+        note = str((json.loads(row["notes"]) if row and row["notes"] else {}).get("호칭") or "")
+    except (ValueError, TypeError, AttributeError):
+        note = ""
+    if note and (generic or (_key(note) and _key(note) in said)):
+        await db.set_member_note(chat_id, user_id, "호칭", "")
+        gone.append(note)
+    if gone:
+        log.info("싫다고 한 호칭 지움 chat=%s user=%s %s", chat_id, user_id, gone)
+    return gone
 
 
 def fact_line(row) -> str:
