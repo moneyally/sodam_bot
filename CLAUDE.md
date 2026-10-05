@@ -799,6 +799,15 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
 - 설정과 무관하게 늘 카드: 멤버 글·다른 봇 글을 읽은 답변(tainted·room_read)·인젝션 판별 못 한 요청, 음성채팅(`ctx.via_voice`), 오너 1:1 의 다른 방 제재.
 - 텔레그램 '사용자 차단' 권한 없는 관리자는 지금처럼 거절 (오너 결정).
 
+## 🧪 작업실 · run_code (격리 코드 실행, 2026-10-05 오너 결정, tests/test_workshop.py · test_runcode.py)
+- 서버 sodam-workshop (`sodam/workshop/server.py`, 봇 폴더를 import 안 함 → update.sh 가 /opt/sodam-sandbox/server.py 로 복사, venv --copies + deploy/sandbox-requirements.txt).
+  바깥 벽 = systemd(DynamicUser·PrivateNetwork·InaccessiblePaths=/opt/sodam·700MB), 안쪽 = 작업마다 user/net/mount/pid 네임스페이스 + rlimit.
+  Ubuntu 24.04 는 AppArmor 가 userns 를 막아서 deploy/apparmor-sodam-workshop 프로필(venv python 실행 파일에 붙음 — 심볼릭 링크 venv 면 안 붙음).
+  update.sh `workshop_setup` → `workshop_check`(계산·인터넷 막힘·봇 폴더 안 보임) → data/workshop_setup.status, 실패면 오너 1:1.
+- AI 도구 run_code(code) (`panels/runcode.py`, find_tools 로 불러옴): 관리자·오너 바로, 멤버는 방 설정 run_code_members, 1:1 은 오너만(방 데이터 없음).
+  방마다 하루 run_code_daily 30 (OWNER_CAP). 그룹방이면 room.db 사본(`workshop/snapshot.py`, 이 방만·90일·메시지 원문은 관리자 요청일 때만) → ctx.room_read.
+  결과 그림은 사진, 나머지 파일은 문서로 방에. 작업실이 꺼져 있으면 안내만 (OpenAI 코드 인터프리터 대체는 아직 없음).
+
 ## 도구 고르기: 핵심만 처음부터 + find_tools (2026-10-05, tests/test_harness_codex.py)
 - 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → `tools.CORE_TOOLS`(서버 30일 사용량 상위 20개)만 처음부터,
   나머지는 `find_tools` 목록(이름·한 줄, `find_tools_schema`)에서 불러오면 `agent._ToolSet.load` 가 다음 라운드부터 싣는다
