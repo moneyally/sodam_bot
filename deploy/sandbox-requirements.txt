@@ -1,0 +1,13 @@
+# 🧪 소담 작업실(격리 코드 실행) 전용 파이썬 환경 — 봇 venv 와 분리: /opt/sodam-sandbox/venv
+# 2026-10-05 서버 설치·검증 (272MB, 한글 폰트는 apt fonts-nanum 33MB). Anthropic 코드 실행 컨테이너 목록 참고, 큰 것(scipy·sklearn·statsmodels·sympy) 제외.
+# 설치: python3 -m venv /opt/sodam-sandbox/venv && /opt/sodam-sandbox/venv/bin/pip install --no-cache-dir -r deploy/sandbox-requirements.txt
+numpy==2.4.6          # 계산
+pandas==3.0.6         # 정산·통계·표
+matplotlib==3.11.2    # 차트 (한글: NanumGothic)
+seaborn==0.13.2       # 보기 좋은 차트
+openpyxl==3.1.5       # 엑셀 읽기·쓰기
+pillow==12.3.0        # 사진 합치기·크기·워터마크
+reportlab==5.0.1      # PDF 안내문·정산서
+pypdf==6.19.0         # 올라온 PDF 읽기
+qrcode==8.2           # 이벤트·링크 QR
+tabulate==0.10.0      # 단톡용 글 표
