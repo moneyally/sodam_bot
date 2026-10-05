@@ -380,6 +380,19 @@ async def _uploading(ctx: ToolCtx) -> None:
         await asyncio.sleep(4)
 
 
+async def _last_made(ctx: ToolCtx) -> Attached | None:
+    """이 사람에게 30분 안에 그려 보낸 마지막 그림 (memory.last_made_image). 못 받으면 None."""
+    fid = await memory.last_made_image(ctx.svc.db, ctx.chat_id, ctx.caller.id)
+    if not fid:
+        return None
+    try:
+        f = await ctx.bot.get_file(fid)
+        return Attached(bytes(await f.download_as_bytearray()), "image/png", ctx.caller.id)
+    except TelegramError as e:
+        log.info("last made image fetch failed: %s", e)
+        return None
+
+
 async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     from . import mediapolicy   # 영상과 같은 규칙 (오너 결정 2026-10-05 — 성인 내용 판단은 그림 AI 에게)
     request = mediapolicy.source_text(ctx)
@@ -397,6 +410,8 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
         if not src:
             return err
         ctx.image, edit = Attached(src, "image/jpeg", ctx.caller.id), True
+    if edit and ctx.image is None:   # 답장 없이 '박스 빼줘' = 방금 이 사람에게 그려 준 그림 (서버 실수 #2304·#2312·#2313)
+        ctx.image = await _last_made(ctx)
     if edit and ctx.image is None:
         return "고칠 사진이 없음. 사진에 답장하면서 부탁하거나 사진과 함께 보내 달라고 안내할 것."
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
@@ -426,7 +441,9 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     except TelegramError as e:
         return f"이미지는 만들었는데 전송 실패: {e.message}"
     # AI 답으로 기록 → 이 그림에 답장하면('더 밝게') 소담이 이어서 받음 (handlers: AI 답에 단 답장만 호출)
-    await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id)
+    photo = getattr(sent, "photo", None)
+    await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id,
+                             media=photo[-1].file_id if photo else None)
     await ctx.svc.db.bump(day, ctx.chat_id, "image")
     # 방금 그린 그림을 이 실행의 원본으로 → '새 그림 만들어서 움프/스티커로' 를 한 번에 이어서 (make_profile_video·make_sticker)
     ctx.image = Attached(data, "image/png", ctx.caller.id)
@@ -470,9 +487,13 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
             d = sports_ui.parse_day(str(a.get("day") or "오늘"), ui.today()) or ui.today()
             text = await ui.games_text(query, d)
     except SportsError as e:
-        return str(e)
+        text = str(e)
     from .util import html_plain
-    return html_plain(text)
+    text = html_plain(text)
+    if "못 찾았" in text and _BY_NAME.get("web_search"):   # 국가대표·없는 리그(NHL 등) — 포기 말고 다음 길 (서버 실수 #2160·#2231·#2395·#2462)
+        text += (f"\n→ 스포츠 도구엔 없음. 끝내지 말고 web_search 로 '{query or '경기'} 경기 일정 결과' 를 찾아서 답할 것 "
+                 "(찾은 곳을 '찾아보니'로 밝힘).")
+    return text
 
 
 NOTE_KEYS = ["호칭", "업종", "관심사", "소개"]

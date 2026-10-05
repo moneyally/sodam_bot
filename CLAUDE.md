@@ -404,6 +404,14 @@
   신입 단서는 요청에 인사·환영·신입·들어온 같은 말이 있을 때만, 이름만 부르면 '부른 사람 본인에게' 메모. 싫다는 호칭
   ('팽부장 떠오르게 하지마')은 `memory.drop_disliked_nickname` 이 코드로 기억·.호칭 메모에서 지움 (handlers 답 전 + 그룹 훅).
 
+## 코덱스식 하네스 보강 (tests/test_harness_codex.py · 뮤테이션 8개, 2026-10-05)
+openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 실수 기록을 맞대서 나온 것 — 전부 코드, 걸릴 때만 1번 더 부름.
+- 앞 요청에서 한 일: `memory.recent_actions` = 이 사람 30분 안 agent_runs.steps(도구·결과) 3개 → `<recent_actions>` 데이터 블록.
+  그림: ai_turns.media 에 보낸 그림 file_id → 답장 없이 make_image mode=edit 면 `memory.last_made_image`(이 사람·30분) 가 원본.
+- 보내기 전 검사 `agent._final_check` (한 실행 1번, call·follow 만): ① 도구 없이 '했다'(claim) ② '해 줘'에 도구 없이 '~하시면 됩니다'
+  (advice) ③ 답이 '이름, …' 으로 시작하는데 말한 사람도 아니고 요청·답장·단서·도구 결과에도 없는 이 방 멤버(addressee, `room_people`).
+- sports 도구가 '못 찾았' 이면 결과 끝에 'web_search 로 찾아서 답할 것' (국가대표·NHL 등에서 작은 모델이 포기하던 것).
+
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·
   숫자 검증(읽기 도구를 쓴 실행에서 결과에 없는 숫자면 한 번 다시) · 자료끼리 다르면 최신 기준+다름 표시 · `answer_sources`(직전 답 근거).

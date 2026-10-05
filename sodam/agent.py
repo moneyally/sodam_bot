@@ -13,7 +13,7 @@ from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
 from .security import nonce, wrap
 from .tools import READ_ONLY, ToolCtx, available, execute, offered
-from .util import clip_mid
+from .util import clip_mid, name_key, user_name
 from .whyfail import CLAIM as _CLAIM
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,71 @@ _COUNT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:명|개|번|건|회|%)")
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 NUMBER_NOTE = ("검사: 답에 적은 숫자 {nums} 가 이번에 조회한 도구 결과에 없습니다. 도구 결과에 있는 숫자로 고치세요. "
                "도구 결과의 숫자로 직접 계산한 값이면 그대로 두고, 추측한 숫자면 빼고 답하세요.")
+# 해 달라는데 도구 없이 '이렇게 넣으시면 됩니다' 로 방법만 말한 답 (코덱스 지시문: '해결책을 메시지로 내놓는 건 나쁘다, 실제로 해라').
+# 서버 실수 #2250 '텔레그램으로 해줘' → '이렇게 넣으시면 됩니다' · #2185 '다시 해주라' → '다시 잡으시면 됩니다'
+_ADVICE = re.compile(r"(하|넣|바꾸|고치|잡|쓰|적|빼|올리|보내|만드|지우|키우|줄이)(시면|으시면)\s?(됩니다|돼요|되세요|돼|될\s?거|좋)|"
+                     r"이렇게\s?(넣|바꾸|하|적|쓰)(시면|으시면)")
+_FIX_ASK = re.compile(r"다시|고쳐|바꿔|수정|빼\s?(줘|주)|넣어\s?(줘|주)|해\s?(줘|주|라|봐)|만들어|올려\s?(줘|주)|크게|작게|지워")
+ADVICE_NOTE = ("검사: 해 달라는 요청인데 도구를 쓰지 않고 방법만 설명했습니다. 할 수 있는 도구가 있으면 지금 실제로 하세요 "
+               "(방금 만든 그림을 고치는 거면 make_image mode=edit — 원본은 자동으로 찾음). 정말 할 수 없는 일이면 못 한다고 한 문장으로.")
+# 답 첫머리에서 엉뚱한 사람을 부름 (일루왕 10/05: 루피가 '소담아' → '문의주세연님, 불렀죠?') — 보내기 전 코드 검사
+_VOCATIVE = re.compile(r"^\s*([^\s,!~?.]{2,20}?)\s*[,!~]")
+VOCATIVE_NOTE = ("검사: 답 첫머리에서 '{who}' 를 부르는데, 지금 말한 사람은 '{caller}' 이고 요청·답장·단서·도구 결과 어디에도 "
+                 "그 사람이 없습니다. 말한 사람에게 답하도록 고치세요 (다른 사람 이름으로 부르지 말 것).")
+
+
+def advice_only(request: str, text: str) -> bool:
+    return bool(_FIX_ASK.search(request or "") and _ADVICE.search(text or ""))
+
+
+def _head_key(word: str) -> str:
+    from .addressee import HONORIFICS
+    for h in sorted(HONORIFICS, key=len, reverse=True):   # '문의주세연님' → '문의주세연'
+        if word.endswith(h) and len(word) > len(h) + 1:
+            word = word[: -len(h)]
+            break
+    return name_key(word)
+
+
+def wrong_vocative(text: str, caller_keys: set[str], people: list, sources: list[str]) -> str | None:
+    """답이 '이름, …' 으로 시작하는데 그 이름이 말한 사람이 아니고 요청·답장·단서·도구 결과에도 없는 이 방 멤버면 그 이름."""
+    from .addressee import GENERIC
+    m = _VOCATIVE.match(text or "")
+    if not m:
+        return None
+    head = _head_key(m.group(1))
+    if len(head) < 2 or head in GENERIC or any(len(k) >= 2 and (head in k or k in head) for k in caller_keys):
+        return None
+    src = name_key(" ".join(x for x in sources if x))
+    for name, keys in people:
+        keys = [k for k in keys if len(k) >= 2 and k not in GENERIC]
+        if any(head in k or k in head for k in keys):
+            if head in src or any(k in src for k in keys):
+                return None
+            return name
+    return None
+
+
+def _keys_of(first: str | None, last: str | None, username: str | None) -> set[str]:
+    return {k for k in (name_key(f"{first or ''}{last or ''}"), name_key(first or ""), name_key(last or ""),
+                        (username or "").lower()) if k}
+
+
+async def room_people(db, chat_id: int, caller_id: int, bot_id: int | None) -> list:
+    """보내기 전 이름 검사용: 이 방에서 90일 안에 말했거나 하루 안에 들어온 멤버 (이름, 이름 키들)."""
+    now = int(time.time())
+    rows = await db._all(
+        "SELECT u.user_id, u.first_name, u.last_name, u.username FROM members m JOIN users u ON u.user_id=m.user_id "
+        "WHERE m.chat_id=? AND u.is_bot=0 AND (COALESCE(m.last_seen,0) > ? OR COALESCE(m.joined_at,0) > ?) "
+        "ORDER BY COALESCE(m.last_seen, m.joined_at) DESC LIMIT 400", (chat_id, now - 90 * 86400, now - 86400))
+    def shown(r) -> str:   # 투명 글자(U+FE0F·한글 채움 등) 뗀 보이는 이름
+        name = re.sub(r"[\ufe00-\ufe0f\u200b-\u200f\u2060\u3164\uffa0]", "", " ".join(x for x in (r["first_name"], r["last_name"]) if x))
+        return " ".join(name.split()) or (r["username"] or "?")
+    return [(shown(r),
+             _keys_of(r["first_name"], r["last_name"], r["username"]))
+            for r in rows if r["user_id"] not in (caller_id, bot_id)]
+
+
 _ACTS = re.compile(r"(해|줘|드려|올려|알려|걸어|바꿔|켜|꺼|찾아|정리해|보여)(줘|주세요|줄래|요)?(?=[\s,.!?]|$)")
 
 
@@ -204,6 +269,13 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     if think0 and ctx.role >= Role.ADMIN and lane.why not in route.THINK_WHY \
             and not (_WHY.search(request or "") or _CHAIN.search(request or "")):
         think0 = False   # 관리자 잡담·이어진 짧은 말은 추론 없이 (일·분석·여러 단계일 때만 생각)
+    if mode in ("call", "follow") and ctx.chat_id < 0:   # 보내기 전 이름 검사 재료 (_final_check)
+        try:
+            ctx.room_people = await room_people(svc.db, ctx.chat_id, ctx.caller.id, getattr(ctx.bot, "id", None))
+        except Exception:
+            log.exception("room people failed")
+            ctx.room_people = []
+        ctx.addr_sources = [reply_to or "", *(hints or [])]
     ctx_tools = _ToolSet(schemas, allowed)
     run.event("route", lane=lane.lane, why=lane.why, think=think0 and lane.lane == "heavy")
     run.event("tools", shown=len(schemas), usable=len(allowed))
@@ -244,6 +316,22 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                               started, deadline)
     return await _attempt(ctx, run, base, "heavy", purpose, ctx_tools, request, mode, steer,
                           started, deadline, think=think0)
+
+
+def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set, results: list[str]) -> tuple[str, str]:
+    """(종류, 다시 물을 말) — 걸리는 게 없으면 ('', '')."""
+    if not used and allowed and _CLAIM.search(text):
+        return "claim", VERIFY_NOTE
+    if not used and allowed and advice_only(request, text):
+        return "advice", ADVICE_NOTE
+    people = getattr(ctx, "room_people", None)
+    if people:
+        c = ctx.caller
+        who = wrong_vocative(text, _keys_of(c.first_name, getattr(c, "last_name", None), getattr(c, "username", None)),
+                             people, [request, *getattr(ctx, "addr_sources", []), *results])
+        if who:
+            return "addressee", VOCATIVE_NOTE.format(who=who, caller=user_name(c))
+    return "", ""
 
 
 @dataclass
@@ -343,13 +431,15 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             if steer is not None and steer.pending:   # 답하는 사이 이어 보낸 말 → 그것까지 보고 다시 (답은 한 번)
                 messages.append({"role": "assistant", "content": text})
                 continue
+            if not checked and mode in ("call", "follow"):   # 보내기 전 코드 검사 (걸리면 한 번만 다시 — 추가 호출은 이때만)
+                kind, note = _final_check(ctx, text, request, used, allowed, results)
+                if note:
+                    checked = True
+                    run.event("check", kind=kind)
+                    messages += [{"role": "assistant", "content": text}, {"role": "system", "content": note}]
+                    continue
             if not used:
-                if checked or not allowed or mode not in ("call", "follow") or not _CLAIM.search(text):
-                    return text
-                checked = True                   # 한 번만 다시 물음 (추가 호출은 이 경우만)
-                run.event("check", kind="claim")
-                messages += [{"role": "assistant", "content": text}, {"role": "system", "content": VERIFY_NOTE}]
-                continue
+                return text
             # 조회 도구를 쓴 답: 결과에 없는 숫자를 세어 말하면 한 번만 다시 (도구 안 쓴 실행은 검사 비용 0)
             if num_checked or not read or not (bad := unsupported_numbers(text, [*results, request])):
                 return text

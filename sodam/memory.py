@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS ai_turns (
     via        TEXT NOT NULL,            -- call(호출) / follow(이어 말하기) / chime(먼저 끼어듦)
     request    TEXT NOT NULL,
     answer     TEXT NOT NULL,
-    bot_msg_id INTEGER
+    bot_msg_id INTEGER,
+    media      TEXT                      -- 소담이 이 답으로 보낸 그림의 file_id ('방금 그거 고쳐줘' 원본)
 );
 CREATE INDEX IF NOT EXISTS idx_ai_turns ON ai_turns(chat_id, user_id, id);
 CREATE TABLE IF NOT EXISTS memory_queue (      -- 예약된 기억 정리 (재시작으로 _extract_later 가 취소돼도 resume 이 다시)
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS memory_queue (      -- 예약된 기억 정리 (재�
 # 예전 DB (컬럼 없던 member_memory) 는 DB.open 의 _migrate 가 추가
 register_columns("member_memory", {"used_n": "INTEGER NOT NULL DEFAULT 0", "used_ts": "INTEGER",
                                    "inferred": "INTEGER NOT NULL DEFAULT 0"})
+register_columns("ai_turns", {"media": "TEXT"})
 QUEUE_MAX_AGE = 3 * 86400    # 이보다 오래된 예약은 버림 (_candidate_messages 도 3일만 봄)
 
 MAX_FACTS = 12              # 넘으면 덜 쓰인 것(used_n) → 오래 안 쓰인 것부터 지움
@@ -623,10 +625,10 @@ async def maybe_refresh_room(svc: Services, chat_id: int) -> None:
 
 # ── 대화 기록 (이어 말하기용) ──────────────────────────────
 async def record_turn(db, chat_id: int, user_id: int, via: str, request: str, answer: str,
-                      bot_msg_id: int | None) -> None:
+                      bot_msg_id: int | None, media: str | None = None) -> None:
     await db._write(
-        "INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id) VALUES(?,?,?,?,?,?,?)",
-        (chat_id, user_id, _now(), via, request[:500], answer[:800], bot_msg_id))
+        "INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id, media) VALUES(?,?,?,?,?,?,?,?)",
+        (chat_id, user_id, _now(), via, request[:500], answer[:800], bot_msg_id, media))
     await db._write("DELETE FROM ai_turns WHERE chat_id=? AND ts<?", (chat_id, _now() - 14 * 86400))
     try:   # 이 답에 쓰인 기억 표시 (덜 쓰인 기억부터 밀려나게). 실패해도 답·기록은 그대로
         await mark_used(db, chat_id, user_id, answer)
@@ -644,11 +646,45 @@ async def recent_turns(db, chat_id: int, user_id: int, since: int, limit: int = 
     return list(reversed(rows))
 
 
+LAST_MADE_SEC = 30 * 60   # '방금 만든 그거 고쳐줘' 로 이어받는 시간
+
+
+async def last_made_image(db, chat_id: int, user_id: int) -> str | None:
+    """이 사람에게 30분 안에 소담이 그려 보낸 마지막 그림의 file_id (답장 없이 '박스 빼줘' 할 때 원본)."""
+    row = await db._one("SELECT media FROM ai_turns WHERE chat_id=? AND user_id=? AND via='image' AND media IS NOT NULL "
+                        "AND ts>=? ORDER BY id DESC LIMIT 1", (chat_id, user_id, _now() - LAST_MADE_SEC))
+    return row["media"] if row else None
+
+
+ACTIONS_SEC = 30 * 60
+ACTIONS_RUNS = 3
+
+
+async def recent_actions(db, chat_id: int, user_id: int, tz) -> list[str]:
+    """이 사람 요청으로 소담이 30분 안에 실제로 한 일 (도구·결과 요약, agent_runs.steps). 코덱스처럼 앞 턴에서 한 일을
+    다음 요청이 알게 — 예전엔 글 답만 남아 '아까 그거 다시' 에서 무엇을 했는지 몰랐음 (서버 실수 #2142·#2185)."""
+    import json as _json
+    rows = await db._all("SELECT ts, trigger, steps FROM agent_runs WHERE chat_id=? AND user_id=? AND ts>=? AND steps!='[]' "
+                         "ORDER BY id DESC LIMIT ?", (chat_id, user_id, _now() - ACTIONS_SEC, ACTIONS_RUNS))
+    out = []
+    for r in reversed(rows):
+        try:
+            steps = _json.loads(r["steps"] or "[]")
+        except ValueError:
+            continue
+        did = "; ".join(f"{s.get('tool')}({str(s.get('args') or '')[:80]}) → {str(s.get('result') or '')[:100]}"
+                        for s in steps[:4] if isinstance(s, dict))
+        if did:
+            when = datetime.fromtimestamp(r["ts"], tz).strftime("%H:%M")
+            out.append(f"[{when}] 요청: {(r['trigger'] or '')[:80]} ⇒ 한 일: {did}".replace("\n", " "))
+    return out
+
+
 # ── 프롬프트에 넣을 기억 묶음 ─────────────────────────────
 async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict, history: list) -> dict:
     """build_messages 에 넘길 user_memory / room_memory / past_turns. 실패해도 빈 값."""
     tz = svc.cfg.tz
-    out: dict = {"user_memory": [], "room_memory": "", "past_turns": [], "card_results": []}
+    out: dict = {"user_memory": [], "room_memory": "", "past_turns": [], "card_results": [], "recent_actions": []}
     if settings.get("ai_memory", True):
         out["user_memory"] = [f"{fact_line(r)} ({datetime.fromtimestamp(r['ts'], tz).strftime('%m/%d')})"
                               for r in await get_facts(svc.db, chat_id, user_id)]
@@ -664,6 +700,10 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
     if chat_id < 0:   # 🎙 최근 음성채팅에서 이 사람과 한 대화 ('아까 통화에서 한 얘기')
         from .voice import context as voice_context   # 늦게 import (voice → memory)
         out["past_turns"] += await voice_context.voice_turns(svc.db, chat_id, user_id, tz)
+    try:
+        out["recent_actions"] = await recent_actions(svc.db, chat_id, user_id, tz)
+    except Exception as e:   # 기록 표가 없거나 깨져도 답은 한다
+        log.debug("recent actions failed: %r", e)
     from . import cards   # 늦게 import (cards → db 만, 순환 없음)
     out["card_results"] = await cards.recent_lines(svc, chat_id)   # 확인 카드를 누른 결과 ('아까 뮤트 됐어?')
     return out
