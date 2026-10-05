@@ -142,13 +142,20 @@ def isolate(work: str, lim: dict) -> bool:
     return iso
 
 
+class _Refused(Exception):
+    """격리를 못 걸었음 → 실행 안 함."""
+
+
 def _child(job: dict, work: str, wfd: int, lim: dict) -> None:
     out = io.StringIO()
     status = "ok"
     before: dict = {}
     ready = False   # 세션 폴더 안에 들어왔는지 — 아니면 결과 파일을 절대 안 모음 (서버가 뜬 폴더 파일이 새는 것 방지)
     try:
-        iso = isolate(work, lim)
+        try:
+            iso = isolate(work, lim)
+        except Exception as e:   # noqa: BLE001 — 격리 단계 실패만 refused (작업 코드의 PermissionError 는 보통 오류)
+            raise _Refused(str(e)) from None
         ready = True
         if iso:   # pid 네임스페이스는 다음 자식부터 → 한 번 더 fork (안쪽은 PID 1, 서버가 안 보임)
             inner = os.fork()
@@ -164,7 +171,7 @@ def _child(job: dict, work: str, wfd: int, lim: dict) -> None:
         exec(compile(str(job.get("code", "")), "<소담 코드>", "exec"), {"__name__": "__main__"})
     except MemoryError:
         status = "memory"
-    except PermissionError as e:
+    except _Refused as e:
         status, out = "refused", io.StringIO(str(e))
     except BaseException:   # noqa: BLE001 — 사용자 코드 오류는 모델에게 그대로 (고쳐서 다시)
         status = "error"

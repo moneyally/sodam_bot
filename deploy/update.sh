@@ -261,7 +261,7 @@ workshop_setup() {
         $SYSTEMCTL restart sodam-workshop || { log "workshop: 시작 실패 (journalctl -u sodam-workshop)"; report workshop_setup.status "workshop_fail 시작"; return 0; }
         sleep 3
     fi
-    res=$(workshop_check 2>&1 | tail -n 1)
+    res=$(workshop_check 2>&1 | tail -n 1) || true   # 점검 실패로 갱신 스크립트가 멈추면 안 됨 (set -e·pipefail)
     log "workshop: 점검 $res"; report workshop_setup.status "workshop_$res"
 }
 

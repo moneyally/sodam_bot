@@ -109,6 +109,8 @@ def isolation_blocks_network_secrets_other_rooms_and_the_server():
     assert r["status"] == "error" and "뚫림" not in r["output"] and "unreachable" in r["output"].lower(), r
     r = call(f"print(open({os.path.join(_srv['secret'], '.env')!r}).read())")
     assert r["status"] == "error" and "BOT_TOKEN" not in r["output"], r
+    r = call("raise PermissionError('작업 코드의 권한 오류')")
+    assert r["status"] == "error", r                                                  # 작업 코드 권한 오류 = 보통 오류 (refused 아님)
     call("open('mine.txt','w').write('room2 비밀')", session="room2")
     r = call(f"import os\nprint(os.listdir({os.path.join(_srv['dir'], 'ws')!r}))", session="room1")
     assert "room2" not in r["output"], r                                             # 다른 방 세션 폴더는 빈 칸
@@ -211,8 +213,9 @@ def deploy_installs_workshop_behind_both_walls():
     assert "NET_OPEN" in chk and "APP_SEEN" in chk                              # 설치 뒤 인터넷·봇 폴더 막힘 실제 확인
     unit = (root / "deploy" / "sodam-workshop.service").read_text()
     for need in ("DynamicUser=yes", "PrivateNetwork=yes", "InaccessiblePaths=/opt/sodam ", "RestrictAddressFamilies=AF_UNIX",
-                 "CapabilityBoundingSet=\n", "MemoryMax=", "ProtectSystem=strict"):
+                 "NoNewPrivileges=yes", "MemoryMax=", "ProtectSystem=strict"):
         assert need in unit, need
+    assert "\nCapabilityBoundingSet=" not in unit   # 비우면 DynamicUser 시작 실패 + 작업 네임스페이스 안 mount 도 막힘 (서버 실측)
     prof = (root / "deploy" / "apparmor-sodam-workshop").read_text()
     assert "/opt/sodam-sandbox/venv/bin/python3" in prof and "userns," in prof and "/opt/sodam-sandbox/venv/bin/python3" in unit
 
