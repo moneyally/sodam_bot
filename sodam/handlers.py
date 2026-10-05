@@ -836,6 +836,10 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         reply_to = f"{who}: {' '.join(x for x in (media, (r.text or r.caption or '')[:500]) if x)}"
     if chat_id > 0 and s.get("ai_memory", True):
         memory.observe(svc, chat_id, user.id, request)  # 1:1 은 그룹 훅이 없어서 여기서 기억 후보 확인
+    try:   # '팽부장 떠오르게 하지마' → 이번 답부터 그 호칭을 안 쓰게 답 만들기 전에 지움
+        await memory.drop_disliked_nickname(svc.db, chat_id, user.id, request)
+    except Exception:
+        log.exception("drop nickname failed")
 
     try:
         hints = await addressee.collect(svc, bot, msg, chat_id, user, request)

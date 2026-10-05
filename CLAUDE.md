@@ -400,6 +400,9 @@
 - 이름 비교는 NFKC(꾸밈 글꼴 𝕊𝔼ℂ𝕆ℕ𝔻→second) + 투명 글자(한글 채움 U+3164 등)·이모지·기호·낱자모 빼고 소문자. 실제: 베베 'ㅤㅤ춘식이'·'ㅤㅤㅤㅤ정실장'
   (멤버 4,553명 중 167명이 투명 글자·이모지). `tools._resolve` → DB 정확 → 호칭 뗌 → `_keyed_members`(정리한 글자로 정확, 인사·조회는 일부도,
   제재는 정확만) → LIKE → 예전 이름. AI 가 단서 모양 '이름(ID)' 로 넘기면 ID 로. addressee._squash 도 name_key.
+- 엉뚱한 사람 이름으로 답함 (일루왕 10/05, test_addressee): '소담아' 만 부르면 '방금 들어온 사람 ★★' 단서 때문에 신입 이름으로 답했음 →
+  신입 단서는 요청에 인사·환영·신입·들어온 같은 말이 있을 때만, 이름만 부르면 '부른 사람 본인에게' 메모. 싫다는 호칭
+  ('팽부장 떠오르게 하지마')은 `memory.drop_disliked_nickname` 이 코드로 기억·.호칭 메모에서 지움 (handlers 답 전 + 그룹 훅).
 
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·

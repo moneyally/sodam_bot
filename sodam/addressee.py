@@ -20,6 +20,8 @@ GENERIC = {"대표", "사장", "실장", "이사", "회장", "팀장", "부장",
            "모두", "방사람", "방사람들", "새로", "오신", "분", "여러분", "소담", "소담아", "소담이"}
 MAX_LINES = 8
 RECENT_JOIN_MIN = 60
+# 새로 온 사람 얘기 (이때만 '방금 들어온 사람' 을 후보로)
+_NEWCOMER = re.compile(r"(인사|환영|반겨|반가|신입|뉴비|새로|새내기|처음|들어온|들어오|입장|오신\s?분|온\s?분|웰컴|어서\s?오)")
 NAME_SCAN_LIMIT = 400
 _STYLE_ASK = re.compile(r"(?:^|\s)[./]\s?(?:말투|style)\s+(\S+)|말투(?:를|는)?\s*(\S+?)(?:로|으로)\s*(?:바꿔|해|변경)")
 _WORD = re.compile(r"[0-9A-Za-z가-힣_]{2,}")
@@ -107,13 +109,16 @@ async def collect(svc: Services, bot, msg, chat_id: int, caller, request: str) -
             if hit:
                 add(row["user_id"], _name(row["first_name"], row["last_name"], row["username"]), 2,
                     f"요청의 '{hit}' 와 이름이 겹침")
-    # 4) 방금 들어온 사람 ★★
-    for row in await db._all(
-            "SELECT u.user_id, u.first_name, u.last_name, u.username, m.joined_at FROM members m JOIN users u "
-            "ON u.user_id=m.user_id WHERE m.chat_id=? AND u.is_bot=0 AND m.joined_at > ? ORDER BY m.joined_at DESC LIMIT 5",
-            (chat_id, now - RECENT_JOIN_MIN * 60)):
-        add(row["user_id"], _name(row["first_name"], row["last_name"], row["username"]), 2,
-            f"{max(1, (now - row['joined_at']) // 60)}분 전에 새로 들어옴")
+    # 4) 방금 들어온 사람 ★★ — 인사·환영처럼 '새로 온 사람' 얘기일 때만. '소담아' 만 부른 걸 신입에게 답하던 문제 (일루왕 10/05)
+    if request.strip() in ("", "(이름만 부름)"):
+        notes.append("이 요청은 소담 이름만 부른 것이다 → 부른 사람 본인에게 답하고, 다른 사람 이름으로 부르지 말 것.")
+    elif _NEWCOMER.search(request):
+        for row in await db._all(
+                "SELECT u.user_id, u.first_name, u.last_name, u.username, m.joined_at FROM members m JOIN users u "
+                "ON u.user_id=m.user_id WHERE m.chat_id=? AND u.is_bot=0 AND m.joined_at > ? "
+                "ORDER BY m.joined_at DESC LIMIT 5", (chat_id, now - RECENT_JOIN_MIN * 60)):
+            add(row["user_id"], _name(row["first_name"], row["last_name"], row["username"]), 2,
+                f"{max(1, (now - row['joined_at']) // 60)}분 전에 새로 들어옴")
     # 5) 지시어 → 가리키는 사람 ★★★ (답장 대상 > 바로 전 대화에서 마지막으로 나온 사람)
     pm = _PRONOUN.search(request)
     if pm:
