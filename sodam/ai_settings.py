@@ -10,6 +10,10 @@ register_setting("ai_follow_up", True, "이름 없이 이어 말하기")        
 register_setting("ai_comeback", "wit", "욕 받아치기",                  # 소담이 욕받이가 되지 않게 (오너 요청 2026-09-29)
                  choices={"wit": "wit", "센스": "wit", "욕없이": "wit", "mirror": "mirror", "똑같이": "mirror", "욕으로": "mirror"},
                  choice_labels={"wit": "센스로 받아치기(욕 없이)", "mirror": "똑같이 욕으로"})
+# AI 제재 확인 카드 범위 (오너 결정 2026-10-05): risky = 밴·강퇴·푸는 조치만 카드, 관리자가 직접 시킨 경고·뮤트는 바로 /
+# all = 예전처럼 전부 카드. 멤버 글을 읽은 답변·음성·오너 1:1 의 다른 방 제재는 설정과 무관하게 늘 카드 (tools._ask_sanction)
+register_setting("ai_sanction_card", "risky", "AI 제재 확인 버튼",
+                 choices={"risky": "risky", "위험한것만": "risky", "밴강퇴만": "risky", "all": "all", "전부": "all"}, choice_labels={"risky": "밴·강퇴만", "all": "전부"})
 register_setting("ai_spicy", False, "19금 드립 받아치기")               # 기본 꺼짐: 켠 방에서만 야한 드립에 은유 수준으로 (노골적 X)
 register_setting("ai_quote", True, "답장 인용으로 답하기")             # 끄면 그룹방 AI 답을 인용 없이 그냥 메시지로 (오너 요청 2026-10-01)
 register_setting("ai_chime_in", False, "AI 먼저 끼어들기")            # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디

@@ -404,6 +404,14 @@
   신입 단서는 요청에 인사·환영·신입·들어온 같은 말이 있을 때만, 이름만 부르면 '부른 사람 본인에게' 메모. 싫다는 호칭
   ('팽부장 떠오르게 하지마')은 `memory.drop_disliked_nickname` 이 코드로 기억·.호칭 메모에서 지움 (handlers 답 전 + 그룹 훅).
 
+## 코덱스식 하네스 보강 (tests/test_harness_codex.py · 뮤테이션 8개, 2026-10-05)
+openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 실수 기록을 맞대서 나온 것 — 전부 코드, 걸릴 때만 1번 더 부름.
+- 앞 요청에서 한 일: `memory.recent_actions` = 이 사람 30분 안 agent_runs.steps(도구·결과) 3개 → `<recent_actions>` 데이터 블록.
+  그림: ai_turns.media 에 보낸 그림 file_id → 답장 없이 make_image mode=edit 면 `memory.last_made_image`(이 사람·30분) 가 원본.
+- 보내기 전 검사 `agent._final_check` (한 실행 1번, call·follow 만): ① 도구 없이 '했다'(claim) ② '해 줘'에 도구 없이 '~하시면 됩니다'
+  (advice) ③ 답이 '이름, …' 으로 시작하는데 말한 사람도 아니고 요청·답장·단서·도구 결과에도 없는 이 방 멤버(addressee, `room_people`).
+- sports 도구가 '못 찾았' 이면 결과 끝에 'web_search 로 찾아서 답할 것' (국가대표·NHL 등에서 작은 모델이 포기하던 것).
+
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·
   숫자 검증(읽기 도구를 쓴 실행에서 결과에 없는 숫자면 한 번 다시) · 자료끼리 다르면 최신 기준+다름 표시 · `answer_sources`(직전 답 근거).
@@ -773,3 +781,29 @@
 - edit_list(금지어·허용 도메인 add/remove/list, **바로 저장** — change_setting·.금지어 와 같은 규칙, 200/50개, 한 번에 20개) ·
   manage_schedule(schedules·alert_rules list 바로 / pause·resume·delete 는 요청자 카드 sched_ok) · room_control(lock/unlock/purge/notice 카드 room_ok,
   누를 때 may 다시 — 잠금 restrict·청소 delete, 청소 범위 = 도구 부를 때 messages 의 최신 msg_id 부터 N개). 전부 ADMIN·room·READ_ONLY 아님(tainted 면 막힘).
+
+## GPT-6 (sol·luna) 전환 (tests/test_gpt6.py · 뮤테이션 10개, 2026-10-05)
+OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.rs build_responses_request, models.json) 대조.
+- `llm.responses_only`: gpt-6* 는 chat() 도 전부 Responses(think) 로 — Chat Completions 는 추론 none 일 때만 도구(6-sol·luna),
+  6.1-sol·astra 는 도구 없음. 추론 값: 도구면 none, 아니면 지정값·.env·none. `fix_effort`: minimal→low(GPT-6), none 없는 모델→low.
+- 캐시: GPT-6 은 prompt_cache_retention(24h) 대신 `prompt_cache_options={"mode":"explicit"}` + `with_breakpoint` = 맨 앞 system
+  묶음 끝에만 `prompt_cache_breakpoint` (도구+고정 지시만 캐시에 씀, 요청·대화는 1.25배 쓰기 요금 없이 일반 입력). 보관 30분 고정.
+  거절되면 `cache_opts_off` → 자동 캐시. 캐시 쓰기 토큰(input_tokens_details.cache_write_tokens)은 `costs.CACHE_WRITE_MULT` 1.25배.
+- 모델 거절(model_not_found 등) → `FALLBACK`(luna→gpt-5.4-mini, 그 외 gpt-6→gpt-5.4) 으로 이 프로세스 동안 (`models_off`). web_search 도.
+- 서버 .env: OPENAI_MODEL=gpt-6-sol · AGENT_LIGHT_MODEL=gpt-6-luna. 안전 판별(OPENAI_GUARD_MODEL: 스팸·사기·패드립·인젝션)은 gpt-5.4-mini 그대로
+  (오탐 성격이 바뀌는 건 따로 판단). 텍스트 verbosity=low (codex 기본값).
+
+## AI 제재 확인 카드 범위 (오너 결정 2026-10-05, 방 설정 `ai_sanction_card`)
+- risky(기본): 관리자가 이 방에서 직접 시킨 경고·뮤트는 바로 실행 (`tools.DIRECT_KINDS`, `_do_sanction` — 실행 함수·관리자 보호·
+  ai_card_log 기록은 카드 누를 때와 같음). 밴·강퇴·푸는 조치는 카드. all: 예전처럼 전부 카드.
+- 설정과 무관하게 늘 카드: 멤버 글·다른 봇 글을 읽은 답변(tainted·room_read)·인젝션 판별 못 한 요청, 음성채팅(`ctx.via_voice`), 오너 1:1 의 다른 방 제재.
+- 텔레그램 '사용자 차단' 권한 없는 관리자는 지금처럼 거절 (오너 결정).
+
+## 도구 고르기: 핵심만 처음부터 + find_tools (2026-10-05, tests/test_harness_codex.py)
+- 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → `tools.CORE_TOOLS`(서버 30일 사용량 상위 20개)만 처음부터,
+  나머지는 `find_tools` 목록(이름·한 줄, `find_tools_schema`)에서 불러오면 `agent._ToolSet.load` 가 다음 라운드부터 싣는다
+  (클로드 코드 deferred tools · OpenAI tool_search 방식, 우리 코드라 모델·API·fallback 과 무관). 목록은 역할·대화 종류로만 정해져 캐시 그대로.
+- 이 방에서 꺼진 도구를 불러오면 '꺼져 있는 기능' 안내. 모델이 목록 이름을 바로 불러도 allowed 안이면 실행됨. light 길에서도 find_tools 됨.
+- 지시문: 8번 규칙을 항목으로 쪼개고 이유를 붙임, [일하는 방식](파악→도구로 확인→실제로 함→결과대로 짧게, 방법만 설명하고 끝내지 않음).
+- 기억: EXTRACT_SYSTEM 에 '안 뽑는 게 기본·농담/드립/과장 제외·싫다는 호칭은 remove', ROOM_SYSTEM = 이어받을 비서에게 주는 인수인계
+  (진행 중인 부탁·정정·싫다는 호칭).

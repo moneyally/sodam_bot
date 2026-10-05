@@ -15,6 +15,14 @@ PRICES: dict[str, tuple[float, float, float]] = {
     "gpt-5.4": (2.50, 0.25, 15.00),
     "gpt-5.4-mini": (0.75, 0.075, 4.50),
     "gpt-5.4-nano": (0.20, 0.02, 1.25),   # 뉴스 요약 선택(.env NEWS_MODEL) — OpenAI 모델 문서 2026-09-29 확인
+    # GPT-6·5.6 (OpenAI 요금표 2026-10-05 확인, 272K 이하 짧은 문맥 값). 캐시 쓰기는 입력값 × CACHE_WRITE_MULT 따로 (아래)
+    "gpt-6-sol": (2.00, 0.20, 10.00),
+    "gpt-6.1-sol": (2.00, 0.10, 10.00),
+    "gpt-6-luna": (0.10, 0.01, 0.50),
+    "gpt-6-astra": (10.00, 1.00, 50.00),
+    "gpt-5.6-sol": (4.00, 0.40, 20.00),   # 프로모션 값 (2026-11-21 까지 이상)
+    "gpt-5.6-terra": (2.00, 0.20, 12.00),
+    "gpt-5.6-luna": (0.20, 0.02, 1.20),
     # 이미지 모델 (OpenAI 모델 문서 2026-09-27 확인, 두 모델 같은 값): 글 입력 $5 · 캐시 $1.25, 사진 입력 $8 · 캐시 $2,
     # 이미지 출력 $30 (글 출력은 없음). 이미지 요금은 장당이 아니라 토큰. llm.image → _record 는 usage.input_tokens(글+사진 합계)·
     # 캐시·출력(total-input) 만 넘겨서 글/사진 입력을 못 나눈다 → 입력은 더 비싼 '사진 입력' 값으로 (보수적, 글 프롬프트
@@ -24,6 +32,9 @@ PRICES: dict[str, tuple[float, float, float]] = {
     "text-embedding-3-small": (0.02, 0.02, 0.0),   # 의미 검색 색인 (sodam/semsearch.py) — 메시지 2천 개 ≈ $0.001
 }
 IMAGE_PREFIX = "gpt-image"
+# GPT-5.6 이후: 캐시에 새로 쓰는 입력 토큰은 일반 입력의 1.25배 (usage.input_tokens_details.cache_write_tokens,
+# OpenAI 프롬프트 캐시 문서 2026-10-05 — '추가 요금이 아니라 그 토큰은 이 값으로' 청구)
+CACHE_WRITE_MULT = 1.25
 WEB_SEARCH_PER_CALL = 0.01       # 웹 검색 도구 1번 ($10 / 1천 번)
 # 영상 모델: 초당 $ (sodam/video.py). Veo https://ai.google.dev/gemini-api/docs/pricing (720p, 소리 포함, 만들어진 것만 청구) ·
 # xAI https://docs.x.ai/developers/models/grok-imagine-video(-1.5) — 2026-09-30 확인. 모르는 영상 모델 = 이 표의 가장 비싼 값.
@@ -50,11 +61,13 @@ def price_of(model: str) -> tuple[float, float, float] | None:
     return PRICES.get(base) if base else None
 
 
-def token_cost(model: str, inp: int, cached: int, out: int) -> float | None:
+def token_cost(model: str, inp: int, cached: int, out: int, written: int = 0) -> float | None:
+    """written = 캐시에 새로 쓴 입력 토큰 (inp 안에 포함, cached 와 겹치지 않음) → 입력값 × CACHE_WRITE_MULT."""
     p = price_of(model)
     if p is None:
         return None
-    return ((inp - cached) * p[0] + cached * p[1] + out * p[2]) / 1_000_000
+    written = max(0, min(written, inp - cached))
+    return ((inp - cached - written) * p[0] + written * p[0] * CACHE_WRITE_MULT + cached * p[1] + out * p[2]) / 1_000_000
 
 
 def by_model(counters: dict[str, int]) -> dict[str, dict]:
@@ -92,15 +105,15 @@ PCT_KEY = "ai_room_budget_pct"    # 방 관리자 설정: 요금제의 몇 %까�
 register_setting(PCT_KEY, 100, "방 하루 AI 사용 한도(%)", range_=(10, 100))
 
 
-def usd_micro(model: str, inp: int, cached: int, out: int, fallback: str = "") -> int:
+def usd_micro(model: str, inp: int, cached: int, out: int, fallback: str = "", written: int = 0) -> int:
     """정수 마이크로달러(올림). 요금표에 없는 모델은 기본 모델 요금, 그것도 없으면 가장 비싼 요금 (보수적으로).
     이미지 모델은 PRICES 에 토큰 요금으로 있음. 요금표에 없는 gpt-image-* 는 아는 이미지 요금 중 가장 비싼 값
     (.env 로 다른 이미지 모델을 쓰면 PRICES 에 추가할 것)."""
-    usd = token_cost(model, inp, cached, out)
+    usd = token_cost(model, inp, cached, out, written)
     if usd is None and model.startswith(IMAGE_PREFIX):   # 요금표에 없는 새 이미지 모델 → 아는 이미지 요금 중 가장 비싼 값
         usd = max(token_cost(m, inp, cached, out) or 0.0 for m in PRICES if m.startswith(IMAGE_PREFIX))
     if usd is None and fallback:
-        usd = token_cost(fallback, inp, cached, out)
+        usd = token_cost(fallback, inp, cached, out, written)
     if usd is None:
         # 대화 모델 중 가장 비싼 값 (이미지 출력 $30 은 대화 모델에 쓰면 2배 과다라 뺌)
         usd = max(token_cost(m, inp, cached, out) or 0.0 for m in PRICES if not m.startswith(IMAGE_PREFIX))

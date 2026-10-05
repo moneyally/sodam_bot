@@ -7,7 +7,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from openai import AsyncOpenAI, BadRequestError, OpenAIError
+from openai import AsyncOpenAI, BadRequestError, NotFoundError, OpenAIError
 
 from . import agentlog, costs
 from .ai_settings import ROOM_TOKENS_MAX
@@ -68,6 +68,68 @@ def to_input(messages: list[dict]) -> list[dict]:
     return out
 
 
+# ── 모델 계열 (OpenAI 모델 문서·옮겨가기 가이드 2026-10-05, codex models.json 대조) ──────────
+REASONING_PREFIXES = ("gpt-5", "gpt-6", "o")   # reasoning_effort 를 받는 모델
+# GPT-6 은 전부 Responses API 로 (코덱스와 같음): Chat Completions 는 추론 none 일 때만 도구가 되고(6-sol·luna),
+# 6.1-sol·astra 는 아예 도구가 안 됨 · 캐시 쓰기 지점(prompt_cache_breakpoint)도 Responses 에만 있음
+RESPONSES_PREFIXES = ("gpt-6",)
+NO_NONE_PREFIXES = ("gpt-6.1", "gpt-6-astra")   # 추론 none·minimal 이 없는 모델 → low
+# 모델 이름이 거절되면(아직 안 열린 계정·오타) 이 프로세스에선 예전 모델로 — AI 답이 멈추면 안 됨
+FALLBACK = (("gpt-6-luna", "gpt-5.4-mini"), ("gpt-5.6-luna", "gpt-5.4-mini"), ("gpt-6", "gpt-5.4"), ("gpt-5.6", "gpt-5.4"))
+
+
+def responses_only(model: str) -> bool:
+    return model.startswith(RESPONSES_PREFIXES)
+
+
+def fix_effort(model: str, effort: str | None) -> str | None:
+    """모델이 못 받는 추론 값 고치기: 'minimal' 은 GPT-6 에 없음(가이드: low 부터), none 없는 모델은 low."""
+    if not effort or not model.startswith(REASONING_PREFIXES):
+        return effort
+    if effort == "minimal" and model.startswith("gpt-6"):
+        effort = "low"
+    if effort in ("none", "minimal") and model.startswith(NO_NONE_PREFIXES):
+        effort = "low"
+    return effort
+
+
+def fallback_model(model: str) -> str | None:
+    return next((to for pre, to in FALLBACK if model.startswith(pre)), None)
+
+
+def _model_rejected(e: Exception) -> bool:
+    """이 오류가 '그 모델을 못 씀' 인지 (그때만 예전 모델로 — 다른 400 은 그대로 올림)."""
+    code = str(getattr(e, "code", "") or "")
+    text = str(e).lower()
+    return code in ("model_not_found", "unsupported_model") or ("model" in text and (
+        "does not exist" in text or "not found" in text or "do not have access" in text or "not supported" in text))
+
+
+def _cache_rejected(e: Exception) -> bool:
+    text = str(e).lower()
+    return "prompt_cache" in text or "cache_breakpoint" in text
+
+
+def with_breakpoint(items: list[dict]) -> list[dict]:
+    """Responses input 의 맨 앞 system 묶음(고정 규칙·말투·방 안내) 끝에 캐시 쓰기 지점 하나 → 도구 목록+고정 지시까지만 캐시에 씀.
+    매번 바뀌는 대화·요청은 캐시 쓰기 요금(1.25배) 없이 일반 입력으로 (implicit 이면 요청 끝까지 1.25배로 씀)."""
+    last = None
+    for i, it in enumerate(items):
+        if it.get("role") != "system":
+            break
+        last = i
+    if last is None:
+        return items
+    it = dict(items[last])
+    content = it["content"]
+    parts = [{"type": "input_text", "text": content}] if isinstance(content, str) else [dict(p) for p in content]
+    if not parts:
+        return items
+    parts[-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
+    it["content"] = parts
+    return [*items[:last], it, *items[last + 1:]]
+
+
 class AIUnavailable(OpenAIError):
     """OPENAI_API_KEY 가 없을 때. OpenAIError 를 상속해서 기존 오류 처리(게임·인사 등)가 그대로 받는다."""
 
@@ -91,6 +153,8 @@ class LLM:
         # 토큰 예산은 .env 에 DAILY_TOKEN_BUDGET 을 직접 적은 경우만 (예전 설정 그대로 지키기). 없으면 0 = 안 봄
         self.token_budget = cfg.daily_token_budget if os.getenv("DAILY_TOKEN_BUDGET", "").strip() else 0
         self.allowed_off = False   # allowed_tools 를 API 가 거절하면 True → 도구 목록 자체를 줄이는 예전 방식
+        self.cache_opts_off = False   # GPT-6 캐시 지점(prompt_cache_options)을 API 가 거절하면 True → 자동 캐시로
+        self.models_off: set[str] = set()   # 이 프로세스에서 거절된 모델 → fallback_model 로
 
     def _today(self) -> str:
         return datetime.now(self.cfg.tz).strftime("%Y-%m-%d")
@@ -129,8 +193,9 @@ class LLM:
         prompt = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0
         details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
         cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+        written = (getattr(details, "cache_write_tokens", 0) or 0) if details else 0   # GPT-5.6+ 캐시 쓰기 (1.25배)
         out = max(0, total - prompt)
-        micro = extra_micro + (costs.usd_micro(model or self.cfg.model, prompt, cached, out, self.cfg.model)
+        micro = extra_micro + (costs.usd_micro(model or self.cfg.model, prompt, cached, out, self.cfg.model, written=written)
                                if total else 0)
         agentlog.add_usage(model, prompt, cached, out, micro)
         rows: list[tuple[int, str, int]] = []
@@ -147,7 +212,8 @@ class LLM:
         if cached:
             rows += [(0, "cached_tokens", cached), (0, f"cached:{purpose}", cached)]
         if model and usage:
-            rows += [(0, f"m:{model}:{k}", n) for k, n in (("in", prompt), ("cached", cached), ("out", out)) if n]
+            rows += [(0, f"m:{model}:{k}", n) for k, n in (("in", prompt), ("cached", cached), ("out", out),
+                                                            ("written", written)) if n]
             rows.append((0, f"m:{model}:calls", 1))
         if rows:   # 한 번에 (DB 스레드에서 전부/전무 — 방 요금만 빠지고 전체는 남는 일 없게)
             await self.db.atomic(lambda c: c.executemany(
@@ -184,16 +250,36 @@ class LLM:
         day = self._today()
         return {k: await self.db.counter(day, 0, k) for k in ("tokens", "prompt_tokens", "cached_tokens")}
 
-    def _cache(self, purpose: str, cache_key: str | None = None) -> dict[str, Any]:
+    def _cache(self, purpose: str, cache_key: str | None = None, model: str = "") -> dict[str, Any]:
         """프롬프트 캐시: 같은 앞부분(시스템 규칙+도구)을 쓰는 요청끼리 같은 캐시 키로 묶는다.
-        cache_key 를 주면 그걸로 (에이전트: 도구 목록 지문 — 기록용 purpose 와 따로)."""
+        cache_key 를 주면 그걸로 (에이전트: 도구 목록 지문 — 기록용 purpose 와 따로).
+        GPT-6: prompt_cache_retention 대신 prompt_cache_options (보관은 30분 고정) + 지점은 with_breakpoint 로 직접."""
         kw: dict[str, Any] = {"prompt_cache_key": f"sodam:{cache_key or purpose}"}
-        if self.cfg.cache_retention:
+        if responses_only(model):
+            if not self.cache_opts_off:
+                kw["prompt_cache_options"] = {"mode": "explicit"}
+        elif self.cfg.cache_retention:
             kw["prompt_cache_retention"] = self.cfg.cache_retention
         return kw
 
+    def _use(self, model: str) -> str:
+        """거절된 모델이면 예전 모델로 (이 프로세스 동안)."""
+        while model in self.models_off and (fb := fallback_model(model)) and fb != model:
+            model = fb
+        return model
+
+    def _drop_model(self, model: str, e: Exception) -> str | None:
+        """모델 거절 → 표시하고 대신 쓸 모델. 못 바꾸면 None."""
+        fb = fallback_model(model)
+        if not fb or not _model_rejected(e):
+            return None
+        if model not in self.models_off:
+            log.warning("모델 %s 거절 → %s 로 (재시작 전까지): %s", model, fb, e)
+        self.models_off.add(model)
+        return fb
+
     def _extra(self, model: str, has_tools: bool = False, effort: str | None = None) -> dict[str, Any]:
-        if not model.startswith(("gpt-5", "o")):
+        if not model.startswith(REASONING_PREFIXES):
             return {}  # reasoning_effort 는 추론 모델만 받는다
         # 도구 호출이 아닌 가벼운 뒷작업(기억 정리·끼어들기 판단)은 호출하는 쪽이 낮은 추론을 지정 → 비용 절감
         if effort and not has_tools:
@@ -220,16 +306,23 @@ class LLM:
         """chat.completions 호출. 응답 message 객체를 돌려준다.
         allowed: tools 중 이번에 부를 수 있는 이름만 (None = 전부) — 목록은 그대로 싣고 호출만 좁힘(캐시 유지).
         chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
+        model = self._use(model or self.cfg.model)
+        if responses_only(model):   # GPT-6 = Responses 로 (추론 값은 chat 과 같은 규칙: 도구면 none, 아니면 지정값·.env·none)
+            e = (effort or self.cfg.reasoning_effort or "none") if not tools else "none"
+            if e == "off":
+                e = "none"
+            return await self.think(messages, tools=tools, tool_choice=tool_choice, effort=e, max_tokens=max_tokens,
+                                    purpose=purpose, chat_id=chat_id, model=model, allowed=allowed, cache_key=cache_key,
+                                    json_mode=json_mode)
         await self._check_budget(chat_id)
-        model = model or self.cfg.model
         if allowed is not None and self.allowed_off and tools:   # allowed_tools 를 거절당한 뒤: 예전처럼 목록 자체를 줄임
             tools, allowed = _narrow(tools, allowed), None
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_completion_tokens": max_tokens,
-            **self._extra(model, has_tools=bool(tools), effort=effort),
-            **self._cache(purpose, cache_key),
+            **self._extra(model, has_tools=bool(tools), effort=fix_effort(model, effort)),
+            **self._cache(purpose, cache_key, model),
         }
         if tools:
             kwargs["tools"] = tools
@@ -246,8 +339,13 @@ class LLM:
         try:
             resp = await self.client.chat.completions.create(**kwargs)
             await self._mark_allowed(kwargs, model, ok=True)
-        except BadRequestError as e:
-            if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
+        except (BadRequestError, NotFoundError) as e:
+            if (fb := self._drop_model(model, e)) is not None:
+                return await self.chat(messages, tools=tools, tool_choice=tool_choice, model=fb, max_tokens=max_tokens,
+                                       json_mode=json_mode, purpose=purpose, chat_id=chat_id, effort=effort,
+                                       allowed=allowed, cache_key=cache_key)
+            if not isinstance(e, BadRequestError) or not isinstance(kwargs.get("tool_choice"), dict) \
+                    or not self._about_tool_choice(e):
                 raise
             await self._mark_allowed(kwargs, model, ok=False)
             self._allowed_rejected(e)
@@ -280,21 +378,28 @@ class LLM:
 
     async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
-                    model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None):
+                    model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None,
+                    json_mode: bool = False):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
         store=False (서버에 대화 안 남김) + reasoning.encrypted_content (OpenAI 추론 가이드의 상태 없는 방식).
         text.verbosity=low: 단톡방 답은 짧게 (Codex CLI 와 같은 설정)."""
         await self._check_budget(chat_id)
-        model = model or self.cfg.model
+        model = self._use(model or self.cfg.model)
         if allowed is not None and self.allowed_off and tools:
             tools, allowed = _narrow(tools, allowed), None
+        items = to_input(messages)
+        cache = self._cache(purpose, cache_key, model)
+        if "prompt_cache_options" in cache:   # GPT-6: 고정 지시 끝에만 캐시 쓰기 (요청·대화는 일반 입력)
+            items = with_breakpoint(items)
+        text: dict[str, Any] = {"verbosity": "low"}
+        if json_mode:
+            text["format"] = {"type": "json_object"}
         kwargs: dict[str, Any] = {
-            "model": model, "input": to_input(messages), "max_output_tokens": max_tokens,
-            "reasoning": {"effort": effort}, "store": False, "include": ["reasoning.encrypted_content"],
-            "text": {"verbosity": "low"},
-            **self._cache(purpose, cache_key),
+            "model": model, "input": items, "max_output_tokens": max_tokens,
+            "reasoning": {"effort": fix_effort(model, effort)}, "store": False,
+            "include": ["reasoning.encrypted_content"], "text": text, **cache,
         }
         if tools:
             kwargs["tools"] = [{"type": "function", **t["function"], "strict": False} for t in tools]
@@ -308,8 +413,17 @@ class LLM:
         try:
             resp = await self.client.responses.create(**kwargs)
             await self._mark_allowed(kwargs, model, ok=True)
-        except BadRequestError as e:
-            if not isinstance(kwargs.get("tool_choice"), dict) or not self._about_tool_choice(e):
+        except (BadRequestError, NotFoundError) as e:
+            again = dict(tools=tools, tool_choice=tool_choice, effort=effort, max_tokens=max_tokens, purpose=purpose,
+                         chat_id=chat_id, allowed=allowed, cache_key=cache_key, json_mode=json_mode)
+            if (fb := self._drop_model(model, e)) is not None:
+                return await self.think(messages, model=fb, **again)
+            if isinstance(e, BadRequestError) and "prompt_cache_options" in kwargs and _cache_rejected(e):
+                log.warning("GPT-6 캐시 지점 거절 → 자동 캐시로 (재시작 전까지): %s", e)
+                self.cache_opts_off = True
+                return await self.think(messages, model=model, **again)
+            if not isinstance(e, BadRequestError) or not isinstance(kwargs.get("tool_choice"), dict) \
+                    or not self._about_tool_choice(e):
                 raise
             await self._mark_allowed(kwargs, model, ok=False)
             self._allowed_rejected(e)
@@ -356,8 +470,22 @@ class LLM:
         """격리 검색: 이 호출은 우리 도구를 하나도 갖지 않고, 요약 텍스트만 돌려준다.
         chat_id 를 주면 방 하루 토큰 한도에 포함된다."""
         await self._check_budget(chat_id)
-        resp = await self.client.responses.create(
-            model=self.cfg.guard_model,
+        model = self._use(self.cfg.guard_model)
+        try:
+            resp = await self._search(model, query)
+        except (BadRequestError, NotFoundError) as e:
+            if (fb := self._drop_model(model, e)) is None:
+                raise
+            model = fb
+            resp = await self._search(model, query)
+        await self._record(resp.usage, chat_id, "web_search", model,
+                           extra_micro=round(costs.WEB_SEARCH_PER_CALL * costs.MICRO))
+        await self.db.bump(self._today(), 0, "web_search_calls", 1)   # 검색 1번당 요금이 따로 붙음
+        return (resp.output_text or "").strip()
+
+    async def _search(self, model: str, query: str):
+        return await self.client.responses.create(
+            model=model,
             tools=[{"type": "web_search"}],
             instructions=(
                 "웹을 검색해 질문에 대한 사실만 한국어로 5줄 이내로 요약하라. "
@@ -365,11 +493,8 @@ class LLM:
                 "링크, 광고 문구, 연락처, 지갑주소는 적지 마라."),
             input=query[:300],
             max_output_tokens=800,
+            **({"text": {"verbosity": "low"}} if responses_only(model) else {}),
         )
-        await self._record(resp.usage, chat_id, "web_search", self.cfg.guard_model,
-                           extra_micro=round(costs.WEB_SEARCH_PER_CALL * costs.MICRO))
-        await self.db.bump(self._today(), 0, "web_search_calls", 1)   # 검색 1번당 요금이 따로 붙음
-        return (resp.output_text or "").strip()
 
     async def classify_injection(self, text: str, chat_id: int | None = None) -> tuple[bool, str]:
         """2층 판별. (공격 여부, 이유). 실패하면 안전하게 False. chat_id 를 주면 방 토큰으로 센다."""

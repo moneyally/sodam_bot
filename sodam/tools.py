@@ -380,6 +380,19 @@ async def _uploading(ctx: ToolCtx) -> None:
         await asyncio.sleep(4)
 
 
+async def _last_made(ctx: ToolCtx) -> Attached | None:
+    """이 사람에게 30분 안에 그려 보낸 마지막 그림 (memory.last_made_image). 못 받으면 None."""
+    fid = await memory.last_made_image(ctx.svc.db, ctx.chat_id, ctx.caller.id)
+    if not fid:
+        return None
+    try:
+        f = await ctx.bot.get_file(fid)
+        return Attached(bytes(await f.download_as_bytearray()), "image/png", ctx.caller.id)
+    except TelegramError as e:
+        log.info("last made image fetch failed: %s", e)
+        return None
+
+
 async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     from . import mediapolicy   # 영상과 같은 규칙 (오너 결정 2026-10-05 — 성인 내용 판단은 그림 AI 에게)
     request = mediapolicy.source_text(ctx)
@@ -397,6 +410,8 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
         if not src:
             return err
         ctx.image, edit = Attached(src, "image/jpeg", ctx.caller.id), True
+    if edit and ctx.image is None:   # 답장 없이 '박스 빼줘' = 방금 이 사람에게 그려 준 그림 (서버 실수 #2304·#2312·#2313)
+        ctx.image = await _last_made(ctx)
     if edit and ctx.image is None:
         return "고칠 사진이 없음. 사진에 답장하면서 부탁하거나 사진과 함께 보내 달라고 안내할 것."
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
@@ -426,7 +441,9 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     except TelegramError as e:
         return f"이미지는 만들었는데 전송 실패: {e.message}"
     # AI 답으로 기록 → 이 그림에 답장하면('더 밝게') 소담이 이어서 받음 (handlers: AI 답에 단 답장만 호출)
-    await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id)
+    photo = getattr(sent, "photo", None)
+    await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id,
+                             media=photo[-1].file_id if photo else None)
     await ctx.svc.db.bump(day, ctx.chat_id, "image")
     # 방금 그린 그림을 이 실행의 원본으로 → '새 그림 만들어서 움프/스티커로' 를 한 번에 이어서 (make_profile_video·make_sticker)
     ctx.image = Attached(data, "image/png", ctx.caller.id)
@@ -470,9 +487,13 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
             d = sports_ui.parse_day(str(a.get("day") or "오늘"), ui.today()) or ui.today()
             text = await ui.games_text(query, d)
     except SportsError as e:
-        return str(e)
+        text = str(e)
     from .util import html_plain
-    return html_plain(text)
+    text = html_plain(text)
+    if "못 찾았" in text and _BY_NAME.get("web_search"):   # 국가대표·없는 리그(NHL 등) — 포기 말고 다음 길 (서버 실수 #2160·#2231·#2395·#2462)
+        text += (f"\n→ 스포츠 도구엔 없음. 끝내지 말고 web_search 로 '{query or '경기'} 경기 일정 결과' 를 찾아서 답할 것 "
+                 "(찾은 곳을 '찾아보니'로 밝힘).")
+    return text
 
 
 NOTE_KEYS = ["호칭", "업종", "관심사", "소개"]
@@ -752,9 +773,12 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
         return err
     if _sanction_used(ctx):
         return SANCTION_ONCE
-    await attempt("확인 카드" + (f"({minutes}분)" if minutes else ""))
     reason = str(a.get("reason", "관리자 판단"))[:100]
     targets = [(r["user_id"], _row_name(r)) for r in rows]
+    if kind in DIRECT_KINDS and card_chat is None and ctx.settings.get("ai_sanction_card", "risky") != "all" \
+            and not (ctx.tainted or ctx.bot_tainted or ctx.room_read or getattr(ctx, "via_voice", False)):
+        return await _do_sanction(ctx, kind, targets, reason, minutes, attempt)
+    await attempt("확인 카드" + (f"({minutes}분)" if minutes else ""))
     key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes,
                                             extra=tuple(targets[1:]), from_dm=card_chat is not None))
     label = modactions.label(kind, minutes)
@@ -771,6 +795,38 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
             InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n")]]))
     return (f"확인 버튼을 보냈음 (대상 {len(targets)}명: {', '.join(n for _, n in targets)}). "
             "관리자가 눌러야 실행된다고 짧게 안내할 것. 아직 실행된 게 아니니 '했다'고 말하지 말 것.")
+
+
+# 오너 결정 2026-10-05: 확인 카드는 위험한 것(밴·강퇴·대량 삭제·푸는 조치)만. 관리자가 이 방에서 직접 시킨 경고·뮤트는 바로 실행.
+# 단 이 답변이 멤버 글·다른 봇 글을 읽었거나 요청 확인을 못 했으면(숨은 지시 가능) 예전처럼 카드. 오너 1:1 의 다른 방 제재도 카드.
+DIRECT_KINDS = frozenset({"warn", "mute"})
+
+
+async def _do_sanction(ctx: ToolCtx, kind: str, targets: list, reason: str, minutes: int, attempt) -> str:
+    """카드 없이 바로 (실행 함수·관리자 보호·결과 기록은 카드를 눌렀을 때와 같음 — handlers._confirm_action)."""
+    spec = modactions.KINDS[kind]
+    await attempt("바로 실행" + (f"({minutes}분)" if minutes else ""))
+    act = PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes, extra=tuple(targets[1:]))
+    lines, done = [], []
+    for uid, name in targets:
+        if spec.punitive and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
+            lines.append(f"{name}: 관리자라서 제재 안 함")
+            continue
+        try:
+            ok, line = await spec.run(ctx.svc, ctx.bot, ctx.chat_id, uid, name, ctx.caller.id, act)
+        except TelegramError as e:
+            log.warning("direct sanction %s failed: chat %s user %s: %s", kind, ctx.chat_id, uid, e)
+            lines.append(f"{name}: 실패 ({e.message}) — 봇에게 '사용자 차단' 권한이 있는지 확인 필요")
+            continue
+        lines.append(html.unescape(re.sub(r"<[^>]+>", "", line)))
+        if ok:
+            done.append(name)
+    label = modactions.record_label(kind, minutes)
+    names = ", ".join(n for _, n in targets)[:60]
+    await cards.record(ctx.svc, ctx.chat_id, ctx.caller.id, kind,
+                       (f"✅ {label} 실행됨 — {len(done)}명" if done else f"⚠️ {label} 실행 안 됨") + f" — {names}"
+                       + f" (요청: {display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)})")
+    return ("실행 결과 (관리자가 직접 시킨 일이라 확인 버튼 없이 바로 함 — 이 결과대로만 짧게 전할 것): " + " / ".join(lines))
 
 
 # ── 오너 전용: 1:1 에서 다른 방 관리 ───────────────────────
@@ -1141,9 +1197,9 @@ TOOLS: list[Tool] = [
     Tool("report_to_admin", "멤버가 관리자에게 전하고 싶은 말·신고·건의를 관리자 개인 텔레그램으로 전달한다 (1인 하루 5회).",
          {"message": {"type": "string", "description": "전달할 내용 요약 (500자 이내)"}}, ["message"], t_report_to_admin),
     # 관리자 전용
-    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+    Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_warn, Role.ADMIN, where="room"),
-    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (확인 버튼 한 장). 여러 명이면 names 에 한 번에. " + WHO_HINT,
+    Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "minutes": {"type": "integer", "description": "1~10080"},
           "reason": {"type": "string"}}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN,
@@ -1236,6 +1292,42 @@ def offered(role: Role, in_dm: bool = False) -> list[Tool]:
     return [t for t in TOOLS if role >= t.min_role and (t.enabled is None or t.enabled())
             and not (t.where == "room" and in_dm) and not (t.where in ("dm", "owner_dm") and not in_dm)
             and not (t.room_role is not None and not in_dm and role < t.room_role)]
+
+
+# ── 도구 고르기 (클로드 코드 deferred tools · OpenAI tool_search 방식, 2026-10-05) ─────────────
+# 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → 자주 쓰는 핵심만 처음부터, 나머지는 find_tools 목록(이름·한 줄)에서
+# 골라 불러오면 다음 라운드부터 쓸 수 있게 (OpenAI: '한 번에 20개 미만' 권장). 핵심 = 서버 30일 사용량 상위 + 늘 필요한 것.
+# 목록은 역할·대화 종류로만 정해지므로(방 설정 무관) 프롬프트 캐시는 그대로.
+FIND_TOOL = "find_tools"
+CORE_TOOLS = frozenset({
+    "make_image", "make_profile_video", "make_video", "greet_members", "sports", "web_search", "sodam_guide",
+    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "point_game", "bot_command",
+    "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call",
+    "feature_request"})   # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
+
+
+def _short(desc: str, n: int = 70) -> str:
+    """도구 설명 첫 문장 (목록 한 줄용)."""
+    first = re.split(r"(?<=[.。])\s|\n", desc.strip(), maxsplit=1)[0]
+    return first if len(first) <= n else first[: n - 1] + "…"
+
+
+def split_core(shown: list[Tool]) -> tuple[list[Tool], list[Tool]]:
+    """(처음부터 싣는 핵심, find_tools 로 불러오는 나머지)."""
+    return [t for t in shown if t.name in CORE_TOOLS], [t for t in shown if t.name not in CORE_TOOLS]
+
+
+def find_tools_schema(deferred: list[Tool]) -> dict:
+    lines = "\n".join(f"- {t.name}: {_short(t.schema()['function']['description'])}" for t in deferred)
+    return {"type": "function", "function": {
+        "name": FIND_TOOL,
+        "description": ("지금 실린 도구에 맞는 게 없을 때 쓴다: 아래 목록에서 필요한 도구 이름을 골라 불러오면 다음 단계부터 그 도구를 "
+                        "바로 부를 수 있다. 일을 하기 전에 '못 해요'라고 하지 말고 먼저 여기서 찾아볼 것. 잡담·이미 실린 도구로 되는 일엔 "
+                        "쓰지 않는다. 불러올 수 있는 도구:\n" + lines),
+        "parameters": {"type": "object", "properties": {
+            "names": {"type": "array", "items": {"type": "string", "enum": [t.name for t in deferred]},
+                      "description": "불러올 도구 이름들 (위 목록 그대로, 한 번에 여러 개 가능)"}},
+            "required": ["names"], "additionalProperties": False}}}
 
 
 # 다른 방 기록을 읽은 뒤에도 쓸 수 있는 도구 = 이 서버 데이터를 읽기만 (제재·전송·외부 검색·기억 저장 없음)

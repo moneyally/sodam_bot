@@ -176,7 +176,7 @@ async def stored_unlimited_room_cap_is_clamped():
 # ── 6. 한 번의 AI 답변에서 제재는 한 번만 ─────────────────
 @test
 async def agent_sanctions_once_per_run():
-    r = await Room().open(admins={1})
+    r = await Room().open(admins={1}, settings={"ai_sanction_card": "all"})
     bob = fake_user(20, "박준호", "junho")
     boss = fake_user(1, "방장", "boss")
     for u in (bob, boss):
@@ -202,7 +202,7 @@ async def agent_sanctions_once_per_run():
 
 @test
 async def mute_via_ai_waits_for_admin_button():
-    r = await Room().open(admins={1})
+    r = await Room().open(admins={1}, settings={"ai_sanction_card": "all"})
     bob, boss = fake_user(20, "박준호", "junho"), fake_user(1, "방장", "boss")
     for u in (bob, boss):
         await r.join(u)

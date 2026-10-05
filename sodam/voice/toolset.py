@@ -130,6 +130,7 @@ def build(svc, bot, chat_id: int, starter: int, settings: dict,
         caller = await _caller(svc.db, uid)
         ctx = tools.ToolCtx(svc, bot, chat_id, caller, role, await svc.db.get_settings(chat_id))
         ctx.tainted = rid in tainted          # 남이 쓴 글을 읽은 답이면 execute 가 쓰기 도구를 거절
+        ctx.via_voice = True                  # 받아쓰기는 이름을 잘못 들을 수 있음 → 경고·뮤트도 확인 카드 (tools.DIRECT_KINDS 예외)
         if name in VOICE_CARD:
             tool = tools._BY_NAME.get(name)
             if not tool or tool not in tools.available(role, ctx.settings, False):
