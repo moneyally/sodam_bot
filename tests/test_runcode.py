@@ -130,7 +130,7 @@ async def recipe_previews_before_saving_and_runs_without_ai():
 @test
 def tool_is_registered_with_guide_and_cap():
     t = tools._BY_NAME["run_code"]
-    assert "room.db" in t.description and "NanumGothic" in t.description
+    assert "room.db" in t.description and "NanumGothic" in t.description and "pandas.read_sql" in t.description   # duckdb 는 sqlite 확장을 못 받음 (인터넷 없음, 서버 실측)
     assert "run_code" in tools.READ_ONLY
     from sodam.settings import OWNER_CAP, over_cap
     assert OWNER_CAP["run_code_daily"] == 30 and over_cap("run_code_daily", 31)
