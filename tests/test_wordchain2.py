@@ -176,7 +176,8 @@ async def ai_player_uses_tools_and_code_rejects_bad_words():
     db, svc, bot, g = await setup()
     g.cancel_timer()
     used = {"기차", "차표"}
-    good = wordbot.candidates("차표", used)[0][0]
+    # 후보는 무작위로 섞임 → 코드 검사(흔한 말 3개↑)를 통과하는 것 중에서 (서버 배포 테스트에서 가끔 떨어지던 원인, 2026-10-05)
+    good = wordbot.candidates("차표", used, min_common=wordbot.MIN_COMMON["normal"])[0][0]
     svc.llm = ScriptLLM([Call("find_words", "{}"), Call("play", '{"word": "표가나다라", "line": "x"}', "c2"),
                          Call("play", '{"word": "%s", "line": "이어보시죠 😏"}' % good, "c3")])
     # 서버 배포 테스트(CPU 1코어·병렬)에선 사전 후보 계산이 6초를 넘겨 코드 수로 빠진 적 있음 (2026-10-05) → 이 테스트만 넉넉히
