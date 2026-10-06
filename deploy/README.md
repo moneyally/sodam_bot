@@ -16,7 +16,7 @@
 | `sodam-health.timer` → `healthcheck.sh` | 1분마다: 켜진 지 3분 넘은 봇의 하트비트가 180초 넘게 멈췄으면 그 봇만 재시작 (`tools/supervise.sh` 와 같은 규칙) |
 | `sodam-backup.timer` → `backup.sh` | `data/*.db` 온라인 백업(sqlite 백업 API, WAL 안전) + integrity_check + gzip, 14일 지난 것 삭제. rclone 예시 주석 |
 | `update.sh` (`sodam-update`) | fetch → 새 커밋을 임시 폴더에서 `tests/run_all.py` → 통과해야 ff 적용·`VERSION`·재시작 → 90초 안에 `시작! (버전 <커밋>` 없으면 이전 커밋으로 되돌림 |
-| `sodam-autoupdate.timer` | (선택, `install.sh --auto-update`) 10분마다 `update.sh --quiet` |
+| `sodam-autoupdate.timer` | (선택, `install.sh --auto-update`) 2분마다 `update.sh --quiet` |
 | `export_bundle.sh` | 옛 서버에서: 봇 끈 뒤 `.env`+DB 를 암호화 꾸러미로 (`--telegram` 이면 오너 1:1 로 전송) |
 
 ## 자주 쓰는 것

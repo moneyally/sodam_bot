@@ -1467,7 +1467,7 @@ def voice_unit_has_cpu_priority_and_autoupdate_is_throttled():
     v = (dep / "sodam-voice.service").read_text()
     assert "CPUWeight=1000" in v and "Nice=-5" in v
     a = (dep / "sodam-autoupdate.service").read_text()
-    for need in ("CPUWeight=20", "CPUQuota=100%", "IOSchedulingClass=idle", "Nice=10", "TimeoutStartSec=60min"):
+    for need in ("CPUWeight=20", "CPUQuota=150%", "IOSchedulingClass=idle", "Nice=10", "TimeoutStartSec=60min"):
         assert need in a, need
     for text in (v, a):                                            # systemd 는 값 줄 끝 주석을 값으로 읽음
         assert not any("#" in line.split("=", 1)[1] for line in text.splitlines() if "=" in line and not line.startswith("#"))

@@ -6,7 +6,7 @@
 #   bash install.sh --env /root/.env [--db /root/sodam.db.gz]   파일을 따로 올린 경우
 #
 # 옵션: --branch 브랜치(기본 main) · --repo URL · --env-dealer 파일 · --replace-db(이미 있는 DB 바꾸기)
-#       --auto-update(GitHub 새 커밋 10분마다 자동 배포) · --yes(확인 질문 생략)
+#       --auto-update(GitHub 새 커밋 2분마다 자동 배포) · --yes(확인 질문 생략)
 # 비밀값(토큰·키)은 명령줄에 쓰지 않는다: 파일로 올리고 경로만 알려준다.
 set -euo pipefail
 
@@ -162,7 +162,7 @@ systemctl daemon-reload
 systemctl enable -q sodam.service sodam-health.timer sodam-backup.timer
 systemctl start sodam-health.timer sodam-backup.timer
 if [ -f "$APP/.env.dealer" ]; then systemctl enable -q sodam-dealer.service; fi
-if [ "$AUTO_UPDATE" -eq 1 ]; then systemctl enable -q --now sodam-autoupdate.timer; echo "자동 배포 켜짐 (10분마다 $BRANCH 확인)"; fi
+if [ "$AUTO_UPDATE" -eq 1 ]; then systemctl enable -q --now sodam-autoupdate.timer; echo "자동 배포 켜짐 (2분마다 $BRANCH 확인)"; fi
 
 if [ ! -f "$APP/.env" ]; then
     step "준비 끝 (봇은 아직 안 켬)"

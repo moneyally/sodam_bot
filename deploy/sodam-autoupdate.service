@@ -9,11 +9,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/sodam/deploy/update.sh --quiet
-# 서버 전체 테스트만 ~20분 (2026-09-29 실측, 1.2코어) — 1코어 제한이면 조금 더 걸려서 넉넉히
+# 서버 전체 테스트 ~25분(1코어) → 2개 동시(run_all --jobs 2, 1.5코어)로 ~10분대 (2026-10-06)
 # (systemd 값 줄 끝에 주석을 붙이면 값의 일부가 됨 → 주석은 따로)
 TimeoutStartSec=60min
-# 테스트가 음성 담당(CPUWeight=1000)·본체와 CPU 를 다투지 않게: 비중 낮게 · 최대 1코어(2 vCPU 중) · 디스크는 쉴 때만
+# 테스트가 음성 담당(CPUWeight=1000)·본체와 CPU 를 다투지 않게: 비중 낮게 · 최대 1.5코어(2 vCPU 중 0.5 는 봇·음성 몫) · 디스크는 쉴 때만
 Nice=10
 CPUWeight=20
-CPUQuota=100%
+CPUQuota=150%
 IOSchedulingClass=idle

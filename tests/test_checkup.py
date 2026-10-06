@@ -1,5 +1,6 @@
 """🔎 사람 찾기 · 방 점검 · 오너 서버 상태/방 들여다보기 (sodam/panels/checkup.py).
 실제 사례 2026-09-29: 오너 1:1 '7647564988 아이디 뭐야' → 도구가 없어 기능 요청만 접수 (클로드는 DB 로 @lovesic3 찾음)."""
+from pathlib import Path
 from types import SimpleNamespace
 
 from fakes import FakeBot, add_member, fake_user, make_db, make_svc, runner
@@ -98,7 +99,16 @@ async def owner_tools_only_in_owner_dm_and_room_view_taints():
     s = ctx(svc, bot, OWNER, Role.OWNER, OWNER)
     assert "말투" in await C.t_owner_room_view(s, {"room": "벳블리", "kind": "settings"}) and s.tainted, \
         "방 이름 = 방 관리자가 정한 글 → settings 도 tainted (2026-09-30)"
-    assert "버전" in await C.t_owner_server_status(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {})
+    st = await C.t_owner_server_status(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {})
+    assert "버전" in st
+    # '업데이트 뭐 됐어?' → 버전 글자만 있어 '알 수 없음' 이라 답했던 것 (2026-10-06): 최근 커밋 제목이 같이
+    import subprocess
+    root = Path(C.__file__).resolve().parents[2]
+    head = subprocess.run(["git", "-C", str(root), "log", "-1", "--no-merges", "--format=%h %s"],
+                          capture_output=True, text=True).stdout.strip()
+    if head:                                           # git 저장소일 때만 (배포 묶음엔 .git 없음)
+        assert "최근 반영된 변경" in st and head.split(" ", 1)[1][:40] in st, st
+    assert C.recent_changes(Path("/nonexistent")) == []
 
 
 @test
