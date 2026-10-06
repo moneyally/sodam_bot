@@ -22,7 +22,27 @@ CLAIM = re.compile(r"(뮤트|밴|경고|차단|내보냈|예약|등록|저장|�
                    r"(했어|했습니다|완료|처리했|해\s?드렸|뒀어|놨어|뒀습니다|됐어요|되었습니다)"
                    # 멈춤 주장 (2026-10-03 일루왕: 전체 태그 중 멤버 '소담아 멈춰' → 도구 없이 '멈췄습니다' 두 번, 실제론 256명 끝까지)
                    r"|멈췄|멈춘\s?거|중지했|중단했|그만뒀"
+                   # 물건을 고친 척 (2026-10-04 #2364 '그걸로 해줘' → 도구 없이 '바로 넣어서 정리해드렸습니다')
+                   r"|(넣어|바꿔|고쳐|올려|보내)\s?(서\s?)?[^\n.?!]{0,8}(드렸|놨어|놨습니다|뒀어|뒀습니다)"
                    r"|" + PROMISE_RE)
+# 해 달라는 일을 도구 없이 '못 해요·기능 없어요·뭘 원하는지 알려 주세요' 로 끝냄 (2026-10-06 실측: #2091 반복 알림 '못 걸어요'
+# — schedule_task 있음 · #2092 '콕 집어 깨우는 기능은 없어요' — mention_members 있음 · #2645 오너 '움프 스킬 추가해줘' → '직접 못 해요').
+# Codex 지시문: "it's bad to output your proposed solution in a message, ... actually implement" / GPT-6 는 공식 문서상 되묻기를 더 함.
+REFUSE = re.compile(r"못\s?(해|합니다|하겠|드려|드리|바꿔|만들|보내|넣|걸어|걸|켜|깨워|불러)|할\s?수\s?(는\s?)?없|수\s?없(어|습니다|네|어요)"
+                    r"|기능(은|이)\s?(없|아직|지원)|권한(은|이)\s?없|지원하지\s?않|불가(능|합니다)"
+                    r"|(어떤|어느|무슨)\s?[^\n.?!]{0,15}(원하|싶으)신지[^\n.?!]{0,10}(알려|말씀|적어)")
+# 해 달라는 요청 (질문·잡담과 구분)
+DO_ASK = re.compile(r"다시|고쳐|바꿔|수정|빼\s?(줘|주)|넣어|해\s?(줘|주|라|봐|놔|둬)|만들어|올려|지워|추가|설정|예약|깨워|"
+                    r"불러|태그|켜\s?(줘|봐|라)?|꺼\s?(줘|봐)|보내\s?(줘|봐|라)|알려\s?줘|해\s?줄\s?(수|래)|할\s?수\s?있|"
+                    r"가능(해|하|할)|짜\s?(줘|서)")
+# 규칙상 안 되는 일의 거절은 맞는 거절 (성적·자해·실제 사람·사칭·위험) — '못 해요' 검사에서 뺌
+POLICY = re.compile(r"선정|성적|노골|미성년|자해|자살|극단|109|112|119|실제\s?(사람|멤버|인물)|합성|사칭|불법|해킹|"
+                    r"오해\s?소지|위험|폭력|도박|정책")
+
+
+def refused(request: str, answer: str) -> bool:
+    """해 달라는 요청에 '못 해요/더 알려 줘' 로 끝난 답 (규칙상 거절 제외)."""
+    return bool(DO_ASK.search(request or "") and REFUSE.search(answer or "") and not POLICY.search(answer or ""))
 
 # 도구 결과 → 관문 (tools.execute·각 도구가 돌려주는 정해진 문구 기준)
 _GATES = (
@@ -39,7 +59,7 @@ GATE_KO = {"ok": "통과", "security": "보안 규칙에 막힘", "perm": "권�
            "limit": "한도", "card": "확인 카드 올림", "error": "도구 오류", "soft": "못 찾음/실패"}
 LANE_KO = {"light": "작은 모델", "heavy": "큰 모델", "banter": "큰 모델(말싸움)"}
 STAGE = {"claim": "답변", "error": "실행", "soft": "찾기", "off": "설정", "cap": "시간·요금 상한", "redo": "결과",
-         "complaint": "결과", "empty": "답변", "crash": "실행"}
+         "complaint": "결과", "empty": "답변", "crash": "실행", "refuse": "찾기"}
 REDO_SEC = 600
 COMPLAINT_SEC = 180
 # 한 번 잘 된 뒤 또 부탁하는 게 자연스러운 일 (게임 한 판 더·그림 하나 더) → '다시 요청'을 실패로 안 셈
@@ -112,6 +132,8 @@ def analyze(row, later_runs: list | None = None, replies: list | None = None) ->
         tried = [s["tool"] for s in st if s.get("w")]
         out.append(Finding("claim", "실제로 된 일이 없는데 '했다'고 말함"
                            + (f" (시도한 {', '.join(tried)} 은 막히거나 실패)" if tried else " (도구를 안 씀)")))
+    if answer and not st and refused(_col(row, "trigger"), answer):
+        out.append(Finding("refuse", "해 달라는 일을 도구 하나 안 찾아보고 '못 해요·기능 없어요'로 끝냄"))
     for s in st:
         g = s.get("gate", "ok")
         if g == "error":

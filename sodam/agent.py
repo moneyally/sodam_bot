@@ -15,7 +15,7 @@ from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_mess
 from .security import nonce, wrap
 from .tools import FIND_TOOL, READ_ONLY, ToolCtx, available, execute, find_tools_schema, offered, split_core
 from .util import clip_mid, name_key, user_name
-from .whyfail import CLAIM as _CLAIM, PROMISE as _PROMISE
+from .whyfail import CLAIM as _CLAIM, PROMISE as _PROMISE, refused
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,13 @@ _ADVICE = re.compile(r"(하|넣|바꾸|고치|잡|쓰|적|빼|올리|보내|만�
 _FIX_ASK = re.compile(r"다시|고쳐|바꿔|수정|빼\s?(줘|주)|넣어\s?(줘|주)|해\s?(줘|주|라|봐)|만들어|올려\s?(줘|주)|크게|작게|지워")
 ADVICE_NOTE = ("검사: 해 달라는 요청인데 도구를 쓰지 않고 방법만 설명했습니다. 할 수 있는 도구가 있으면 지금 실제로 하세요 "
                "(방금 만든 그림을 고치는 거면 make_image mode=edit — 원본은 자동으로 찾음). 정말 할 수 없는 일이면 못 한다고 한 문장으로.")
+# 해 달라는 일을 도구 없이 '못 해요·기능 없어요·뭘 원하는지 알려 주세요' 로 끝냄 = whyfail.refused (서버 600건 중 9건 실측,
+# 규칙상 거절은 뺌). 작은 모델(light)이면 큰 모델로 올려 보내고, 큰 모델이면 이 문구로 한 번만 다시.
+REFUSE_NOTE = ("검사: 해 달라는 일인데 도구를 하나도 안 쓰고 '못 해요·기능이 없어요·더 알려 주세요'로 끝냈습니다. 보내기 전에 다시 하세요. "
+               "① find_tools 목록에서 이 일(또는 가장 가까운 일)을 하는 도구를 찾아 불러와 실제로 한다 — 예: 반복·나중 알림 = schedule_task, "
+               "콕 집어 부르기·깨우기 = mention_members, 계산·차트·파일 = run_code, 움프·스티커 효과 = sticker_catalog 로 지금 부품을 보고 조합. "
+               "② 빠진 값은 되묻기 전에 기록·조회 도구로 먼저 찾아본다. ③ 그래도 맞는 도구가 없으면 가장 가까운 대안을 실제로 하고, 모자란 부분은 "
+               "feature_request 로 접수한 뒤 한 문장으로 알린다. 성적·자해·실제 사람·사칭·위험처럼 규칙상 안 되는 일이면 원래 답을 그대로 둔다.")
 # 답 첫머리에서 엉뚱한 사람을 부름 (일루왕 10/05: 루피가 '소담아' → '문의주세연님, 불렀죠?') — 보내기 전 코드 검사
 _VOCATIVE = re.compile(r"^\s*([^\s,!~?.]{2,20}?)\s*[,!~]")
 VOCATIVE_NOTE = ("검사: 답 첫머리에서 '{who}' 를 부르는데, 지금 말한 사람은 '{caller}' 이고 요청·답장·단서·도구 결과 어디에도 "
@@ -321,13 +328,15 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
 
 
 def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set, results: list[str],
-                 wrote: bool | None = None) -> tuple[str, str]:
+                 wrote: bool | None = None, act: bool = True) -> tuple[str, str]:
     """(종류, 다시 물을 말) — 걸리는 게 없으면 ('', ''). '했다' 검사는 쓰기 도구를 안 불렀으면 (안내서 같은 조회만 했어도) 함
     (2026-10-05 일루왕: 안내서만 읽고 '23시55분에 불러드릴게요' → 예약 없음)."""
     if allowed and (not used and _CLAIM.search(text) or not (used if wrote is None else wrote) and _PROMISE.search(text)):
         return "claim", VERIFY_NOTE
     if not used and allowed and advice_only(request, text):
         return "advice", ADVICE_NOTE
+    if act and not used and allowed and refused(request, text):   # act=False: 말싸움 길 (드립 속 '못 해' 는 거절이 아님)
+        return "refuse", REFUSE_NOTE
     people = getattr(ctx, "room_people", None)
     if people:
         c = ctx.caller
@@ -461,10 +470,12 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 messages.append({"role": "assistant", "content": text})
                 continue
             if not checked and mode in ("call", "follow"):   # 보내기 전 코드 검사 (걸리면 한 번만 다시 — 추가 호출은 이때만)
-                kind, note = _final_check(ctx, text, request, used, allowed, results, wrote)
+                kind, note = _final_check(ctx, text, request, used, allowed, results, wrote, act=lane != "banter")
                 if note:
                     checked = True
                     run.event("check", kind=kind)
+                    if light and kind == "refuse" and not chime:   # 작은 모델이 못 한다고 하면 큰 모델이 처음부터 (도구를 더 잘 찾음)
+                        raise _Escalate("refuse", done)
                     messages += [{"role": "assistant", "content": text}, {"role": "system", "content": note}]
                     continue
             if not used:
