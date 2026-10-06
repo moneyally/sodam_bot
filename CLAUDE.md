@@ -547,7 +547,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - make_sticker format=static = 같은 엔진 마지막 장면 → 512 WEBP (`SF.render_static`). caption 색·테두리는 값으로(top/mid/bottom/extrude [r,g,b]·stroke·depth·size_max).
 - '이 스티커처럼 글자만 X' (실제 루피: '안녕하세요' 남긴 채 새 글자 얹음·검은 네모): redraw(그림 AI 로 원래 글자 지운 흰 배경 그림, 지키는 규칙
   REDRAW_KEEP 은 코드가 붙임, 방 그림 한도 1) → 글자는 코드 → old_text 가 남았는지 작은 모델이 그림 읽기(read_text) → 남으면 안 보냄.
-  고친 그림은 ctx.image 로 남겨 다시 부를 때 그림 AI 비용 안 씀. 그림 AI 에 한글을 쓰게 하지 않음.
+  고친 그림은 ctx.image 로 남겨 다시 부를 때 그림 AI 비용 안 씀. 그림 AI 에 한글을 쓰게 하지 않음. png=true 면 정지 스티커와 투명 PNG 문서도.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)

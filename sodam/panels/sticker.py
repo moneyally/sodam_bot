@@ -300,12 +300,22 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
         return f"스티커는 만들었는데 전송 실패: {e.message}"
     if fid := getattr(getattr(sent, "sticker", None), "file_id", ""):
         await stickerpack.set_file(db, item_id, fid)
+    png_note = ""
+    if a.get("png"):                       # PNG 파일도 (다른 앱·직접 편집용, 투명 512) — 정지 스티커만 한 장 그림이 있음
+        if static and res.preview:
+            try:
+                await ctx.bot.send_document(ctx.chat_id, InputFile(res.preview, filename="sodam_sticker.png"))
+                png_note = " PNG 파일도 같이 보냈음."
+            except TelegramError as e:
+                png_note = f" PNG 파일은 전송 실패({e.message})."
+        else:
+            png_note = " PNG 파일은 정지 스티커(format=static)일 때만 — 원하면 정지로 다시."
     await db.bump(day, 0, f"stk:{uid}")
     await L.log(db, chat_id=ctx.chat_id, user_id=uid, request=request, kind=res.keying, spec=spec, outcome=outcome,
                 msg_id=getattr(sent, "message_id", 0))
     note = f" (경고 안고 보냄: {'; '.join(res.warnings)})" if res.warnings else ""
     note += await note_wanted(ctx, a.get("wanted") or "", _used(spec))
-    return (f"{'정지 ' if static else ''}스티커를 방에 보냈음 (배경: {res.keying}, 조합: {_used(spec)}){note}{redrawn} "
+    return (f"{'정지 ' if static else ''}스티커를 방에 보냈음 (배경: {res.keying}, 조합: {_used(spec)}){note}{redrawn}{png_note} "
             "밑의 [📦 내 팩에 넣기] 를 누르면 누른 사람 팩에 바로 들어감. 한마디만 짧게.")
 
 
@@ -334,6 +344,7 @@ tools.register_tool(tools.Tool(
                                                  "캐릭터·그림체 유지·흰 배경은 코드가 붙임. 그림 한도 1회 씀"},
      "old_text": {"type": "string", "description": "원본에 있던 글자 — 보내기 전에 남았는지 검사"},
      "emoji": {"type": "string", "description": "팩에 넣을 때 쓸 이모지 1개 (스티커 뜻)"},
+     "png": {"type": "boolean", "description": "PNG 파일·파일로 달라고 하면 true (정지 스티커와 함께 투명 PNG 문서)"},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true"},
      "request": {"type": "string", "description": "사용자 요청 원문"},
      "wanted": {"type": "string", "description": "정말 못 하는 연출을 원했을 때 그 말 그대로 (기능 요청 접수)"}},
