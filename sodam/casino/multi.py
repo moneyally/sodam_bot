@@ -435,7 +435,10 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
             r.style = (await ctx.svc.db.get_settings(cid))["style"]  # 딜러 소담 말투 (자유분방=반말)
             r.players[uid] = p
             _start(r)
-            await ctx.reply(r.open_text(p, pick_txt))
+            if hasattr(r, "open_send"):   # 판 여는 화면을 직접 (바카라 회차판 = 덮인 카드 사진, casino/bactable.py)
+                await r.open_send(ctx, p, pick_txt)
+            else:
+                await ctx.reply(r.open_text(p, pick_txt))
             return
         if r.phase != "betting" or uid in r.players or len(r.players) >= MAX_PLAYERS:  # take_bet 하는 사이 마감
             await r.refund(p)
@@ -722,7 +725,7 @@ async def g_horse(ctx: Ctx) -> None:
 
 # ── 📋 라운드 현황 ────────────────────────────────────────
 async def g_rounds(ctx: Ctx) -> None:
-    rs = [r for g in ("crash", "horse") if (r := current(ctx.chat_id, g))]
+    rs = [r for g in ("crash", "horse", "bactable") if (r := current(ctx.chat_id, g))]
     if not rs:
         await ctx.reply("지금 진행 중인 판이 없어요.\n<code>!그래프 금액</code> · <code>!경마 금액 번호</code> 로 새 판을 열어보세요!")
         return
