@@ -584,7 +584,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - make_image 로 그린 그림은 같은 답변의 원본(ctx.image) → '새 그림 → 움프/스티커' 한 번에. prompt 규칙 9 = 안 되는 것(영상 새로 생성 —
   OpenAI Sora API 2026-09-24 종료, 20MB, 남의 봇 버튼·프사, 같은 얼굴 보장)은 꾸미지 말고 대안 하나.
 - 빠른 답: AI 답 만드는 동안 '입력 중' 4초마다(`handlers._keep_typing`), 벽시계 상한 `agent.DEADLINE` 그룹 25초·1:1 45초 → 넘으면 지금까지로 답.
-  병렬 도구 호출(parallel_tool_calls)은 아직 끔 — 제재 도구가 한 라운드에 여러 개 나올 수 있어 안전 검토 뒤에.
+  **병렬 도구 호출 켬 (2026-10-06, tests/test_agent_parallel.py · 뮤테이션 5개)**: 에이전트만 parallel_tool_calls=True. 한 라운드의 **맨 앞부터 이어지는
+  조회 도구(READ_ONLY)만 동시에** 실행(Codex parallel.rs), 쓰기 도구·그 뒤 조회·find_tools 는 차례대로 하나씩, 결과는 부른 순서대로 (events 'parallel').
 
 ## 📞 음성채팅 (`sodam/voice/`, `panels/voice.py`, tests/test_voice.py · 뮤테이션 22개)
 - **통화 안정성 (2026-09-30, '렉 때문에 끊겼어요' 조사 — 운영 통화는 1건 reason=idle 뿐)**: Realtime 오류는 무해한 것
@@ -824,6 +825,8 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
   실측 2026-10-06: 지점이 ②만일 땐 sol 입력 43만 중 13만이 쓰기(방·말투마다 캐시) → ① 공용으로 바꾼 뒤 적중 76%·실행당 $0.034→$0.0135.
   거절되면 `cache_opts_off` → 자동 캐시. 캐시 쓰기 토큰(input_tokens_details.cache_write_tokens)은 `costs.CACHE_WRITE_MULT` 1.25배.
 - 모델 거절(model_not_found 등) → `FALLBACK`(luna→gpt-5.4-mini, 그 외 gpt-6→gpt-5.4) 으로 이 프로세스 동안 (`models_off`). web_search 도.
+- **GPT-6 + 도구 추론 = low** (`llm.TOOL_EFFORT`, 2026-10-06): 'none' 은 chat.completions 가 도구와 추론을 같이 못 받던 시절 제한이라 GPT-6(Responses)엔
+  필요 없음. 서버 실측 관리자 일 none $0.046·32초 vs low $0.046·20초. 말싸움(banter)·끼어들기만 none. 생각 토큰도 상한이라 그땐 THINK_MAX_TOKENS.
 - 서버 .env: OPENAI_MODEL=gpt-6-sol · AGENT_LIGHT_MODEL=gpt-6-luna. 안전 판별(OPENAI_GUARD_MODEL: 스팸·사기·패드립·인젝션)은 gpt-5.4-mini 그대로
   (오탐 성격이 바뀌는 건 따로 판단). 텍스트 verbosity=low (codex 기본값).
 

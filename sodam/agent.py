@@ -1,5 +1,6 @@
 """에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다.
 실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
+import asyncio
 import json
 import logging
 import re
@@ -411,6 +412,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     allowed = ts.allowed
     chime = mode in ("chime", "morning")
     extra = (route.ESCALATE_TOOL,) if light and not chime else ()   # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
+    # 생각 깊이: GPT-6 + 도구 기본은 llm.TOOL_EFFORT(low). 말싸움(순발력)·끼어들기(대부분 PASS)만 none
+    effort = "none" if lane == "banter" or chime else None
     # GPT-6 캐시 ③ 이번 요청 끝: 도구를 여러 번 부를 일이 많은 큰 모델 일하는 길만 (작은 모델·받아치기·끼어들기는 한 번에 끝나는 게 대부분)
     tail = not light and not chime and ":banter" not in tag
 
@@ -424,16 +427,18 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
-                                           allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail)
+                                           allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail,
+                                           parallel=True)
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
                 log.warning("생각하는 에이전트 실패 → 기본 방식: %s", e)
                 think = False
                 run.purpose = run.purpose.replace(":think", "")
-        return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
-                                  purpose=call_purpose, chat_id=ctx.chat_id, model=model,
-                                  allowed=restrict, cache_key=ts.key(tag), cache_tail=tail)
+        return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice,
+                                  max_tokens=MAX_TOKENS if effort else THINK_MAX_TOKENS,   # 생각 토큰도 상한에 포함
+                                  purpose=call_purpose, chat_id=ctx.chat_id, model=model, effort=effort,
+                                  allowed=restrict, cache_key=ts.key(tag), cache_tail=tail, parallel=True)
 
     def inject() -> None:
         """모델을 부르기 직전: 실행 중 이어 보낸 말을 새 user 메시지로 (nonce 태그 안 데이터, 멤버 글과 같게)."""
@@ -497,6 +502,17 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                            for c in calls],
             **({"items": msg.items} if think else {}),   # 추론 항목을 다음 라운드로 (llm.to_input)
         })
+        # 조회 도구가 연달아 나오면 동시에 미리 실행 (Codex parallel.rs: 읽기는 같이, 쓰기는 혼자·순서대로).
+        # 결과는 아래 순서대로 붙임 — 쓰기 도구·도구 불러오기·막힌 도구는 지금처럼 차례에 하나씩.
+        early: dict[str, asyncio.Task] = {}
+        head = []                                  # 맨 앞에서부터 이어지는 조회 도구 (쓰기 도구 뒤의 조회는 쓰기 결과를 봐야 하니 차례대로)
+        for c in calls:
+            if c.function.name == FIND_TOOL or c.function.name not in allowed or c.function.name not in READ_ONLY:
+                break
+            head.append(c)
+        if len(head) > 1:
+            early = {c.id: asyncio.create_task(execute(c.function.name, c.function.arguments, ctx)) for c in head}
+            run.event("parallel", n=len(head))
         for c in calls:
             if c.function.name == FIND_TOOL and ts.deferred:   # 도구 불러오기는 코드가 바로 (실행되는 일 없음)
                 try:
@@ -512,7 +528,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 result = ("이 방에서는 꺼져 있는 기능이라 사용할 수 없음 (관리자가 설정에서 켜야 함)."
                           if c.function.name in shown_names else "이 도구는 지금 사용할 수 없음.")
             else:
-                result = await execute(c.function.name, c.function.arguments, ctx)
+                result = await (early.pop(c.id) if c.id in early else execute(c.function.name, c.function.arguments, ctx))
                 wrote = wrote or c.function.name not in READ_ONLY
                 results.append(result)
                 read = read or c.function.name in READ_ONLY

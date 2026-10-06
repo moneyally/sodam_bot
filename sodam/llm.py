@@ -74,6 +74,9 @@ REASONING_PREFIXES = ("gpt-5", "gpt-6", "o")   # reasoning_effort 를 받는 모
 # 6.1-sol·astra 는 아예 도구가 안 됨 · 캐시 쓰기 지점(prompt_cache_breakpoint)도 Responses 에만 있음
 RESPONSES_PREFIXES = ("gpt-6",)
 NO_NONE_PREFIXES = ("gpt-6.1", "gpt-6-astra")   # 추론 none·minimal 이 없는 모델 → low
+# GPT-6 + 도구의 기본 추론 (2026-10-06): 'none' 은 chat.completions 가 도구와 추론을 같이 못 받던 시절 제한 — Responses 는 같이 됨.
+# 서버 실측(GPT-6 46건): 관리자 일 none $0.046·32초 vs low $0.046·20초 (덜 헤맴). codex models.json 의 gpt-6 기본은 medium.
+TOOL_EFFORT = "low"
 # 모델 이름이 거절되면(아직 안 열린 계정·오타) 이 프로세스에선 예전 모델로 — AI 답이 멈추면 안 됨
 FALLBACK = (("gpt-6-luna", "gpt-5.4-mini"), ("gpt-5.6-luna", "gpt-5.4-mini"), ("gpt-6", "gpt-5.4"), ("gpt-5.6", "gpt-5.4"))
 
@@ -317,18 +320,19 @@ class LLM:
                    tool_choice: str = "auto", model: str | None = None,
                    max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc",
                    chat_id: int | None = None, effort: str | None = None,
-                   allowed: list[str] | None = None, cache_key: str | None = None, cache_tail: bool = False):
+                   allowed: list[str] | None = None, cache_key: str | None = None, cache_tail: bool = False,
+                   parallel: bool = False):
         """chat.completions 호출. 응답 message 객체를 돌려준다.
         allowed: tools 중 이번에 부를 수 있는 이름만 (None = 전부) — 목록은 그대로 싣고 호출만 좁힘(캐시 유지).
         chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
         model = self._use(model or self.cfg.model)
-        if responses_only(model):   # GPT-6 = Responses 로 (추론 값은 chat 과 같은 규칙: 도구면 none, 아니면 지정값·.env·none)
-            e = (effort or self.cfg.reasoning_effort or "none") if not tools else "none"
+        if responses_only(model):   # GPT-6 = Responses 로 (도구면 지정값 또는 TOOL_EFFORT, 아니면 지정값·.env·none)
+            e = (effort or TOOL_EFFORT) if tools else (effort or self.cfg.reasoning_effort or "none")
             if e == "off":
                 e = "none"
             return await self.think(messages, tools=tools, tool_choice=tool_choice, effort=e, max_tokens=max_tokens,
                                     purpose=purpose, chat_id=chat_id, model=model, allowed=allowed, cache_key=cache_key,
-                                    json_mode=json_mode, cache_tail=cache_tail)
+                                    json_mode=json_mode, cache_tail=cache_tail, parallel=parallel)
         await self._check_budget(chat_id)
         if allowed is not None and self.allowed_off and tools:   # allowed_tools 를 거절당한 뒤: 예전처럼 목록 자체를 줄임
             tools, allowed = _narrow(tools, allowed), None
@@ -348,7 +352,7 @@ class LLM:
                 kwargs["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {
                     "mode": "auto", "tools": [{"type": "function", "function": {"name": n}} for n in allowed]}}
             if tool_choice != "none":
-                kwargs["parallel_tool_calls"] = False
+                kwargs["parallel_tool_calls"] = parallel
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         try:
@@ -358,7 +362,7 @@ class LLM:
             if (fb := self._drop_model(model, e)) is not None:
                 return await self.chat(messages, tools=tools, tool_choice=tool_choice, model=fb, max_tokens=max_tokens,
                                        json_mode=json_mode, purpose=purpose, chat_id=chat_id, effort=effort,
-                                       allowed=allowed, cache_key=cache_key)
+                                       allowed=allowed, cache_key=cache_key, cache_tail=cache_tail, parallel=parallel)
             if not isinstance(e, BadRequestError) or not isinstance(kwargs.get("tool_choice"), dict) \
                     or not self._about_tool_choice(e):
                 raise
@@ -394,7 +398,7 @@ class LLM:
     async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
                     model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None,
-                    json_mode: bool = False, cache_tail: bool = False):
+                    json_mode: bool = False, cache_tail: bool = False, parallel: bool = False):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
@@ -424,13 +428,13 @@ class LLM:
             elif tool_choice == "auto" and allowed is not None:
                 kwargs["tool_choice"] = {"type": "allowed_tools", "mode": "auto",
                                          "tools": [{"type": "function", "name": n} for n in allowed]}
-            kwargs["parallel_tool_calls"] = False
+            kwargs["parallel_tool_calls"] = parallel   # 에이전트만 True (조회 도구는 agent 가 동시에 실행)
         try:
             resp = await self.client.responses.create(**kwargs)
             await self._mark_allowed(kwargs, model, ok=True)
         except (BadRequestError, NotFoundError) as e:
             again = dict(tools=tools, tool_choice=tool_choice, effort=effort, max_tokens=max_tokens, purpose=purpose,
-                         chat_id=chat_id, allowed=allowed, cache_key=cache_key, json_mode=json_mode)
+                         chat_id=chat_id, allowed=allowed, cache_key=cache_key, json_mode=json_mode, parallel=parallel)
             if (fb := self._drop_model(model, e)) is not None:
                 return await self.think(messages, model=fb, **again)
             if isinstance(e, BadRequestError) and "prompt_cache_options" in kwargs and _cache_rejected(e):
