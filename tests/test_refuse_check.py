@@ -110,10 +110,10 @@ async def banter_lane_is_not_rechecked():
     """말싸움 길(mirror 방에서 소담에게 욕) 드립 속 '못 해' 는 거절이 아님 — 서버 #2585 오탐."""
     old = fast_timers()
     try:
-        text = "소담아 병신아 노래 불러봐"
+        text = "소담아 병신아 니가 해봐"
         settings = {"ai_comeback": "mirror"}
         assert route.decide(route.Req(text, settings=settings), light_model=LIGHT).lane == "banter", "평가 문장이 banter 길이어야 함"
-        llm = ScriptedLLM([reply("노래는 못 해 ㅋㅋ 니 목소리나 들어보자")])
+        llm = ScriptedLLM([reply("그건 못 해 ㅋㅋ 니가 먼저 해봐")])
         r = await _room(llm, light=LIGHT, settings=settings)
         await r.say(JUNHO, text)
         assert len(llm.calls) == 1 and not _noted(llm)
