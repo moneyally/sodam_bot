@@ -256,6 +256,15 @@
 - 네트워크 재전송(`util.send_retry`): 방에 보이는 글은 연결 자체가 실패한 경우만(확실히 안 보내짐) 다시, 응답만 끊긴 경우는
   이미 보내졌을 수 있어 안 보냄(중복 방지). 오너 보고는 둘 다 다시. 이름 순찰은 한 차례 40초 제한.
 
+## 🎴 바카라 회차판 + 실사 카드 (`casino/bactable.py`·`cardart.py`, tests/test_bactable.py · 뮤테이션 6개, 2026-10-06 오너 요청 '저 봇처럼')
+- 다른 봇(S COIN BOT, 백악관) 실측: 2분 주기 회차, 단계마다 새 사진(플레이어·뱅커·추가·결과·그림장) 한 판 7~8개 메시지.
+  우리는 **사진 한 장을 고쳐 가며**(editMessageMedia, 단계 사이 STEP 2.6초) + 결과 글 1개 (그룹 분당 ~20 보내기·수정 제한, 도배 방지 — 오너 결정).
+- `!회차 금액 플|뱅|타이|플페어|뱅페어` (별칭 회차바카라·바카라회차·바회): 첫 베팅이 판을 엶(multi.Round, 30초) — 혼자 판 `!바카라` 는 그대로.
+  규칙·배당 = cards.deal_baccarat·bac_payout, 정산 먼저 → 공개는 보여주기만, 결과 봉인, 그림장 record, 회차 번호 chat_state bac_round_no.
+  multi._join 은 판 클래스에 `open_send` 가 있으면 여는 화면을 그걸로(덮인 카드 사진).
+- 카드 그림 = 영국식 52장 PNG(sodam/data_files/cards, Dmitry Fomin **CC0** — LICENSE.md, Wikimedia), 뒷면은 코드가 그림. 한 장 ~0.1초·JPEG ~100KB.
+  그림이 없거나 사진이 안 되면 글자 공개. 위키미디어는 작업 환경 IP 에 429 → 서버에서 받아 옴.
+
 ## 게임 돈·안정성 (2026-09-27 심층 감사 수정, tests/test_fix_games_audit.py · 뮤테이션 23개)
 - 열린 베팅 = DB `casino_open`(방·사람별 합계): `debit('bet:')` 이 같은 트랜잭션에서 더하고, 정산·환불은 `credit(..., close=베팅)` 으로
   지급과 함께 뺀다 (`settle` 이 자동으로). **새 게임도 베팅은 take_bet, 끝은 settle 또는 credit(close=) — 안 닫으면 재시작 때 환불(=포인트 생김).**
