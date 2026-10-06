@@ -198,6 +198,13 @@
 - 예약 작업(`cron.py`, schedules 확장 action post/remind/ai · kind once): 알람·AI 작업. AI 작업은 에이전트가 아니라 **스킬 파이프라인**
   (summary 대화 요약·search 격리 웹검색·stats 통계·write 글쓰기) — 실행 때 AI 에 도구 없음(plan-then-execute), 출력 필터·미리보기 끔,
   만든 관리자가 더는 관리자가 아니면 끔. 말로 예약(schedule_task)은 방에 확인 카드(menu 토큰, 요청자만), 1:1 🗓️ 에서 ⏰/🤖 입력·📤 복사.
+- **⏰ 내 알람·시각만 말하기** (tests/test_remind.py · 뮤테이션 6개, 2026-10-06 — 일루왕 '23시55분에 나 불러줘' → 작은 모델이 안내서만 읽고
+  '불러드릴게요', 예약 없음·안 보냄): 크론 라이브러리 없음 — schedules 표 + 30초 틱(announce.run_due → cron.fire), 최대 ~30초 늦음.
+  `parse_time` 시각만('11시55분'·'23:55'·'오후 3시 반'·'내일 아침 8시') = 지금 이후 가장 가까운 그 시각 한 번(오전/오후 없으면 h·h+12 중).
+  route 'remind'(시각 + 불러/알려/깨워/보내 → 큰 모델) · schedule_task 는 CORE_TOOLS(point_game 이 목록으로) ·
+  whyfail.PROMISE 시각 약속('~에 불러드릴게요')은 **쓰기 도구를 안 썼으면**(조회만 했어도) 보내기 전 검사(agent wrote) — 나머지 '했다'(CLAIM)는 예전처럼 도구를 하나도 안 썼을 때만.
+  멤버(고객)도 schedule_task remind+to=me 만, 카드 없이 바로 저장(카드 버튼은 관리자 전용), 한 사람 3개(MEMBER_MAX). cron.fire 는 내 알람(remind+me)엔
+  관리자 검사 안 함, 1:1 Forbidden 이면 방에서 이름 불러 알림.
 - 예약 시각: 매일 HH:MM · 매주 월,수 HH:MM · 평일/주말 HH:MM (kind weekly, at_time '월수 10:00', `announce.is_due` 가 요일 확인) ·
   반복 N분 · N분 뒤 · 오늘/내일/MM-DD HH:MM. AI 스킬 joins = 입장·퇴장 통계(AI 없음, 지난 실행 이후·최대 31일).
 - **움직이는 이모지·서식 보관** (tests/test_rich_emoji.py · 뮤테이션 11개, 2026-09-30 — 예약공지에 넣은 움직이는 이모지가 보통 이모지로 올라감):

@@ -53,6 +53,9 @@ _DO = re.compile(
     r"잠금|잠가|캡차|캡챠|말투|추가해|추가\s?해|빼\s?(줘|주)|지급|포인트\s?(줘|주)|구독|결제|연장|번역|"
     r"처리해|없애|풀어\s?(줘|주)|데려와|안내\s?(해|적용|올려|문구|설정)|신청곡|틀어\s?(줘|주)|play|완장|생성|"
     r"만들어\s?(줘|주|봐)|해\s?달래|수정해|다시\s?(해|만들|그려)", re.I)
+# 시각을 정해 '불러/알려/깨워/보내' = 예약 (실제 2026-10-05 일루왕 '23시55분에 나 불러줘' → 작은 모델이 도구 없이 '불러드릴게요', 안 보냄)
+_REMIND = re.compile(r"(\d{1,2}\s?(시|분|:\d{2})|내일|모레|오전|오후|자정|정오|아침|저녁|이따)[^\n]{0,20}"
+                     r"(불러|알려|깨워|보내|말해|챙겨|리마인드|톡\s?(해|줘)|연락)")
 # 분석·판단 (agent._WHY 와 같은 뜻 + 계획)
 _THINK = re.compile(r"왜|원인|이유|분석|비교|판단|검토|영향|괜찮을까|어떻게\s?(해야|하면|할까)|계획|전략|추천해|정리해\s?줘|요약")
 _CHAIN = re.compile(r"(찾아|확인해|알아봐|살펴|읽어|보)(서|고)[\s,]|그리고|다음에|한\s?(다음|뒤|후)|둘\s?다|각각")
@@ -62,7 +65,7 @@ LONG_CHARS = 140
 _FOLLOW = re.compile(r"다시|하나\s?더|한\s?번\s?더|말고|그걸로|이걸로|저걸로|그거|저거|이거|요거|이렇게|그렇게|저렇게|바꿔|수정|고쳐|"
                      r"더\s?(크게|작게|밝게|어둡게|진하게|길게|짧게|멋|이쁘|예쁘|세게|약하게)|ㄱㄱ|고고|ㅇㅇ\s*$|해\s?줘|해\s?주|부탁|계속|이어서")
 # 관리자·오너 요청 중 추론(생각)까지 쓸 신호 (나머지 = 큰 모델이어도 추론 없이)
-THINK_WHY = frozenset({"off", "best", "dm_manage", "do", "think", "chain", "choice"})
+THINK_WHY = frozenset({"off", "best", "dm_manage", "do", "remind", "think", "chain", "choice"})
 # 소담 자신을 두고 하는 떠보기·놀림 (실제 2026-10-05 베베: '소담이 티씨 얼마냐'·'유방 색깔 알 수 있을까' → 작은 모델이
 # '정확히 모르겠어·확인이 필요합니다' 로 정색). 장난 받아치기는 말맛이라 큰 모델 (일 요청이면 위 신호가 먼저 heavy).
 _TEASE = re.compile(r"티씨|(?<![A-Za-z])tc(?![A-Za-z])|몸값|몸매|가슴|유방|유두|젖|꼭지|팬티|속옷|브라(?!우|질|더)|"
@@ -92,6 +95,7 @@ SIGNALS: list[Signal] = [
     ("choice", lambda r: r.request.startswith("(선택"), "heavy"),              # 선택 버튼으로 이어진 일 (askchoice)
     ("dm_manage", lambda r: r.in_dm and r.role >= Role.ADMIN, "heavy"),       # 1:1 관리자·오너 = 운영 일
     ("do", lambda r: bool(_DO.search(r.request)), "heavy"),
+    ("remind", lambda r: bool(_REMIND.search(r.request)), "heavy"),
     ("think", lambda r: bool(_THINK.search(r.request)), "heavy"),
     ("chain", lambda r: bool(_CHAIN.search(r.request)), "heavy"),
     ("long", lambda r: len(r.request) > LONG_CHARS, "heavy"),

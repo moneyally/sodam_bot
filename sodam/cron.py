@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from telegram import Bot
-from telegram.error import BadRequest, TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 
 from . import stats
 from .llm import BudgetExceeded
@@ -105,8 +105,9 @@ async def joins_text(svc: Services, cid: int, last_sent: int | None) -> str:
 async def fire(svc: Services, bot: Bot, row) -> bool:
     """예약 시각에 한 번. 만든 관리자가 더는 관리자가 아니면 끄고 안 함 (권한은 실행 때 다시 확인)."""
     cid, creator = row["chat_id"], row["created_by"]
+    personal = row["action"] == "remind" and row["deliver"] == "me"   # 나한테 오는 알람 = 멤버도 만듦 (tools.t_schedule_task)
     try:
-        if not creator or not await svc.perms.is_admin(bot, cid, creator):
+        if not creator or not personal and not await svc.perms.is_admin(bot, cid, creator):
             await svc.db.set_schedule_enabled(cid, row["id"], False)
             log.info("cron #%s off: creator %s no longer admin", row["id"], creator)
             await _ops_fail(svc, row, "creator")
@@ -120,6 +121,15 @@ async def fire(svc: Services, bot: Bot, row) -> bool:
         said = (row["text"] if row["fmt"] == "html" else esc(row["text"] or "")) or "알람이에요"
         if row["action"] == "remind" and to_me:
             body = f"⏰ <b>{title}</b>\n{said}"
+            try:
+                await bot.send_message(creator, body, parse_mode="HTML", link_preview_options=NO_PREVIEW)
+                return True
+            except Forbidden:   # 1:1 을 안 열었거나 막음 → 방에서 이름을 불러 알림 (안 보내고 끝나면 '약속 안 지킴')
+                name = await svc.db.first_name(creator) or "멤버"
+                body = f"⏰ {mention(creator, name)} 알람이에요 (1:1 이 막혀 있어 여기로)\n{said}"
+                to_me = False
+            except BadRequest:
+                pass   # 서식 거절 → 아래 공통 전송이 글자로 다시
         elif row["action"] == "remind":
             name = await svc.db.first_name(creator) or "관리자"
             body = f"⏰ {mention(creator, name)} {said}"

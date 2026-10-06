@@ -15,7 +15,7 @@ from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_mess
 from .security import nonce, wrap
 from .tools import FIND_TOOL, READ_ONLY, ToolCtx, available, execute, find_tools_schema, offered, split_core
 from .util import clip_mid, name_key, user_name
-from .whyfail import CLAIM as _CLAIM
+from .whyfail import CLAIM as _CLAIM, PROMISE as _PROMISE
 
 log = logging.getLogger(__name__)
 
@@ -320,9 +320,11 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                           started, deadline, think=think0)
 
 
-def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set, results: list[str]) -> tuple[str, str]:
-    """(종류, 다시 물을 말) — 걸리는 게 없으면 ('', '')."""
-    if not used and allowed and _CLAIM.search(text):
+def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set, results: list[str],
+                 wrote: bool | None = None) -> tuple[str, str]:
+    """(종류, 다시 물을 말) — 걸리는 게 없으면 ('', ''). '했다' 검사는 쓰기 도구를 안 불렀으면 (안내서 같은 조회만 했어도) 함
+    (2026-10-05 일루왕: 안내서만 읽고 '23시55분에 불러드릴게요' → 예약 없음)."""
+    if allowed and (not used and _CLAIM.search(text) or not (used if wrote is None else wrote) and _PROMISE.search(text)):
         return "claim", VERIFY_NOTE
     if not used and allowed and advice_only(request, text):
         return "advice", ADVICE_NOTE
@@ -428,7 +430,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             messages.append({"role": "user", "content": STEER_NOTE + wrap("request", text, nonce())})
             run.trigger = agentlog.clip(f"{run.trigger} + {text}", agentlog.TRIGGER_CHARS)
 
-    used = checked = num_checked = read = False
+    used = checked = num_checked = read = wrote = False   # wrote = 조회 아닌 도구를 실제로 부름 ('했다' 검사 기준)
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
     done: list[str] = []                     # light 가 실행한 쓰기 도구 (올려 보낼 때 heavy 에 알림)
     usd0 = run.usd_micro                     # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
@@ -457,7 +459,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 messages.append({"role": "assistant", "content": text})
                 continue
             if not checked and mode in ("call", "follow"):   # 보내기 전 코드 검사 (걸리면 한 번만 다시 — 추가 호출은 이때만)
-                kind, note = _final_check(ctx, text, request, used, allowed, results)
+                kind, note = _final_check(ctx, text, request, used, allowed, results, wrote)
                 if note:
                     checked = True
                     run.event("check", kind=kind)
@@ -498,6 +500,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                           if c.function.name in shown_names else "이 도구는 지금 사용할 수 없음.")
             else:
                 result = await execute(c.function.name, c.function.arguments, ctx)
+                wrote = wrote or c.function.name not in READ_ONLY
                 results.append(result)
                 read = read or c.function.name in READ_ONLY
                 if light and c.function.name in route.LIGHT_WRITE:
