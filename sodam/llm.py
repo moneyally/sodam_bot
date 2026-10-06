@@ -111,23 +111,20 @@ def _cache_rejected(e: Exception) -> bool:
 
 
 def with_breakpoint(items: list[dict]) -> list[dict]:
-    """Responses input 의 맨 앞 system 묶음(고정 규칙·말투·방 안내) 끝에 캐시 쓰기 지점 하나 → 도구 목록+고정 지시까지만 캐시에 씀.
-    매번 바뀌는 대화·요청은 캐시 쓰기 요금(1.25배) 없이 일반 입력으로 (implicit 이면 요청 끝까지 1.25배로 씀)."""
-    last = None
-    for i, it in enumerate(items):
-        if it.get("role") != "system":
-            break
-        last = i
-    if last is None:
+    """Responses input 의 **첫 system(고정 규칙 — 모든 방·말투·길이 똑같음)** 끝에 캐시 쓰기 지점 하나 → 도구 목록+고정 규칙만 캐시.
+    말투·방 안내·받아치기 system 과 대화·요청은 지점 뒤라 일반 입력 (1.25배 쓰기 요금 없음).
+    예전엔 맨 앞 system 묶음 끝에 찍어서 방·말투·길마다 따로 캐시를 쓰고(30분 보관) 거의 재사용 못 함 — 실측 2026-10-06:
+    sol 입력 43만 중 13만이 쓰기, 받아치기 길은 적중 0."""
+    if not items or items[0].get("role") != "system":
         return items
-    it = dict(items[last])
+    it = dict(items[0])
     content = it["content"]
     parts = [{"type": "input_text", "text": content}] if isinstance(content, str) else [dict(p) for p in content]
     if not parts:
         return items
     parts[-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
     it["content"] = parts
-    return [*items[:last], it, *items[last + 1:]]
+    return [it, *items[1:]]
 
 
 class AIUnavailable(OpenAIError):
