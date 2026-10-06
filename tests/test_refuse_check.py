@@ -155,5 +155,37 @@ def owner_capability_asks_are_filed():
         assert not OWNER_EXPLICIT.search(t), t
 
 
+def _can_map() -> str:
+    from sodam.prompt import static_system
+    text = static_system("소담")
+    return text.split("[할 수 있는 일 지도")[1].split("\n[")[0]
+
+
+@test
+def can_map_names_real_tools_only():
+    """sodam.md 역할의 '이 말이면 이 도구' 지도 — 도구 이름이 바뀌면 지도가 거짓말 안 하게 (항상 실리는 고정 system, 캐시 공용)."""
+    import importlib
+    import pkgutil
+    import re
+
+    import sodam.panels as panels
+    from sodam import tools
+    for m in pkgutil.iter_modules(panels.__path__):
+        importlib.import_module("sodam.panels." + m.name)
+    names = {t.name for t in tools.TOOLS} | {"find_tools"}
+    used = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", _can_map()))
+    assert used and not (used - names), used - names
+    assert len(_can_map()) < 2600                                   # 짧게 (길면 진짜 지시를 무시함 — Anthropic CLAUDE.md 지침)
+
+
+@test
+def can_map_covers_real_refusals():
+    """서버에서 '못 해요' 했던 말 → 지도에 그 말과 도구가 같은 줄에."""
+    lines = _can_map().splitlines()
+    for word, tool in (("깨워", "mention_members"), ("N분/N시간마다", "schedule_task"), ("효과 늘려", "sticker_catalog"),
+                       ("환율", "web_search"), ("차트", "run_code"), ("소담에 없는 기능", "feature_request")):
+        assert any(word in ln and tool in ln for ln in lines), (word, tool)
+
+
 if __name__ == "__main__":
     run_all()
