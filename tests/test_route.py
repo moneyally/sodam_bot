@@ -106,6 +106,21 @@ async def chat_goes_light_with_small_model_and_escalate_tool():
 
 
 @test
+async def cache_tail_only_on_big_model_work_lanes():
+    """GPT-6 캐시 ③(요청 끝)은 도구를 여러 번 부를 일이 많은 길만 — 작은 모델·받아치기는 1.25배 쓰기 값만 버림 (llm.with_breakpoint)."""
+    old = fast_timers()
+    try:
+        llm = ScriptedLLM([reply("ㅎㅇ"), reply("뮤트할게요")])
+        r = await _room(llm)
+        await r.say(JUNHO, "소담아 안녕")
+        await r.say(BOSS, "소담아 준호 10분 뮤트해줘")
+        light, heavy = llm.calls[-2], llm.calls[-1]
+        assert light.get("cache_tail") is False and heavy.get("cache_tail") is True, (light.get("cache_tail"), heavy.get("cache_tail"))
+    finally:
+        restore_timers(old)
+
+
+@test
 async def admin_chat_is_light_without_thinking():
     old = fast_timers()
     try:

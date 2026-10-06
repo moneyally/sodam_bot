@@ -802,8 +802,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.rs build_responses_request, models.json) 대조.
 - `llm.responses_only`: gpt-6* 는 chat() 도 전부 Responses(think) 로 — Chat Completions 는 추론 none 일 때만 도구(6-sol·luna),
   6.1-sol·astra 는 도구 없음. 추론 값: 도구면 none, 아니면 지정값·.env·none. `fix_effort`: minimal→low(GPT-6), none 없는 모델→low.
-- 캐시: GPT-6 은 prompt_cache_retention(24h) 대신 `prompt_cache_options={"mode":"explicit"}` + `with_breakpoint` = 맨 앞 system
-  묶음 끝에만 `prompt_cache_breakpoint` (도구+고정 지시만 캐시에 씀, 요청·대화는 1.25배 쓰기 요금 없이 일반 입력). 보관 30분 고정.
+- 캐시: GPT-6(5.6 이후)은 24h 보관이 **없음**(OpenAI 문서: ttl 값은 `30m` 하나, 24h 는 gpt-5.5 이하만) — 대신 '마지막으로 쓴 뒤 30분'이라 쓸 때마다 연장(추가 요금 없음).
+  `prompt_cache_options={"mode":"explicit"}` + `with_breakpoint` 지점(한 요청 최대 4개, 쓰기는 1.25배): ① 첫 system(고정 규칙, 모든 방 공용) 끝
+  ② system 묶음(말투·방 안내) 끝 ③ cache_tail 이면 첫 user(대화·요청) 끝 — 큰 모델 일하는 길만(agent `tail`: light·banter·끼어들기 X, 실측 7일
+  여러 라운드 비율 think 41%·heavy 21%·light 19%·banter 0%). 자동(implicit) 모드는 요청 끝까지 매번 1.25배로 써서 손해.
+  실측 2026-10-06: 지점이 ②만일 땐 sol 입력 43만 중 13만이 쓰기(방·말투마다 캐시) → ① 공용으로 바꾼 뒤 적중 76%·실행당 $0.034→$0.0135.
   거절되면 `cache_opts_off` → 자동 캐시. 캐시 쓰기 토큰(input_tokens_details.cache_write_tokens)은 `costs.CACHE_WRITE_MULT` 1.25배.
 - 모델 거절(model_not_found 등) → `FALLBACK`(luna→gpt-5.4-mini, 그 외 gpt-6→gpt-5.4) 으로 이 프로세스 동안 (`models_off`). web_search 도.
 - 서버 .env: OPENAI_MODEL=gpt-6-sol · AGENT_LIGHT_MODEL=gpt-6-luna. 안전 판별(OPENAI_GUARD_MODEL: 스팸·사기·패드립·인젝션)은 gpt-5.4-mini 그대로

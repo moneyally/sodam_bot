@@ -79,8 +79,11 @@ async def gpt6_agent_call_goes_to_responses_with_explicit_cache_point():
     first, second, user = kw["input"]
     assert first["content"] == [{"type": "input_text", "text": "고정 규칙",
                                  "prompt_cache_breakpoint": {"mode": "explicit"}}]          # 모든 방이 같은 첫 system 끝에만
-    assert second == {"role": "system", "content": "[말투]"}                                   # 말투(방·사람마다 다름)는 지점 뒤
-    assert user == {"role": "user", "content": "요청"}                                         # 요청엔 쓰기 지점 없음
+    assert second["content"] == [{"type": "input_text", "text": "[말투]",
+                                  "prompt_cache_breakpoint": {"mode": "explicit"}}]         # ② 말투·방 안내 끝 (방별)
+    assert user == {"role": "user", "content": "요청"}                                         # cache_tail 없으면 요청엔 지점 없음
+    await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="agent:abc", cache_tail=True)
+    assert llm.client.resp[-1]["input"][2]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}   # ③ 요청 끝
     assert kw["tools"][0]["name"] == "read_chat" and msg.tool_calls[0].function.name == "read_chat"
 
 
@@ -158,7 +161,7 @@ async def web_search_falls_back_when_guard_model_rejected():
 
 
 @test
-def breakpoint_only_on_first_system():
+def breakpoints_shared_rules_then_room_then_request():
     items = [{"role": "user", "content": "x"}]
     assert with_breakpoint(items) == items                                       # system 없으면 그대로
     parts = [{"role": "system", "content": [{"type": "input_text", "text": "a"}, {"type": "input_text", "text": "b"}]},
@@ -166,9 +169,18 @@ def breakpoint_only_on_first_system():
     out = with_breakpoint(parts)
     assert "prompt_cache_breakpoint" not in out[0]["content"][0] and out[0]["content"][1]["prompt_cache_breakpoint"]
     assert out[2] == parts[2] and "prompt_cache_breakpoint" not in parts[0]["content"][1], "원본은 안 바꿈"
-    two = [{"role": "system", "content": "고정"}, {"role": "system", "content": "말투"}, {"role": "user", "content": "x"}]
-    out = with_breakpoint(two)
-    assert out[0]["content"][0]["prompt_cache_breakpoint"] and out[1] == two[1], "지점은 첫 system 뿐 (방·말투마다 캐시가 갈리지 않게)"
+    msgs = [{"role": "system", "content": "고정"}, {"role": "system", "content": "말투"}, {"role": "system", "content": "방 안내"},
+            {"role": "user", "content": [{"type": "input_text", "text": "요청"}, {"type": "input_image", "image_url": "x"}]},
+            {"role": "user", "content": "이어서 보낸 말"}]
+    marked = lambda o: [i for i, it in enumerate(o) if "prompt_cache_breakpoint" in str(it)]   # noqa: E731
+    assert marked(with_breakpoint(msgs)) == [0, 2], "① 공용 고정 규칙 끝 ② 방별 system 묶음 끝"
+    out = with_breakpoint(msgs, tail=True)
+    assert marked(out) == [0, 2, 3], "③ 첫 요청 끝 (같은 실행의 다음 라운드가 재사용)"
+    assert out[3]["content"][0]["prompt_cache_breakpoint"] and "prompt_cache_breakpoint" not in out[3]["content"][1], \
+        "지점은 글 조각에 (사진 조각엔 안 찍음)"
+    assert len(marked(out)) <= 4, "한 요청 쓰기 최대 4개 (OpenAI 문서)"
+    one = [{"role": "system", "content": "고정"}, {"role": "user", "content": "x"}]
+    assert marked(with_breakpoint(one)) == [0], "system 이 하나면 지점도 하나 (같은 자리에 두 번 안 찍음)"
 
 
 if __name__ == "__main__":

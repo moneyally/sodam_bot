@@ -402,6 +402,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     allowed = ts.allowed
     chime = mode in ("chime", "morning")
     extra = (route.ESCALATE_TOOL,) if light and not chime else ()   # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
+    # GPT-6 캐시 ③ 이번 요청 끝: 도구를 여러 번 부를 일이 많은 큰 모델 일하는 길만 (작은 모델·받아치기·끼어들기는 한 번에 끝나는 게 대부분)
+    tail = not light and not chime and ":banter" not in tag
 
     async def call(tool_choice: str = "auto"):
         nonlocal think
@@ -413,7 +415,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
-                                           allowed=restrict, cache_key=ts.key(":think" + tag))
+                                           allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail)
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
@@ -422,7 +424,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 run.purpose = run.purpose.replace(":think", "")
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice, max_tokens=MAX_TOKENS,
                                   purpose=call_purpose, chat_id=ctx.chat_id, model=model,
-                                  allowed=restrict, cache_key=ts.key(tag))
+                                  allowed=restrict, cache_key=ts.key(tag), cache_tail=tail)
 
     def inject() -> None:
         """모델을 부르기 직전: 실행 중 이어 보낸 말을 새 user 메시지로 (nonce 태그 안 데이터, 멤버 글과 같게)."""
