@@ -200,8 +200,10 @@ def admin_starts_with_core_tools_and_a_catalog_of_the_rest():
     import sodam.panels  # noqa: F401  (패널 도구까지 다 등록된 상태)
     shown = tools.offered(Role.ADMIN, False)
     core, deferred = tools.split_core(shown)
-    assert len(shown) > 40 and len(core) <= 21, (len(shown), len(core))          # 69개 → 21개 이하 + 목록
+    assert len(shown) > 40 and len(core) <= 34, (len(shown), len(core))          # 69개 → 핵심 34개 이하 + 목록 (자주 쓰는 건 핵심: 중간 불러오기 = 캐시 깨짐)
     names = {t.name for t in core}
+    # 자주 쓰는 것·짝으로 쓰는 것은 처음부터 (중간에 불러오면 도구 목록이 바뀌어 그 실행 캐시가 전부 깨짐 — 2026-10-06 run_code 1번 $0.095)
+    assert {"sticker_catalog", "make_sticker", "run_code", "schedule_task", "room_members", "other_bot_results"} <= names
     assert {"make_image", "greet_members", "change_setting", "mute_member", "read_chat"} <= names
     sch = tools.find_tools_schema(deferred)["function"]
     assert "warn_member" in sch["description"] and "ban_member" in sch["description"]

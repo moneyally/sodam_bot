@@ -823,7 +823,7 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
   바깥 벽 = systemd(DynamicUser·PrivateNetwork·InaccessiblePaths=/opt/sodam·700MB), 안쪽 = 작업마다 user/net/mount/pid 네임스페이스 + rlimit.
   Ubuntu 24.04 는 AppArmor 가 userns 를 막아서 deploy/apparmor-sodam-workshop 프로필(venv python 실행 파일에 붙음 — 심볼릭 링크 venv 면 안 붙음).
   update.sh `workshop_setup` → `workshop_check`(계산·인터넷 막힘·봇 폴더 안 보임) → data/workshop_setup.status, 실패면 오너 1:1.
-- AI 도구 run_code(code) (`panels/runcode.py`, find_tools 로 불러옴): 관리자·오너 바로, 멤버는 방 설정 run_code_members, 1:1 은 오너만(방 데이터 없음).
+- AI 도구 run_code(code) (`panels/runcode.py`, 핵심 도구): 관리자·오너 바로, 멤버는 방 설정 run_code_members, 1:1 은 오너만(방 데이터 없음).
   방마다 하루 run_code_daily 30 (OWNER_CAP). 그룹방이면 room.db 사본(`workshop/snapshot.py`, 이 방만·90일·메시지 원문은 관리자 요청일 때만) → ctx.room_read.
   결과 그림은 사진, 나머지 파일은 문서로 방에. 작업실이 꺼져 있으면 안내만 (OpenAI 코드 인터프리터 대체는 아직 없음).
 - **🧪 코드 레시피** = 예약 작업 skill=code (schedule_task ai+code, text = 코드 4000자): 만들 때 지금 데이터로 한 번 돌려 보고(실패면 AI 가 고침)
@@ -831,6 +831,9 @@ OpenAI 옮겨가기 가이드·프롬프트 캐시 문서 + openai/codex(client.
   만든 사람이 관리자가 아니면 끔(cron.fire). 하루 횟수는 run_code 와 같이 셈. manage_schedule op=run = AI 작업·코드 작업 지금 한 번(카드 없음).
 
 ## 도구 고르기: 핵심만 처음부터 + find_tools (2026-10-05, tests/test_harness_codex.py)
+- **핵심 목록은 실제 사용으로 정리 (2026-10-06)**: 도구 목록은 AI 요청 **맨 앞**이라, 실행 중 find_tools 로 불러오면 그 실행의 캐시가 고정 규칙까지 전부 깨짐
+  (실측: 22:51~12:40 실행 47번 중 9번, run_code 1번 $0.095). 요청마다 싣는 조합을 바꾸는 것도 조합마다 캐시가 갈려서 안 됨 → 자주 쓰는 것·짝(sticker_catalog+make_sticker)·
+  새 기능(run_code·schedule_task·alert_rule)을 CORE_TOOLS(33개, ~2.7만 자)에 고정, find_tools 는 드문 것만. 불러오기 빈도는 agent_runs.events 'find_tools' 로 확인.
 - 관리자 그룹방에 도구 69개(설명 4만 자)를 한 번에 싣던 것 → `tools.CORE_TOOLS`(서버 30일 사용량 상위 20개)만 처음부터,
   나머지는 `find_tools` 목록(이름·한 줄, `find_tools_schema`)에서 불러오면 `agent._ToolSet.load` 가 다음 라운드부터 싣는다
   (클로드 코드 deferred tools · OpenAI tool_search 방식, 우리 코드라 모델·API·fallback 과 무관). 목록은 역할·대화 종류로만 정해져 캐시 그대로.

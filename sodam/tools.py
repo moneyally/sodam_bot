@@ -1333,11 +1333,17 @@ def offered(role: Role, in_dm: bool = False) -> list[Tool]:
 # 목록은 역할·대화 종류로만 정해지므로(방 설정 무관) 프롬프트 캐시는 그대로.
 FIND_TOOL = "find_tools"
 CORE_TOOLS = frozenset({
+    # 30일 사용 상위
     "make_image", "make_profile_video", "make_video", "greet_members", "sports", "web_search", "sodam_guide",
-    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "schedule_task", "bot_command",
-    "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call",
+    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "bot_command",
+    "change_setting", "mute_member", "unmute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call",
+    "set_member_style", "room_members", "lookup_user", "point_game", "points_ranking",
+    # 짝으로 쓰는 것·새 기능 (중간에 불러오면 도구 목록이 바뀌어 그 실행의 캐시가 전부 깨짐 — 실측 2026-10-06:
+    # 22:51~12:40 실행 47번 중 9번이 sticker_catalog·run_code·other_bot_results·game_control 등을 불러와 캐시 미스, run_code 1번 $0.095)
+    "sticker_catalog", "make_sticker", "run_code", "other_bot_results", "game_control",
+    "schedule_task", "alert_rule",   # '23시55분에 나 불러줘' 를 말로만 약속한 실제 사례 (2026-10-05)
     "feature_request"})   # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
-# schedule_task: 2026-10-05 '23시55분에 나 불러줘' 를 도구 없이 말로만 약속한 실제 사례 → 처음부터 실음 (point_game 14일 9번은 목록에서 불러옴)
+# 나머지(관리 세부·오너 운영·드문 조회)는 find_tools 목록에서. 목록 크기: 핵심 ~2.7만 자(캐시로 10분의 1 값) vs 전체 ~5.3만 자.
 
 
 def _short(desc: str, n: int = 70) -> str:
