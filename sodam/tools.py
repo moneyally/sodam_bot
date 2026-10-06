@@ -1342,7 +1342,9 @@ CORE_TOOLS = frozenset({
     # 22:51~12:40 실행 47번 중 9번이 sticker_catalog·run_code·other_bot_results·game_control 등을 불러와 캐시 미스, run_code 1번 $0.095)
     "sticker_catalog", "make_sticker", "run_code", "other_bot_results", "game_control",
     "schedule_task", "alert_rule",   # '23시55분에 나 불러줘' 를 말로만 약속한 실제 사례 (2026-10-05)
-    "feature_request"})   # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
+    "feature_request",    # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
+    # 오너 1:1 에서만 보임 (다른 목록엔 영향 없음). '업데이트 보고' 때 불러오다 캐시가 깨져 실행 상한($0.05)에 걸림 (#2634, 2026-10-06)
+    "owner_server_status"})
 # 나머지(관리 세부·오너 운영·드문 조회)는 find_tools 목록에서. 목록 크기: 핵심 ~2.7만 자(캐시로 10분의 1 값) vs 전체 ~5.3만 자.
 
 

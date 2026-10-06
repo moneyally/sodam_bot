@@ -204,6 +204,7 @@ def admin_starts_with_core_tools_and_a_catalog_of_the_rest():
     names = {t.name for t in core}
     # 자주 쓰는 것·짝으로 쓰는 것은 처음부터 (중간에 불러오면 도구 목록이 바뀌어 그 실행 캐시가 전부 깨짐 — 2026-10-06 run_code 1번 $0.095)
     assert {"sticker_catalog", "make_sticker", "run_code", "schedule_task", "room_members", "other_bot_results"} <= names
+    assert "owner_server_status" in tools.CORE_TOOLS, "오너 업데이트 보고 때 불러와 캐시 깨짐 (#2634)"
     assert {"make_image", "greet_members", "change_setting", "mute_member", "read_chat"} <= names
     sch = tools.find_tools_schema(deferred)["function"]
     assert "warn_member" in sch["description"] and "ban_member" in sch["description"]
