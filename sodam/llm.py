@@ -110,21 +110,39 @@ def _cache_rejected(e: Exception) -> bool:
     return "prompt_cache" in text or "cache_breakpoint" in text
 
 
-def with_breakpoint(items: list[dict]) -> list[dict]:
-    """Responses input 의 **첫 system(고정 규칙 — 모든 방·말투·길이 똑같음)** 끝에 캐시 쓰기 지점 하나 → 도구 목록+고정 규칙만 캐시.
-    말투·방 안내·받아치기 system 과 대화·요청은 지점 뒤라 일반 입력 (1.25배 쓰기 요금 없음).
-    예전엔 맨 앞 system 묶음 끝에 찍어서 방·말투·길마다 따로 캐시를 쓰고(30분 보관) 거의 재사용 못 함 — 실측 2026-10-06:
-    sol 입력 43만 중 13만이 쓰기, 받아치기 길은 적중 0."""
+def _mark(item: dict) -> dict | None:
+    """이 항목 끝(마지막 글 조각)에 캐시 쓰기 지점. 글 조각이 없으면 None."""
+    it = dict(item)
+    content = it.get("content")
+    parts = [{"type": "input_text", "text": content}] if isinstance(content, str) else [dict(p) for p in content or []]
+    texts = [i for i, p in enumerate(parts) if p.get("type") == "input_text"]
+    if not texts:
+        return None
+    parts[texts[-1]]["prompt_cache_breakpoint"] = {"mode": "explicit"}
+    it["content"] = parts
+    return it
+
+
+def with_breakpoint(items: list[dict], tail: bool = False) -> list[dict]:
+    """GPT-6 캐시 쓰기 지점 (한 요청 최대 4개, OpenAI 프롬프트 캐시 문서). 보관은 '마지막으로 쓴 뒤 30분'이라 자주 맞는 앞부분일수록 이득.
+    ① 첫 system(고정 규칙 — 모든 방·말투·길 공용) 끝 → 도구 목록+고정 규칙은 모든 방이 캐시 하나를 같이 씀
+    ② 맨 앞 system 묶음 끝(말투·방 안내·받아치기 — 방·사람마다) → 같은 방이 30분 안에 또 부르면 거기까지
+    ③ tail: 그 뒤 첫 user(대화 기록·요청) 끝 → 같은 실행의 다음 라운드(도구 뒤)가 대화까지 재사용
+       (큰 모델 일하는 길만 — 한 번에 끝나는 실행은 1.25배 쓰기 값만 버림. 실측 7일: think 41%·heavy 21%·light 19%·banter 0% 가 여러 라운드)
+    예전엔 ②만 찍어서 방·말투마다 캐시가 따로 생기고 거의 재사용 못 함 (실측 2026-10-06: sol 입력 43만 중 13만이 쓰기)."""
     if not items or items[0].get("role") != "system":
         return items
-    it = dict(items[0])
-    content = it["content"]
-    parts = [{"type": "input_text", "text": content}] if isinstance(content, str) else [dict(p) for p in content]
-    if not parts:
-        return items
-    parts[-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
-    it["content"] = parts
-    return [it, *items[1:]]
+    out = list(items)
+    last = 0
+    while last + 1 < len(out) and out[last + 1].get("role") == "system":
+        last += 1
+    marks = [0] + ([last] if last else [])
+    if tail and last + 1 < len(out) and out[last + 1].get("role") == "user":
+        marks.append(last + 1)
+    for i in marks:
+        if (m := _mark(out[i])) is not None:
+            out[i] = m
+    return out
 
 
 class AIUnavailable(OpenAIError):
@@ -299,7 +317,7 @@ class LLM:
                    tool_choice: str = "auto", model: str | None = None,
                    max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc",
                    chat_id: int | None = None, effort: str | None = None,
-                   allowed: list[str] | None = None, cache_key: str | None = None):
+                   allowed: list[str] | None = None, cache_key: str | None = None, cache_tail: bool = False):
         """chat.completions 호출. 응답 message 객체를 돌려준다.
         allowed: tools 중 이번에 부를 수 있는 이름만 (None = 전부) — 목록은 그대로 싣고 호출만 좁힘(캐시 유지).
         chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
@@ -310,7 +328,7 @@ class LLM:
                 e = "none"
             return await self.think(messages, tools=tools, tool_choice=tool_choice, effort=e, max_tokens=max_tokens,
                                     purpose=purpose, chat_id=chat_id, model=model, allowed=allowed, cache_key=cache_key,
-                                    json_mode=json_mode)
+                                    json_mode=json_mode, cache_tail=cache_tail)
         await self._check_budget(chat_id)
         if allowed is not None and self.allowed_off and tools:   # allowed_tools 를 거절당한 뒤: 예전처럼 목록 자체를 줄임
             tools, allowed = _narrow(tools, allowed), None
@@ -376,7 +394,7 @@ class LLM:
     async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
                     model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None,
-                    json_mode: bool = False):
+                    json_mode: bool = False, cache_tail: bool = False):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
@@ -389,7 +407,7 @@ class LLM:
         items = to_input(messages)
         cache = self._cache(purpose, cache_key, model)
         if "prompt_cache_options" in cache:   # GPT-6: 고정 지시 끝에만 캐시 쓰기 (요청·대화는 일반 입력)
-            items = with_breakpoint(items)
+            items = with_breakpoint(items, tail=cache_tail)
         text: dict[str, Any] = {"verbosity": "low"}
         if json_mode:
             text["format"] = {"type": "json_object"}
