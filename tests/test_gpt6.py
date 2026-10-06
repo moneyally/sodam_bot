@@ -73,7 +73,9 @@ async def gpt6_agent_call_goes_to_responses_with_explicit_cache_point():
     msg = await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="agent:abc")
     kw = llm.client.resp[0]
     assert not llm.client.chat_kw and kw["model"] == "gpt-6-sol"
-    assert kw["reasoning"] == {"effort": "none"} and kw["text"] == {"verbosity": "low"} and kw["store"] is False
+    # 도구 + GPT-6 기본 추론 = low (2026-10-06: none 은 chat.completions 시절 제한 — 서버 실측 none 32초 vs low 20초)
+    assert kw["reasoning"] == {"effort": "low"} and kw["text"] == {"verbosity": "low"} and kw["store"] is False
+    assert kw["parallel_tool_calls"] is False                                                # 에이전트가 켤 때만
     assert kw["prompt_cache_options"] == {"mode": "explicit"} and "prompt_cache_retention" not in kw
     assert kw["prompt_cache_key"] == "sodam:agent:abc"
     first, second, user = kw["input"]
@@ -85,6 +87,8 @@ async def gpt6_agent_call_goes_to_responses_with_explicit_cache_point():
     await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="agent:abc", cache_tail=True)
     assert llm.client.resp[-1]["input"][2]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}   # ③ 요청 끝
     assert kw["tools"][0]["name"] == "read_chat" and msg.tool_calls[0].function.name == "read_chat"
+    await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin:banter", chat_id=-100, effort="none", parallel=True)
+    assert llm.client.resp[-1]["reasoning"] == {"effort": "none"} and llm.client.resp[-1]["parallel_tool_calls"] is True
 
 
 @test
