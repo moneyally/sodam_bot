@@ -173,6 +173,10 @@ async def remake_redraws_then_blocks_when_old_text_left():
         assert "보냈음" in res[0], res
         sent = r.bot.named("send_sticker")[-1]
         assert sent[2].filename == "sticker.webp"
+        assert not r.bot.named("send_document")                              # PNG 는 달라고 할 때만
+        res, _ = await _agent(r, [tool_call("make_sticker", {**args, "redraw": "", "png": True})], png())
+        doc = r.bot.named("send_document")[-1][2]
+        assert "PNG" in res[0] and doc.filename == "sodam_sticker.png" and doc.input_file_content[:4] == b"\x89PNG", res
         assert await r.db.counter(__import__("datetime").datetime.now(r.svc.cfg.tz).strftime("%Y-%m-%d"), r.CHAT, "image") == 2
     finally:
         S.read_text = orig
