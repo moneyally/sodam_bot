@@ -434,6 +434,10 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   whyfail 'refuse' 로 매일 셈. 프롬프트 규칙 8 의 '못 해요' 모범 문장을 없애고 '마지막 수단' 순서로, '~해 줄 수 있어?'=해 달라는 말(GPT-6 공식 가이드:
   GPT-6 는 예전보다 되묻기를 더 함), 확인 질문은 값이 어디에도 없을 때만. 오너 '스킬·효과 추가해줘·코드 짜' 도 feature_request 접수 허용.
   CLAIM 에 '넣어서 정리해드렸습니다' 꼴 추가.
+- **할 수 있는 일 지도 = sodam.md 역할** (prompt.SYSTEM [할 수 있는 일 지도], tests/test_refuse_check.py can_map_*, 2026-10-06): '이 말이면 이 도구'
+  25줄·1.9천 자를 **항상 싣는 고정 system** 에 (캐시 공용). 근거: Vercel 실험 '필요할 때 읽는 문서' 53% vs '항상 실린 짧은 색인' 100%,
+  ETH 논문 AI 가 자동 생성한 안내 파일은 오히려 손해 → **서버 agent_runs 의 실제 요청→도구 짝(14일 754건)과 실패 사례로 사람이 고름**.
+  도구 이름은 테스트가 실제 도구인지 검사, 2600자 넘으면 실패. 새 도구를 만들면 여기에 한 줄 (자주 쓰일 것만).
 
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·
