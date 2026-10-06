@@ -30,6 +30,7 @@ register_setting("run_code_daily", 30, "🧪 코드 실행 하루 횟수", range
 OWNER_CAP["run_code_daily"] = 30          # 방 관리자는 줄이기만, 늘리는 건 오너
 
 PHOTO_EXT = (".png", ".jpg", ".jpeg", ".gif")
+SRC_PREFIX = "src_"                        # 이 이름으로 저장한 그림 = 스티커·움프 원본 (방에 안 올림)
 OUT_CHARS = 3000                           # AI 에게 돌려줄 출력 (도구 결과 4000자 안)
 COUNTER = "run_code"
 
@@ -38,6 +39,8 @@ DESC = ("격리된 파이썬 작업실에서 코드를 실행한다 (인터넷 �
         "print 한 글이 결과로 돌아오고, 현재 폴더에 저장한 파일(png·jpg·gif = 사진, csv·xlsx·pdf·txt·json·md·svg = 파일, 5개까지)은 방에 바로 올라간다. "
         "라이브러리: numpy pandas matplotlib(한글 글꼴 NanumGothic 설정됨) seaborn openpyxl xlsxwriter duckdb pillow reportlab pypdf qrcode "
         "tabulate wordcloud squarify networkx rapidfuzz holidays korean_lunar_calendar emoji. "
+        "스티커·움프 재료 그림(차트·표·도형을 직접 그린 것, 투명 배경 png 권장)은 'src_' 로 시작하는 이름으로 저장 → 방에 안 올리고 "
+        "다음 make_sticker·make_profile_video 의 원본이 됨. "
         "room.db 는 sqlite3 나 pandas.read_sql 로 읽는다 (duckdb 는 인터넷이 없어 sqlite 파일을 직접 못 붙임 — DataFrame 에만). 오류가 나면 고쳐서 한 번 더. 결과 숫자는 출력에 있는 그대로만 말한다. "
         + snapshot.GUIDE)
 
@@ -82,8 +85,16 @@ async def t_run_code(ctx: ToolCtx, a: dict) -> str:
         return "작업실(코드 실행 서버)이 지금 꺼져 있음. 잠시 뒤 다시 부탁해 달라고 짧게 안내할 것 (계산은 말로 대신 할 수 있으면 해도 됨)."
     await svc.db.bump(day, ctx.chat_id, COUNTER)
     who = esc(display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username))
-    sent_names, last = [], None
-    for name, data in (res.get("files") or {}).items():
+    sent_names, last, src = [], None, ""
+    outs = dict(res.get("files") or {})
+    for name in [n for n in outs if n.lower().startswith(SRC_PREFIX) and n.lower().endswith((".png", ".jpg", ".jpeg"))][:1]:
+        from ..vision import Attached          # 스티커·움프 재료: 방에 안 올리고 이 답변의 원본 그림으로 (make_sticker·make_profile_video)
+        data = outs.pop(name)
+        ctx.image = Attached(data, "image/png" if name.lower().endswith(".png") else "image/jpeg", ctx.caller.id)
+        src = name
+    for name in [n for n in outs if n.lower().startswith(SRC_PREFIX)]:
+        outs.pop(name)
+    for name, data in outs.items():
         try:
             last = await _send(ctx, name, data, f"🧪 {who}님 요청 · {esc(name)}")
             sent_names.append(name)
@@ -100,6 +111,8 @@ async def t_run_code(ctx: ToolCtx, a: dict) -> str:
     head = {"ok": "실행 완료", "error": "실행 중 오류 — 고쳐서 한 번 더 해 볼 것", "timeout": "시간 초과(20초) — 더 가볍게",
             "cpu": "계산 시간 초과 — 더 가볍게", "memory": "메모리 초과 — 데이터를 줄여서"}.get(status, f"실행 실패({status})")
     tail = f"\n방에 올린 파일: {', '.join(sent_names)} (파일 내용을 다시 설명하지 말고 한마디만)" if sent_names else ""
+    if src:
+        tail += f"\n{src} 는 방에 안 올리고 이 답변의 원본 그림으로 둠 → 이어서 make_sticker·make_profile_video 를 부르면 그걸로 만듦."
     return f"{head} ({res.get('ms', 0)}ms)\n출력:\n{out or '(출력 없음)'}{tail}"
 
 

@@ -548,6 +548,14 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - '이 스티커처럼 글자만 X' (실제 루피: '안녕하세요' 남긴 채 새 글자 얹음·검은 네모): redraw(그림 AI 로 원래 글자 지운 흰 배경 그림, 지키는 규칙
   REDRAW_KEEP 은 코드가 붙임, 방 그림 한도 1) → 글자는 코드 → old_text 가 남았는지 작은 모델이 그림 읽기(read_text) → 남으면 안 보냄.
   고친 그림은 ctx.image 로 남겨 다시 부를 때 그림 AI 비용 안 씀. 그림 AI 에 한글을 쓰게 하지 않음. png=true 면 정지 스티커와 투명 PNG 문서도.
+- **글자·도형 레이어 = 프레임워크** (`stickerforge/layout.py`, tests/test_sticker_layout.py · 뮤테이션 7개, 2026-10-07 오너 '프레임워크로'):
+  예전엔 '그림 1장 + 글자 1줄(12자·위/아래·글꼴 1개)' 고정 → layers 에 `text`(여러 줄 \n·4줄·60자, at·size(폭 width 에 맞게 자동 축소)·align·
+  font bold/round/cute/pen/gothic(전부 OFL, data_files/fonts/LICENSE.md)·color 또는 colors 그라데이션·stroke·depth·rotate·enter·idle) ·
+  `shape`(bubble 꼬리 tail·rect·round·ellipse·star·burst, at·wh·fill·stroke). 그리는 순서대로 겹침(말풍선 → 글자). 레이어마다 한 번 그려 ctx 캐시.
+  글꼴에 없는 글자면 다 있는 글꼴로 자동(둥근·귀여운 글꼴은 흔한 2,350자만), 이모지는 거절. 글자·도형은 MAX_LIGHT 8 따로(MAX_LAYERS 6 은 무거운 것만).
+  피사체 자리·크기 = motion keyframes 한 점. 정지 스티커는 마지막 장면 한 장만 그림(build last_only, 7초→4초).
+  **run_code 연계**: 코드가 `src_*.png` 로 저장한 그림은 방에 안 올리고 ctx.image(다음 make_sticker·make_profile_video 원본) ·
+  그룹방 run_code 는 room_read 를 켜지만 make_sticker·make_profile_video 는 `tools.MAKE_AFTER_READ` 로 허용(결과가 그림 한 장뿐). 안내서 `guide/sticker.md`.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
