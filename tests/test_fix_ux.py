@@ -94,6 +94,12 @@ def call_name_third_person_not_addressed():
     assert addressed_to_bot(msg, "근데 소담이 이거 알려줘", NAMES, BOT)[0] is True     # 중간이어도 끝이 부탁
     assert addressed_to_bot(msg, "소담이야 뭐해?", NAMES, BOT)[0] is True
     assert addressed_to_bot(msg, "@sodambot 도와줘", NAMES, BOT) == (True, "도와줘")
+    # '소담이도 …' + 부탁·권유로 끝나면 부른 것 (베베 2026-10-06 '소담이도 참여 ㄱㄱ' 에 답 없음)
+    for t in ("소담이도 참여 ㄱㄱ", "소담도 해봐", "그럼 소담이도 같이 하자", "소담이도 와"):
+        assert addressed_to_bot(msg, t, NAMES, BOT)[0] is True, t
+    assert addressed_to_bot(msg, "소담이도 참여 ㄱㄱ", NAMES, BOT) == (True, "참여 ㄱㄱ")
+    for t in ("소담이도 틀렸네", "소담이도 사람이냐", "우리 소담이도 귀엽다"):   # 끝이 부탁이 아니면 그대로 언급
+        assert addressed_to_bot(msg, t, NAMES, BOT)[0] is False, t
 
 
 # ── 4. 봇 메시지 답장: AI 답에 단 답장만 호출 ──────────────

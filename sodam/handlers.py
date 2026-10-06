@@ -97,6 +97,8 @@ _LEADING_MENTIONS = re.compile(r"^(?:@\w{3,32}[\s,]*)+")
 _INSULT_HEAD = re.compile(r"(개[^가-힣\s]?|개[가-힣]|씨|시발|병신|좆|존나|미친|ㅅㅂ|ㅆㅂ|ㅂㅅ|ㅄ|새끼|십|썅|지랄)")
 # 문장 중간의 '소담이' 는 보통 3인칭('우리 소담이 최고') → 끝이 부탁일 때만 부른 걸로 본다
 _ASK_TAIL = re.compile(r"(줘|줄래|주라|주세요|줄래요|해봐|봐봐|부탁(해|해요|드려요|합니다)?)[\s.!~?]*$")
+# '소담이도 참여 ㄱㄱ'·'소담도 해봐' — '도' 가 붙어도 끝이 부탁·권유면 부른 것 (2026-10-06 베베 오너: 답 안 나옴, 3인칭으로 봤음)
+_ALSO_TAIL = re.compile(r"(줘|줄래|주라|주세요|해봐|봐봐|해|해라|하자|가자|와|ㄱㄱ*|ㄲ|고고|참여|참가|ㄱㄱ해)[\s.!~?ㅋㅎ]*$")
 
 
 def _strip_call(text: str, start: int, name: str) -> str:
@@ -127,6 +129,13 @@ def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot,
                 and not _INSULT_HEAD.match(t, body_start + len(name)):   # '소담이개…'·'소담이씨발…' = 붙여 쓴 욕 호출 (실제 사례 일루왕)
             continue
         return True, _strip_call(t, body_start, name)
+    if _ALSO_TAIL.search(t):
+        for name in call_names:
+            if name[-1] in "아야":
+                continue
+            m = re.search(rf"(?<![\w가-힣]){re.escape(name)}도(?![\w가-힣])", t)
+            if m:
+                return True, _strip_call(t, m.start(), name + "도")
     for name in call_names:
         if name[-1] not in "아야이":
             continue  # 문장 중간의 '소담'은 그냥 이름 언급일 수 있어서 호격만 인정
