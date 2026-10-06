@@ -297,13 +297,16 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         ctx.media_intent = "ump"
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
     started, deadline = time.monotonic(), DEADLINE["dm" if ctx.chat_id > 0 else "group"]
-    if lane.lane == "light":
+    if lane.lane in ("light", "banter"):
         snap = (ctx.tainted, ctx.bot_tainted, list(ctx.mentions), list(ctx.name_notes), ctx.quiet, ctx.room_read)
         try:
+            if lane.lane == "banter":   # 말싸움 명장면: 큰 모델 말맛, 추론 X, 도구 설명 없이 (3일 32번 중 도구 0번 — 입력만 2.7만 자씩)
+                return await _attempt(ctx, run, list(base), "banter", purpose, _ToolSet([], {route.ESCALATE_TOOL}, {}), request, mode,
+                                      steer, started, deadline)
             return await _attempt(ctx, run, list(base), "light", purpose, ctx_tools, request, mode, steer,
                                   started, deadline, model=light_model)   # 복사본: 올려 보내면 light 흔적 없이 base 부터
         except _Escalate as e:
-            log.info("🧭 light → heavy (chat=%s, %s)", ctx.chat_id, e.reason)
+            log.info("🧭 %s → heavy (chat=%s, %s)", lane.lane, ctx.chat_id, e.reason)
             run.event("escalate", why=e.reason)
             try:
                 run.step(route.ESCALATE_TOOL, e.reason, "큰 모델로 올려 보냄")
@@ -321,9 +324,6 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
                 messages.append({"role": "system", "content": DONE_NOTE.format(tools=", ".join(e.done))})
             return await _attempt(ctx, run, messages, "heavy", purpose, ctx_tools, request, mode, steer,
                                   time.monotonic(), deadline, think=think0, escalated=True)   # heavy 는 시간을 새로
-    if lane.lane == "banter":   # 말싸움 명장면: 큰 모델 말맛, 추론은 필요 없음
-        return await _attempt(ctx, run, base, "banter", purpose, ctx_tools, request, mode, steer,
-                              started, deadline)
     return await _attempt(ctx, run, base, "heavy", purpose, ctx_tools, request, mode, steer,
                           started, deadline, think=think0)
 
@@ -396,6 +396,9 @@ class _Escalate(Exception):
         self.reason, self.done = reason, list(done or [])
 
 
+# 결과를 도구가 방에 직접 올리는 도구 (ctx.quiet = AI 답은 안 보냄). 한 라운드가 이것들뿐이면 다음 AI 호출은 버려질 답만 쓰니
+# 부르지 않음 (서버 14일: 끝말잇기 24·음성방 20·영상 34·선택지 16·포인트 9번 — 매번 1번씩 헛호출).
+TERMINAL = frozenset({"start_game", "game_control", "point_game", "voice_call", "make_video", "ask_choice"})
 LIGHT_MAX_STEPS = 3    # 작은 모델은 도구 라운드 3번까지 (길게 찾으면 올려 보낸 큰 모델의 시간·요금을 먹음)
 DONE_NOTE = ("(이미 한 일) 이 요청에서 방금 이미 실행한 도구: {tools}. 같은 일을 다시 하지 말고 남은 일만 한다.")
 
@@ -411,7 +414,9 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     call_purpose = purpose + tag            # 기록(counters prompt:·cached:)용 — 캐시 키는 도구 지문(ts.key)
     allowed = ts.allowed
     chime = mode in ("chime", "morning")
-    extra = (route.ESCALATE_TOOL,) if light and not chime else ()   # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음
+    banter = lane == "banter"
+    # 끼어들기는 방 자료 조회만 — 올려 보낼 일 없음. 말싸움은 도구 없이 ask_senior 하나만 (욕 섞인 진짜 부탁이면 큰 모델이 이어받음)
+    extra = (route.ESCALATE_TOOL,) if (light or banter) and not chime else ()
     # 생각 깊이: GPT-6 + 도구 기본은 llm.TOOL_EFFORT(low). 말싸움(순발력)·끼어들기(대부분 PASS)만 none
     effort = "none" if lane == "banter" or chime else None
     # GPT-6 캐시 ③ 이번 요청 끝: 도구를 여러 번 부를 일이 많은 큰 모델 일하는 길만 (작은 모델·받아치기·끼어들기는 한 번에 끝나는 게 대부분)
@@ -463,6 +468,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
         inject()
         msg = await call()
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
+        if banter and calls:   # 말싸움 길엔 실을 도구가 없음 — 무엇이든 부르면 진짜 일이 섞인 것 → 도구 다 가진 큰 모델이 처음부터
+            raise _Escalate("banter " + ", ".join(c.function.name for c in calls)[:120], done)
         if light:   # 쓰기 도구·도움 요청이 하나라도 있으면 이 라운드 도구는 하나도 실행하지 않고 올려 보냄
             for c in calls:
                 if c.function.name == route.ESCALATE_TOOL:
@@ -542,6 +549,10 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", clip_mid(result, TOOL_RESULT_CHARS), nonce())})
+        if ctx.quiet and {c.function.name for c in calls} <= TERMINAL and not _CHAIN.search(request or "") \
+                and not (steer is not None and steer.pending):
+            run.event("terminal", tools=", ".join(c.function.name for c in calls))
+            return ""   # 결과는 도구가 이미 방에 올림 — 버려질 답을 쓰려고 또 부르지 않음
 
     if light and not chime and used and rounds == LIGHT_MAX_STEPS and step == rounds - 1:
         # 작은 모델이 라운드를 다 쓰고도 도구를 더 원함 = 여러 단계 일 → 대충 마무리하지 말고 큰 모델로

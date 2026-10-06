@@ -72,6 +72,8 @@ _TEASE = re.compile(r"티씨|(?<![A-Za-z])tc(?![A-Za-z])|몸값|몸매|가슴|�
                     r"색깔|몇\s?살|나이(?!스)|몸무게|키\s?(몇|얼마)|남친|여친|애인|사귀|사귈|결혼|뽀뽀|키스|섹시|예쁘|이쁘|못생|얼굴\s?(보여|공개)|"
                     r"벗|만져|안아\s?(줘|주)|데이트|나랑\s?(자|놀|만나)", re.I)
 MEDIA_MARK = re.compile(r"\[(사진|영상|이미지|GIF|동그라미|스티커|움직이는|파일)")
+# 욕 섞인 진짜 부탁 ('ㅅㅂ 채팅순위나 보여줘') — 말싸움 길(도구 없음)로 보내지 않고 도구 있는 길로 (2026-10-06)
+_ASK = re.compile(r"(보여|알려|찾아|불러|틀어|만들어|그려|가져와|읽어|검색해|조회해|정리해)\s?(줘|주|봐|와)|순위|통계|일정|날씨|시세|환율")
 _LINK = re.compile(r"https?://|t\.me/|www\.", re.I)                            # 이보다 긴 요청 = 설명이 많은 일일 때가 많음
 
 
@@ -102,8 +104,9 @@ SIGNALS: list[Signal] = [
     ("lines", lambda r: r.lines >= 3, "heavy"),                               # 여러 줄 = 목록·설명 붙은 일
     ("link", lambda r: bool(_LINK.search(r.request)), "heavy"),               # 링크 = 확인·판단할 거리
     ("tease", lambda r: r.mode in ("call", "follow") and len(r.request) <= 60 and bool(_TEASE.search(r.request)), "banter"),
-    ("banter", lambda r: (r.settings.get("ai_comeback") == "mirror" and bool(INSULT_RE.search(r.request)))
-     or (bool(r.settings.get("ai_spicy")) and bool(SEX_RE.search(r.request))), "banter"),
+    ("banter", lambda r: not _ASK.search(r.request) and (
+        (r.settings.get("ai_comeback") == "mirror" and bool(INSULT_RE.search(r.request)))
+        or (bool(r.settings.get("ai_spicy")) and bool(SEX_RE.search(r.request)))), "banter"),
 ]
 
 

@@ -61,8 +61,10 @@ async def posts_buttons_as_reply_and_stays_quiet():
     assert card[3]["reply_parameters"].message_id == m.message_id, "요청한 메시지에 답장"
     assert "어느 철수님을" in card[2] and "방장님만" in card[2]
     assert not m.replies, "ctx.quiet: AI 글 답은 안 보냄"
-    tool_msgs = [x["content"] for x in r.llm.of("chat")[-1]["messages"] if x["role"] == "tool"]
-    assert askchoice.SENT in tool_msgs[0], tool_msgs
+    # 버튼을 올렸으면 그 라운드로 끝 (agent.TERMINAL — 버려질 AI 답을 쓰려고 또 부르지 않음)
+    assert len(r.llm.of("chat")) == 1
+    row = await r.db._one("SELECT steps, events FROM agent_runs ORDER BY id DESC LIMIT 1")
+    assert askchoice.SENT[:20] in row["steps"] and '"e": "terminal"' in row["events"], row
     assert await r.db.is_ai_message(Room.CHAT, r.bot._next_id), "질문 = AI 답으로 기록 → 답장으로 직접 쓰면 호출"
 
 
@@ -191,11 +193,14 @@ async def tainted_blocked():
 @test
 async def once_per_run():
     r = await room()
-    r.llm.script = [tool_call("ask_choice", Q), tool_call("ask_choice", {**Q, "question": "또?"}, "c2"), reply("끝")]
+    # 같은 라운드에 질문 두 개 → 하나만 올라감 (두 번째는 거절), 그 뒤 AI 를 또 부르지 않음
+    two = SimpleNamespace(content="", tool_calls=[tool_call("ask_choice", Q).tool_calls[0],
+                                                  tool_call("ask_choice", {**Q, "question": "또?"}, "c2").tool_calls[0]])
+    r.llm.script = [two, reply("끝")]
     await r.say(BOSS, "소담아 철수 뮤트")
-    assert len(cards(r)) == 1
-    tool_msgs = [x["content"] for x in r.llm.of("chat")[-1]["messages"] if x["role"] == "tool"]
-    assert askchoice.SENT in tool_msgs[0] and "이미 질문을 보냈음" in tool_msgs[1], tool_msgs
+    assert len(cards(r)) == 1 and len(r.llm.of("chat")) == 1
+    row = await r.db._one("SELECT steps FROM agent_runs ORDER BY id DESC LIMIT 1")
+    assert "이미 질문을 보냈음" in row["steps"], row["steps"]
 
 
 @test

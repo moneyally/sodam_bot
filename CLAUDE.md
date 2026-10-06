@@ -290,6 +290,12 @@
 - 오너 `.AI모델 나눠|절약|최고 [방ID|전체]` (chat_state ai_route: hybrid 기본·saver=말싸움도 작은 모델·best=전부 큰 모델). AGENT_LIGHT_MODEL 비면 기능 끔.
   Config 직접 만들면(테스트) light_model="" → 기존 테스트는 heavy 그대로.
 - 기록: agent_runs.purpose ':light'·':banter'·':escalated', counters prompt:/cached: 도 길별.
+- **말싸움(banter) 길 = 도구 설명 없이** (2026-10-06, tests/test_agent_terminal.py · 뮤테이션 7개): 3일 32번 중 도구 0번인데 매번 도구 2.7만 자·캐시 45%·$0.026 →
+  `_ToolSet([], {ask_senior})` 로 탈출 도구 하나만, **무엇이든 부르면**(ask_senior·지어낸 도구) light 와 같은 `_Escalate` 로 도구 다 가진 큰 모델이 처음부터.
+  allowed 에 ask_senior 가 있어 '뮤트했어' 거짓 완료 검사는 그대로. 욕 섞인 진짜 부탁은 처음부터 말싸움 길 아님: 실행 말(_DO)은 원래 먼저 heavy,
+  조회 부탁(`route._ASK` 보여줘·알려줘·불러줘·순위·통계…)은 banter 신호에서 빠져 light(도구 있음). 서버 예전 banter 72건은 전부 그대로 banter.
+- **끝 도구(agent.TERMINAL)**: start_game·game_control·point_game·voice_call·make_video·ask_choice 는 결과를 방에 직접 올리고 ctx.quiet →
+  한 라운드가 이것들뿐이고 여러 단계 말(_CHAIN)·이어 보낸 말이 없으면 **다음 AI 호출 안 함**(버려질 답, 14일 ~100번). events 'terminal'.
 - **캐시: 도구 목록은 방 설정과 무관하게 같게** (`tools.offered`), 방 설정으로 꺼진 도구(image_daily 0·games·sports·video)는 OpenAI `allowed_tools` 로 호출만 막음
   (예전: 목록에서 빼서 그 뒤 도구 ~13k 토큰 캐시가 깨짐). 불러도 agent 가 '이 방에서는 꺼져 있는 기능' 결과. 캐시 키 = 싣는 도구 이름 지문(`_ToolSet.key`)
   → 오너·관리자, 방·1:1 이 같은 목록이면 같이 씀. API 가 allowed_tools 를 거절하면 그 프로세스는 `llm.allowed_off` → 예전처럼 목록 줄이기(AI 답 안 멈춤).
