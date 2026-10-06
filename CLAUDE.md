@@ -427,6 +427,13 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 보내기 전 검사 `agent._final_check` (한 실행 1번, call·follow 만): ① 도구 없이 '했다'(claim) ② '해 줘'에 도구 없이 '~하시면 됩니다'
   (advice) ③ 답이 '이름, …' 으로 시작하는데 말한 사람도 아니고 요청·답장·단서·도구 결과에도 없는 이 방 멤버(addressee, `room_people`).
 - sports 도구가 '못 찾았' 이면 결과 끝에 'web_search 로 찾아서 답할 것' (국가대표·NHL 등에서 작은 모델이 포기하던 것).
+- **'못 해요' 검사** (tests/test_refuse_check.py · 뮤테이션 7개, 2026-10-06 오너 '해줘 했는데 못 하는 건 멍청한 거' — 서버 600건 중 9건:
+  반복 알림·콕 집어 깨우기·움프 스킬 추가 …, 도구는 있었음): ④ refuse = 해 달라는 요청(`whyfail.DO_ASK`)에 도구 0개로 '못 해요·기능 없어요·
+  뭘 원하는지 알려 주세요'(`REFUSE`) → REFUSE_NOTE(find_tools → 가까운 대안 실제로 → 모자란 것만 feature_request)로 한 번 더.
+  규칙상 거절(`POLICY`: 성적·자해·실제 사람·사칭·위험)과 말싸움 길(banter)은 뺌. **light 가 거절하면 큰 모델로 올림**(_Escalate "refuse").
+  whyfail 'refuse' 로 매일 셈. 프롬프트 규칙 8 의 '못 해요' 모범 문장을 없애고 '마지막 수단' 순서로, '~해 줄 수 있어?'=해 달라는 말(GPT-6 공식 가이드:
+  GPT-6 는 예전보다 되묻기를 더 함), 확인 질문은 값이 어디에도 없을 때만. 오너 '스킬·효과 추가해줘·코드 짜' 도 feature_request 접수 허용.
+  CLAIM 에 '넣어서 정리해드렸습니다' 꼴 추가.
 
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·

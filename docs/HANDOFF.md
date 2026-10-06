@@ -14,7 +14,10 @@
 4. 작업 브랜치: `claude/button-panels` (머지 끝나면 `git fetch origin main && git checkout -B claude/button-panels origin/main && git push -f -u origin claude/button-panels`).
 5. 테스트 환경: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt` (컨테이너 새로 뜨면). 전체 테스트 `~/venv/bin/python tests/run_all.py --jobs 2` (~6분).
 
-## 1. 지금 상태 (2026-10-06 14:30)
+## 1. 지금 상태 (2026-10-06 16:00)
+- **#100 반영 확인 (5dc7023, 14:30)**: 테스트 2개 동시 첫 배포 = 서버 테스트 **16분** (14:14:13 → 14:30:20, 예전 25분). 목표 10분은 아직.
+- '못 해요' 검사 PR 올림 (아래 3절) — 반영되면 `diag why` 의 refuse 건수로 효과 확인.
+
 - 서버 버전: **ff92ad5** (#99) 확인. **5dc7023 (#100)** 은 14:14 부터 서버 테스트 중 — 새 방식(테스트 2개 동시) 첫 배포.
   → 새 세션 첫 일: 반영 확인 + **배포 걸린 시간 측정** (`journalctl -u sodam-autoupdate` 에서 'tests…' → 'tests ok' 시각 차이. 예전 ~25분, 목표 ~10분).
 - 서버 .env: OPENAI_MODEL=gpt-6-sol · AGENT_LIGHT_MODEL=gpt-6-luna · guard gpt-5.4-mini (백업 /opt/sodam/.env.bak-before-gpt6).
@@ -44,6 +47,8 @@
    아침 보고 (#32) · **API-Sports 키 거절('Missing application key') — 오너가 dashboard.api-football.com 확인해야 함**.
 
 ## 3. 오늘(10-05~06) 한 일 — PR 번호
+- '해줘'에 '못 해요' 고침: 보내기 전 refuse 검사·light 거절 → 큰 모델·지시문 '못 해요는 마지막 수단'·오너 스킬 추가 요청 접수 (서버 600건 중 9건 실측).
+  조사 보고서(아티팩트·코드 실행·자가개선·Claude vs 소담)는 세션 scratchpad 에만 — 결론: 자가개선은 '후보 → 오프라인 평가 → 오너 승인 카드' 가 빠짐 (다음 후보).
 - 농담·맥락 못 읽음: 프롬프트 [장난 읽기], 사실 규칙은 정보 질문에만, 놀림(tease) → 큰 모델 말싸움 길 (route._TEASE).
 - 베베 기본 말투가 존댓말이라 재미없다는 클레임 → 자유분방으로 (DB).
 - GPT-6 (sol·luna) 전환 + 캐시: GPT-6 은 24h 보관 없음(30분, 쓸 때마다 연장). explicit 모드 지점 3개 (#97).
