@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONT = os.path.join(HERE, "..", "data_files", "fonts", "BlackHanSans.ttf")   # OFL, 굵은 한글 제목체
 MAX_MOTIONS, MAX_FX, MAX_CAPTION = 2, 4, 12
+CAPTION_NUM = {"stroke": (0, 16), "depth": (0, 14), "size_max": (36, 120)}
+STATIC_MAX_BYTES = 512 * 1024          # 정지 스티커 WEBP (Bot API: 한 변 512, 512KB↓)
 BLOCKED_FX = {"rain", "rise"}          # image= 로 파일 경로를 받음
 VIDEO_MAX_BYTES = 2 * 1024 * 1024      # 움프 2MB
 CLAMP = {                              # (최소, 최대) — 넘으면 잘라서 씀
@@ -61,6 +63,7 @@ class Result:
     metrics: dict = field(default_factory=dict)    # qc 지표 숫자
     mp4: bytes = b""                                # forge_video 결과 (움프)
     spec: dict = field(default_factory=dict)        # 실제로 쓴 spec
+    still: bytes = b""                              # forge_static 결과 (정지 스티커 WEBP)
 
     def summary(self) -> str:
         bad = [f"{n} {v}" for n, v, ok in self.rows if not ok]
@@ -190,6 +193,12 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         spec["caption"] = {"text": text, "palette": cap.get("palette") if cap.get("palette") in CAP.PALETTES else "gold",
                            "anims": anims, "position": "top" if cap.get("position") == "top" else "bottom",
                            "typing": bool(cap.get("typing", True))}
+        for k in ("top", "mid", "bottom", "extrude"):            # 참고 스티커 글씨 색을 값으로 (팔레트 이름 대신)
+            if (c := _color(cap.get(k))) is not None:
+                spec["caption"][k] = c
+        for k, (lo, hi) in CAPTION_NUM.items():                 # 테두리 두께·입체 깊이·글자 최대 크기
+            if _num(cap.get(k)):
+                spec["caption"][k] = int(_clip(cap[k], lo, hi))
     return spec, None
 
 
@@ -465,6 +474,57 @@ def render_video(image: bytes, spec: dict) -> Result:
         return Result(False, error=f"{type(e).__name__}: {str(e)[:160]}", spec=spec)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def render_static(image: bytes, spec: dict) -> Result:
+    """정지 스티커: 같은 엔진으로 그린 뒤 글자가 다 나온 마지막 장면 한 장 → 512 WEBP (투명)."""
+    import io
+    from . import caption as CAP, engine
+    spec = {**spec, "motion": [{"type": "idle"}]}
+    if spec.get("caption"):
+        spec["caption"] = {**spec["caption"], "typing": False}
+    tmp = tempfile.mkdtemp(prefix="sodam_stk_")
+    try:
+        src, used = _load(image, spec, tmp)
+        built = engine.build(src, spec, None, FONT)
+        frame = built["frames"][-1]
+        buf = io.BytesIO()
+        frame.save(buf, "WEBP", quality=92, method=6)
+        data = buf.getvalue()
+        if len(data) > STATIC_MAX_BYTES:
+            buf = io.BytesIO()
+            frame.save(buf, "WEBP", quality=70, method=6)
+            data = buf.getvalue()
+        alpha = frame.getchannel("A").getextrema()
+        rows = [("size", f"{len(data) // 1024}KB / {STATIC_MAX_BYTES // 1024}KB", len(data) <= STATIC_MAX_BYTES),
+                ("dims", f"{frame.width}x{frame.height}", max(frame.size) == 512),
+                ("alpha_range", f"{alpha[0]}..{alpha[1]}", alpha[0] < 255)]
+        cap = spec.get("caption")
+        if cap:
+            style = CAP.Style(**{k: v for k, v in cap.items() if k != "text"})
+            style.anims = tuple(style.anims)
+            g = CAP.glyph_check(cap["text"], FONT, style)
+            rows.append(("glyphs", f"worst {g['worst']}%", g["ok"]))
+        warnings, metrics = qc_one(built, used, spec)
+        prev = io.BytesIO()
+        frame.save(prev, "PNG")
+        return Result(all(r[2] for r in rows), preview=prev.getvalue(), rows=rows, keying=used, warnings=warnings,
+                      metrics=metrics, spec=spec, still=data)
+    except Exception as e:
+        return Result(False, error=f"{type(e).__name__}: {str(e)[:160]}", spec=spec)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def qc_one(built: dict, used: str, spec: dict) -> tuple[list, dict]:
+    """정지 스티커 검수: 움직임 경고(밋밋·요란)는 뺌."""
+    warnings, metrics = _inspect(built, used, None, spec)
+    return [w for w in warnings if not w.startswith(("너무 밋밋", "너무 요란"))], metrics
+
+
+async def forge_static(image: bytes, spec: dict) -> Result:
+    async with _LOCK:
+        return await asyncio.to_thread(render_static, image, spec)
 
 
 async def forge(image: bytes, spec: dict, icon: bool = False) -> Result:

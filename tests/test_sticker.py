@@ -88,7 +88,8 @@ async def tool_sends_sticker_and_file_retries_lighter_and_limits():
         img = Attached(mascot(), "image/png", BOSS.id)
         res = await ask(r, A, [tool_call("make_sticker", {"spec": {"fx": ["sparkle", "glitch"], "caption": "출근완료"}})], image=img)
         assert "보냈음" in res[0] and calls == [["sparkle", "glitch"], ["sparkle"]], (res, calls)   # 효과 하나 덜고 다시
-        assert r.bot.named("send_sticker") and "@Stickers" in r.bot.named("send_document")[-1][3]
+        kb = r.bot.named("send_sticker")[-1][4]["reply_markup"]                 # 파일·@Stickers 안내 대신 팩 넣기 버튼
+        assert kb.inline_keyboard[0][0].callback_data.startswith("spk:") and not r.bot.named("send_document")
         res = await ask(r, A, [tool_call("make_sticker", {"spec": {"fx": [{"type": "rain", "image": "/etc/passwd"}]}})], image=img)
         assert "spec 오류" in res[0], res
         for _ in range(P.FREE_DAILY - 1):

@@ -945,6 +945,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _cas_button(svc, bot, q, parts)
     elif prefix == "wc":
         await svc.games.on_callback(q, parts)
+    elif prefix in hooks.CALLBACK_HANDLERS:   # 기능 모듈이 등록한 버튼 (hooks.add_callback_handler)
+        await hooks.CALLBACK_HANDLERS[prefix](svc, bot, q, parts)
     else:
         await q.answer()
 
@@ -1146,6 +1148,10 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         svc.inputs.pop(user.id, None)
         text_, kb = await menu.group_panel(svc, bot, chat_id, user.id)
         await menu.send_panel(svc, bot, user.id, lambda: msg.reply_text(text_, parse_mode="HTML", reply_markup=kb))
+        return
+    hook = re.match(r"^/start\s+([a-z]+)_(\w{1,40})\s*$", text)
+    if hook and hook.group(1) in hooks.DEEP_LINKS:   # 기능 모듈이 등록한 딥링크 (hooks.add_deep_link)
+        await hooks.DEEP_LINKS[hook.group(1)](svc, bot, msg, hook.group(2))
         return
     if re.match(r"^/start(@\w+)?\s*$", text) or text in ("/menu", ".메뉴"):
         svc.inputs.pop(user.id, None)

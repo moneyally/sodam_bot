@@ -85,6 +85,19 @@ async def mine_cooldown_streak_and_no_double():
 
 
 @test
+async def mine_interval_is_room_setting():
+    """방 설정 mine_minutes (얼라이드 '채굴 3분' 2026-10-06): 3분 지나면 다시, 2분이면 아직."""
+    db, svc, bot, ctx = await setup()
+    await db.set_setting(CHAT, "mine_minutes", 3)
+    await say(ctx, A, "!가입")
+    assert "3분 뒤 다시" in await say(ctx, A, "!채굴")
+    await db._write("UPDATE casino_accounts SET last_mine=last_mine-? WHERE user_id=?", (120, A.id))
+    assert "곡괭이 식는 중… 1분 0초" in await say(ctx, A, "!채굴")
+    await db._write("UPDATE casino_accounts SET last_mine=last_mine-? WHERE user_id=?", (61, A.id))
+    assert "채굴 성공" in await say(ctx, A, "!채굴")
+
+
+@test
 async def daily_and_bailout_once_per_day():
     db, svc, bot, ctx = await setup()
     await say(ctx, A, "!가입")
