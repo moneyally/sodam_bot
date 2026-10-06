@@ -86,6 +86,8 @@ units() {   # 켜 둔 봇들 (딜러는 .env.dealer 가 있고 켜 둔 경우만
 # 📞 음성 담당(sodam-voice): 본체가 뜬 뒤 따로 — 패키지·서비스 파일 설치·재시작. 실패해도 본체는 그대로 (되돌리지 않음).
 # VOICE_SETUP=auto(기본: root 설치일 때만 — RUN_AS 있음) / 1(항상, 테스트용) / 0(안 함)
 VOICE_SETUP=${VOICE_SETUP:-auto}
+RETRY_STAMP="$APP_DIR/data/update.retry"   # 새 커밋 없을 때 설치 재시도 간격 (10분)
+REQ_STAMP="$APP_DIR/data/requirements.installed"   # 마지막으로 설치 성공한 requirements.txt 의 sha256 — 같으면 pip 건너뜀
 VOICE_PENDING="$APP_DIR/data/voice.restart_pending"   # 통화 중이라 못 한 음성 재시작 → 다음 타이머(새 커밋 없어도)에서
 voice_setup() {
     case $VOICE_SETUP in
@@ -273,6 +275,7 @@ unit_setup() {
         [ -f "$APP_DIR/deploy/$u" ] || continue
         cmp -s "$APP_DIR/deploy/$u" "$UNIT_DIR/$u" && continue
         cp "$APP_DIR/deploy/$u" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload && log "unit: $u 갱신"
+        if [ "$u" = sodam-autoupdate.timer ]; then $SYSTEMCTL restart "$u" || true; fi   # 새 간격 바로 (도는 중인 이 스크립트는 안 끊김)
     done
 }
 
@@ -305,16 +308,19 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     if [ -f "$VOICE_PENDING" ]; then
         voice_setup
     fi
-    # 점검 창구가 안 떠 있으면 10분마다 다시 설치 시도 (apt 잠금 같은 일시 실패 회복)
+    # 아래 설치 재시도는 10분에 한 번만 (타이머는 2분마다 — 실패가 계속되면 2분마다 apt·재시작을 되풀이하지 않게)
+    if [ -f "$RETRY_STAMP" ] && [ -z "$(find "$RETRY_STAMP" -mmin +9 2>/dev/null)" ]; then exit 0; fi
+    touch "$RETRY_STAMP" 2>/dev/null || true
+    # 점검 창구가 안 떠 있으면 다시 설치 시도 (apt 잠금 같은 일시 실패 회복)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-diag.service" ] && ! $SYSTEMCTL is-active -q sodam-diag 2>/dev/null; then
         diag_setup
     fi
-    # SSH 다리가 안 떠 있으면 10분마다 다시 설치 시도 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    # SSH 다리가 안 떠 있으면 다시 설치 시도 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-sshws.service" ] && ! $SYSTEMCTL is-active -q sodam-sshws 2>/dev/null; then
         diag_setup
         sshws_setup
     fi
-    # 작업실이 안 떠 있거나 마지막 점검이 실패면 10분마다 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    # 작업실이 안 떠 있거나 마지막 점검이 실패면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] \
         && { ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null || ! grep -q ' workshop_ok' "$APP_DIR/data/workshop_setup.status" 2>/dev/null; }; then
         workshop_setup
@@ -327,7 +333,7 @@ if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
 fi
 log "$(g rev-parse --short "$PREV") → $(g rev-parse --short "$NEW") ($BRANCH)"
 
-# 0) 음성 통화 중이면 무거운 테스트(약 20분·1코어)를 다음 타이머(10분 뒤)로 — 통화 소리가 끊기지 않게 (최대 60분, --force 는 바로)
+# 0) 음성 통화 중이면 무거운 테스트(약 10분·1.5코어)를 다음 타이머(2분 뒤 다시 확인)로 — 통화 소리가 끊기지 않게 (최대 60분, --force 는 바로)
 if postpone_for_call; then
     log "voice: 통화 중 → 테스트·재시작을 다음 타이머로 미룸 (바로 하려면 sodam-update --force)"
     exit 0
@@ -337,11 +343,17 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/var/tmp}/sodam-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 g archive "$NEW" | tar -x -C "$TMP"
-"$PY" -m pip install -q --disable-pip-version-check -r "$TMP/requirements.txt"
+# 패키지 설치는 requirements.txt 가 지난 설치 성공 때와 다를 때만 (매번 pip 확인 ~수십 초). 실패하면 표시를 지워 다음에 다시
+REQ_SUM=$(sha256sum "$TMP/requirements.txt" | cut -d' ' -f1)
+if [ "$(cat "$REQ_STAMP" 2>/dev/null)" != "$REQ_SUM" ]; then
+    rm -f "$REQ_STAMP"
+    "$PY" -m pip install -q --disable-pip-version-check -r "$TMP/requirements.txt"
+    echo "$REQ_SUM" > "$REQ_STAMP" 2>/dev/null || true
+fi
 as_user=()
 if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_AS" --); fi
 log "tests…"
-if ! (cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py > "$TMP/tests.log" 2>&1); then
+if ! (cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py --jobs 2 > "$TMP/tests.log" 2>&1); then
     { grep -B1 -A15 -E '^FAIL' "$TMP/tests.log" | head -80; } || true   # 어떤 테스트가 왜 (끝 40줄엔 안 남는 경우가 많았음)
     tail -n 40 "$TMP/tests.log"
     report update.status "tests_failed $(g rev-parse --short "$NEW"): $(grep -E '^FAIL' "$TMP/tests.log" | head -5 | tr '\n' ' ')"
@@ -369,6 +381,7 @@ fi
 log "!! 버전 $VER 시작 확인 실패 → 이전 커밋으로 되돌림"
 $JOURNALCTL -u sodam -n 30 -o cat --no-pager 2>/dev/null || true
 g reset -q --hard "$PREV"
+rm -f "$REQ_STAMP"   # 되돌린 코드의 requirements 로 다시 설치 → 다음 배포는 새로 확인
 "$PY" -m pip install -q --disable-pip-version-check -r "$APP_DIR/requirements.txt" || true
 VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"

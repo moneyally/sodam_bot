@@ -90,7 +90,7 @@ Claude 세션(소담 저장소)에 이렇게 보내세요:
 ## 코드 갱신 (Claude 가 고친 걸 서버에 반영)
 Claude 클라우드 세션은 서버에 직접 접속할 수 없어요. 그래서: **Claude 가 GitHub `main` 에 푸시 → 서버가 가져감.**
 - 손으로: PowerShell 에서 `ssh root@1.2.3.4 sodam-update`
-- 자동으로(추천): 서버에서 한 번만 `bash /opt/sodam/deploy/install.sh --auto-update` → 10분마다 새 커밋 확인.
+- 자동으로(추천): 서버에서 한 번만 `bash /opt/sodam/deploy/install.sh --auto-update` → 2분마다 새 커밋 확인.
   확인 기록: `journalctl -u sodam-autoupdate -n 50`
 
 `sodam-update` 가 하는 일: 새 코드를 임시 폴더에서 **전체 오프라인 테스트** → 통과해야만 적용·재시작 →

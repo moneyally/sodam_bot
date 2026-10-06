@@ -587,7 +587,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   **계측** voice_calls.stats(JSON): frames_in/out·send_dropped·late_ticks·max_late_ms·resyncs·loop_lag_max/p99_ms(0.1초 표본)·
   rt_errors{코드:수}·interrupts·first_audio_ms(말 끝→첫 소리)·reconnects·cpu_sec·steal_ticks·loadavg → `diag voice`(chat 없으면 모든 방 최근 통화) ·
   `diag health` voice_active_calls·loadavg. 조각마다 로그 없음, 끝날 때 한 줄.
-  배포: sodam-voice CPUWeight=1000·Nice=-5, autoupdate CPUWeight=20·CPUQuota=100%·IOSchedulingClass=idle · update.sh 가 **통화 중이면
+  배포: sodam-voice CPUWeight=1000·Nice=-5, autoupdate CPUWeight=20·CPUQuota=150%·IOSchedulingClass=idle · update.sh 가 **통화 중이면
   테스트를 다음 타이머로**(voice_calls end_ts NULL·20분 안, 처음 미룬 뒤 최대 60분 data/update.postponed, --force 는 바로) ·
   테스트 중 시작된 통화: voice_setup 이 재시작 바로 전에 다시 확인 → 통화 중이면 건너뛰고 data/voice.restart_pending →
   새 커밋 없는 다음 타이머에서 통화 없으면 재시작 (테스트용 VOICE_SETUP=1).
@@ -701,7 +701,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **봇은 Hetzner VPS 에서 돈다**: cx23(2 vCPU·4GB·40GB) nbg1, Ubuntu 24.04, IP 178.104.55.232, `/opt/sodam` (systemd `sodam`,
   하트비트 감시·매일 백업·보안 업데이트). 월 약 €6.5. 클라우드 컨테이너의 옛 봇은 끔 — `.env` 를 `.env.migrated-to-vps` 로 치워
   다시 켜질 수 없음. **컨테이너에서 봇을 켜지 말 것** (같은 토큰 두 곳 = 409 Conflict + DB 갈라짐). 세션 시작 훅·생존 확인 Routine 도 끔.
-- **배포 = GitHub main 에 머지** → 서버 `sodam-autoupdate.timer` 가 10분마다 가져가서 전체 테스트 통과해야 재시작, 시작 로그 없으면 자동 되돌림.
+- **배포 = GitHub main 에 머지** → 서버 `sodam-autoupdate.timer` 가 2분마다 가져가서 전체 테스트 통과해야 재시작, 시작 로그 없으면 자동 되돌림.
+  **빠른 배포 (2026-10-06, tests/test_run_all.py · 뮤테이션 5개)**: 예전 = 10분 타이머 + 테스트 순서대로 1코어 ~25분 + 매번 pip. 지금 = 2분 타이머 ·
+  `run_all.py --jobs 2`(무거운 모듈 HEAVY 를 두 묶음에 고르게, 동시에 돌 때만 실패한 모듈은 혼자 한 번 더 — 그래도 실패면 실패) · CPUQuota 150% ·
+  requirements.txt 가 지난 설치 성공(data/requirements.installed sha256)과 같으면 pip 건너뜀 · 새 커밋 없을 때 설치 재시도는 10분에 한 번(data/update.retry).
+  새 무거운 테스트(그림·영상 렌더 수십 초)를 만들면 run_all.HEAVY 에 대략 초를 넣을 것.
   (claude/button-panels 에 푸시 → PR → main 머지.) 확인은 텔레그램 오너 알림 '▶️ 소담 시작 (버전 …)'.
 - 컨테이너 → VPS SSH 는 막힘 (egress 프록시가 TLS 만 통과). 서버 조작은 Hetzner Cloud API(HTTPS, 토큰은 사용자에게) 또는
   사용자가 PowerShell `ssh root@IP`. 이사는 cloud-init user_data 부트스트랩 + 텔레그램 오너 1:1 **고정 메시지를 우편함**으로

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -208,6 +209,20 @@ def _read_status(path: Path) -> str:
         return "없음"
 
 
+CHANGES_MAX = 10
+
+
+def recent_changes(root: Path, n: int = CHANGES_MAX) -> list[str]:
+    """지금 돌고 있는 코드에 들어간 최근 변경 (git 커밋 제목, 영어). 서버는 /opt/sodam 이 git 저장소 — 없으면 빈 목록.
+    (2026-10-06 오너 '업데이트 뭐뭐 됐어?' → 버전 글자만 있어서 '알 수 없음' 이라고 답했음)"""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "log", f"-{n}", "--no-merges", "--date=format:%m-%d %H:%M",
+                              "--format=%h %ad %s"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip()[:160] for line in out.stdout.splitlines() if line.strip()][:n]
+
+
 async def t_owner_server_status(ctx: ToolCtx, a: dict) -> str:
     from .. import costs, diag
     from ..voice import store as vstore
@@ -220,6 +235,7 @@ async def t_owner_server_status(ctx: ToolCtx, a: dict) -> str:
     usd = await svc.db.counter(day, 0, "usd_micro")
     budget = getattr(svc.llm, "usd_budget", 0) or 0
     rooms = await svc.db._one("SELECT COUNT(*) n FROM chats WHERE chat_id<0")
+    changes = recent_changes(ver_file.parent)
     return "\n".join([
         f"버전 {version}" + (f" · 봇 신호 {int(time.time() - hb.stat().st_mtime)}초 전" if hb.exists() else ""),
         f"음성 담당: {'켜짐' if await vstore.worker_alive(svc.db) else '꺼짐'} · 도우미 계정: {'연결됨' if await vstore.assistant(svc.db) else '없음'}",
@@ -227,7 +243,8 @@ async def t_owner_server_status(ctx: ToolCtx, a: dict) -> str:
         f"오늘 AI 요금 {costs.fmt_usd(usd)}" + (f" / 예산 ${budget:g}" if budget else ""),
         f"방 {rooms['n'] if rooms else 0}개",
         f"마지막 서버 갱신: {_read_status(data / 'update.status')}",
-    ])
+    ] + (["최근 반영된 변경 (새것부터, 커밋 제목은 영어 → 한국어로 쉽게 풀어서 전할 것):", *changes] if changes else
+         ["최근 변경 목록: 못 읽음 (git 기록 없음)"]))
 
 
 async def t_owner_room_view(ctx: ToolCtx, a: dict) -> str:
@@ -273,7 +290,8 @@ CHECKUP_TOOLS = [
     (Tool("room_checkup", "[관리자] 방 소담 점검: 설정(말투·욕 받아치기·19금·음성 등)·이용 기간·오늘 AI 한도 %·이미지/웹검색 오늘 쓴 횟수와 한도·봇 권한·최근 AI 문제. "
           "'소담 왜 답 안 해?', '우리 방 설정 뭐야?' 같은 질문에. 1:1 에선 room 필요.",
           {"room": ROOM}, [], t_room_checkup, Role.ADMIN), True),
-    (Tool("owner_server_status", "[오너] 서버 상태: 버전·봇 신호·음성 담당·원격 점검·오늘 AI 요금·마지막 서버 갱신 결과.",
+    (Tool("owner_server_status", "[오너] 서버 상태: 버전·봇 신호·음성 담당·원격 점검·오늘 AI 요금·마지막 서버 갱신 결과·"
+          "최근 반영된 변경 목록(무엇이 바뀌고 추가됐는지). '업데이트 뭐 됐어?', '서버 상태' 같은 질문에.",
           {}, [], t_owner_server_status, Role.OWNER, where="owner_dm"), True),
     (Tool("owner_room_view", "[오너] 다른 방 들여다보기: kind=settings(설정)/recent(최근 대화, hours≤24)/ai_runs(최근 AI 실행)/voice(통화 기록).",
           {"room": ROOM, "kind": {"type": "string", "enum": ["settings", "recent", "ai_runs", "voice"]},
