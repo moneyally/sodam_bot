@@ -124,7 +124,8 @@ async def ai_tool_sends_card_only_requester_saves():
     assert "예약했어요" in q.edits[-1]
     res = await ask(r, A, [tool_call("schedule_task", {"when": "30분 뒤", "action": "remind", "text": "x"})],
                     role=Role.MEMBER)
-    assert "사용할 수 없음" in res[0]
+    assert "알람 저장함" in res[0], res                                  # 멤버 = 나한테 오는 알람만 바로 (tests/test_remind.py)
+    assert [x["deliver"] for x in await r.db.schedules(Room.CHAT) if x["created_by"] == A.id] == ["me"]
     res = await ask(r, BOSS, [tool_call("schedule_task", {"when": "반복 30분", "action": "ai", "skill": "write",
                                                           "text": "x"})])
     assert "1시간 이상" in res[0]

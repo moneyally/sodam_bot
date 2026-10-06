@@ -1041,6 +1041,9 @@ async def t_game_alert(ctx: ToolCtx, a: dict) -> str:
             + ("" if await ctx.svc.paid_features(ctx.chat_id) else " 단 이 방은 이용 기간이 아니라 지금은 동작 안 함."))
 
 
+MEMBER_MAX = 3   # 멤버 한 사람이 켜 둘 수 있는 내 알람 수
+
+
 async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
     """알람·AI 작업 예약. 바로 저장하지 않고 요청한 관리자에게 확인 카드 (대화 속 숨은 지시로 예약이 생기지 않게)."""
     from . import menu   # 늦게 import (menu → panels → tools 순환 방지)
@@ -1054,6 +1057,14 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         return "action 은 remind / post / ai, ai 면 skill 은 " + " / ".join(cron.SKILLS) + " 중 하나."
     if action == "ai" and when[0] == "interval" and when[2] < 60:
         return "AI 작업은 1시간 이상 간격으로만 반복할 수 있음."
+    if ctx.role < Role.ADMIN:   # 멤버(고객) = 나한테 오는 알람만 ('11시55분에 나한테 메시지 보내줘')
+        if action != "remind":
+            return "멤버는 나한테 오는 알람(action=remind, to=me)만 예약할 수 있음. 방 공지·AI 작업은 관리자에게 부탁하라고 안내."
+        a = {**a, "to": "me"}
+        mine = [r for r in await ctx.svc.db.schedules(ctx.chat_id)
+                if r["created_by"] == ctx.caller.id and r["deliver"] == "me" and r["enabled"]]
+        if len(mine) >= MEMBER_MAX:
+            return f"내 알람은 한 사람당 {MEMBER_MAX}개까지라 더 못 만듦. 하나 끝나거나 지운 뒤 다시 하라고 안내."
     if len(await ctx.svc.db.schedules(ctx.chat_id)) >= MAX_PER_CHAT:
         return f"이 방 예약이 이미 {MAX_PER_CHAT}개라 더 못 만듦. 관리자 1:1 메뉴 🗓️ 에서 정리하라고 안내."
     code = action == "ai" and skill == "code"
@@ -1076,6 +1087,13 @@ async def t_schedule_task(ctx: ToolCtx, a: dict) -> str:
         action = "remind"
     spec = {"when": when, "action": action, "skill": skill if action == "ai" else None, "text": text, "title": title,
             "deliver": deliver}
+    if ctx.role < Role.ADMIN:   # 멤버 내 알람: 나한테만 오는 거라 확인 카드 없이 바로 (카드 버튼은 관리자 전용)
+        from .panels.announce import save_cron   # 늦게 import (panels → tools 순환 방지)
+        ok, out = await save_cron(ctx.svc, ctx.chat_id, ctx.caller.id, spec)
+        if not ok:
+            return f"예약 못 함: {_plain(out)}"
+        return (f"알람 저장함: {describe_when(*when[:3])}에 요청한 사람 1:1 로 '{text[:60]}' (1:1 이 막혀 있으면 이 방에서 이름을 불러 알림). "
+                "언제 오는지 짧게 알려줄 것.")
     if await cards.skip_card(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller.id, "schedule_task"):   # 오늘은 확인 생략
         from .panels.announce import cron_line, save_cron   # 늦게 import (panels → tools 순환 방지)
         ok, out = await save_cron(ctx.svc, ctx.chat_id, ctx.caller.id, spec)
@@ -1236,11 +1254,12 @@ TOOLS: list[Tool] = [
           "action": {"type": "string", "enum": list(gametime.ACTIONS), "description": "notify=알림만, button=알림+뮤트 버튼, auto=자동 뮤트"},
           "mute_hours": {"type": "integer", "description": "뮤트 시간 (1~48)"}}, ["on"], t_game_alert, Role.ADMIN,
          where="room"),
-    Tool("schedule_task", "알람·공지·AI 작업 예약 (확인 버튼을 보냄). '내일 9시에 회의 알려줘'(요청한 사람을 부름) → remind, "
+    Tool("schedule_task", "알람·공지·AI 작업 예약 (확인 버튼을 보냄). 시각을 정해 '불러줘·알려줘·깨워줘·메시지 보내줘' 하면 말로 약속하지 말고 이 도구로. "
+         "'내일 9시에 회의 알려줘'(요청한 사람을 부름) → remind, '11시55분에 나한테 메시지 보내줘' → remind+to=me (멤버도 자기 알람은 됨, 한 사람 3개), "
          "'매일 아침 9시 방에 인사 올려'(정해진 글) → post, "
          "'매일 밤 10시에 오늘 대화 요약해서 올려' → ai+summary, '매일 아침 8시 비트코인 뉴스' → ai+search, "
-         "'매일 자정 수다 랭킹' → ai+stats, '매일 밤 11시 시간대별 채팅 차트 올려'·정해진 통계로 안 되는 계산·표·파일 → ai+code (text = 파이썬 코드, room.db = 이 방 사본, print·저장 파일이 그 시각에 올라감 — 저장 전에 한 번 돌려 봄), '매주 월요일 10시 지난주 신규 가입 통계' → ai+joins, '매일 아침 명언' → ai+write. 멤버 개인 알람은 안 됨(관리자만).",
-         {"when": {"type": "string", "description": "매일 HH:MM / 매주 월 HH:MM (여러 요일: 매주 월,수,금 HH:MM) / 평일 HH:MM / 주말 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM (자정은 00:00)"},
+         "'매일 자정 수다 랭킹' → ai+stats, '매일 밤 11시 시간대별 채팅 차트 올려'·정해진 통계로 안 되는 계산·표·파일 → ai+code (text = 파이썬 코드, room.db = 이 방 사본, print·저장 파일이 그 시각에 올라감 — 저장 전에 한 번 돌려 봄), '매주 월요일 10시 지난주 신규 가입 통계' → ai+joins, '매일 아침 명언' → ai+write. 방 공지·AI 작업은 관리자만.",
+         {"when": {"type": "string", "description": "시각만('11시55분'·'23:55'·'오후 3시 반' = 지금 이후 가장 가까운 그 시각) / 매일 HH:MM / 매주 월 HH:MM (여러 요일: 매주 월,수,금 HH:MM) / 평일 HH:MM / 주말 HH:MM / 반복 N분|N시간 / N분 뒤 / N시간 뒤 / 오늘|내일 HH:MM / MM-DD HH:MM (자정은 00:00)"},
           "action": {"type": "string", "enum": list(cron.ACTIONS)},
           "skill": {"type": "string", "enum": list(cron.SKILLS), "description": "action=ai 일 때만"},
           "text": {"type": "string", "description": "remind: 그 시각에 방에 그대로 올라갈 알림 내용 자체 (예: '회의 시간이에요', '치킨 도착!'), "
@@ -1249,7 +1268,7 @@ TOOLS: list[Tool] = [
           "title": {"type": "string"},
           "to": {"type": "string", "enum": ["room", "me"], "description": "room=방에 올림(기본), me=요청한 관리자 1:1 로만 "
                                                                         "('나한테 알려줘', '나한테 보고' 같은 말)"}},
-         ["when", "action", "text"], t_schedule_task, Role.ADMIN, where="room"),
+         ["when", "action", "text"], t_schedule_task, Role.MEMBER, where="room"),   # 멤버는 도구 안에서 내 알람만
     Tool("alert_rule", "알림 규칙 만들기 (확인 버튼을 보냄). '누가 입금 얘기하면 알려줘' → keyword, '@홍길동 말하면 나 불러' → "
          "user+call, '누가 들어오면 알려줘' → join, '방 3시간 조용하면 인사 올려' → quiet+post. 정해진 시각 알람은 schedule_task.",
          {"trigger": {"type": "string", "enum": list(rules.TRIGGERS)},
@@ -1315,9 +1334,10 @@ def offered(role: Role, in_dm: bool = False) -> list[Tool]:
 FIND_TOOL = "find_tools"
 CORE_TOOLS = frozenset({
     "make_image", "make_profile_video", "make_video", "greet_members", "sports", "web_search", "sodam_guide",
-    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "point_game", "bot_command",
+    "chat_stats", "read_chat", "search_chat", "member_info", "start_game", "schedule_task", "bot_command",
     "change_setting", "mute_member", "ask_choice", "save_lesson", "search_knowledge", "voice_call",
     "feature_request"})   # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
+# schedule_task: 2026-10-05 '23시55분에 나 불러줘' 를 도구 없이 말로만 약속한 실제 사례 → 처음부터 실음 (point_game 14일 9번은 목록에서 불러옴)
 
 
 def _short(desc: str, n: int = 70) -> str:

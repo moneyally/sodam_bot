@@ -84,6 +84,10 @@ def parse_when(text: str) -> tuple[str, str | None, int | None]:
 
 _WHEN_AFTER = re.compile(r"^(\d+)\s*(분|시간)\s*(?:뒤|후)(?:에)?$")
 _WHEN_ONCE = re.compile(r"^(?:(오늘|내일|모레)|(?:(\d{4})[-./])?(\d{1,2})[-./](\d{1,2}))\s*(\d{1,2}:\d{2})$")
+# 날짜 없이 시각만 ('11시55분', '23:55', '오후 3시 반', '내일 아침 8시') → 한 번, 지금 이후 가장 가까운 그 시각.
+# 오전/오후를 안 말한 12시간제(1~12시)면 h 와 h+12 중 지금 이후 가장 가까운 쪽 (실제 '11시55분에 나한테 보내줘').
+_WHEN_AT = re.compile(r"^(?:(오늘|내일|모레)\s*)?(오전|오후|아침|새벽|저녁|밤|낮)?\s*(\d{1,2})\s*(?::|시)\s*(?:(\d{1,2})\s*분?|(반))?\s*(?:에)?$")
+_PM = ("오후", "저녁", "밤", "낮")
 ONCE_GRACE = 6 * 3600          # 한 번 예약을 놓쳤을 때(재시작 등) 이 안이면 늦게라도 실행
 
 
@@ -98,6 +102,22 @@ def parse_time(text: str, tz, now_ts: int | None = None) -> tuple[str, str | Non
         if not 1 <= minutes <= 30 * 1440:
             raise ValueError("1분 ~ 30일 뒤까지 예약할 수 있어요")
         at = now + timedelta(minutes=minutes)
+    elif m := _WHEN_AT.match(t):
+        day, ampm, hh = m.group(1), m.group(2), int(m.group(3))
+        mm = 30 if m.group(5) else int(m.group(4) or 0)
+        if hh > 23 or mm > 59:
+            raise ValueError("없는 시각이에요")
+        if ampm in _PM and hh < 12:
+            hh += 12
+        elif ampm in ("오전", "새벽", "아침") and hh == 12:
+            hh = 0
+        hours = [hh] if ampm or hh == 0 or hh > 12 else [hh % 12, hh % 12 + 12]   # 오전/오후 없으면 둘 다 후보
+        days = [("오늘", "내일", "모레").index(day)] if day else [0, 1]
+        cands = [(now + timedelta(days=d)).replace(hour=h, minute=mm, second=0, microsecond=0) for d in days for h in hours]
+        later = sorted(c for c in cands if c > now)
+        if not later:
+            raise ValueError("지금보다 뒤의 시각으로 해주세요")
+        at = later[0]
     elif m := _WHEN_ONCE.match(t):
         hh, mm = map(int, parse_hhmm(m.group(5)).split(":"))
         if m.group(1):
