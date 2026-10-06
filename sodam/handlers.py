@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import agent, aiqueue, apikeys
-from . import mediastore, modactions
+from . import mediastore, medialog, modactions
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -523,6 +523,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _record(svc.db.log_message(chat_id, user.id, msg.message_id, text, flagged=scan.blocked, ts=sent_at(msg),
                                          reply_to_msg_id=reply_msg, reply_to_user=reply_user))
     vision.remember(msg)        # 사진·영상 올리고 답장 없이 '소담아 이거 어때' 해도 그걸 보게 (3분)
+    try:   # 스티커·사진·영상 기록 (사흘, 파일 번호만) — '내가 올린 스티커처럼' 의 그 스티커를 찾게. 실패해도 관리·대화는 계속
+        await medialog.record(svc.db, msg)
+    except Exception:
+        log.exception("media log failed")
 
     # 봇이 관리 권한 없이 일반 멤버로만 있는 방: 지우지도 막지도 못하니 관리 검사는 건너뛰고 대화·게임·기록만
     exempt = role >= Role.ADMIN or await free.is_free(svc.db, chat_id, user.id)   # 자유 멤버는 자동 통제 없음

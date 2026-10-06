@@ -582,6 +582,12 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   guard 모델이 #1 말투(STYLE_EXAMPLE, 사람 같은 일기·AI 티 나는 말 금지 목록)로, 지난 일기 2개 반복 금지. 보내기 전 `clean`: 링크·지갑·@ 제거, 방·채널 이름 → '어떤 방', 1200자.
 - 오너 메인 📓(m:dy): 채널(글쓰기 권한 있는 등록 채널, 하나뿐이면 자동)·방식 off/auto(기본)/preview(1:1 초안 + [올리기][다시 쓰기][안 올림])·시각·✍️ 지금 써보기.
 
+## 🗂️ 미디어 기록 (`medialog.py`, tests/test_medialog.py · 뮤테이션 5개, 2026-10-06)
+- 방에 사람이 올린 스티커·사진·영상·GIF·동그라미 영상을 media_log(방·사람·msg_id·종류·file_id·스티커 이모지/세트/형식·캡션) 에 **사흘** (한 시간에 한 번 같이 정리).
+  파일은 안 받고 file_id 만. messages 표엔 안 넣음(채팅 순위·통계 그대로). 기록 실패해도 관리·대화 계속 (handlers 에서 try).
+  계기: 루피 '내가 올린 스티커처럼 만들어줘' → 소담이 그 스티커를 모름(글만 기록, vision.remember 는 메모리 3분·'이거/방금' 말에만).
+  `medialog.recent(db, chat, user, kind, within)` — 다음 단계: '내가 올린·위에' 말에 자동으로 붙이기, '스티커' 말이면 스티커 도구로.
+
 ## 🎬 영상 읽기 · 빠른 답 (조사 2026-09-28 — OpenAI 쿡북·Bot API 문서 근거, tests/test_vision.py·test_fast_agent.py)
 - `vision.fetch`: 사진·이미지 문서 + **영상·GIF·동그라미 영상·영상 스티커** → ffmpeg 로 장면 3~8장(영상 = 길이/2초, GIF·스티커 3장) 긴 변 512px JPEG,
   `[n초]` 표시로 AI 에 (`Attached.parts()`), data = 가운데 장면(움프·그림 고치기 원본). OpenAI 비전은 영상·움직이는 GIF 를 직접 못 봄.
