@@ -5,7 +5,9 @@ sticker_catalog 로 요청에 맞는 검증된 조합(레시피, 계열이 서�
 코드는 sanitize 로 이름·숫자·범위만 통과시키고, 엔진 검사표(규격) + qc 경고(자막 겹침·잘림·구멍·밋밋/요란·하얗게 날아감) 를 돌려줌.
 경고가 있으면 한 번은 고쳐 다시 만들고(accept_warnings 없이 두 번째면 그대로 보냄), 규격 실패면 효과 하나를 덜고 한 번 더.
 원본 = 붙은/답장한 사진, 없으면 요청자 프사. 사람마다 하루 FREE_DAILY 개.
-보내기 = 스티커(방에서 바로 움직이는 걸 봄) + 파일(@Stickers 로 팩 등록용 — 영상으로 보내면 재압축돼 거절됨).
+보내기 = 스티커 + [📦 내 팩에 넣기] 버튼 (sodam/stickerpack.py — 봇이 그 사람 팩을 직접 만듦, @Stickers 안내 없앰).
+format=static = 정지 스티커(WEBP). '이 스티커처럼 글자만 바꿔서' = redraw(그림 AI 로 원래 글자 지운 깨끗한 그림) → 글자는 코드(caption 값)
+→ old_text 가 남았는지 그림 읽기 검사(작은 모델) 뒤에만 보냄. 그림 AI 는 한글을 틀리게 써서 글자는 절대 그림 AI 에 안 맡김.
 """
 from __future__ import annotations
 
@@ -19,14 +21,18 @@ from telegram import InputFile
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from .. import featreq, hooks, stickerforge as SF, stickerlearn as L, tools
+from .. import featreq, hooks, stickerforge as SF, stickerlearn as L, stickerpack, tools
 from ..stickerforge import examples as EX, recipes
-from ..util import display_name, esc, user_name
+from ..util import user_name
 from .avatar import PHOTO_OF, source_photo
 
 log = logging.getLogger(__name__)
 FREE_DAILY = 5
-GUIDE = "팩 만들기: @Stickers → /newvideo → 팩 이름 → 이 파일(📎 파일로) → 이모지 → /publish"
+REDRAW_KEEP = ("Keep the same character, pose, expression, art style, line work and colors exactly. "
+               "Do not write any text, letters, numbers or speech bubbles anywhere. "
+               "Place it on a plain flat solid white background with nothing else.")
+OCR_SYSTEM = ("You read text in a sticker image. Return JSON {\"texts\": [every piece of visible text exactly as written]}. "
+              "Empty list if there is none. Do not guess hidden text.")
 
 COMPOSE = EX.COMPOSE
 
@@ -182,6 +188,54 @@ def lighter(spec: dict) -> dict | None:
     return None
 
 
+def _norm(t: str) -> str:
+    return "".join(ch for ch in (t or "") if ch.isalnum()).lower()
+
+
+async def read_text(ctx: tools.ToolCtx, png: bytes) -> list[str] | None:
+    """만든 스티커에 보이는 글자 (작은 모델이 그림을 읽음, 몇 원). 못 읽으면 None (검사 건너뜀)."""
+    from ..vision import Attached
+    try:
+        msg = await ctx.svc.llm.chat(
+            [{"role": "system", "content": OCR_SYSTEM},
+             {"role": "user", "content": [{"type": "text", "text": "Read all text."}, Attached(png, "image/png").part()]}],
+            model=ctx.svc.cfg.guard_model, max_tokens=300, json_mode=True, purpose="sticker_ocr", chat_id=ctx.chat_id)
+        import json
+        got = json.loads(msg.content or "{}").get("texts")
+    except Exception as e:   # 검사 실패는 만들기를 막지 않음
+        log.warning("sticker ocr failed: %s", e)
+        return None
+    return [str(x) for x in got] if isinstance(got, list) else None
+
+
+def leftover(texts: list[str], old_text: str, caption: str) -> str:
+    """지워야 할 글자가 그림에 남았으면 그 글자 (자막 글자 안에 들어 있는 경우는 남은 것 아님)."""
+    old = _norm(old_text)
+    if not old or old in _norm(caption):
+        return ""
+    return next((t for t in texts if old in _norm(t) or (len(_norm(t)) >= 2 and _norm(t) in old)), "")
+
+
+async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str) -> tuple[bytes | None, str]:
+    """그림 AI 로 원본 고치기 (원래 글자 지우기·자세 바꾸기 등 — 무엇을 바꿀지는 AI 가 말로, 지키는 규칙은 코드가 붙임)."""
+    from openai import BadRequestError, OpenAIError
+    from ..llm import BudgetExceeded
+    from ..vision import Attached
+    if await ctx.svc.db.counter(day, ctx.chat_id, "image") >= ctx.settings["image_daily"]:
+        return None, "오늘 이 방 그림 한도를 다 써서 원본 고치기(redraw)는 안 됨. redraw 없이 하거나 내일 하자고 안내."
+    try:
+        out = await ctx.svc.llm.image(f"{redraw[:600]}. {REDRAW_KEEP}", Attached(src, "image/png", ctx.caller.id), ctx.chat_id)
+    except BudgetExceeded:
+        return None, "오늘 AI 사용량 한도를 다 써서 원본 고치기는 못 함."
+    except BadRequestError:
+        return None, "그림 AI 정책에 걸려 원본을 못 고침. redraw 없이 다시 하거나 다른 그림으로 하자고 안내."
+    except OpenAIError as e:
+        log.warning("sticker redraw failed: %s", e)
+        return None, "그림 서버가 잠깐 불안정함. 잠시 후 다시 부탁하라고 안내."
+    await ctx.svc.db.bump(day, ctx.chat_id, "image")
+    return out, ""
+
+
 async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     spec, err = await resolve_spec(ctx, a.get("spec") or {}, "sticker")
     if err:
@@ -200,14 +254,32 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     if await db.counter(day, 0, f"stk:{uid}") >= FREE_DAILY:
         return f"스티커는 한 사람 하루 {FREE_DAILY}개까지. 내일 다시 가능하다고 안내."
+    static = a.get("format") == "static"
+    forge = SF.forge_static if static else SF.forge
     busy = asyncio.create_task(_busy(ctx))
-    outcome = "ok"
+    outcome, redrawn = "ok", ""
     try:
-        res = await SF.forge(src, spec, icon=bool(a.get("icon")))
+        if str(a.get("redraw") or "").strip():
+            src, err = await redraw_source(ctx, src, str(a["redraw"]).strip(), day)
+            if not src:
+                return err
+            from ..vision import Attached
+            ctx.image = Attached(src, "image/png", uid)      # 다시 부를 땐 redraw 없이 이 고친 그림을 씀 (그림 AI 비용 한 번)
+            redrawn = " 원본은 redraw 로 고쳤음(다시 부를 땐 redraw 빼면 고친 그림 그대로)."
+        res = await forge(src, spec)
         if not res.ok and lighter(spec):       # 크기·검사 실패 → 효과 하나 덜고 한 번 더 (SKILL: 움직임·효과를 줄여야 화질이 삼)
             spec = lighter(spec)
-            res = await SF.forge(src, spec, icon=bool(a.get("icon")))
+            res = await forge(src, spec)
             outcome = "retry"
+        old_text = str(a.get("old_text") or "").strip()
+        if res.ok and old_text:                # 지워야 할 글자가 남았으면 보내지 않음 (실제: '안녕하세요' 남긴 채 새 글자 얹음)
+            texts = await read_text(ctx, res.preview)
+            left = leftover(texts or [], old_text, (spec.get("caption") or {}).get("text", ""))
+            if left:
+                await L.log(db, chat_id=ctx.chat_id, user_id=uid, request=str(a.get("request") or ""), kind=res.keying,
+                            spec=spec, outcome="fail")
+                return (f"만들었지만 원래 글자 '{left}' 가 그림에 남아 있어 안 보냄.{redrawn} "
+                        f"redraw 에 '{old_text} 글자를 완전히 지우기'를 분명히 넣어 다시 부를 것 (한 번만, 또 남으면 솔직히 말하기).")
     finally:
         busy.cancel()
     request = str(a.get("request") or "")
@@ -218,22 +290,23 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     if res.warnings and not a.get("accept_warnings"):   # 소담이는 결과를 못 보니 지표가 대신 말함 → 한 번 고쳐 다시
         return ("만들었지만 검수 경고 (아직 안 보냄): " + " / ".join(res.warnings)
                 + f". 지표 {res.metrics}. 경고가 말하는 것 하나만 고쳐 다시 부를 것 — 그래도 경고면 accept_warnings=true 로 보냄.")
-    name = display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)
+    emoji = str(a.get("emoji") or "😀").strip()[:8] or "😀"
+    item_id = await stickerpack.new_item(db, fmt="static" if static else "video", emoji=emoji, chat_id=ctx.chat_id, user_id=uid)
     try:
-        sent = await ctx.bot.send_sticker(ctx.chat_id, InputFile(res.webm, filename="sticker.webm"))
-        await ctx.bot.send_document(ctx.chat_id, InputFile(res.webm, filename="sodam_sticker.webm"), parse_mode="HTML",
-                                    caption=f"🧩 {esc(name)}님 스티커 파일\n{GUIDE}")
-        if res.icon:
-            await ctx.bot.send_document(ctx.chat_id, InputFile(res.icon, filename="pack_icon.webm"),
-                                        caption="팩 아이콘 (100×100) — /publish 뒤 아이콘 물을 때 이 파일")
+        sent = await ctx.bot.send_sticker(ctx.chat_id, InputFile(res.still, filename="sticker.webp") if static
+                                          else InputFile(res.webm, filename="sticker.webm"),
+                                          reply_markup=stickerpack.keyboard(item_id))
     except TelegramError as e:
         return f"스티커는 만들었는데 전송 실패: {e.message}"
+    if fid := getattr(getattr(sent, "sticker", None), "file_id", ""):
+        await stickerpack.set_file(db, item_id, fid)
     await db.bump(day, 0, f"stk:{uid}")
     await L.log(db, chat_id=ctx.chat_id, user_id=uid, request=request, kind=res.keying, spec=spec, outcome=outcome,
                 msg_id=getattr(sent, "message_id", 0))
     note = f" (경고 안고 보냄: {'; '.join(res.warnings)})" if res.warnings else ""
     note += await note_wanted(ctx, a.get("wanted") or "", _used(spec))
-    return f"스티커와 파일을 방에 보냈음 (배경: {res.keying}, 조합: {_used(spec)}){note}. 한마디만 짧게, 다른 느낌 원하면 말하라고."
+    return (f"{'정지 ' if static else ''}스티커를 방에 보냈음 (배경: {res.keying}, 조합: {_used(spec)}){note}{redrawn} "
+            "밑의 [📦 내 팩에 넣기] 를 누르면 누른 사람 팩에 바로 들어감. 한마디만 짧게.")
 
 
 tools.register_tool(tools.Tool(
@@ -248,12 +321,19 @@ tools.register_tool(tools.Tool(
 
 tools.register_tool(tools.Tool(
     "make_sticker",
-    "텔레그램 움직이는 스티커(512 WebM)를 만들어 방에 보낸다. 원본 = photo_of > 붙은·답장한 사진 > 요청자 프사. "
-    "mode: 단색 배경 캐릭터=cutout, 실사·꽉 찬 그림=photo(framing auto). " + COMPOSE,
-    {"spec": {"type": "object", "description": "{mode, keying, motion:[…], layers:[{type,…,start,end}], fx(옛), caption{text,palette,anims,position}, "
-                                               "framing, margin, radius, seed} 또는 {recipe, seed}"},
+    "텔레그램 스티커를 만들어 방에 보낸다 (움직이는 512 WebM 또는 format=static 정지). 원본 = photo_of > 붙은·답장한 사진·스티커 > 요청자 프사. "
+    "mode: 단색 배경 캐릭터=cutout, 실사·꽉 찬 그림=photo(framing auto). 보낸 스티커엔 [📦 내 팩에 넣기] 버튼이 붙음. "
+    "'이 스티커처럼 글자만 X로' = 원본에 글자가 있으면 redraw 로 그 글자를 지운 그림 + caption.text=X (글씨 색·테두리는 원본을 보고 값으로) "
+    "+ old_text=원래 글자. 글자는 그림 AI 에 쓰게 하지 말 것(한글이 틀림). " + COMPOSE,
+    {"spec": {"type": "object", "description": "{mode, keying, motion:[…], layers:[{type,…,start,end}], fx(옛), "
+                                               "caption{text≤12자,palette 또는 top/mid/bottom/extrude:[r,g,b], stroke 0~16, depth 0~14, "
+                                               "size_max 36~120, anims, position}, framing, margin, radius, seed} 또는 {recipe, seed}"},
      "photo_of": PHOTO_OF,
-     "icon": {"type": "boolean", "description": "팩 아이콘(100×100)도 같이 — 팩 만든다고 할 때만"},
+     "format": {"type": "string", "enum": ["video", "static"], "description": "static = 정지 스티커 (움직임 말이 없으면 static)"},
+     "redraw": {"type": "string", "description": "그림 AI 로 원본 먼저 고치기 — 바꿀 것만 영어로 (예: remove the text '안녕하세요'). "
+                                                 "캐릭터·그림체 유지·흰 배경은 코드가 붙임. 그림 한도 1회 씀"},
+     "old_text": {"type": "string", "description": "원본에 있던 글자 — 보내기 전에 남았는지 검사"},
+     "emoji": {"type": "string", "description": "팩에 넣을 때 쓸 이모지 1개 (스티커 뜻)"},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true"},
      "request": {"type": "string", "description": "사용자 요청 원문"},
      "wanted": {"type": "string", "description": "정말 못 하는 연출을 원했을 때 그 말 그대로 (기능 요청 접수)"}},

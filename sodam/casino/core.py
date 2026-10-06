@@ -56,10 +56,11 @@ CREATE TABLE IF NOT EXISTS casino_open (
 
 register_setting("casino_enabled", True, "포인트 게임(! 명령)")
 register_setting("casino_max_bet", 100_000, "포인트 게임 최대 베팅", range_=(100, 100_000_000))
+register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # 방마다 (얼라이드 '3분' 요청 2026-10-06)
 
 START_POINTS = 10_000
 MIN_BET = 100
-MINE_COOLDOWN = 600            # 채굴 10분마다
+MINE_COOLDOWN = 600            # 채굴 기본 10분마다 — 방 설정 mine_minutes 가 우선 (mine_cooldown)
 MINE_MIN, MINE_MAX = 200, 1_000
 MINE_JACKPOT_ODDS = 50         # 1/50 확률 💎 대박 광맥 ×10
 MINE_STREAK_MAX = 10           # 연속 채굴(1시간 안에 다시) 보너스 최대 +10%×10
@@ -399,15 +400,25 @@ async def c_join(ctx: Ctx) -> None:
     n = (await db._one("SELECT COUNT(*) AS n FROM casino_accounts WHERE chat_id=?", (cid,)))["n"]
     await ctx.reply(f"🎉 {mention(uid, user_name(ctx.user))}님 가입 완료! (이 방 {n}번째)\n"
                     f"가입 선물 <b>{fmt(START_POINTS)}</b> · 잔액 {fmt(bal)}\n\n"
-                    "⛏ <code>!채굴</code> 10분마다 포인트 캐기 · 📅 <code>!출석</code> 하루 한 번\n"
+                    f"⛏ <code>!채굴</code> {await mine_cooldown(db, cid) // 60}분마다 포인트 캐기 · 📅 <code>!출석</code> 하루 한 번\n"
                     "🎰 게임 목록은 <code>!도움</code>")
+
+
+async def mine_cooldown(db, chat_id: int) -> int:
+    """이 방 채굴 간격(초) — 설정 mine_minutes (1~60분)."""
+    try:
+        m = int((await db.get_settings(chat_id)).get("mine_minutes") or MINE_COOLDOWN // 60)
+    except (TypeError, ValueError):
+        m = MINE_COOLDOWN // 60
+    return min(max(m, 1), 60) * 60
 
 
 async def c_mine(ctx: Ctx) -> None:
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
     acc = await account(db, cid, uid)
     t = now()
-    left = acc["last_mine"] + MINE_COOLDOWN - t
+    cool = await mine_cooldown(db, cid)
+    left = acc["last_mine"] + cool - t
     if left > 0:
         await ctx.reply(f"⛏ 곡괭이 식는 중… {left // 60}분 {left % 60}초 뒤에 다시 캘 수 있어요.")
         return
@@ -424,7 +435,7 @@ async def c_mine(ctx: Ctx) -> None:
         return
     head = "💎 <b>대박 광맥 발견!!</b> ×10\n" if jackpot else ""
     streak_txt = f" (연속 {streak}회 +{bonus_pct}%)" if bonus_pct else ""
-    await ctx.reply(f"{head}⛏ {esc(user_name(ctx.user))}님 채굴 성공: <b>+{fmt(amount)}</b>{streak_txt}\n잔액 {fmt(bal)} · 10분 뒤 다시")
+    await ctx.reply(f"{head}⛏ {esc(user_name(ctx.user))}님 채굴 성공: <b>+{fmt(amount)}</b>{streak_txt}\n잔액 {fmt(bal)} · {cool // 60}분 뒤 다시")
 
 
 async def c_daily(ctx: Ctx) -> None:
@@ -471,7 +482,7 @@ async def c_wallet(ctx: Ctx) -> None:
     bal = await balance(db, cid, uid)
     rank = (await db._one("SELECT COUNT(*) AS n FROM members m JOIN casino_accounts a USING(chat_id, user_id) "
                           "WHERE m.chat_id=? AND m.points>?", (cid, bal)))["n"] + 1
-    left = max(0, acc["last_mine"] + MINE_COOLDOWN - now())
+    left = max(0, acc["last_mine"] + await mine_cooldown(db, cid) - now())
     mine = "지금 가능" if not left else f"{left // 60}분 {left % 60}초 뒤"
     daily = "완료" if acc["last_daily"] == today(ctx.svc) else "가능"
     await ctx.reply(f"💰 <b>{esc(user_name(ctx.user))}</b>님 지갑\n"
@@ -502,7 +513,7 @@ async def c_help(ctx: Ctx) -> None:
 
 
 register(("가입", "join"), c_join, help=f"게임 가입 ({fmt(START_POINTS)} 지급)", group="시작", needs_account=False)
-register(("채굴", "mine", "캐기"), c_mine, help="10분마다 포인트 캐기 (가끔 💎 ×10)", group="시작")
+register(("채굴", "mine", "캐기"), c_mine, help="포인트 캐기 (방 설정 간격, 기본 10분 · 가끔 💎 ×10)", group="시작")
 register(("출석", "daily"), c_daily, help=f"하루 한 번 {fmt(DAILY_POINTS)}", group="시작")
 register(("지갑", "잔액", "돈", "wallet"), c_wallet, help="내 포인트·순위", group="시작")
 register(("순위", "랭킹", "부자", "rank"), c_rank, help="방 포인트 부자 순위", group="시작", needs_account=False)

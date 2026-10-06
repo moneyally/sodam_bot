@@ -539,6 +539,17 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   VP9 1차 패스 cpu-used 4, 사다리 건너뛰기). 명령줄 `tools/sticker_forge.py IMAGE SPEC out [--mp4] [--catalog 요청]`.
 - 도구 설명은 짧게(`stickerforge/examples.COMPOSE` 공통 규칙: catalog 먼저·말의 낱말 → 부품 값·같은 조합 금지·seed·wanted). 부품·예시는 카탈로그 결과로만.
 
+## 📦 스티커 팩 바로 넣기 · 정지 스티커 · 글자만 바꾸기 (`stickerpack.py`, `panels/sticker.py`, tests/test_stickerpack.py · 뮤테이션 5개, 2026-10-06)
+- 예전: 스티커 + 파일 + '@Stickers → /newvideo … /publish' 6단계 안내 → 이제 스티커 밑 [📦 내 팩에 넣기](spk:<항목>) — **누른 사람** 팩에
+  봇이 직접(createNewStickerSet/addStickerToSet, 이름 sodam<ID>[v권]_by_<봇>, 120장 차면 다음 권, 팩 지웠으면 새로, file_id 거절이면 내려받아 올림).
+  1:1 을 한 번도 안 연 사람은 텔레그램이 거절(PEER_ID_INVALID) → 방에 [▶️ 1:1 열고 넣기](?start=spk_<항목>) → hooks.DEEP_LINKS. 표 sticker_items(30일)·sticker_packs.
+  새 콜백 접두어·딥링크는 `hooks.add_callback_handler` · `hooks.add_deep_link` (handlers 수정 없이).
+- make_sticker format=static = 같은 엔진 마지막 장면 → 512 WEBP (`SF.render_static`). caption 색·테두리는 값으로(top/mid/bottom/extrude [r,g,b]·stroke·depth·size_max).
+- '이 스티커처럼 글자만 X' (실제 루피: '안녕하세요' 남긴 채 새 글자 얹음·검은 네모): redraw(그림 AI 로 원래 글자 지운 흰 배경 그림, 지키는 규칙
+  REDRAW_KEEP 은 코드가 붙임, 방 그림 한도 1) → 글자는 코드 → old_text 가 남았는지 작은 모델이 그림 읽기(read_text) → 남으면 안 보냄.
+  고친 그림은 ctx.image 로 남겨 다시 부를 때 그림 AI 비용 안 씀. 그림 AI 에 한글을 쓰게 하지 않음.
+- 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
+
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
   길이 video_seconds(4~8, 기본 6). 둘 다 settings.OWNER_CAP (관리자는 줄이기만). 오너는 개수 한도 무시(요금은 셈).

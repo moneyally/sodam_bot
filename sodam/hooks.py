@@ -19,6 +19,20 @@ BOT_EDIT_HOOKS: list = []
 TICK_HOOKS: list = []
 # 메시지 반응(message_reaction 업데이트, handlers.on_any_update 에서): async hook(svc, bot, reaction) — 스티커 학습(sodam/stickerlearn.py)
 REACTION_HOOKS: list = []
+# 버튼 콜백 접두어 → async fn(svc, bot, q, parts) (handlers.on_callback 이 아는 접두어가 아니면 여기서 찾음 — sodam/stickerpack.py 'spk')
+CALLBACK_HANDLERS: dict = {}
+
+
+def add_callback_handler(prefix: str, fn) -> None:
+    CALLBACK_HANDLERS[prefix] = fn
+
+
+# 1:1 딥링크 '/start <접두어>_<값>' → async fn(svc, bot, msg, 값) (sub_·cfg_ 는 handlers 가 직접 — sodam/stickerpack.py 'spk')
+DEEP_LINKS: dict = {}
+
+
+def add_deep_link(prefix: str, fn) -> None:
+    DEEP_LINKS[prefix] = fn
 
 
 def add_group_message_hook(fn) -> None:
