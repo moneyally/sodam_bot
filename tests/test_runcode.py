@@ -63,6 +63,21 @@ async def admin_reads_room_copy_with_text_and_files_go_to_the_room():
 
 
 @test
+async def src_image_becomes_sticker_source_not_posted():
+    """코드로 그린 그림(src_*.png) = 스티커·움프 원본: 방에 안 올리고 ctx.image 로, 방 사본을 읽었어도 make_sticker 는 됨 (2026-10-07)."""
+    svc, bot = await _setup()
+    code = "open('src_chart.png','wb').write(b'\\x89PNG src')\nopen('보기.png','wb').write(b'\\x89PNG v')\nprint('ok')"
+    out, c = await run(svc, bot, ADMIN, Role.ADMIN, code)
+    assert c.image is not None and c.image.data == b"\x89PNG src" and "src_chart.png" in out and "원본" in out, out
+    assert len(bot.named("send_photo")) == 1, "src_ 그림은 방에 안 올림 (보기.png 만)"
+    assert c.room_read
+    res = await tools.execute("make_sticker", json.dumps({"spec": {"recipe": "없는레시피"}}), c)
+    assert res != tools.ROOM_READ_REFUSED and "spec 오류" in res, res
+    res = await tools.execute("change_setting", json.dumps({"key": "ai_enabled", "value": "off"}), c)
+    assert res == tools.ROOM_READ_REFUSED or "못" in res, res              # 다른 쓰기 도구는 그대로 막힘
+
+
+@test
 async def members_need_the_room_switch_and_never_see_text():
     svc, bot = await _setup()
     out, _ = await run(svc, bot, MEMBER, Role.MEMBER, "print(1)")

@@ -222,7 +222,8 @@ def _layer_fn(item: dict, idx: int):
     return run_fx
 
 
-def build(src: Image.Image, spec: dict, outdir: str | None, font: str, tl: dict | None = None, flatten: bool = False) -> dict:
+def build(src: Image.Image, spec: dict, outdir: str | None, font: str, tl: dict | None = None, flatten: bool = False,
+          last_only: bool = False) -> dict:
     """타임라인 nf 장을 그린다. outdir 가 있으면 outdir/frames.rgba (ffmpeg 입력) 로도 쓴다.
     그리는 순서: 움직임(motion·keyframes, 투명도) → fx(옛 효과) → layers(순서대로, 각자 start·end) → 자막.
     flatten = 움프용: 알파를 검정 위에 미리 곱해서 씀 (반투명 가장자리·fade 가 mp4 에서 제 밝기).
@@ -265,7 +266,7 @@ def build(src: Image.Image, spec: dict, outdir: str | None, font: str, tl: dict 
         os.makedirs(outdir)
         raw = open(os.path.join(outdir, RAW), "wb")
     frames, boxes = [], []
-    for n in range(nf):
+    for n in (range(nf - 1, nf) if last_only else range(nf)):      # 정지 스티커 = 마지막 장면 한 장만
         u = n / nf
         t = ((u * tl["rep"]) % 1.0) * D                     # 옛 부품(이름 있는 움직임·fx·자막)의 시간
         (ang, sx, sy, dx, dy, shear), op = motion(u)

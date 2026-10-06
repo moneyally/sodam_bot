@@ -170,8 +170,11 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
     layers = raw.get("layers") or []
     if not isinstance(layers, list):
         return None, "layers 는 [{type, ...}, ...] 목록"
-    if len(spec["fx"]) + len(layers) > MAX_LAYERS:
-        return None, f"효과(fx)+레이어(layers)는 합쳐서 {MAX_LAYERS}개까지 (렌더 시간 상한)"
+    light = [x for x in layers if isinstance(x, dict) and x.get("type") in LIGHT_LAYERS]
+    if len(spec["fx"]) + len(layers) - len(light) > MAX_LAYERS:
+        return None, f"효과(fx)+레이어(layers, 글자·도형 빼고)는 합쳐서 {MAX_LAYERS}개까지 (렌더 시간 상한)"
+    if len(light) > MAX_LIGHT:
+        return None, f"글자(text)·도형(shape) 레이어는 {MAX_LIGHT}개까지"
     for item in layers:
         lay, err = _clean_layer(item)
         if err:
@@ -203,7 +206,8 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
 
 
 # ── 프레임워크 부품(prims) 값 검사 — 이름·숫자·범위만 통과 (경로·코드·수식 없음) ─────────────
-MAX_LAYERS = 6            # fx + layers 합계 (CPU 상한)
+MAX_LAYERS = 6            # fx + layers 합계 (CPU 상한) — 글자·도형은 따로
+LIGHT_LAYERS, MAX_LIGHT = {"text", "shape"}, 8   # 한 번 그려 캐시하는 가벼운 레이어
 MAX_KEYS = 16
 PARTICLE_BUDGET = 300     # 모든 입자 레이어 개수 합 + 불씨 (2vCPU 서버 렌더 시간 상한, tests/test_animation.py 실측)
 
@@ -215,8 +219,10 @@ def _p():
 
 def layer_params() -> dict:
     """레이어 종류 → {인자: (형식, …)}. 형식: num lo hi · int lo hi · osc lo hi(숫자 또는 [a,b] 진동) · range lo hi(숫자 또는 [최소,최대]) ·
-    enum 선택지 · color · colors n · xy(0~1 좌표) · times n(0~1 시각 목록) · text n · bool. 모든 레이어에 start·end(0~1)."""
+    enum 선택지 · color · colors n · xy(0~1 좌표) · times n(0~1 시각 목록) · text n · lines n(줄바꿈 유지, 4줄) · pair lo hi([가로,세로]) ·
+    bool. 모든 레이어에 start·end(0~1)."""
     P = _p()
+    from . import layout as L
     return {
         "particles": {"shape": ("enum", tuple(P.SHAPES)), "char": ("text", 2), "colors": ("colors", 6), "color": ("color",),
                       "count": ("int", 1, 200), "size": ("range", 2, 160), "spawn": ("enum", P.SPAWNS), "at": ("xy",),
@@ -228,6 +234,15 @@ def layer_params() -> dict:
         "grade": {"brightness": ("osc", -0.4, 0.4), "contrast": ("osc", 0.5, 2), "saturation": ("osc", 0, 2.5),
                   "hue_shift": ("osc", -180, 180), "hue_spin": ("int", -3, 3), "tint": ("color",), "tint_amount": ("osc", 0, 0.8),
                   "vignette": ("osc", 0, 1), "grain": ("num", 0, 0.25), "bloom": ("osc", 0, 1.2), "cycles": ("int", 1, 6)},
+        "text": {"text": ("lines", 60), "font": ("enum", tuple(L.FONTS)), "at": ("xy",), "size": ("int", 14, 200),
+                 "width": ("num", 0.1, 1), "align": ("enum", L.ALIGNS), "color": ("color",), "colors": ("colors", 4),
+                 "stroke": ("int", 0, 20), "stroke_color": ("color",), "depth": ("int", 0, 16), "depth_color": ("color",),
+                 "rotate": ("num", -45, 45), "opacity": ("num", 0.05, 1), "enter": ("enum", L.ENTERS),
+                 "enter_dur": ("num", 0, 1), "idle": ("enum", L.IDLES), "amp": ("num", 0, 4)},
+        "shape": {"kind": ("enum", L.SHAPE_KINDS), "at": ("xy",), "wh": ("pair", 0.05, 1), "fill": ("color",),
+                  "stroke": ("int", 0, 16), "stroke_color": ("color",), "radius": ("num", 0, 0.5), "tail": ("xy",),
+                  "points": ("int", 3, 12), "rotate": ("num", -45, 45), "opacity": ("num", 0.05, 1),
+                  "enter": ("enum", L.ENTERS), "enter_dur": ("num", 0, 1), "idle": ("enum", L.IDLES), "amp": ("num", 0, 4)},
         "flash": {"times": ("times", 6), "count": ("int", 1, 6), "color": ("color",), "strength": ("num", 0, 0.75),
                   "decay": ("num", 0.02, 0.3)},
         "lightning": {"times": ("times", 4), "count": ("int", 1, 4), "color": ("color",), "origin": ("xy",), "target": ("xy",),
@@ -288,6 +303,12 @@ def _clean_value(kind: tuple, v):
         return [_clip(x, 0, 1) for x in v[:kind[1]]] or None
     if k == "text" and isinstance(v, str):
         return " ".join(v.split())[:kind[1]] or None
+    if k == "lines" and isinstance(v, str):
+        lines = [" ".join(ln.split()) for ln in v.replace("\\n", "\n").split("\n")]
+        out = "\n".join(ln for ln in lines if ln)[:kind[1]]
+        return "\n".join(out.split("\n")[:4]) or None
+    if k == "pair" and isinstance(v, (list, tuple)) and len(v) == 2 and all(_num(x) for x in v):
+        return tuple(_clip(x, kind[1], kind[2]) for x in v)
     if k == "bool" and isinstance(v, bool):
         return v
     return None
@@ -344,6 +365,18 @@ def _clean_layer(item) -> tuple[dict | None, str | None]:
                     item = {**item, "shape": mapped}
                 elif not ch:
                     return None, "shape=char 이면 char 에 글자 1~2자"
+        if name == "text":
+            from . import layout as L
+            words = _clean_value(("lines", 60), item.get("text"))
+            if not words:
+                return None, "text 레이어는 text 에 글자 (줄바꿈 '\\n', 4줄·60자까지)"
+            want = item.get("font") if item.get("font") in L.FONTS else "bold"
+            bad = L.missing_glyphs(words, want)
+            if bad:   # 둥근·귀여운 글꼴은 흔한 글자 2,350자만 → 그 글자가 다 있는 다른 글꼴로 (깔끔한 고딕이 가장 넓음)
+                other = next((f for f in ("gothic", "bold", "pen", "round", "cute") if not L.missing_glyphs(words, f)), None)
+                if not other:
+                    return None, f"글꼴에 없는 글자 '{bad[:6]}' — 그 글자를 빼기 (이모지는 shape·particles 로)"
+                item = {**item, "font": other}
         lay = {"type": name}
         for k, kind in schema[name].items():
             if k in item:
@@ -480,13 +513,12 @@ def render_static(image: bytes, spec: dict) -> Result:
     """정지 스티커: 같은 엔진으로 그린 뒤 글자가 다 나온 마지막 장면 한 장 → 512 WEBP (투명)."""
     import io
     from . import caption as CAP, engine
-    spec = {**spec, "motion": [{"type": "idle"}]}
     if spec.get("caption"):
         spec["caption"] = {**spec["caption"], "typing": False}
     tmp = tempfile.mkdtemp(prefix="sodam_stk_")
     try:
         src, used = _load(image, spec, tmp)
-        built = engine.build(src, spec, None, FONT)
+        built = engine.build(src, spec, None, FONT, last_only=True)   # 움직임은 마지막 순간 그대로 (keyframes 한 점 = 배치)
         frame = built["frames"][-1]
         buf = io.BytesIO()
         frame.save(buf, "WEBP", quality=92, method=6)

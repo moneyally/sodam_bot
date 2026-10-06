@@ -662,6 +662,8 @@ def transition(frame, u, ctx, kind="dissolve", direction="out", start=0.1, end=0
 
 
 LAYERS = {"particles": particles, "grade": grade, "flash": flash, "lightning": lightning, "transition": transition}
+from .layout import LAYERS as _LAYOUT  # noqa: E402  글자·도형 레이어 (layout.py)
+LAYERS.update(_LAYOUT)
 TRANSITIONS = ("dissolve", "burn", "fade", "pixelate", "shatter")
 SPAWNS = ("top", "bottom", "left", "right", "edges", "center", "point", "area", "around", "subject")
 FADES = ("none", "in", "out", "both")

@@ -1386,6 +1386,9 @@ CARD_GATED = frozenset({"warn_member", "mute_member", "unmute_member", "ban_memb
                         "mention_all", "room_control", "set_room_instructions", "save_room_rule", "owner_sanction",
                         "manage_schedule", "member_cleanup", "ask_choice",
                         "stop_tag_all"})   # 멈추기 = 해가 없는 쪽 (숨은 지시로 불려도 태그가 멈출 뿐)
+# room_read 여도 되는 만들기 = 결과가 요청자 앞에 그림 한 장 올라가는 것뿐 (설정·제재·전송·기억 없음) — run_code 로 그린 그림을
+# 스티커·움프 원본으로 쓰는 길(그룹방 run_code 는 항상 room.db 사본을 실어 room_read 가 켜짐)이 막히지 않게.
+MAKE_AFTER_READ = frozenset({"make_sticker", "make_profile_video"})
 ROOM_READ_REFUSED = ("이 답변은 멤버가 쓴 글을 읽었거나 요청 확인을 못 해서, 확인 카드 없이 바로 바뀌는 일은 못 함 (보안 — 숨은 지시 방지). "
                      "필요하면 요청한 사람이 따로 한 번 더 말해 달라고 짧게 안내할 것.")
 
@@ -1415,7 +1418,7 @@ async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
         return "이 도구는 지금 사용할 수 없음 (권한 없음)."
     if (ctx.tainted or (ctx.bot_tainted and name != "bot_command")) and name not in READ_ONLY:   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
         return "방 기록을 읽은 답변에서는 이 도구를 못 씀 (보안). 필요하면 오너가 따로 다시 요청하라고 안내할 것."
-    if ctx.room_read and name not in READ_ONLY and name not in CARD_GATED:
+    if ctx.room_read and name not in READ_ONLY and name not in CARD_GATED and name not in MAKE_AFTER_READ:
         return ROOM_READ_REFUSED
     try:
         args = json.loads(raw_args or "{}")

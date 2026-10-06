@@ -45,6 +45,10 @@ def _kind_str(kind: tuple) -> str:
         return f"{kind[1]:g}~{kind[2]:g}|[a,b]"
     if k == "enum":
         return "|".join(kind[1])
+    if k == "lines":
+        return f"≤{kind[1]}자·줄바꿈\\n 4줄"
+    if k == "pair":
+        return f"[가로,세로]{kind[1]:g}~{kind[2]:g}"
     return {"color": "[r,g,b]", "colors": "[[r,g,b],…]", "xy": "[x,y]0~1", "times": "[t,…]0~1",
             "text": f"≤{kind[1]}자" if len(kind) > 1 else "글자", "bool": "true"}[k]
 
@@ -65,7 +69,9 @@ def parts_text() -> str:
     for name, schema in SF.layer_params().items():
         lines.append(f"[{name}] " + " ".join(f"{k}:{_kind_str(v)}" for k, v in schema.items()))
     lines.append("공통 start·end(0~1 시간 창). particles angle 0=오른쪽 90=아래 -90=위 · blend add=빛(불티·네온) · 연기=smoke+blur 2~4+grow 2~3 · "
-                 f"shape=char 면 char 에 글자(이모지는 비슷한 모양으로). 입자 합계 {SF.PARTICLE_BUDGET}, fx+layers ≤{SF.MAX_LAYERS}.")
+                 f"shape=char 면 char 에 글자(이모지는 비슷한 모양으로). 입자 합계 {SF.PARTICLE_BUDGET}, fx+layers ≤{SF.MAX_LAYERS}(text·shape 는 따로 ≤{SF.MAX_LIGHT}).")
+    lines.append("text·shape = 그리는 순서대로 겹침(말풍선 다음 글자). 피사체 자리·크기 = motion keyframes 한 점 {t:0, scale, x, y}. "
+                 "부품으로 안 되는 그림은 run_code 로 그려 src_*.png 로 저장 → 그게 원본.")
     lines.append("transition = 앞에 그린 것 전체가 사라짐/나타남(direction out|in), to=[r,g,b] 면 그 색이 남음. "
                  "움프 loop:false = 6초 한 번(타서 없어지기 등), 기본 = 3초 반복×2.")
     named = sorted(n for n in SF.catalog()["fx"] if n not in prims.LAYERS)   # 같은 이름(flash)은 layers 에선 새 부품
@@ -335,7 +341,9 @@ tools.register_tool(tools.Tool(
     "mode: 단색 배경 캐릭터=cutout, 실사·꽉 찬 그림=photo(framing auto). 보낸 스티커엔 [📦 내 팩에 넣기] 버튼이 붙음. "
     "'이 스티커처럼 글자만 X로' = 원본에 글자가 있으면 redraw 로 그 글자를 지운 그림 + caption.text=X (글씨 색·테두리는 원본을 보고 값으로) "
     "+ old_text=원래 글자. 글자는 그림 AI 에 쓰게 하지 말 것(한글이 틀림). " + COMPOSE,
-    {"spec": {"type": "object", "description": "{mode, keying, motion:[…], layers:[{type,…,start,end}], fx(옛), "
+    {"spec": {"type": "object", "description": "{mode, keying, motion:[…], layers:[{type,…,start,end} — particles·grade·flash·lightning·"
+                                               "transition·text(글자: text 여러 줄 \\n, font, at, size, colors, stroke, depth, enter, idle)·"
+                                               "shape(bubble·rect·round·ellipse·star·burst, at, wh, tail)], fx(옛), "
                                                "caption{text≤12자,palette 또는 top/mid/bottom/extrude:[r,g,b], stroke 0~16, depth 0~14, "
                                                "size_max 36~120, anims, position}, framing, margin, radius, seed} 또는 {recipe, seed}"},
      "photo_of": PHOTO_OF,

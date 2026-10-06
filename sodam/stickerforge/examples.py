@@ -12,7 +12,8 @@ COMPOSE = (
     "motion(keyframes 또는 이름)·layers(particles·grade·flash·lightning·transition·효과 이름, 순서=그리는 순서, 각 start·end)로 옮긴다. "
     "말에 없는 효과를 습관처럼 넣지 말고, 같은 사람에게 직전과 같은 조합 금지, seed 는 매번 새로. "
     "경고(warnings)가 오면 말한 것 하나만 고쳐 한 번 더(두 번째는 accept_warnings). 정말 못 하는 것(사진 속 사람 팔다리·표정이 실제로 "
-    "움직이기 = 생성형 영상 모델 필요)은 가장 가까운 조합 + wanted 에 원래 말 + 한계 한마디. request 에 요청 원문."
+    "움직이기 = 생성형 영상 모델 필요)은 가장 가까운 조합 + wanted 에 원래 말 + 한계 한마디. request 에 요청 원문. "
+    "글자·말풍선 = layers text·shape. 부품으로 안 되는 그림은 run_code 로 src_*.png 를 그리면 그게 원본."
 )
 
 EXAMPLES = [
@@ -75,6 +76,22 @@ EXAMPLES = [
                                                         {"t": 0.85, "scale": 1.0}, {"t": 1, "scale": 0.6, "opacity": 0}]}],
               "layers": [{"type": "lightning", "count": 2, "origin": [0.3, 0.0], "target": [0.5, 0.55]},
                          {"type": "grade", "brightness": -0.05, "tint": [120, 110, 255], "tint_amount": 0.12}]}},
+    {"request": "말풍선에 포인트 지급완료입니다 넣어서 정지 스티커로",
+     "why": "정지 = format=static. 캐릭터는 keyframes 한 점으로 왼쪽 아래로 작게, 오른쪽 위 말풍선(shape bubble, 꼬리 tail 은 캐릭터 입 쪽) "
+            "→ 그 위에 같은 at 으로 글자(text, 두 줄로 나눠 크게). 원본에 이미 글자가 있으면 redraw 로 지우고 old_text",
+     "spec": {"motion": [{"type": "keyframes", "keys": [{"t": 0, "scale": 0.72, "x": -0.16, "y": 0.12}]}],
+              "layers": [{"type": "shape", "kind": "bubble", "at": [0.66, 0.24], "wh": [0.6, 0.34], "tail": [0.42, 0.46], "stroke": 6},
+                         {"type": "text", "text": "포인트\n지급완료입니다", "font": "round", "at": [0.66, 0.24], "size": 64,
+                          "width": 0.52, "color": [30, 30, 40], "stroke": 0, "enter": "pop"}]}},
+    {"request": "위에 내 이름 작게, 아래에 오늘도 출근 크게 노란 글씨",
+     "why": "글자 덩어리 두 개 = text 레이어 두 개(각자 at·size·font·색). 노란 글씨 = colors 위→아래 그라데이션 + 검은 테두리 + 입체(depth). "
+            "이름은 작게 펜 글씨, 큰 글씨는 drop 으로 등장 후 bob",
+     "spec": {"motion": [{"type": "breathe"}],
+              "layers": [{"type": "text", "text": "루피", "font": "pen", "at": [0.5, 0.09], "size": 44, "color": [255, 255, 255],
+                          "stroke": 5, "enter": "fade"},
+                         {"type": "text", "text": "오늘도 출근", "font": "bold", "at": [0.5, 0.86], "size": 80,
+                          "colors": [[255, 250, 170], [255, 200, 30], [230, 120, 0]], "stroke": 9, "depth": 6,
+                          "enter": "drop", "idle": "bob", "start": 0.05}]}},
     {"request": "사진 속 인물이 움직이면 (팔 흔들기·걷기)",
      "why": "사진 속 사람의 팔다리·표정이 실제로 움직이는 건 생성형 영상 모델이 필요 → 여기선 못 함. 사진 전체 움직임(끄덕·흔들)으로 "
             "가장 가깝게 만들고, 한계를 한마디 + wanted 에 원래 말",
