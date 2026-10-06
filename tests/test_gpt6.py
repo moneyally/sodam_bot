@@ -77,9 +77,9 @@ async def gpt6_agent_call_goes_to_responses_with_explicit_cache_point():
     assert kw["prompt_cache_options"] == {"mode": "explicit"} and "prompt_cache_retention" not in kw
     assert kw["prompt_cache_key"] == "sodam:agent:abc"
     first, second, user = kw["input"]
-    assert first == {"role": "system", "content": "고정 규칙"}                                  # 앞 system 은 그대로
-    assert second["content"] == [{"type": "input_text", "text": "[말투]",
-                                  "prompt_cache_breakpoint": {"mode": "explicit"}}]         # 마지막 system 끝에만
+    assert first["content"] == [{"type": "input_text", "text": "고정 규칙",
+                                 "prompt_cache_breakpoint": {"mode": "explicit"}}]          # 모든 방이 같은 첫 system 끝에만
+    assert second == {"role": "system", "content": "[말투]"}                                   # 말투(방·사람마다 다름)는 지점 뒤
     assert user == {"role": "user", "content": "요청"}                                         # 요청엔 쓰기 지점 없음
     assert kw["tools"][0]["name"] == "read_chat" and msg.tool_calls[0].function.name == "read_chat"
 
@@ -158,7 +158,7 @@ async def web_search_falls_back_when_guard_model_rejected():
 
 
 @test
-def breakpoint_only_on_leading_system_block():
+def breakpoint_only_on_first_system():
     items = [{"role": "user", "content": "x"}]
     assert with_breakpoint(items) == items                                       # system 없으면 그대로
     parts = [{"role": "system", "content": [{"type": "input_text", "text": "a"}, {"type": "input_text", "text": "b"}]},
@@ -166,6 +166,9 @@ def breakpoint_only_on_leading_system_block():
     out = with_breakpoint(parts)
     assert "prompt_cache_breakpoint" not in out[0]["content"][0] and out[0]["content"][1]["prompt_cache_breakpoint"]
     assert out[2] == parts[2] and "prompt_cache_breakpoint" not in parts[0]["content"][1], "원본은 안 바꿈"
+    two = [{"role": "system", "content": "고정"}, {"role": "system", "content": "말투"}, {"role": "user", "content": "x"}]
+    out = with_breakpoint(two)
+    assert out[0]["content"][0]["prompt_cache_breakpoint"] and out[1] == two[1], "지점은 첫 system 뿐 (방·말투마다 캐시가 갈리지 않게)"
 
 
 if __name__ == "__main__":
