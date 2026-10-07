@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import mtproto
-from . import store
+from . import music, musicq, store
 from .bridge import Bridge
 from .live import BACKEND_MODEL, LIVE_MODEL, LiveBridge
 from .video import FPS as VFPS, H as VH, W as VW, to_i420
@@ -85,7 +86,8 @@ def user_client(session: str, api_id: int, api_hash: str):
 class Worker:
     def __init__(self, cfg, db, *, client_factory: Callable | None = None, calls_factory: Callable | None = None,
                  realtime_connect: Callable | None = None, media: Any = None,
-                 web_search: Callable | None = None, svc: Any = None, bot: Any = None, engine: str | None = None):
+                 web_search: Callable | None = None, svc: Any = None, bot: Any = None, engine: str | None = None,
+                 music_source: Any = None, music_decoder: Callable | None = None, music_opts: dict | None = None):
         self.cfg, self.db = cfg, db
         self.engine = (engine or ENGINE) if (engine or ENGINE) in ("realtime", "live") else "realtime"
         self.model = LIVE if self.engine == "live" else MODEL
@@ -108,6 +110,14 @@ class Worker:
         self.jobs: set[asyncio.Task] = set()   # 일감마다 따로 (한 방 입장이 느려도 다른 방·로그인이 안 막힘)
         self.locks: dict[int, asyncio.Lock] = {}
         self._health_at = 0.0
+        # 🎵 뮤직봇 (voice/music.py): 방마다 Player 하나. 통화(소리 줄)는 AI 대화·노래가 같이 씀 → in_call
+        self.music_source = music_source or music.YouTube(Path(getattr(cfg, "db_path", "data/sodam.db")).parent)
+        self.music_decoder = music_decoder or music.Decoder
+        self.music_opts = music_opts or {}          # 테스트: 가짜 시계·짧은 대기
+        self.players: dict[int, music.Player] = {}
+        self.ptasks: dict[int, asyncio.Task] = {}
+        self.psessions: dict[int, int] = {}
+        self.in_call: set[int] = set()
 
     # ── 로그인 ──────────────────────────────────────────
     async def resume(self) -> None:
@@ -231,21 +241,21 @@ class Worker:
             return False, "no_assistant"
         if chat_id in self.bridges:
             return True, "already"
-        if len(self.bridges) >= MAX_CALLS:
+        if chat_id not in self.in_call and len(self.in_call | set(self.bridges)) >= MAX_CALLS:
             return False, "busy"
         if p.get("link"):
             await self._join(p)
         md = self.media
         cls, extra = (LiveBridge, {"model": self.model, "backend": BACKEND}) if self.engine == "live" else (Bridge, {})
         bridge = cls(lambda: self.realtime_connect(self.model),
-                        lambda f: self.calls.send_frame(chat_id, md.Device.MICROPHONE, f),
+                        lambda f: self._send(chat_id, f),
                         instructions=p.get("instructions") or "", voice=p.get("voice") or "marin",
                         reply=p.get("reply") or "all", greet=p.get("greet"),
                         transcribe_prompt=str(p.get("transcribe_prompt") or ""),
                         max_sec=float(p.get("max_sec") or 900), idle_sec=float(p.get("idle_sec") or 60),
                         **extra, **(await self._toolset(chat_id, p.get("by") or 0)))
         params = md.AudioParameters(48000, 1)
-        video = self.frame is not None
+        video = self.frame is not None and chat_id not in self.in_call   # 노래 중이면 이미 소리 줄이 열려 있음
         try:
             if video:
                 try:
@@ -258,19 +268,20 @@ class Worker:
                         raise
                     log.warning("영상 칸 없이 소리만으로 다시 (%s)", e)
                     video = False
-            if not video:
+            if not video and chat_id not in self.in_call:     # 노래 중이면 이미 열린 소리 줄을 같이 씀
                 await asyncio.wait_for(self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, params),
                                                        md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
+            self.in_call.add(chat_id)
             await self.calls.record(chat_id, md.RecordStream(True, params))
             await self._load_participants(chat_id)
         except Exception as e:
-            await self._leave(chat_id)
+            await self._maybe_leave(chat_id)
             log.warning("통화 시작 실패 %s: %r", chat_id, e)
             return False, err_code(e)
         try:
             call_id = await store.call_started(self.db, chat_id, p.get("by"))   # 기록 먼저 → 실패해도 dict 에 안 남음
         except Exception:
-            await self._leave(chat_id)
+            await self._maybe_leave(chat_id)
             raise
         bridge.on_line = self._recorder(chat_id, call_id, bridge)
         self.bridges[chat_id] = bridge
@@ -362,7 +373,7 @@ class Worker:
             self.bridges.pop(chat_id, None)
             self.tasks.pop(chat_id, None)
             self.ssrc_users.pop(chat_id, None)
-            await self._leave(chat_id)
+            await self._maybe_leave(chat_id)          # 노래가 남아 있으면 음성채팅엔 그대로
         await store.call_ended(self.db, call_id, res.seconds, res.reason, res.user_turns, res.bot_turns, res.stats)
         await store.record_cost(self.db, getattr(self.cfg, "tz", None), chat_id, res.seconds, self.model, res.usage)
         if self.svc is not None:                       # 통화에서 한 자기 얘기 → 채팅과 같은 멤버 기억
@@ -382,10 +393,24 @@ class Worker:
                  st.get("speech_events"), res.user_turns, st.get("empty_transcripts"))
 
     async def _leave(self, chat_id: int) -> None:
+        self.in_call.discard(chat_id)
         try:
             await self.calls.leave_call(chat_id)
         except Exception as e:
             log.debug("leave_call: %s", e)
+
+    async def _maybe_leave(self, chat_id: int) -> None:
+        """AI 대화도 노래도 없을 때만 음성채팅에서 나감 (둘이 소리 줄 하나를 같이 씀)."""
+        if chat_id not in self.bridges and chat_id not in self.players:
+            await self._leave(chat_id)
+
+    async def _send(self, chat_id: int, frame: bytes) -> None:
+        """소담 AI 목소리 한 조각: 노래 중이면 DJ(Player)가 섞어서 보내고, 아니면 바로."""
+        pl = self.players.get(chat_id)
+        if pl is not None and not pl.done:
+            pl.voice_frame(frame)
+            return
+        await self.calls.send_frame(chat_id, self.media.Device.MICROPHONE, frame)
 
     async def _stop(self, chat_id: int, reason: str = "admin") -> tuple[bool, str]:
         b = self.bridges.get(chat_id)
@@ -413,6 +438,10 @@ class Worker:
             b = self.bridges.get(update.chat_id)
             if b:
                 b.stop("chat_closed")                  # OpenAI 연결 끊김(ws_closed)과 구분
+            pl = self.players.get(update.chat_id)
+            if pl:
+                pl.stop("chat_closed")
+            self.in_call.discard(update.chat_id)
 
         if hasattr(md.filters, "call_participant"):   # 새로 들어온·바뀐 참가자의 소리 번호 → 계정
             @self.calls.on_update(md.filters.call_participant(md.Action.JOINED | md.Action.UPDATED))
@@ -427,6 +456,10 @@ class Worker:
                 b = self.bridges.get(update.chat_id)
                 if b:
                     b.stop("kicked")
+                pl = self.players.get(update.chat_id)
+                if pl:
+                    pl.stop("kicked")
+                self.in_call.discard(update.chat_id)
 
     # ── 일 처리 ────────────────────────────────────────
     async def handle(self, job: dict) -> None:
@@ -447,6 +480,10 @@ class Worker:
                 ok, res = await self._start(chat_id, p)
             elif kind == "stop":
                 ok, res = await self._stop(chat_id)
+            elif kind == "music_play":
+                ok, res = await self._music_play(chat_id, p)
+            elif kind.startswith("music_"):
+                ok, res = await self._music_ctl(chat_id, kind[6:], p)
             else:
                 ok, res = False, "unknown"
         except Exception as e:
@@ -455,7 +492,12 @@ class Worker:
         await store.finish(self.db, job["id"], ok, res)
 
     async def _run_job(self, job: dict) -> None:
-        key = 0 if job["kind"].startswith(("login", "logout")) else job["chat_id"]   # 로그인끼리·같은 방끼리만 차례로
+        kind = job["kind"]
+        key = 0 if kind.startswith(("login", "logout")) else job["chat_id"]   # 로그인끼리·같은 방끼리만 차례로
+        if kind == "music_play":            # 노래 찾기·받기는 느림 → 신청끼리만 차례로 (넘기기·일시정지를 안 막게)
+            key = ("mplay", job["chat_id"])
+        elif kind.startswith("music_"):
+            key = ("mctl", job["chat_id"])
         async with self.locks.setdefault(key, asyncio.Lock()):
             await self.handle(job)
 
@@ -498,9 +540,218 @@ class Worker:
         await self.db.set_state(0, store.ASSISTANT_KEY, None)
 
     async def shutdown(self) -> None:
-        """SIGTERM(배포·재시작): 통화마다 나가기 → 방에 유령 참가자가 안 남음."""
+        """SIGTERM(배포·재시작): 통화마다 나가기 → 방에 유령 참가자가 안 남음. 노래는 위치를 남기고 다시 켜지면 이어서."""
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "restart")
+        for chat_id, pl in list(self.players.items()):
+            pl.stop("restart")
+            t = self.ptasks.get(chat_id)
+            if t:
+                await asyncio.wait({t}, timeout=10)
+
+    # ── 🎵 뮤직봇 ──────────────────────────────────────────
+    async def _ensure_call(self, chat_id: int, p: dict) -> tuple[bool, str]:
+        """노래용 소리 줄 (AI 대화가 이미 열었으면 그대로). 같은 방 AI 시작과 겹치지 않게 방 잠금 안에서."""
+        async with self.locks.setdefault(chat_id, asyncio.Lock()):
+            if chat_id in self.in_call:
+                return True, "already"
+            if not self.client or not self.calls:
+                return False, "no_assistant"
+            if len(self.in_call | set(self.bridges)) >= MAX_CALLS:
+                return False, "busy"
+            if p.get("link") or p.get("username"):
+                await self._join(p)
+            md = self.media
+            try:
+                await asyncio.wait_for(self.calls.play(chat_id, md.MediaStream(md.ExternalMedia.AUDIO, md.AudioParameters(48000, 1)),
+                                                       md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
+            except Exception as e:
+                await self._leave(chat_id)
+                log.warning("노래 통화 시작 실패 %s: %r", chat_id, e)
+                return False, err_code(e)
+            self.in_call.add(chat_id)
+            return True, "joined"
+
+    async def _get_player(self, chat_id: int, p: dict, by: int | None) -> tuple[Any, str]:
+        pl = self.players.get(chat_id)
+        if pl is not None and not pl.done:
+            return pl, "ok"
+        ok, res = await self._ensure_call(chat_id, p)
+        if not ok:
+            return None, res
+        pl = music.Player(self.db, chat_id, lambda f: self.calls.send_frame(chat_id, self.media.Device.MICROPHONE, f),
+                          source=self.music_source, announce=self._music_say, decoder=self.music_decoder,
+                          has_voice=lambda: chat_id in self.bridges, **self.music_opts)
+        sid = await musicq.session_start(self.db, chat_id, by)
+        self.players[chat_id] = pl
+        self.ptasks[chat_id] = asyncio.create_task(self._run_player(chat_id, pl, sid))
+        return pl, "ok"
+
+    async def _run_player(self, chat_id: int, pl: Any, sid: int) -> None:
+        reason = "error"
+        try:
+            reason = await pl.run()
+        except Exception as e:
+            log.warning("뮤직 재생 오류 %s: %r", chat_id, e)
+            reason = f"error:{type(e).__name__}"
+        finally:
+            if self.players.get(chat_id) is pl:
+                self.players.pop(chat_id, None)
+                self.ptasks.pop(chat_id, None)
+            if reason != "restart":                     # 재시작이 아니면 남은 곡은 정리 (다음 신청은 새로)
+                await musicq.clear(self.db, chat_id, "removed")
+            await musicq.session_end(self.db, sid, reason, pl.tracks)
+            await self._maybe_leave(chat_id)
+        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 비어 있음 %s", chat_id, reason, pl.tracks,
+                 pl.stats["frames"], pl.stats["late"], pl.stats["underrun"])
+
+    def _music_path(self, path: str | None) -> str | None:
+        """봇이 받아 둔 텔레그램 음악 파일 — data/music 안만 (DB 일감이라도 다른 파일을 열지 않게)."""
+        if not path:
+            return None
+        base = (Path(self.cfg.db_path).parent / "music").resolve()
+        try:
+            real = Path(path).resolve()
+        except OSError:
+            return None
+        return str(real) if real.is_relative_to(base) and real.is_file() else None
+
+    async def _music_play(self, chat_id: int, p: dict) -> tuple[bool, str]:
+        if not self.client or not self.calls:
+            return False, "no_assistant"
+        by, name, status = p.get("by"), str(p.get("by_name") or "")[:60], p.get("status_msg")
+        try:
+            if p.get("path"):
+                path = self._music_path(p["path"])
+                if not path:
+                    raise music.MusicError("not_found", "음악 파일을 못 찾았어요.")
+                info = {"title": str(p.get("title") or "음악 파일")[:200], "url": "", "vid": None,
+                        "duration": int(p.get("duration") or 0), "path": path}
+            else:
+                info = await asyncio.to_thread(self.music_source.resolve, str(p.get("query") or "")[:300])
+                await self._music_health(None)
+        except music.MusicError as e:
+            if e.code == "blocked":
+                await self._music_health(str(e))
+            await self._music_edit(chat_id, status, f"⚠️ {e}")
+            return False, f"music:{e.code}"
+        rid, pos, why = await musicq.add(self.db, chat_id, title=info["title"], url=info["url"], vid=info["vid"],
+                                         duration=info["duration"], by_id=by, by_name=name, path=info.get("path"),
+                                         msg_id=status)
+        if not rid:
+            text = (f"⚠️ 대기열이 꽉 찼어요 ({musicq.QUEUE_MAX}곡)." if why == "full"
+                    else f"⚠️ 한 사람이 걸어 둘 수 있는 곡은 {musicq.PER_USER}개까지예요.")
+            await self._music_edit(chat_id, status, text)
+            return False, f"music:{why}"
+        pl, res = await self._get_player(chat_id, p, by)
+        if pl is None:
+            await musicq.finish(self.db, rid, "failed")
+            await self._music_edit(chat_id, status, None)
+            return False, res
+        if pos:                                         # 지금 다른 곡 중 → 대기열 카드 (시작할 땐 새 메시지)
+            await musicq.set_msg(self.db, rid, None)
+            row = {"title": info["title"], "duration": info["duration"], "by_name": name}
+            await self._music_edit(chat_id, status, musicq.card_text("queued", row, pos=pos))
+        pl.wake()
+        return True, "queued" if pos else "playing"
+
+    async def _music_ctl(self, chat_id: int, op: str, p: dict) -> tuple[bool, str]:
+        pl = self.players.get(chat_id)
+        if pl is None or pl.done:
+            return False, "no_music"
+        if op == "skip":
+            return pl.skip(), "skipped"
+        if op == "pause":
+            return pl.pause(), "paused"
+        if op == "resume":
+            return pl.resume(), "resumed"
+        if op == "mute":
+            pl.muted = True
+            return True, "muted"
+        if op == "unmute":
+            pl.muted = False
+            return True, "unmuted"
+        if op == "volume":
+            pl.volume = max(0, min(200, int(p.get("value") or 100)))
+            return True, f"volume:{pl.volume}"
+        if op == "loop":
+            pl.loop = max(0, min(10, int(p.get("value") or 0)))
+            return True, f"loop:{pl.loop}"
+        if op == "seek":
+            sec = float(p.get("value") or 0)
+            if p.get("relative"):
+                sec += pl.pos_ms / 1000
+            return await pl.seek(max(0.0, sec)), f"seek:{int(max(0.0, sec))}"
+        if op == "end":
+            await musicq.clear(self.db, chat_id, "removed")
+            pl.stop("end")
+            t = self.ptasks.get(chat_id)
+            if t:
+                await asyncio.wait({t}, timeout=10)
+            return True, "ended"
+        return False, "unknown"
+
+    async def music_resume(self) -> None:
+        """재시작 전에 틀던 곡·대기열이 있으면 (30분 안) 그 방에 다시 들어가 이어서."""
+        now = int(time.time())
+        await musicq.drop_stale(self.db, now - 1800)
+        if not self.client or not self.calls:
+            return
+        for chat_id in await musicq.chats_with_queue(self.db, now - 1800):
+            pl, res = await self._get_player(chat_id, {}, None)
+            if pl is None:
+                log.info("노래 이어 틀기 못 함 %s: %s", chat_id, res)
+                await musicq.clear(self.db, chat_id, "removed")
+            else:
+                pl.wake()
+                log.info("노래 이어 틀기 %s", chat_id)
+
+    async def _music_health(self, err: str | None) -> None:
+        cur = await self.db.get_state(0, musicq.HEALTH_KEY) or {}
+        if err:
+            cur.update(err=err[:200], err_ts=int(time.time()))
+        else:
+            cur.update(ok_ts=int(time.time()))
+        await self.db.set_state(0, musicq.HEALTH_KEY, cur)
+
+    async def _music_edit(self, chat_id: int, msg_id: int | None, text: str | None) -> None:
+        """봇이 올린 '찾는 중' 글을 결과로 고침 (없으면 새로). text None = 그 글 지움."""
+        if not self.bot:
+            return
+        try:
+            if msg_id and text is None:
+                await self.bot.delete_message(chat_id, msg_id)
+            elif msg_id:
+                await self.bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, parse_mode="HTML")
+            elif text:
+                await self.bot.send_message(chat_id, text, parse_mode="HTML")
+        except Exception as e:
+            log.info("뮤직 글 고치기 실패 %s: %r", chat_id, e)
+
+    async def _music_say(self, kind: str, chat_id: int, row, why: str = "") -> None:
+        """Player 가 부름: now(재생 시작 — 처음 곡은 '찾는 중' 글을 고침) · failed."""
+        if not self.bot:
+            return
+        if kind == "failed":
+            await self._music_edit(chat_id, row.get("msg_id") if isinstance(row, dict) else None,
+                                   musicq.card_text("failed", dict(row), why=why))
+            return
+        text, kb = musicq.card_text("now", dict(row)), musicq.card_kb()
+        prev = self.__dict__.setdefault("_now_msg", {}).get(chat_id)
+        if prev:                                   # 지난 곡 카드의 버튼은 뗌 (누르면 엉뚱한 곡이 멈추지 않게)
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_reply_markup(chat_id=chat_id, message_id=prev, reply_markup=None)
+        mid = None
+        if row["msg_id"]:
+            try:
+                await self.bot.edit_message_text(text, chat_id=chat_id, message_id=row["msg_id"], parse_mode="HTML",
+                                                 reply_markup=kb)
+                mid = row["msg_id"]
+            except Exception as e:                  # 지워졌거나 너무 오래됨 → 새로
+                log.debug("재생 카드 고치기 실패 → 새로: %r", e)
+        if mid is None:
+            mid = getattr(await self.bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb), "message_id", None)
+        self._now_msg[chat_id] = mid
 
     async def leave_orphans(self, chats: list[int]) -> None:
         """지난번에 인사 없이 꺼졌다면(kill -9 등) 그 방 음성채팅에서 나감 (ntgcalls 는 기록이 없어 leave_call 이 안 됨)."""
@@ -519,9 +770,11 @@ class Worker:
     async def run(self) -> None:
         orphans = [r["chat_id"] for r in await self.db._all("SELECT DISTINCT chat_id FROM voice_calls WHERE end_ts IS NULL")]
         await store.close_orphans(self.db)
+        orphans = sorted(set(orphans) | set(await musicq.close_orphans(self.db)))
         try:
             await self.resume()
             await self.leave_orphans(orphans)
+            await self.music_resume()
         except Exception as e:
             log.warning("어시스턴트 세션 열기 실패: %s", e)
         log.info("📞 음성 담당 시작 (어시스턴트 %s)", "있음" if self.client else "없음")

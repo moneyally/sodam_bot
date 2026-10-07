@@ -430,6 +430,15 @@ async def c_sports(ctx: CmdCtx) -> None:
     await ctx.reply(await sports_ui.command(ctx.svc, ctx.chat_id, ctx.user.id, ctx.role >= Role.ADMIN, ctx.args))
 
 
+def _music(fn_name: str):
+    """🎵 뮤직봇 명령 → panels/music.py (늦게 import — commands → menu → panels 순환 방지)."""
+    async def run(ctx: CmdCtx) -> None:
+        from .panels import music
+        await getattr(music, fn_name)(ctx)
+    run.__name__ = f"music_{fn_name}"
+    return run
+
+
 async def c_news(ctx: CmdCtx) -> None:
     from .panels import news as news_panel   # 늦게 import (commands → menu → panels 순환 방지). 동작은 sodam/news.py
     await news_panel.c_news(ctx)
@@ -1368,6 +1377,21 @@ COMMANDS: list[Cmd] = [
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘|내일 리그|라이브|순위 리그|팀 이름|구독 리그·팀|해제|목록]",
         help="경기 일정·스코어·순위·자동 알림", group="스포츠"),
+    Cmd(("노래", "재생", "play", "음악"), _music("c_play"), usage="<제목|유튜브 링크> (음악 파일 답장도)",
+        help="음성채팅에 노래 틀기·대기열 추가", group="🎵 뮤직봇"),
+    Cmd(("스킵", "다음곡", "skip", "next"), _music("c_skip"), help="다음 곡으로", group="🎵 뮤직봇"),
+    Cmd(("일시정지", "pause"), _music("c_pause"), help="일시정지", group="🎵 뮤직봇"),
+    Cmd(("다시재생", "resume"), _music("c_resume"), help="다시 재생", group="🎵 뮤직봇"),
+    Cmd(("대기열", "queue"), _music("c_queue"), help="대기열 보기", group="🎵 뮤직봇"),
+    Cmd(("빼기", "remove"), _music("c_remove"), usage="<번호>", help="대기열에서 곡 빼기", group="🎵 뮤직봇"),
+    Cmd(("음소거", "mmute"), _music("c_mute"), help="노래 소리 끄기 (/mute 는 멤버 뮤트)", group="🎵 뮤직봇"),
+    Cmd(("음소거해제", "munmute"), _music("c_unmute"), help="노래 소리 켜기", group="🎵 뮤직봇"),
+    Cmd(("이동", "seek"), _music("c_seek"), usage="<초|+초|-초|분:초>", help="곡 안에서 위치 이동", group="🎵 뮤직봇"),
+    Cmd(("노래끝", "end"), _music("c_end"), help="노래 끝내고 음성채팅 나가기", group="🎵 뮤직봇"),
+    Cmd(("볼륨", "volume", "vol"), _music("c_volume"), usage="<0~200>", help="노래 음량 (%)", group="🎵 뮤직봇"),
+    Cmd(("반복", "loop"), _music("c_loop"), usage="<0~10>", help="지금 곡 반복", group="🎵 뮤직봇"),
+    Cmd(("지금곡", "np", "nowplaying"), _music("c_now"), help="지금 나오는 곡", group="🎵 뮤직봇"),
+    Cmd(("도우미부르기", "userbotjoin"), _music("c_userbotjoin"), help="노래 도우미 계정을 방에 넣기 (관리자)", group="🎵 뮤직봇"),
     Cmd(("뉴스", "news", "세계뉴스"), c_news, usage="[세계|경제|기술|코인|스포츠]",
         help="여러 해외 언론이 함께 다룬 주요 뉴스 (방마다 10분에 1번)", group="뉴스"),
     Cmd(("말투도움말", "말투설명", "말투목록"), c_style_help, help="말투 종류·예시와 방 모드(욕 받아치기·19금)"),

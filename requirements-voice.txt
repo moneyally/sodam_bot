@@ -2,3 +2,5 @@
 # deploy/update.sh 가 서버에서 자동 설치. ntgcalls 는 linux x86_64/arm64 휠이 있음.
 py-tgcalls==3.0.0
 websockets>=13,<16      # openai realtime (client.realtime.connect)
+yt-dlp[default]>=2026.8.19   # 🎵 뮤직봇 유튜브 찾기·받기 (sodam/voice/music.py) — default = yt-dlp-ejs(JS 풀이)
+deno>=2.5                    # yt-dlp 의 유튜브 JS 풀이 실행기 (2025-11 부터 필요, pip 로 실행 파일까지)
