@@ -46,7 +46,7 @@ async def in_channel(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     return True, f"✅ 채널을 {esc(ch)} 로 정했어요." + ("" if ok else "\n⚠️ 소담을 그 채널 관리자로 넣어야 구독 확인이 돼요.")
 
 
-menu.register_hub(HubItem(23, "sgt", "📢 채널 구독 필수"))
+menu.register_hub(HubItem(23, "sgt", "📢 채널 가입 필수"))
 menu.register_screen("sgt", s_sgt)
 menu.register_screen("sgc", s_sgt)
 menu.register_input("sgc", (
