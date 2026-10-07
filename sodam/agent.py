@@ -22,7 +22,9 @@ log = logging.getLogger(__name__)
 
 # Codex CLI 처럼 모델이 도구를 그만 부를 때까지 돌되, 라운드·요금 상한은 둔다 (넘으면 도구 없이 마무리 답)
 MAX_STEPS = 8          # 도구 호출 라운드 최대 횟수
-RUN_USD_CAP = 0.05     # 한 실행(도구 안 AI 포함, agentlog.Run.usd_micro)이 이만큼 쓰면 더는 도구 라운드 안 함
+RUN_USD_CAP = 0.15     # 한 실행(도구 안 AI 포함, 그림·영상 만들기 요금은 빼고)이 이만큼 쓰면 더는 도구 라운드 안 함
+# (2026-10-07: 0.05 였을 땐 GPT-6 sol 한 라운드 ~$0.02 + 그림 한 장 ~$0.05 라 36시간 186번 중 23번이 일하다 끊김 —
+#  '30초 뒤 불러' '활동 좋은 사람 태그' 가 '처리 안 됐어요' 로 끝남. 라운드 수는 MAX_STEPS 가 막음)
 DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금까지로 답 (OpenAI Agents SDK max_turns 같은 벽시계 상한 — 단톡방은 빨리)
 TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
 MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
@@ -454,10 +456,10 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     used = checked = num_checked = read = wrote = False   # wrote = 조회 아닌 도구를 실제로 부름 ('했다' 검사 기준)
     results: list[str] = []                  # 이번 실행의 도구 결과 (숫자 검사용)
     done: list[str] = []                     # light 가 실행한 쓰기 도구 (올려 보낼 때 heavy 에 알림)
-    usd0 = run.usd_micro                     # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
+    usd0 = run.usd_micro - run.media_micro   # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
     rounds = min(LIGHT_MAX_STEPS, MAX_STEPS) if light else MAX_STEPS
     for step in range(rounds):
-        if step and run.usd_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
+        if step and run.usd_micro - run.media_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
             run.event("cap", kind="usd", round=step)
             break

@@ -132,7 +132,8 @@
   오너·관리자 요청(call/follow)은 전부 + 멤버는 `wants_thinking` 규칙에 걸릴 때만 Responses API(추론 low + 도구, `llm.think`, 암호화 추론
   이어 넣기, verbosity low). 멤버 잡담·끼어들기는 chat.completions. MAX_STEPS 8 + 실행당 $0.05 상한(RUN_USD_CAP), 부드러운 실패엔
   `tools.retry_hint`(다른 인자·도구로 한 번 더), 권한·보안·제재·한도·카드 결과엔 안 붙임. 프롬프트 '끝까지 해결·지어내지 않기'.
-  실측(2026-09-28, 39문제): 끔 38/39 $0.0094/요청 → auto 38/39 $0.0122 (+30%). 37번 '보고 괜찮으면 바꿔줘' 는 같은 답변에서
+  **실행 상한 RUN_USD_CAP $0.15, 그림·영상 요금(agentlog.Run.media_micro, purpose image·video)은 빼고** (2026-10-07: $0.05 일 땐 36시간 186번 중 23번이
+  일하다 끊겨 '처리 안 됐어요' — GPT-6 sol 라운드 ~$0.02·그림 한 장 ~$0.05).   실측(2026-09-28, 39문제): 끔 38/39 $0.0094/요청 → auto 38/39 $0.0122 (+30%). 37번 '보고 괜찮으면 바꿔줘' 는 같은 답변에서
   simulate 뒤 change_setting 을 코드가 보류(ctx.simulated)해서 설정은 안 바뀌고 '바꿔'를 물음 (평가표엔 도구 시도로 ❌ 남음).
 - 선택지 버튼(`panels/askchoice.py` ask_choice, Codex request_user_input): 2~4개 버튼, 요청자만·10분·한 번만, 누르면 그 선택으로 이어서 실행.
 - 기억 품질(tests/test_memory_quality.py): 명시/추정 태그('(추정)' 표시), 정정은 replaces 로 덮어씀, 쓰인 횟수로 남기고 60일 안 쓰면 만료, add_facts 는 db.atomic.
@@ -384,6 +385,8 @@
 - botlink_mode off(기본)/observe/interact. 봇은 말하면 자동 등록 → 관리자가 ✅ 믿음/👀 기록만/🙈 무시. 기록 7일.
   제한: 방 분당 봇 글 30 · 명령 분당 3·하루 30 · 방·봇 쌍 분당 8 · 명령→답 연속 3번(60초).
 - AI 도구: other_bot_results(읽기, ctx.bot_tainted = 이후 읽기 도구 + bot_command 만, 새 명령은 '확인 생략'이 켜져도 카드) · bot_command(관리자·방·interact·믿는 봇만, '/cmd@봇 인자≤64자' 한 줄, 봇·명령 쌍 첫 사용은 확인 카드, 답 1번에 1번).
+- bot_command 첫 답이 '찾는 중·잠시만' 같은 중간 글(panels/botlink.PENDING)이면 10초 더 기다려 진짜 결과까지 + '요청과 다르면(반주 Inst·다른 곡) 그대로 말하고
+  다시 신청할지 물을 것'(CHECK_RESULT) — 실제 #2740 음악봇이 Inst. 버전을 잡았는데 소담은 '신청했어요'로 끝냄.
 - 켜는 법: 운영자가 BotFather 에서 @sodam_ai_bot Bot-to-Bot 켜기(1번) → 방마다 ⚙️ 🤝 에서 모드 → 게임봇이 말하면 ✅ 믿는 봇.
 
 ## 💡 기능 요청 받기 (`featreq.py`, `panels/featreq.py`, tests/test_featreq.py · 뮤테이션 21개)
@@ -464,6 +467,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 판정은 코드(AI 0원): '했다'고 했는데 된 쓰기 없음 · 도구 오류 · 못 찾고 끝남 · 꺼진 기능 · 상한 · 10분 안 비슷한 재요청 · 답 뒤 3분 불만(소담 답장·이름만).
 - Claude: `python tools/diag.py why hours=24 [chat=…]` 목록 → `why run=<번호>` 단계별. 오너: 매일 9시 1:1 '🧠 어제 소담 실수 N건' (없으면 안 보냄, #번호로 고쳐 요청).
 - 보내기 전 '했다' 검사 정규식은 whyfail.CLAIM 하나 (agent 도 이걸 씀).
+- 오탐 빼기 (2026-10-07 아침 보고, tests/test_whyfail.py): 같은 도구를 다시 불러 된 오류 · 확인 카드·버튼을 올린 실행 뒤 다시 말함 ·
+  '다른걸로·하나 더·또 추천'(whyfail.NEXT_ONE) 은 실수로 안 셈.
 - 2026-10-03 why 로 찾은 실수 고침 (tests/test_improve_1003.py): '태그해서 ~해 줘' = mention_members(인사 아님, greet 은 인사만) ·
   route 'continue' 는 이어짐 말(_FOLLOW)이 있을 때만 · 관리자 추론은 route.THINK_WHY(일·분석·여러 단계·1:1) 일 때만 ·
   끝말잇기 소담 말 뒤 흔한 말 최소(wordbot.MIN_COMMON 쉬움 8·보통 3·어려움 1), '소담아 X' 도 게임 답, 지어낸 말엔 예시 한 번 ·

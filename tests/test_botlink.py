@@ -263,6 +263,32 @@ async def echo_bot_ping_pong_stops_after_one_round():
 
 
 @test
+async def waits_past_interim_reply_and_asks_to_check_result():
+    """실제 #2740: 음악봇 '음원을 찾는 중입니다...' → 4초 뒤 '대기열 추가: … (Inst.)'. 중간 글만 보고 '신청했어요' 로 끝내지 않게
+    진짜 결과까지 기다리고, 요청과 다르면 그대로 말하라는 안내를 붙임."""
+    r = await blroom("interact")
+    await trust(r)
+    await botlink.approve(r.db, Room.CHAT, DICE.id, "/dice", BOSS.id)
+    replies = ["음원을 찾는 중입니다...", "대기열 1번에 추가: Bus, Subway, Taxi (Inst.)"]
+    waits = []
+
+    async def fake_wait(svc, chat_id, msg_id, timeout=None, bot_id=None):
+        waits.append(timeout)
+        return replies.pop(0) if replies else None
+    real = botlink.wait_reply
+    botlink.wait_reply = fake_wait
+    try:
+        res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
+        assert "(Inst.)" in res[0] and "다르면" in res[0] and len(waits) == 2, (res, waits)
+        replies[:] = ["🎲 4"]
+        waits.clear()
+        res = await ask(r, BOSS, [tool_call("bot_command", {"bot": "dice_bot", "command": "/dice"})])
+        assert "🎲 4" in res[0] and len(waits) == 1, waits                                  # 바로 결과면 한 번만
+    finally:
+        botlink.wait_reply = real
+
+
+@test
 async def rate_limits_pair_and_depth():
     r = await blroom("interact")
     cid, st = Room.CHAT, botlink.state(r.svc)
