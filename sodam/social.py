@@ -66,9 +66,14 @@ _ACK = re.compile(
 _MORNING = re.compile(r"(좋은\s?아침|굿\s?모닝|모닝입니다|(다들|여러분|대표님들)\s*(안녕|좋은))")
 
 
+# 다른 봇 명령 꼴 ('?플 올인'·'?바카라'·'#출석'): 기호 바로 뒤에 글자. 실제 2026-10-07 얼라이드: 벳코 봇에 보낸 '?플 올인' 을
+# '?' 때문에 질문으로 보고 이어 말하기 → 소담 바카라로 466P 를 걸어 버림.
+_OTHER_CMD = re.compile(r"^[?？!/.#$~*+=>-]\w")
+
+
 def looks_like_follow_up(text: str) -> bool:
     t = text.strip()
-    if not t or _ACK.match(t) or _GROUP.search(t):
+    if not t or _ACK.match(t) or _GROUP.search(t) or _OTHER_CMD.match(t):
         return False
     return bool(_QUESTION.search(t) or _CONTINUE.match(t) or _REQUEST.search(t) or _YOU.search(t))
 

@@ -202,7 +202,8 @@ async def passive_hook_schedules_extraction_and_prompt_uses_memory():
 def follow_up_text_heuristics():
     yes = ["그럼 가격은 얼마로 하면 좋을까요?", "근데 그건 왜 그래요", "더 자세히 알려줘", "너는 어떻게 생각해?",
            "재고는 몇 개가 적당해요"]
-    no = ["ㅋㅋㅋ", "감사합니다!", "네 알겠어요", "ㅇㅋ", "다들 점심 뭐 드세요?", "오늘 날씨 좋다", "맞아요 ㅋㅋ"]
+    no = ["ㅋㅋㅋ", "감사합니다!", "네 알겠어요", "ㅇㅋ", "다들 점심 뭐 드세요?", "오늘 날씨 좋다", "맞아요 ㅋㅋ",
+          "?플 올인", "?바카라", "?내정보", "#출석"]   # 다른 봇 명령 (실제 2026-10-07 얼라이드: 벳코 '?플 올인' → 소담 바카라 466P)
     assert all(social.looks_like_follow_up(t) for t in yes), [t for t in yes if not social.looks_like_follow_up(t)]
     assert not any(social.looks_like_follow_up(t) for t in no), [t for t in no if social.looks_like_follow_up(t)]
 

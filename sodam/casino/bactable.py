@@ -17,6 +17,7 @@ from telegram import InputMediaPhoto
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from . import Ctx, cardart, register
+from .basic import photo_file
 from .board import record
 from .cards import BAC_LABEL, BAC_PICKS, BacRound, cards_str, deal_baccarat, make_shoe
 from .cards import bac_payout as payout_of
@@ -75,7 +76,7 @@ class BacTableRound(Round):
         for attempt in (0, 1):
             try:
                 await self.bot.edit_message_media(chat_id=self.chat_id, message_id=self.live.message_id,
-                                                  media=InputMediaPhoto(img, caption=caption, parse_mode="HTML"))
+                                                  media=InputMediaPhoto(photo_file(img), caption=caption, parse_mode="HTML"))
                 self.last_edit = self.clock()
                 return True
             except RetryAfter as e:
