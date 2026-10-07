@@ -204,6 +204,7 @@ class Worker:
     async def _logout(self, p: dict) -> tuple[bool, str]:
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "logout")
+        await self._stop_music("logout")
         if self.client:
             try:
                 await self.client.log_out()
@@ -536,6 +537,7 @@ class Worker:
         log.warning("도우미 세션이 풀렸어요 — 🎙 에서 다시 연결")
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "logout")
+        await self._stop_music("logout")
         self.client = self.calls = None
         await self.db.set_state(0, store.ASSISTANT_KEY, None)
 
@@ -543,11 +545,7 @@ class Worker:
         """SIGTERM(배포·재시작): 통화마다 나가기 → 방에 유령 참가자가 안 남음. 노래는 위치를 남기고 다시 켜지면 이어서."""
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "restart")
-        for chat_id, pl in list(self.players.items()):
-            pl.stop("restart")
-            t = self.ptasks.get(chat_id)
-            if t:
-                await asyncio.wait({t}, timeout=10)
+        await self._stop_music("restart")
 
     # ── 🎵 뮤직봇 ──────────────────────────────────────────
     async def _ensure_call(self, chat_id: int, p: dict) -> tuple[bool, str]:
@@ -595,10 +593,11 @@ class Worker:
             log.warning("뮤직 재생 오류 %s: %r", chat_id, e)
             reason = f"error:{type(e).__name__}"
         finally:
-            if self.players.get(chat_id) is pl:
+            mine = self.players.get(chat_id) is pl      # 끝나는 사이 새 신청으로 새 DJ 가 생겼으면 그 대기열은 건드리지 않음
+            if mine:
                 self.players.pop(chat_id, None)
                 self.ptasks.pop(chat_id, None)
-            if reason != "restart":                     # 재시작이 아니면 남은 곡은 정리 (다음 신청은 새로)
+            if reason != "restart" and mine and chat_id not in self.players:   # 재시작이 아니면 남은 곡은 정리
                 await musicq.clear(self.db, chat_id, "removed")
             await musicq.session_end(self.db, sid, reason, pl.tracks)
             await self._maybe_leave(chat_id)
@@ -644,9 +643,8 @@ class Worker:
             await self._music_edit(chat_id, status, text)
             return False, f"music:{why}"
         pl, res = await self._get_player(chat_id, p, by)
-        if pl is None:
+        if pl is None:                                  # '찾는 중' 글은 그대로 → 봇이 이유(권한·음성채팅 없음…)로 고침
             await musicq.finish(self.db, rid, "failed")
-            await self._music_edit(chat_id, status, None)
             return False, res
         if pos:                                         # 지금 다른 곡 중 → 대기열 카드 (시작할 땐 새 메시지)
             await musicq.set_msg(self.db, rid, None)
@@ -672,10 +670,11 @@ class Worker:
             pl.muted = False
             return True, "unmuted"
         if op == "volume":
-            pl.volume = max(0, min(200, int(p.get("value") or 100)))
+            v = p.get("value")
+            pl.volume = max(0, min(200, int(v) if v is not None else 100))   # 0 은 0 (예전: 'or 100' 이라 .볼륨 0 = 100%)
             return True, f"volume:{pl.volume}"
         if op == "loop":
-            pl.loop = max(0, min(10, int(p.get("value") or 0)))
+            pl.loop = max(0, min(10, int(p.get("value") if p.get("value") is not None else 0)))
             return True, f"loop:{pl.loop}"
         if op == "seek":
             sec = float(p.get("value") or 0)
@@ -691,13 +690,23 @@ class Worker:
             return True, "ended"
         return False, "unknown"
 
-    async def music_resume(self) -> None:
-        """재시작 전에 틀던 곡·대기열이 있으면 (30분 안) 그 방에 다시 들어가 이어서."""
-        now = int(time.time())
-        await musicq.drop_stale(self.db, now - 1800)
+    async def _stop_music(self, reason: str) -> None:
+        for chat_id, pl in list(self.players.items()):
+            pl.stop(reason)
+            t = self.ptasks.get(chat_id)
+            if t:
+                await asyncio.wait({t}, timeout=10)
+
+    async def music_resume(self, chats: list[int]) -> None:
+        """재시작으로 끊긴 방(세션이 열려 있던 방)은 남은 곡을 이어서, 나머지 방의 묵은 대기열은 정리.
+        (예전: 신청 시각 30분 기준이라 긴 대기열 앞쪽 곡이 지워졌음)"""
+        await musicq.drop_except(self.db, chats)
         if not self.client or not self.calls:
+            for chat_id in chats:
+                await musicq.clear(self.db, chat_id, "removed")
             return
-        for chat_id in await musicq.chats_with_queue(self.db, now - 1800):
+        live = set(await musicq.chats_with_queue(self.db, 0))
+        for chat_id in [c for c in chats if c in live]:
             pl, res = await self._get_player(chat_id, {}, None)
             if pl is None:
                 log.info("노래 이어 틀기 못 함 %s: %s", chat_id, res)
@@ -770,11 +779,13 @@ class Worker:
     async def run(self) -> None:
         orphans = [r["chat_id"] for r in await self.db._all("SELECT DISTINCT chat_id FROM voice_calls WHERE end_ts IS NULL")]
         await store.close_orphans(self.db)
-        orphans = sorted(set(orphans) | set(await musicq.close_orphans(self.db)))
+        orphan_music = await musicq.close_orphans(self.db)      # kill -9 등으로 끝 표시 없이 남은 노래 세션
+        music_chats = await musicq.restart_chats(self.db, int(time.time()) - 1800)   # 재시작으로 끊긴 방 (30분 안)
+        orphans = sorted(set(orphans) | set(orphan_music))
         try:
             await self.resume()
             await self.leave_orphans(orphans)
-            await self.music_resume()
+            await self.music_resume(music_chats)
         except Exception as e:
             log.warning("어시스턴트 세션 열기 실패: %s", e)
         log.info("📞 음성 담당 시작 (어시스턴트 %s)", "있음" if self.client else "없음")

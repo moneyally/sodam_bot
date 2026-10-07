@@ -77,6 +77,8 @@ def signals_media_dm_banter_modes_and_off():
 
 
 async def _room(llm, *, think="off", light=LIGHT, settings=None):
+    from sodam import vision
+    vision._RECENT.clear()      # 같은 프로세스의 앞 테스트 모듈이 같은 방 ID 로 남긴 '방금 사진' 기억 (run_all --jobs 묶음에서 실패하던 것)
     r = Room()
     r.llm = llm
     await r.open(admins=(BOSS.id,), settings={"captcha_enabled": False, **(settings or {})})

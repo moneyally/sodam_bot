@@ -872,5 +872,217 @@ async def player_swaps_blocked_youtube_track_for_soundcloud():
     await task
 
 
+# ── 리뷰로 찾은 버그 (2026-10-08 검사 담당 재현) ─────────────────
+async def fast_player(db, src=None, **kw):
+    clock = Clock()
+
+    async def sleep(s):
+        clock.t += s
+        await asyncio.sleep(0.001)
+    sent = []
+
+    async def send(f):
+        sent.append(f)
+    said = []
+
+    async def say(kind, chat_id, row, why=""):
+        said.append(kind)
+    pl = music.Player(db, CHAT, send, source=src or FakeSource(tempfile.mkdtemp()), announce=say, decoder=kw.pop("decoder", FakeDecoder),
+                      clock=clock, sleep=sleep, poll=0.02, **kw)
+    return pl, said
+
+
+@test
+async def stop_while_taking_next_song_or_fetching_does_not_hang():
+    db = await make_db()
+    await musicq.add(db, CHAT, title="a", url="u", vid="aaaaaaaaaaa", duration=100, by_id=1, by_name="x")
+    pl, said = await fast_player(db)
+    real = musicq.start_next
+
+    async def stop_in_between(db_, chat):
+        row = await real(db_, chat)
+        pl.stop("end")                                  # 다음 곡을 꺼내는 그 순간 '노래끝'
+        return row
+    musicq.start_next = stop_in_between
+    try:
+        await asyncio.wait_for(pl.run(), 3)
+    finally:
+        musicq.start_next = real
+    assert pl.done and not said and pl.dec is None, "멈춤 신호를 지워 영원히 기다리던 것"
+
+    await musicq.clear(db, CHAT)
+    await musicq.add(db, CHAT, title="b", url="u", vid="bbbbbbbbbbb", duration=100, by_id=1, by_name="x")
+
+    class Slow(FakeSource):
+        def fetch(self, vid):
+            pl2.stop("restart")                          # 받는 사이 배포 재시작
+            return super().fetch(vid)
+    pl2, said2 = await fast_player(db, Slow(tempfile.mkdtemp()))
+    await asyncio.wait_for(pl2.run(), 3)
+    assert not said2, "끝난 뒤에 '재생 시작' 카드를 올리지 않음"
+
+
+@test
+async def stalled_decoder_moves_on_instead_of_silence_forever():
+    db = await make_db()
+
+    class Stuck(FakeDecoder):
+        def frame(self):
+            return None
+
+        @property
+        def finished(self):
+            return False
+    await musicq.add(db, CHAT, title="깨진곡", url="u", vid="ccccccccccc", duration=1100, by_id=1, by_name="x")
+    old = music.STALL_FRAMES
+    music.STALL_FRAMES = 50
+    try:
+        pl, said = await fast_player(db, decoder=Stuck, idle_sec=0.5)
+        await asyncio.wait_for(pl.run(), 5)
+    finally:
+        music.STALL_FRAMES = old
+    row = await db._one("SELECT state FROM music_queue")
+    assert row["state"] == "failed" and "failed" in said, row["state"]
+
+
+@test
+async def volume_zero_is_zero_and_status_message_kept_on_join_failure():
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 3000
+    try:
+        await play(db, w, "곡")
+        await until(lambda: CHAT in w.players)
+        assert (await run_job(db, w, "music_volume", {"value": 0}, CHAT))["result"] == "volume:0"
+        assert w.players[CHAT].volume == 0
+        assert (await run_job(db, w, "music_loop", {"value": 0}, CHAT))["result"] == "loop:0"
+    finally:
+        FakeDecoder.LEN = 40
+        await stop_all(w)
+    await run_job(db, w, "music_end", {}, CHAT)
+    w.calls.fail = type("NoActiveGroupCall", (Exception,), {})()
+    row = await play(db, w, "실패곡", status=91)
+    assert row["result"] == "no_voice_chat" and not w.bot.named("delete"), "봇이 이유로 고칠 수 있게 '찾는 중' 글을 안 지움"
+
+
+@test
+async def restart_keeps_whole_queue_of_restarted_room_and_drops_others():
+    db = await make_db()
+    old = int(time.time()) - 7200
+    for t in ("지금", "q1", "q2"):
+        rid, _, _ = await musicq.add(db, CHAT, title=t, url="u", vid=t, duration=100, by_id=1, by_name="x")
+        await db._write("UPDATE music_queue SET ts=? WHERE id=?", (old, rid))   # 2시간 전에 신청한 긴 대기열
+    await musicq.start_next(db, CHAT)
+    sid = await musicq.session_start(db, CHAT, 1)
+    await musicq.session_end(db, sid, "restart", 3)
+    await musicq.add(db, -200, title="딴방", url="u", vid="z", duration=100, by_id=1, by_name="x")
+    assert await musicq.restart_chats(db, int(time.time()) - 1800) == [CHAT]
+    await musicq.drop_except(db, [CHAT])
+    rows = await db._all("SELECT chat_id, title, state FROM music_queue ORDER BY id")
+    assert [(r["title"], r["state"]) for r in rows] == [("지금", "playing"), ("q1", "queued"), ("q2", "queued"), ("딴방", "removed")]
+
+
+@test
+async def old_dj_cleanup_does_not_wipe_a_new_request():
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 3000
+    try:
+        await play(db, w, "옛곡")
+        await until(lambda: CHAT in w.players)
+        old_pl, old_task = w.players[CHAT], w.ptasks[CHAT]
+        cleared = []
+        real = musicq.clear
+
+        async def spy(db_, chat, reason="removed"):
+            cleared.append(chat)
+            return await real(db_, chat, reason)
+        musicq.clear = spy
+        try:
+            new = SimpleNamespace(done=False, stop=lambda r="": None, tracks=0)
+            old_pl.stop("idle")
+            w.players[CHAT] = new                            # 끝나는 사이 새 신청으로 새 DJ
+            await old_task
+        finally:
+            musicq.clear = real
+        assert w.players.get(CHAT) is new and not cleared and ("leave", CHAT) not in w.calls.log
+        w.players.pop(CHAT)
+    finally:
+        FakeDecoder.LEN = 40
+
+
+@test
+def same_song_is_downloaded_once_even_when_asked_twice_at_once():
+    import threading as th
+    d = tempfile.mkdtemp()
+    y = music.YouTube(Path(d))
+    n = []
+
+    def slow_fetch(vid):
+        n.append(vid)
+        time.sleep(0.2)
+        p = Path(d) / "music" / f"{vid}.m4a"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"a")
+        return str(p)
+    real = y._fetch
+    y._fetch = lambda vid: real(vid) if y._cached(vid) else slow_fetch(vid)
+    ts = [th.Thread(target=y.fetch, args=("sc5",)) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert n == ["sc5"], n
+    (Path(d) / "music" / "gone.m4a.part").write_bytes(b"x" * 10)
+    y.cache_mb = 0
+    y.trim()
+    assert (Path(d) / "music" / "gone.m4a.part").exists(), "받는 중인 파일은 안 지움"
+
+
+@test
+def soundcloud_words_any_script_and_variant_word_boundaries():
+    FakeYDL.SEARCH = {
+        ("sc", "残酷な天使のテーゼ"): [sc(40, "Totally Different Song", 240), sc(41, "残酷な天使のテーゼ - 高橋洋子", 241)],
+        ("sc", "未知の歌"): [sc(42, "Totally Different Song", 240)],
+        ("sc", "drivers license"): [sc(43, "Olivia Rodrigo - drivers license (Deluxe Edition)", 242),
+                                    sc(44, "drivers license (Remix)", 240)],
+        ("sc", "beyonce halo"): [sc(45, "Beyoncé - Halo", 261)]}
+    FakeYDL.DRM = set()
+
+    def run():
+        y = music.YouTube(Path(tempfile.mkdtemp()))
+        assert y.soundcloud("残酷な天使のテーゼ")["vid"] == "sc41", "일본어 제목도 낱말로 비교"
+        try:
+            y.soundcloud("未知の歌")
+            raise AssertionError("낱말이 하나도 안 맞으면 아무 곡이나 틀지 않음")
+        except music.MusicError as e:
+            assert e.code == "not_found"
+        assert y.soundcloud("drivers license")["vid"] == "sc43", "'edition' 은 'edit' 변형이 아님"
+        assert y.soundcloud("beyonce halo")["vid"] == "sc45", "악센트 무시"
+        assert music._words("아이유 Beyoncé") == ["아이유", "beyonce"], "한글은 자모로 안 쪼갬 (NFKD 뒤 NFC)"
+        FakeYDL.SEARCH[("sc", "♪ 노")] = [sc(46, "Totally Different Song", 240)]
+        try:
+            y.soundcloud("♪ 노")
+            raise AssertionError("비교할 낱말이 없으면(기호·한 글자) 아무 곡이나 통과시키지 않음")
+        except music.MusicError as e:
+            assert e.code == "not_found"
+    with_fake_ydl(run)
+
+
+@test
+async def slow_result_leaves_the_status_message_to_the_worker():
+    db, svc, bot = await world()
+    await ready(db)
+    bot.member_status = {(CHAT, 4242): "member"}
+    real = P._wait
+
+    async def slow(db_, jid, timeout=0):
+        return "failed", "slow"
+    P._wait = slow
+    try:
+        await M.request(svc, bot, CHAT, MEMBER, query="밤편지", status_msg=55)
+    finally:
+        P._wait = real
+    assert not bot.named("edit_text") and not [x for x in bot.named("send_message") if "느" in x[2]]
+
+
 if __name__ == "__main__":
     run_all()

@@ -18,7 +18,9 @@ import logging
 import os
 import random
 import re
+import threading
 import time
+import unicodedata
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +35,7 @@ MAX_SEC = int(os.getenv("MUSIC_MAX_SEC", "1200"))          # 한 곡 최대 길�
 CACHE_MB = int(os.getenv("MUSIC_CACHE_MB", "600"))
 IDLE_SEC = float(os.getenv("MUSIC_IDLE_SEC", "180"))       # 틀 곡 없음·일시정지가 이만큼이면 음성채팅에서 나감
 PAUSE_MAX = float(os.getenv("MUSIC_PAUSE_MAX", "900"))     # 일시정지는 15분까지 기다림
+STALL_FRAMES = 1500                                        # 15초 동안 풀린 조각이 없으면 곡을 끝냄
 DUCK = 0.25                                                # 소담이 말하는 동안 노래 크기
 AHEAD = 300                                                # 미리 풀어 두는 조각 (3초) — 디스크·CPU 가 잠깐 늦어도 안 끊김
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
@@ -70,7 +73,7 @@ def _blocked(msg: str) -> bool:
 
 
 SC_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
-VARIANT = ("remix", "cover", "slowed", "sped up", "speed up", "nightcore", "inst", "karaoke", "8d", "reverb", "mashup",
+VARIANT = ("remix", "cover", "slowed", "sped up", "speed up", "nightcore", "inst", "instrumental", "karaoke", "8d", "reverb", "mashup",
            "disco", "80s", "lofi", "lo-fi", "phonk", "bootleg", "flip", "version", "ver.", "bass boost", "mix)",
            "live", "concert", "라이브", "콘서트",
            "cello", "violin", "guitar", "duo", "orgel", "music box", "kalimba", "8bit", "8-bit", "첼로", "바이올린", "오르골",
@@ -86,9 +89,28 @@ _NOISE = re.compile(r"[\[(【](?:[^\])】]*?(?:mv|m/v|official|lyrics?|가사|au
 _WORDS = re.compile(r"(?i)\b(?:official\s*(?:music\s*)?(?:video|mv|audio)|m/?v|lyrics?|live\s*clip|lyric\s*video)\b")
 
 
+def _norm(text: str) -> str:
+    """소문자 + 악센트 뺌 (Beyoncé → beyonce) — 일본어·중국어 글자는 그대로."""
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return unicodedata.normalize("NFC", "".join(c for c in t if not unicodedata.combining(c)))   # 한글은 다시 붙임
+
+
 def _words(text: str) -> list[str]:
-    """비교용 낱말 (2글자↑ 한글·영문·숫자)."""
-    return [w for w in re.findall(r"[0-9a-z가-힣]+", (text or "").lower()) if len(w) >= 2]
+    """비교용 낱말 (2글자↑ — 한글·영문·숫자·일본어·중국어 등 모든 글자. 예전엔 한글·영문만이라 일본 노래는 낱말이 비어 아무 곡이나 통과)."""
+    return [w for w in re.findall(r"[^\W_]+", _norm(text)) if len(w) >= 2]
+
+
+def _variant(title: str, asked: str) -> bool:
+    """신청에 없는 리믹스·커버… 영어는 낱말 단위('edit' ⊄ 'edition', 'inst' ⊄ 'instinct'), 한글은 글자 포함."""
+    for v in VARIANT:
+        if v in asked:
+            continue
+        if v.isascii():
+            if re.search(rf"(?<![0-9a-z]){re.escape(v)}(?![0-9a-z])", title):
+                return True
+        elif v in title:
+            return True
+    return False
 
 
 def clean_title(title: str) -> str:
@@ -110,6 +132,8 @@ class YouTube:
         self.cache_dir = Path(data_dir) / "cache"
         self.max_sec, self.cache_mb = max_sec, cache_mb
         self.blocked_at = 0.0           # 유튜브가 마지막으로 막은 시각
+        self._locks: dict[str, threading.Lock] = {}   # 같은 곡을 두 곳(미리 받기·두 방)에서 동시에 받지 않게
+        self._locks_guard = threading.Lock()
         self._sig: tuple = ()           # 쿠키 파일 모양 (바뀌면 유튜브 다시 시도)
 
     def _env(self) -> None:
@@ -220,7 +244,7 @@ class YouTube:
         vid = 'sc<번호>'."""
         res = self._run(lambda y: y.extract_info(f"scsearch10:{query}", download=False), cookies=False,
                         where="SoundCloud", extract_flat="in_playlist")
-        asked = f"{wanted} {query}".lower()
+        asked = _norm(f"{wanted} {query}")
         core = set(_words(wanted or query))                # 신청한 말 (가수·제목) — 가장 중요
         hint = set(_words(asked)) - core                    # 유튜브 제목에서 온 낱말 (영어 제목 등)
         ok = []
@@ -232,10 +256,10 @@ class YouTube:
                 continue
             if ref_sec and abs(dur - ref_sec) > max(30, ref_sec * 0.2):
                 continue                                    # 원곡과 길이가 다름 (믹스·조각·다른 곡)
-            title = str(e.get("title") or "").lower()
-            if any(v in title and v not in asked for v in VARIANT):
+            title = _norm(str(e.get("title") or ""))
+            if _variant(title, asked):
                 continue
-            core_ok = not core or sum(1 for w in core if w in title) >= need * len(core)
+            core_ok = bool(core) and sum(1 for w in core if w in title) >= need * len(core)   # 낱말이 없으면 공짜 통과 아님
             hint_ok = len(hint) >= 2 and sum(1 for w in hint if w in title) >= HINT_NEED * len(hint)
             if not (core_ok or hint_ok):                   # 한글로 신청해도 영어 제목(유튜브 제목 낱말)이면 같은 곡
                 continue
@@ -282,7 +306,13 @@ class YouTube:
                 "vid": info.get("id"), "duration": dur}
 
     def fetch(self, vid: str) -> str:
-        """오디오 파일 경로 (이미 받았으면 그대로). vid 'sc…' = SoundCloud."""
+        """오디오 파일 경로 (이미 받았으면 그대로). vid 'sc…' = SoundCloud. 같은 곡은 한 번에 하나만 받음."""
+        with self._locks_guard:
+            lock = self._locks.setdefault(vid, threading.Lock())
+        with lock:
+            return self._fetch(vid)
+
+    def _fetch(self, vid: str) -> str:
         self.dir.mkdir(parents=True, exist_ok=True)
         old = self._cached(vid)
         if old:
@@ -310,14 +340,24 @@ class YouTube:
         return None
 
     def trim(self) -> None:
-        files = sorted((p for p in self.dir.glob("*") if p.is_file()), key=lambda p: p.stat().st_mtime)
-        total = sum(p.stat().st_size for p in files)
+        """오래 안 쓴 것부터 지움. 받는 중(.part)은 건드리지 않고, 그 사이 사라진 파일은 건너뜀."""
+        files = []
+        for p in self.dir.glob("*"):
+            try:
+                if p.is_file() and p.suffix not in (".part", ".ytdl"):
+                    st = p.stat()
+                    files.append((st.st_mtime, st.st_size, p))
+            except OSError:
+                continue
+        files.sort()
+        total = sum(f[1] for f in files)
         limit = self.cache_mb * 1024 * 1024
-        for p in files:
+        for _, size, p in files:
             if total <= limit:
                 break
-            total -= p.stat().st_size
-            p.unlink(missing_ok=True)
+            total -= size
+            with contextlib.suppress(OSError):
+                p.unlink()
 
 
 def glob_escape(s: str) -> str:
@@ -367,7 +407,7 @@ class Decoder:
         self._proc = await asyncio.create_subprocess_exec(
             ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-ss", f"{self.start_ms / 1000:.2f}", "-i", self.path,
             "-vn", "-ac", "1", "-ar", str(audio.TG_RATE), "-f", "s16le", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)   # 오류 출력을 PIPE 로 두고 안 읽으면 ~128KB 에서 ffmpeg 가 멈춤
         self._task = asyncio.create_task(self._read())
 
     async def _read(self) -> None:
@@ -392,8 +432,7 @@ class Decoder:
             self.eof = True
         rc = await self._proc.wait()
         if rc not in (0, None) and not self.buf:
-            err = (await self._proc.stderr.read())[-300:].decode(errors="replace")
-            self.failed = self.failed or err or f"ffmpeg {rc}"
+            self.failed = self.failed or f"ffmpeg {rc}"
 
     def frame(self) -> bytes | None:
         return self.buf.popleft() if self.buf else None
@@ -457,6 +496,7 @@ class Player:
         self._quiet_since = clock()
         self._paused_at: float | None = None
         self.stats = {"frames": 0, "late": 0, "underrun": 0}
+        self._starved = 0
 
     # ── 밖에서 부름 (worker 일감) ──
     def stop(self, reason: str = "end") -> None:
@@ -541,6 +581,8 @@ class Player:
     async def _conductor(self) -> None:
         while not self.done:
             row = await musicq.start_next(self.db, self.chat_id)
+            if self.done:                                  # 꺼내는 사이 멈춤 (곡은 playing 그대로 — 끝 정리·재시작이 처리)
+                return
             if not row:
                 if self._quiet_for() >= self.idle_sec and not self.has_voice():
                     return self.stop("idle")
@@ -553,6 +595,8 @@ class Player:
     async def _play(self, row) -> None:
         self._end.clear()
         self._end_state = "done"
+        if self.done:                                      # stop() 의 _end 를 방금 지웠을 수 있음 → 기다리지 않고 끝
+            return
         try:
             row = dict(row)
             if row["path"] and Path(row["path"]).exists():
@@ -582,6 +626,8 @@ class Player:
             self.row = None
             await musicq.finish(self.db, row["id"], "failed")
             await self._say("failed", dict(row), "노래 파일을 못 열었어요.")
+            return
+        if self.done:                                      # 받는 사이 끝내기·재시작 → 재생 카드 안 올림
             return
         self.tracks += 1
         self.paused, self._paused_at = False, None
@@ -645,6 +691,13 @@ class Player:
                     self._end.set()
                 else:
                     self.stats["underrun"] += 1
+                    self._starved += 1
+                    if self._starved >= STALL_FRAMES:   # 풀기가 멈춤 (깨진 파일 등) → 무음으로 곡을 붙잡지 않고 넘김
+                        log.warning("노래 풀기 멈춤 %s → 다음 곡", self.chat_id)
+                        dec.failed = dec.failed or "stalled"
+                        self._end.set()
+                if music is not None:
+                    self._starved = 0
             elif self.paused and self._paused_at is not None and self.clock() - self._paused_at >= PAUSE_MAX \
                     and not self.has_voice():
                 self.stop("idle")

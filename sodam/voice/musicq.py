@@ -139,13 +139,15 @@ async def chats_with_queue(db, since: int) -> list[int]:
     return [r["chat_id"] for r in rows]
 
 
-async def drop_stale(db, before: int) -> int:
-    """오래 묵은 대기열(재시작 뒤 이어 틀지 않은 것) 정리 + 끝난 곡 기록 KEEP_DAYS."""
+async def drop_except(db, keep: list[int]) -> int:
+    """음성 담당이 다시 켜짐: 이어 틀 방(keep) 말고 남은 대기열은 정리 + 끝난 곡 기록 KEEP_DAYS."""
     now = _now()
+    keep = [int(c) for c in keep]
 
     def run(c):
-        n = c.execute("UPDATE music_queue SET state='removed', end_ts=? WHERE state IN ('queued','playing') "
-                      "AND COALESCE(started_ts, ts)<?", (now, before)).rowcount
+        marks = ",".join("?" * len(keep))
+        n = c.execute("UPDATE music_queue SET state='removed', end_ts=? WHERE state IN ('queued','playing')"
+                      + (f" AND chat_id NOT IN ({marks})" if keep else ""), (now, *keep)).rowcount
         c.execute("DELETE FROM music_queue WHERE state NOT IN ('queued','playing') AND COALESCE(end_ts, ts)<?",
                   (now - KEEP_DAYS * 86400,))
         return n
@@ -172,6 +174,13 @@ async def close_orphans(db) -> list[int]:
     rows = await db._all("SELECT DISTINCT chat_id FROM music_sessions WHERE end_ts IS NULL")
     await db._write("UPDATE music_sessions SET end_ts=?, reason='restart' WHERE end_ts IS NULL", (_now(),))
     return [r["chat_id"] for r in rows]
+
+
+async def restart_chats(db, since: int) -> list[int]:
+    """재시작으로 끊긴 방: 마지막 세션이 'restart' 로 끝남 (정상 종료든 kill -9 뒤 close_orphans 든), since 이후."""
+    rows = await db._all("SELECT chat_id, reason, end_ts FROM music_sessions s WHERE id=(SELECT MAX(id) FROM music_sessions "
+                         "WHERE chat_id=s.chat_id)")
+    return [r["chat_id"] for r in rows if r["reason"] == "restart" and (r["end_ts"] or 0) >= since]
 
 
 async def ended_unnotified(db) -> list:
