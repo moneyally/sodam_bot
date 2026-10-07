@@ -242,11 +242,25 @@ SPORTS = {
     # 명령: (이모지, 성공 값, 배당, 설명)
     "농구": ("🏀", {4, 5}, 2.4, "골인하면 ×2.4"),
     # ⚽ 3·4·5 = 공이 골망에 들어가는 그림, 1·2 = 빗나감·골대. PTB 문서는 '4·5 골' 이라 적혀 있지만 실제 그림과 다름
-    # (2026-10-07 얼라이드: 3 이 골 그림인데 '아깝다 ❌' 로 5,962P 회수). 확률 60% → ×1.6 (예전 40%×2.4 와 같은 96%).
-    "축구": ("⚽", {3, 4, 5}, 1.6, "골이면 ×1.6"),
+    # (2026-10-07 얼라이드: 3 이 골 그림인데 '아깝다 ❌' 로 5,962P 회수). 노골이면 BONUS_KICK 확률로 한 번 더 →
+    # 골 0.6 + 0.4×0.42×0.6 ≈ 70% (오너 '10번 중 7번'), ×1.37 = 기대값 96% (다른 게임과 같음).
+    "축구": ("⚽", {3, 4, 5}, 1.37, "골이면 ×1.37, 노골이어도 가끔 보너스 킥"),
     "다트": ("🎯", {6}, 5.7, "정중앙이면 ×5.7"),
     "볼링": ("🎳", {6}, 5.7, "스트라이크면 ×5.7"),
 }
+
+
+# 노골 뒤 한 번 더 찰 확률(%). 판정은 늘 텔레그램 공 그림 값으로만 (코드가 결과를 바꾸면 그림과 어긋남).
+BONUS_KICK = {"축구": 42}
+
+
+def win_rate(name: str) -> float:
+    """성공 확률 (텔레그램 값은 고르게 나온다고 봄)."""
+    emoji, wins, _, _ = SPORTS[name]
+    top = 5 if emoji in ("🏀", "⚽") else 6
+    p = len(wins) / top
+    b = BONUS_KICK.get(name, 0) / 100
+    return p + (1 - p) * b * p
 
 
 def _sport(name: str):
@@ -264,8 +278,16 @@ def _sport(name: str):
         if v is None:
             return
         await record(ctx.svc.db, ctx.chat_id, name, str(v))            # 나중에 '골이었는데?' 를 값으로 확인
+        bonus = ""
+        if v not in wins and rng(100) < BONUS_KICK.get(name, 0):
+            await ctx.bot.send_message(ctx.chat_id, f"🍀 {esc(user_name(ctx.user))}님 보너스 킥! 한 번 더~")
+            v = await _roll(ctx, emoji, name, bet)
+            if v is None:
+                return
+            await record(ctx.svc.db, ctx.chat_id, name, str(v))
+            bonus = " (보너스 킥)"
         payout = int(bet * mult) if v in wins else 0
-        await finish(ctx, name, bet, payout, f"{emoji} <b>{name}</b> {'성공! ✅' if payout else '아깝다… ❌'}")
+        await finish(ctx, name, bet, payout, f"{emoji} <b>{name}</b>{bonus} {'성공! ✅' if payout else '아깝다… ❌'}")
     return play
 
 
