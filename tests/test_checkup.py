@@ -107,6 +107,12 @@ async def room_checkup_is_admin_only_and_hides_money():
     assert "벳블리" in out and "똑같이 욕으로" in out and "봇 권한" in out and "$" not in out, out
     assert "관리자 추가" in out, "봇에 없는 권한(관리자 추가·음성채팅 관리)을 짚어 줌"
     assert "오늘 이미지 6/10장" in out and "웹검색 0/30번" in out, "점검에 이미지·웹검색 횟수 (2026-09-30 벳블리)"
+    from telegram import ChatPermissions                          # 2026-10-07 백악관: 멤버 '사용자 추가' 켜짐 → 강제 추가·신고
+    bot.chat_permissions = ChatPermissions(can_send_messages=True, can_invite_users=True)
+    out = await C.t_room_checkup(ctx(svc, bot, ADMIN, Role.ADMIN, A), {})
+    assert "사용자 추가' 끄기" in out, out
+    bot.chat_permissions = ChatPermissions(can_send_messages=True, can_invite_users=False)
+    assert "사용자 추가' 끄기" not in await C.t_room_checkup(ctx(svc, bot, ADMIN, Role.ADMIN, A), {})
 
 
 @test

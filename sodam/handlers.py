@@ -26,7 +26,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHand
 from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
-from . import agent, aiqueue, apikeys
+from . import addguard, agent, aiqueue, apikeys
 from . import mediastore, medialog, modactions
 from .agent import run_agent
 from .db import disk_full
@@ -170,7 +170,9 @@ def _first_join(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) 
     return True
 
 
-async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, title: str | None, user: User) -> None:
+async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, title: str | None, user: User,
+                            by: User | None = None) -> None:
+    """by = 텔레그램이 알려 준 '들어오게 한 사람' (직접 입장이면 본인, 추가·승인이면 그 사람)."""
     if user.is_bot or not _first_join(context, chat_id, user.id):
         return
     svc, bot = _svc(context), context.bot
@@ -180,6 +182,8 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     await members_panel.mark(svc.db, chat_id, user.id, left=False)
     s = await svc.db.get_settings(chat_id)
     if await svc.perms.is_admin(bot, chat_id, user.id):
+        return
+    if await addguard.check(svc, bot, chat_id, user, by, s):   # 관리자 아닌 사람이 강제로 추가 (sodam/addguard.py)
         return
     # 관리 권한 없는 방·자유 멤버(sodam/free.py): 검사 없이 기록·인사만
     if not await svc.perms.bot_can_moderate(bot, chat_id) or await free.is_free(svc.db, chat_id, user.id):
@@ -278,7 +282,7 @@ async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     svc = _svc(context)
     for u in msg.new_chat_members:
-        await handle_new_member(context, msg.chat_id, msg.chat.title, u)
+        await handle_new_member(context, msg.chat_id, msg.chat.title, u, msg.from_user)
     if (await svc.db.get_settings(msg.chat_id))["delete_join_message"]:
         try:
             await msg.delete()
@@ -420,7 +424,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if old.status != new.status and (old.status in admin_states or new.status in admin_states):
         svc.perms.forget(cmu.chat.id)  # 관리자 목록 캐시 갱신
     if not _in_chat(old) and _in_chat(new):
-        await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user)
+        await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user, getattr(cmu, "from_user", None))
     elif _in_chat(old) and not _in_chat(new):
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
         hooks.member_left(svc, cmu.chat.id, new.user.id)
