@@ -38,7 +38,7 @@ def sanitize_text_and_shape_values():
                                      {"type": "shape", "kind": "bubble", "wh": [3, 0.01], "tail": [0.4, 0.5]}]})
     assert not err, err
     t, sh = s["layers"]
-    assert t["text"] == "포인트\n지급 완료\n셋\n넷" and t["font"] == "cute" and t["size"] == 200 and t["at"] == (1, 0)
+    assert t["text"] == "포인트\n지급 완료\n셋\n넷" and t["font"] == "cute" and t["size"] == 420 and t["at"] == (1, 0)
     assert t["colors"] == [(255, 0, 0), (0, 255, 0)] and "enter" not in t          # 없는 선택지는 버림(기본값)
     assert sh["wh"] == (1, 0.05) and sh["tail"] == (0.4, 0.5)
     assert "글꼴에 없는" in SF.sanitize({"layers": [{"type": "text", "text": "안녕😀"}]})[1]

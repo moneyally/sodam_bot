@@ -39,7 +39,7 @@ def analysis_is_clipped_to_safe_values():
     t = a["texts"]
     assert len(t) == 1 and t[0]["text"] == "루피 등장" and t[0]["box"] == [0, 0.8, 1, 0.95] and t[0]["fill"] == [[255, 0, 10]]
     assert t[0]["stroke"] is None and t[0]["stroke_px"] == 20 and a["background"] == "solid"
-    assert C.clean_analysis("not json") == {"texts": [], "background": "solid"}
+    assert C.clean_analysis("not json") == {"texts": [], "background": "solid", "only_text": False}
 
 
 @test
@@ -250,6 +250,38 @@ async def swaps_words_keeping_lettering_design_first():
         _restore(saved)
     assert C.swapped_ok(["반갑습니다"], "반갑습니다", ["안녕하세요"])
     assert not C.swapped_ok(["반갑습니다 안녕하세요"], "반갑습니다", ["안녕하세요"]) and not C.swapped_ok(None, "반갑", ["안녕"])
+
+
+DIGIT = {"texts": [{"text": "1", "box": [0.3, 0.05, 0.7, 0.95], "fill": [[255, 255, 255], [190, 190, 195]],
+                    "stroke": [40, 30, 50], "stroke_px": 10, "outer_stroke": [140, 70, 220], "outer_px": 10, "font": "blocky"}],
+         "background": "transparent", "only_text": True}
+
+
+@test
+async def digit_set_zero_to_nine_without_image_ai():
+    """실제 2026-10-07 얼라이드: 보라 테두리 '1' 스티커에 '다른 버전은 0~9 까지 이모지 만들어줘' → 소담이 ⓪①② 글자로 때움.
+    글자뿐인 스티커는 그림 AI 없이 같은 틀로, 여러 개는 texts 로 한 번에 (하루 개수 1개)."""
+    r = await _room()
+    redraws = []
+    saved = _patch(redraws, [])
+
+    async def analyze(ctx, data):
+        return C.clean_analysis(DIGIT)
+    C.analyze = analyze
+    try:
+        _, res = await _ask(r, {"texts": [str(i) for i in range(10)], "format": "static"})
+        assert "시작" in res[0], res
+        assert not redraws, "글자뿐인 스티커는 그림 AI 안 씀"
+        assert len(r.bot.named("send_sticker")) == 10
+        rows = await r.db._all("SELECT spec FROM sticker_log ORDER BY id")
+        assert '"text": "0"' in rows[0]["spec"] and '"text": "9"' in rows[-1]["spec"], rows[-1]
+        assert '"stroke2": 10' in rows[0]["spec"] and '"none"' in rows[0]["spec"]
+        from datetime import datetime
+        day = datetime.now(r.svc.cfg.tz).strftime("%Y-%m-%d")
+        assert await r.db.counter(day, 0, f"stk:{BOSS.id}") == 1, "세트 = 하루 1개"
+        assert not r.bot.named("send_message")[1:], "경고 안내 없음 (빈 칸은 정상)"
+    finally:
+        _restore(saved)
 
 
 if __name__ == "__main__":

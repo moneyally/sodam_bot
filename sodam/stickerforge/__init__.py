@@ -234,7 +234,7 @@ def layer_params() -> dict:
         "grade": {"brightness": ("osc", -0.4, 0.4), "contrast": ("osc", 0.5, 2), "saturation": ("osc", 0, 2.5),
                   "hue_shift": ("osc", -180, 180), "hue_spin": ("int", -3, 3), "tint": ("color",), "tint_amount": ("osc", 0, 0.8),
                   "vignette": ("osc", 0, 1), "grain": ("num", 0, 0.25), "bloom": ("osc", 0, 1.2), "cycles": ("int", 1, 6)},
-        "text": {"text": ("lines", 60), "font": ("enum", tuple(L.FONTS)), "at": ("xy",), "size": ("int", 14, 200),
+        "text": {"text": ("lines", 60), "font": ("enum", tuple(L.FONTS)), "at": ("xy",), "size": ("int", 14, 420),
                  "width": ("num", 0.1, 1), "align": ("enum", L.ALIGNS), "color": ("color",), "colors": ("colors", 4),
                  "stroke": ("int", 0, 20), "stroke_color": ("color",), "depth": ("int", 0, 16), "depth_color": ("color",),
                  "stroke2": ("int", 0, 16), "stroke2_color": ("color",), "glow": ("int", 0, 24), "glow_color": ("color",), "slant": ("num", -0.5, 0.5),
