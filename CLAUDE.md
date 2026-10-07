@@ -574,6 +574,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   ③ `build_spec`: 새 글자를 가장 큰 원래 상자 가운데·폭에, 원래 색(2개↑면 그라데이션)·테두리·그림자로 text 레이어, 배경 photo 면 photo 아니면 cutout,
   견본이 움직이면(vision frames) breathe ④ 원래 글자 남으면(read_text) 한 번 더 지움 ⑤ 가벼운 경고로 안 버림(HARD_WARN 만 한마디), 움직이는 게 규격 못 맞추면 정지로
   ⑥ 뒤에서(persist.spawn, 사람당 1개 RUNNING) — '🧩 따라 만드는 중…' 답장 → 스티커 + 📦 버튼 → 안내 글 지움. agent.TERMINAL·MAKES·CORE_TOOLS·지도에 있음.
+  **2026-10-07 보강 (얼라이드)**: ① 그림 AI 가 글자 디자인 그대로 낱말만 바꿈(SWAP) → 작은 모델로 읽어 정확하면 그대로, 틀리면 지우기+코드 글자 ·
+  흰 배경 = 인물이 가장자리에 닿아도 흰색 빼기(keying.detect_mode 테두리 50%) · 글자 레이어 glow·stroke2·slant·붓글씨 글꼴(brush·brush2) ·
+  **variants = 한 장마다 바꿀 것 아무 조합 [{text, style(글자 값), change(그림 바꾸기 말)}]** 최대 10, 한 번 부탁 = 하루 1개 (texts = 글자만) ·
+  only_text(글자뿐인 스티커) = 그림 AI 없이 빈 캔버스에 견본 값으로 · 답장 없이 '이걸로' = 15분 안 만든 정지 스티커 ·
+  보내기 전 검사 make(agent._MAKE_ASK): '이모지·스티커 만들어' 에 도구 없이 ⓪① 글자로 때우면 한 번 더.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)

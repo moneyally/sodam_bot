@@ -284,5 +284,38 @@ async def digit_set_zero_to_nine_without_image_ai():
         _restore(saved)
 
 
+@test
+async def variants_any_mix_of_text_style_and_picture_change():
+    """정해진 종류 없이 한 장마다 바꿀 것: 글자 · 글자 꾸미기 값 · 그림 바꾸기 말 (오너 '틀은 넓게 하드코딩 없이')."""
+    vs = C.variants_of({"variants": [{"style": {"colors": [[255, 0, 0], [90, 0, 0]], "bogus": 1}}, {"text": "B", "change": "웃는 얼굴로"},
+                                     "C", {}]})
+    assert vs == [{"text": None, "style": {"colors": [[255, 0, 0], [90, 0, 0]]}, "change": None},
+                  {"text": "B", "style": {}, "change": "웃는 얼굴로"}, {"text": "C", "style": {}, "change": None}], vs
+    r = await _room()
+    redraws = []
+    saved = _patch(redraws, [])
+
+    async def analyze(ctx, data):
+        return C.clean_analysis(DIGIT)
+    C.analyze = analyze
+    try:                                                     # 글자뿐인 스티커: 색만 다르게 2장 (그림 AI 없음)
+        await _ask(r, {"variants": [{"style": {"colors": [[255, 0, 0], [90, 0, 0]]}}, {"style": {"stroke2_color": [0, 200, 0]}}]})
+        rows = await r.db._all("SELECT spec FROM sticker_log ORDER BY id")
+        assert '"text": "1"' in rows[0]["spec"] and "[255, 0, 0]" in rows[0]["spec"] and "[0, 200, 0]" in rows[1]["spec"]
+        assert not redraws
+    finally:
+        _restore(saved)
+    r = await _room()
+    redraws = []
+    saved = _patch(redraws, [])                              # 캐릭터 스티커: 표정만 바꾸기 → 그림 AI + 원래 글자 코드로
+    try:
+        await _ask(r, {"variants": [{"change": "웃는 얼굴로"}]})
+        assert len(redraws) == 1 and "웃는 얼굴로" in redraws[0] and "'루피 등장'" in redraws[0], redraws
+        row = await r.db._one("SELECT spec FROM sticker_log ORDER BY id DESC LIMIT 1")
+        assert '"text": "루피 등장"' in row["spec"], row["spec"]
+    finally:
+        _restore(saved)
+
+
 if __name__ == "__main__":
     run_all()
