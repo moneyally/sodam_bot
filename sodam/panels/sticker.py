@@ -269,7 +269,8 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
             and src is ctx.image.data:   # 답장한 그림·스티커에 새 글자 = 따라 만들기 → 원본에 글자가 있으면 먼저 지워야 겹치지 않음
         found = [t for t in (await read_text(ctx, src) or []) if _norm(t) and _norm(t) not in _norm(new_words)]
         if found:
-            return (f"원본 그림에 이미 글자 '{' / '.join(found)[:40]}' 가 있음 (안 그렸음). 따라 만들기: redraw='remove the text "
+            return (f"원본 그림에 이미 글자 '{' / '.join(found)[:40]}' 가 있음 (안 그렸음). 견본 + 새 글자면 copy_sticker(text) 가 정답. "
+                    f"make_sticker 로 계속하려면 redraw='remove the text "
                     f"\\'{found[0][:20]}\\' only, keep the character and style' + old_text='{found[0][:20]}' 로 다시 부를 것 — 글자 모양(색·테두리·"
                     "위치·크기)은 원본을 보고 text 레이어 값으로. 원래 글자를 일부러 남기는 거면 accept_warnings=true.")
     static = a.get("format") == "static"

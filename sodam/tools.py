@@ -1340,7 +1340,7 @@ CORE_TOOLS = frozenset({
     "set_member_style", "room_members", "lookup_user", "point_game", "points_ranking",
     # 짝으로 쓰는 것·새 기능 (중간에 불러오면 도구 목록이 바뀌어 그 실행의 캐시가 전부 깨짐 — 실측 2026-10-06:
     # 22:51~12:40 실행 47번 중 9번이 sticker_catalog·run_code·other_bot_results·game_control 등을 불러와 캐시 미스, run_code 1번 $0.095)
-    "sticker_catalog", "make_sticker", "run_code", "other_bot_results", "game_control",
+    "sticker_catalog", "make_sticker", "copy_sticker", "run_code", "other_bot_results", "game_control",
     "schedule_task", "alert_rule",   # '23시55분에 나 불러줘' 를 말로만 약속한 실제 사례 (2026-10-05)
     "feature_request",    # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
     # 오너 1:1 에서만 보임 (다른 목록엔 영향 없음). '업데이트 보고' 때 불러오다 캐시가 깨져 실행 상한($0.05)에 걸림 (#2634, 2026-10-06)
