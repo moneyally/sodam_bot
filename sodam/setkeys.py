@@ -15,6 +15,8 @@ EXCLUDED: dict[str, str] = {
     "gt_setter": "알림 받을 관리자는 game_alert 로 정함 (요청한 관리자가 받음)",
     "greet_media_type": "인사 사진·영상은 관리자 1:1 메뉴 ✏️ 인사 편집기에서만",
     "greet_media_id": "인사 사진·영상은 관리자 1:1 메뉴 ✏️ 인사 편집기에서만",
+    "farewell_media_type": "퇴장 인사 사진·영상은 운영자가 넣음 (file_id)",
+    "farewell_media_id": "퇴장 인사 사진·영상은 운영자가 넣음 (file_id)",
     "greet_copy": "글 복사 인사는 관리자 1:1 메뉴 ✏️ 인사 편집기에서만 (글을 전달해서 정함)",
     "greet_copy_snap": "글 복사 인사 사본은 인사 편집기에서 글을 정할 때 자동으로 저장됨",
     "greet_buttons": "인사 URL 버튼은 관리자 1:1 메뉴 ✏️ 인사 편집기에서만",

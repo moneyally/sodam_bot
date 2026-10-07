@@ -13,15 +13,17 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardMarkup
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
-from . import persist, raid
+from . import mediastore, persist, raid
 from .greet import _render_buttons, button_rows as _greet_rows
 from .settings import max_text, register_setting
 from .util import esc, send_retry, user_name
@@ -58,6 +60,8 @@ register_setting("farewell_mode", "off", "퇴장 인사",
 register_setting("farewell_template", "", "퇴장 문구", validator=max_text(MAX_TEMPLATE))
 register_setting("farewell_buttons", [], "퇴장 URL 버튼", render_fn=_render_buttons)
 register_setting("farewell_delete_after", 0, "퇴장 인사 삭제(초)", range_=(0, 3600))
+register_setting("farewell_media_type", "", "퇴장 인사 미디어 종류")   # photo/video/animation (인사 미디어와 같은 꼴, 2026-10-07 백악관)
+register_setting("farewell_media_id", "", "퇴장 인사 미디어 file_id")
 
 
 def template_of(s: dict) -> str:
@@ -69,7 +73,8 @@ def button_rows(s: dict):
     return _greet_rows({"greet_buttons": s.get("farewell_buttons")})
 
 
-def render(template: str, people: list[tuple[int, str, str | None]], count: int | None = None, extra: int = 0) -> str:
+def render(template: str, people: list[tuple[int, str, str | None]], count: int | None = None, extra: int = 0,
+           when: str = "") -> str:
     """people = [(ID, 이름, @아이디)]. 문구는 이스케이프하고 자리표시자에만 코드가 만든 값을 넣는다."""
     tpl = template if "{name}" in template else "{name} " + template
     if "{id}" not in tpl:
@@ -84,6 +89,7 @@ def render(template: str, people: list[tuple[int, str, str | None]], count: int 
         "{username}": ", ".join(esc("@" + u) if u else "아이디 없음" for _, _, u in shown) + tail,
         "{id}": ", ".join(f"<code>{uid}</code>" for uid, _, _ in shown) + tail,
         "{count}": str(count),
+        "{time}": esc(when),
     }
     out = esc(tpl)
     for key, value in values.items():
@@ -163,9 +169,20 @@ async def flush(context, chat_id: int) -> None:
         except TelegramError:
             pass
     rows = button_rows(s)
+    kb = InlineKeyboardMarkup(rows) if rows else None
+    from datetime import datetime
+    text = render(tpl, people, count, extra, datetime.now(svc.cfg.tz).strftime("%Y-%m-%d %H:%M"))
+    kind, fid = s.get("farewell_media_type"), s.get("farewell_media_id")
     try:
-        sent = await send_retry(lambda: bot.send_message(chat_id, render(tpl, people, count, extra), parse_mode="HTML",
-                                                         reply_markup=InlineKeyboardMarkup(rows) if rows else None))
+        sent = None
+        if kind in mediastore.KINDS and fid and len(html.unescape(re.sub(r"<[^>]+>", "", text))) <= 1024:
+            try:   # 영상·사진에 문구를 설명으로 (인사와 같은 mediastore — 봇이 바뀌어도 보관 원본으로)
+                sent = await send_retry(lambda: mediastore.send(bot, svc.db, kind, chat_id, fid, caption=text,
+                                                                parse_mode="HTML", reply_markup=kb))
+            except BadRequest as e:
+                log.warning("farewell media failed, text only: %s", e)
+        if sent is None:
+            sent = await send_retry(lambda: bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb))
     except TelegramError as e:
         log.warning("farewell send failed in %s: %s", chat_id, e)
         return

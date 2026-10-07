@@ -167,9 +167,21 @@ def with_names(template: str, tag: bool = True) -> str:
     return template if "{names}" in template or not tag else "{names} " + template
 
 
-def fill(template: str, names_html: str) -> str:
-    """인사말(관리자·AI 가 쓴 글)은 이스케이프하고, {names} 자리에만 코드가 만든 멘션을 넣는다."""
-    return esc(template).replace(esc("{names}"), names_html)
+def fill(template: str, names_html: str, extra: dict[str, str] | None = None) -> str:
+    """인사말(관리자·AI 가 쓴 글)은 이스케이프하고, 자리표시자에만 코드가 만든 값을 넣는다.
+    {names}·{name} 이름(멘션) · {id} 고유번호 · {username} @아이디 · {time} 들어온 시각 (extra 로 받은 값, 2026-10-07 백악관 요청)."""
+    out = esc(template).replace(esc("{names}"), names_html).replace(esc("{name}"), names_html)
+    for key, value in (extra or {}).items():
+        out = out.replace(esc(key), value)
+    return out
+
+
+def fill_values(people: list[tuple[int, str, str | None]], when: str) -> dict[str, str]:
+    """people = [(ID, 이름, @아이디)] → {id}·{username}·{time} 값 (HTML)."""
+    shown = people[:15]
+    return {"{id}": ", ".join(f"<code>{uid}</code>" for uid, _, _ in shown),
+            "{username}": ", ".join(esc("@" + u) if u else "아이디 없음" for _, _, u in shown),
+            "{time}": esc(when)}
 
 
 def _plain_len(text_html: str) -> int:
@@ -299,8 +311,16 @@ class Greeter:
         if len(people) > 15:
             names += f" 외 {len(people) - 15}분"
         template = with_names(await self._template(chat_id, len(people)), tag)
+        extra = None
+        if any(k in template for k in ("{id}", "{username}", "{time}")):
+            rows = {r["user_id"]: r["username"] for r in await self.svc.db._all(
+                f"SELECT user_id, username FROM users WHERE user_id IN ({','.join('?' * len(people[:15]))})",
+                [uid for uid, _ in people[:15]])}
+            from datetime import datetime
+            extra = fill_values([(uid, name, rows.get(uid)) for uid, name in people],
+                                datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d %H:%M"))
         try:
-            sent = await send_greeting(bot, chat_id, s, fill(template, names), reply_to=reply_to, db=self.svc.db)
+            sent = await send_greeting(bot, chat_id, s, fill(template, names, extra), reply_to=reply_to, db=self.svc.db)
             # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
             plain = ", ".join(name for _, name in people[:15])
             await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
