@@ -194,6 +194,7 @@ async def slot_payouts_match_telegram_values():
 
 @test
 async def sports_emoji_games():
+    basic.BONUS_KICK, keep = {}, basic.BONUS_KICK          # 보너스 킥은 아래 따로
     db, svc, bot, ctx = await setup(values=[5, 1, 6, 3])
     await say(ctx, A, "!가입")
     assert "+1,400P" in await say(ctx, A, "!농구 1000")                   # 🏀 5 = 골
@@ -201,18 +202,33 @@ async def sports_emoji_games():
     assert "+4,700P" in await say(ctx, A, "!다트 1000")                   # 🎯 6 = 정중앙
     assert "-1,000P" in await say(ctx, A, "!볼링 1000")
     assert [c[2] for c in bot.named("send_dice")] == ["🏀", "⚽", "🎯", "🎳"]
+    basic.BONUS_KICK = keep
 
 
 @test
 async def football_three_is_goal():
     # 실제 2026-10-07 얼라이드: ⚽ 공이 골망에 들어갔는데(값 3) '아깝다 ❌' 로 5,962P 회수 → 3·4·5 = 골
-    db, svc, bot, ctx = await setup(values=[3, 2])
-    await say(ctx, A, "!가입")
-    assert "+600P" in await say(ctx, A, "!축구 1000")                     # ⚽ 3 = 골 ×1.6
-    assert "-1,000P" in await say(ctx, A, "!축구 1000")                   # ⚽ 2 = 골대
-    from sodam.casino.board import recent
-    assert await recent(db, CHAT, "축구") == ["3", "2"]          # 값이 남아야 나중에 확인 가능
-    assert await ledger_ok(db, A.id)
+    keep = basic.BONUS_KICK
+    try:
+        basic.BONUS_KICK = {}
+        db, svc, bot, ctx = await setup(values=[3, 2])
+        await say(ctx, A, "!가입")
+        assert "+370P" in await say(ctx, A, "!축구 1000")                 # ⚽ 3 = 골 ×1.37
+        assert "-1,000P" in await say(ctx, A, "!축구 1000")               # ⚽ 2 = 골대
+        from sodam.casino.board import recent
+        assert await recent(db, CHAT, "축구") == ["3", "2"]               # 값이 남아야 나중에 확인 가능
+        assert await ledger_ok(db, A.id)
+        # 노골 → 보너스 킥 한 번 더 (그림 값으로만 판정), 보너스도 노골이면 끝
+        basic.BONUS_KICK = {"축구": 100}
+        db, svc, bot, ctx = await setup(values=[1, 4, 2, 1])
+        await say(ctx, A, "!가입")
+        r = await say(ctx, A, "!축구 1000")
+        assert "보너스 킥" in r and "+370P" in r, r
+        assert "-1,000P" in await say(ctx, A, "!축구 1000")
+        assert len(bot.named("send_dice")) == 4 and await ledger_ok(db, A.id)
+    finally:
+        basic.BONUS_KICK = keep
+    assert 0.69 <= basic.win_rate("축구") <= 0.71                          # 오너: 10번 중 7번
 
 
 @test
@@ -255,7 +271,9 @@ async def rtp_simulation_all_basic_games():
     goal = {"🏀": ({4, 5}, 5), "⚽": ({3, 4, 5}, 5), "🎯": ({6}, 6), "🎳": ({6}, 6)}
     for name, (emoji, wins, mult, _) in basic.SPORTS.items():
         assert wins == goal[emoji][0], (name, wins)
-        results[name] = rtp(lambda: mult if r.randint(1, goal[emoji][1]) in wins else 0)
+        bonus = basic.BONUS_KICK.get(name, 0)
+        results[name] = rtp(lambda: mult if (r.randint(1, goal[emoji][1]) in wins or (
+            r.randrange(100) < bonus and r.randint(1, goal[emoji][1]) in wins)) else 0)
     bad = {k: round(v, 3) for k, v in results.items() if not 0.88 <= v <= 1.0}
     assert not bad, bad
 
