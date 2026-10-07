@@ -224,7 +224,7 @@ def leftover(texts: list[str], old_text: str, caption: str) -> str:
     return next((t for t in texts if old in _norm(t) or (len(_norm(t)) >= 2 and _norm(t) in old)), "")
 
 
-async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str) -> tuple[bytes | None, str]:
+async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str, keep: str = REDRAW_KEEP) -> tuple[bytes | None, str]:
     """그림 AI 로 원본 고치기 (원래 글자 지우기·자세 바꾸기 등 — 무엇을 바꿀지는 AI 가 말로, 지키는 규칙은 코드가 붙임)."""
     from openai import BadRequestError, OpenAIError
     from ..llm import BudgetExceeded
@@ -232,7 +232,7 @@ async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str) -
     if await ctx.svc.db.counter(day, ctx.chat_id, "image") >= ctx.settings["image_daily"]:
         return None, "오늘 이 방 그림 한도를 다 써서 원본 고치기(redraw)는 안 됨. redraw 없이 하거나 내일 하자고 안내."
     try:
-        out = await ctx.svc.llm.image(f"{redraw[:600]}. {REDRAW_KEEP}", Attached(src, "image/png", ctx.caller.id), ctx.chat_id)
+        out = await ctx.svc.llm.image(f"{redraw[:600]}. {keep}", Attached(src, "image/png", ctx.caller.id), ctx.chat_id)
     except BudgetExceeded:
         return None, "오늘 AI 사용량 한도를 다 써서 원본 고치기는 못 함."
     except BadRequestError:

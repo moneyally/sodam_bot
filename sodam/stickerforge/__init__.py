@@ -237,6 +237,7 @@ def layer_params() -> dict:
         "text": {"text": ("lines", 60), "font": ("enum", tuple(L.FONTS)), "at": ("xy",), "size": ("int", 14, 200),
                  "width": ("num", 0.1, 1), "align": ("enum", L.ALIGNS), "color": ("color",), "colors": ("colors", 4),
                  "stroke": ("int", 0, 20), "stroke_color": ("color",), "depth": ("int", 0, 16), "depth_color": ("color",),
+                 "stroke2": ("int", 0, 16), "stroke2_color": ("color",), "glow": ("int", 0, 24), "glow_color": ("color",), "slant": ("num", -0.5, 0.5),
                  "rotate": ("num", -45, 45), "opacity": ("num", 0.05, 1), "enter": ("enum", L.ENTERS),
                  "enter_dur": ("num", 0, 1), "idle": ("enum", L.IDLES), "amp": ("num", 0, 4)},
         "shape": {"kind": ("enum", L.SHAPE_KINDS), "at": ("xy",), "wh": ("pair", 0.05, 1), "fill": ("color",),

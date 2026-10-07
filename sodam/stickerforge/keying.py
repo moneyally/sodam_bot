@@ -36,6 +36,13 @@ def detect_mode(im: Image.Image) -> str:
         if (a < 16).mean() > 0.05:                 # real transparency already present
             return "none"
     rgb = np.asarray(im.convert("RGB"))
+    b = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
+    # 인물이 가장자리까지 꽉 찬 그림 (옷·불꽃이 테두리에 닿음): 테두리 대부분이 흰색/검정이면 그 색 배경
+    # (2026-10-07 얼라이드 '반갑습니다': 퍼짐이 커서 none → 흰 배경 그대로 나감)
+    if (b.min(1) >= 225).mean() >= 0.5:
+        return "white"
+    if (b.max(1) <= 40).mean() >= 0.5:
+        return "black"
     mean, spread = _border_stats(rgb)
     if spread > 40:                                # busy border: no uniform background
         return "none"

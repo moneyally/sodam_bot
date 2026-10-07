@@ -83,7 +83,7 @@ def _patch(redraws, reads):
     async def analyze(ctx, data):
         return C.clean_analysis(LUFFY_STICKER)
 
-    async def redraw(ctx, src, prompt, day):
+    async def redraw(ctx, src, prompt, day, **kw):
         redraws.append(prompt)
         return png(False), ""
 
@@ -141,7 +141,7 @@ async def needs_a_sample_and_reports_redraw_failure():
     assert "답장" in res[0] and not r.bot.named("send_message")
     saved = _patch([], [])
 
-    async def no(ctx, src, prompt, day):
+    async def no(ctx, src, prompt, day, **kw):
         return None, "오늘 이 방 그림 한도를 다 써서 원본 고치기(redraw)는 안 됨."
     S.redraw_source = no
     try:
@@ -150,6 +150,106 @@ async def needs_a_sample_and_reports_redraw_failure():
         assert edits and "못 지웠어요" in edits[-1][2] and not r.bot.named("send_sticker"), edits
     finally:
         _restore(saved)
+
+
+ALLIED = {"texts": [{"text": "안녕하세요", "box": [0.1, 0.75, 0.95, 0.95], "fill": [[250, 250, 255], [170, 170, 185], [70, 70, 90], [230, 230, 240]],
+                     "stroke": [30, 20, 50], "stroke_px": 4, "outer_stroke": [140, 60, 220], "outer_px": 5,
+                     "glow": [170, 80, 255], "glow_px": 12, "shadow": False, "italic": True, "backdrop": [25, 20, 35],
+                     "font": "brush"}], "background": "transparent"}
+
+
+def full_frame_white(fill_bottom=True):
+    """인물이 아래·옆 가장자리까지 꽉 찬 흰 배경 그림 (그림 AI 가 글자 지운 결과 모양)."""
+    im = Image.new("RGB", (512, 512), "white")
+    d = ImageDraw.Draw(im)
+    d.ellipse((200, 10, 320, 130), fill=(150, 60, 220))
+    d.rectangle((110, 160, 400, 511), fill=(25, 25, 30))
+    d.rectangle((0, 330, 150, 511), fill=(35, 35, 35))
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+@test
+def metallic_glow_text_style_is_copied():
+    """실제 2026-10-07 얼라이드: 은색 금속 글자 + 보라 빛번짐 '안녕하세요' → 납작한 보라 글자로 나옴."""
+    spec, err = SF.sanitize(C.build_spec(C.clean_analysis(ALLIED), "반갑습니다", False, 7, redrawn=True))
+    assert not err, err
+    lay = spec["layers"][-1]
+    assert len(lay["colors"]) == 4 and lay["stroke2"] == 5 and lay["stroke2_color"] == (140, 60, 220), lay
+    assert lay["glow"] == 12 and lay["glow_color"] == (170, 80, 255) and lay["font"] == "bold"
+    assert spec["keying"]["mode"] == "white", "지운 그림은 흰 배경 → 흰색 빼기"
+    assert lay["slant"] == 0.22 and spec["layers"][0]["type"] == "shape" and spec["layers"][0]["fill"] == (25, 20, 35)
+    lay = spec["layers"][1]
+    from sodam.stickerforge import layout
+    plain = layout.render_text("반갑", stroke=4, stroke_color=(30, 20, 50))
+    fancy = layout.render_text("반갑", stroke=4, stroke_color=(30, 20, 50), stroke2=5, stroke2_color=(140, 60, 220),
+                               glow=12, glow_color=(170, 80, 255))
+    assert fancy.width > plain.width + 20
+    px = fancy.convert("RGBA").getpixel((3, fancy.height // 2))
+    assert px[3] > 0 and px[2] > px[1], ("가장자리에 보라 빛번짐", px)
+    leaned = layout.render_text("반갑", slant=0.3)
+    a = leaned.getchannel("A")
+    top = min(x for x in range(leaned.width) if a.getpixel((x, 2)) > 0)
+    bottom = min(x for x in range(leaned.width) if a.getpixel((x, leaned.height - 3)) > 0)
+    assert top > bottom, "slant + = 위가 오른쪽 (이탤릭)"
+
+
+@test
+async def full_frame_redraw_gets_transparent_background():
+    """인물이 가장자리에 닿는 흰 배경 그림 → 예전엔 자동 판단이 'none' 이라 흰 네모 그대로 (얼라이드 '반갑습니다')."""
+    from sodam.stickerforge import keying
+    assert keying.detect_mode(Image.open(io.BytesIO(full_frame_white()))) == "white"
+    spec, _ = SF.sanitize(C.build_spec(C.clean_analysis(ALLIED), "반갑습니다", False, 7, redrawn=True))
+    res = await SF.forge_static(full_frame_white(), spec)
+    out = Image.open(io.BytesIO(res.still)).convert("RGBA")
+    assert res.ok and out.getpixel((60, 60))[3] == 0 and out.getpixel((470, 80))[3] == 0, res.summary()
+
+
+@test
+async def uses_sticker_just_made_without_reply():
+    """'이걸로 반갑습니다 해줘' 를 답장 없이 → 방금 이 사람에게 만든 스티커로 (예전: '원본을 못 집어요')."""
+    r = await _room()
+    r.bot.files = getattr(r.bot, "files", {}) or {}
+    r.bot.files["F1"] = png(True)
+    from sodam import stickerpack
+    await stickerpack.new_item(r.db, fmt="static", emoji="😎", chat_id=r.CHAT, user_id=BOSS.id, file_id="F1")
+    saved = _patch([], [])
+    try:
+        _, res = await _ask(r, {"text": "반갑습니다", "format": "static"}, image=False)
+        assert "시작" in res[0], res
+        assert len(r.bot.named("send_sticker")) == 1
+    finally:
+        _restore(saved)
+
+
+@test
+async def swaps_words_keeping_lettering_design_first():
+    """오너 2026-10-07 '유저는 100% 똑같은 걸 원함' → 그림 AI 가 글자 디자인 그대로 낱말만 바꿈. 맞게 써졌으면 코드 글자 없이 그대로."""
+    r = await _room()
+    redraws = []
+    saved = _patch(redraws, [["반갑습니다"]])
+    C.SWAP_FIRST = True
+    try:
+        _, res = await _ask(r, {"text": "반갑습니다", "format": "static"})
+        assert len(redraws) == 1, (res, r.bot.named("edit_text"), r.bot.named("send_message"))
+        assert len(redraws) == 1 and "exactly: \"반갑습니다\"" in redraws[0] and "'루피 등장'" in redraws[0], redraws
+        assert len(r.bot.named("send_sticker")) == 1
+        row = await r.db._one("SELECT spec FROM sticker_log ORDER BY id DESC LIMIT 1")
+        assert '"layers": []' in row["spec"] and '"white"' in row["spec"], row["spec"]
+        # 한글이 틀리게 써짐(반값습니다) → 지우고 코드로 쓰기
+        redraws.clear()
+        saved2 = _patch(redraws, [["반값습니다"], []])
+        await _ask(r, {"text": "반갑습니다", "format": "static"})
+        assert len(redraws) == 2 and "Remove all the written text" in redraws[1], redraws
+        row = await r.db._one("SELECT spec FROM sticker_log ORDER BY id DESC LIMIT 1")
+        assert '"반갑습니다"' in row["spec"], "코드가 쓴 글자 레이어"
+        _restore(saved2)
+    finally:
+        C.SWAP_FIRST = False
+        _restore(saved)
+    assert C.swapped_ok(["반갑습니다"], "반갑습니다", ["안녕하세요"])
+    assert not C.swapped_ok(["반갑습니다 안녕하세요"], "반갑습니다", ["안녕하세요"]) and not C.swapped_ok(None, "반갑", ["안녕"])
 
 
 if __name__ == "__main__":
