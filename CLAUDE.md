@@ -152,6 +152,8 @@
 - **🔎 사람 찾기·점검 도구** (`panels/checkup.py`, tests/test_checkup.py · 뮤테이션 7개, 2026-09-29 — 오너 '7647564988 아이디 뭐야'에 도구가 없어
   기능 요청만 접수한 실제 사례): lookup_user(누구나, 숫자ID·@·예전 @·이름 → 지금 이름·@·namehist 변경 기록, 봤던 방은 오너=전부·관리자=자기 관리 방·
   그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted, 2026-09-30부터 오너 1:1 확인 카드), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
+  **닮은 계정(사칭 확인)**: lookup_user 결과에 같은 방 사람 중 이 사람이 쓴 이름과 같은 이름(name_key)·@아이디 1~2글자 차이 계정을 처음 본 날 순으로
+  (`checkup.lookalikes`, 2026-10-07 백악관 'allhistory 조회' → 대화 검색만 했던 것. 문주 @Amxjdjl 을 @Amxjdjl1·@Amxjdj1 이 따라 함). 지도에 'allhistory·사칭'.
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
 - **📘 소담 공식 안내서** (`sodam/guide/*.md` 19개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —

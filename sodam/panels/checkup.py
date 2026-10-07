@@ -23,7 +23,7 @@ from telegram.error import TelegramError
 from .. import namehist, tools
 from ..permissions import Role
 from ..tools import Tool, ToolCtx
-from ..util import display_name
+from ..util import display_name, name_key
 
 MAX_ROOMS = 15
 RECENT_MAX = 60
@@ -94,6 +94,67 @@ async def _seen_rooms(ctx: ToolCtx, uid: int) -> str:
                                  for r in shown[:MAX_ROOMS])
 
 
+def _edit(a: str, b: str) -> int:
+    """두 글자열 편집 거리 (짧은 @아이디끼리만 씀)."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+LOOKALIKE_MAX = 5
+
+
+async def lookalikes(db, uid: int, tz) -> str:
+    """사칭 확인: 같은 방에 있는(있었던) 다른 계정 중 이 사람이 쓴(쓰는) 이름과 같은 이름, 또는 @아이디가 1~2글자만 다른 계정.
+    실제 2026-10-07 백악관: 'allhistory 조회' → 대화 검색만 함. 문주(@Amxjdjl, 09-28부터) 를 @Amxjdjl1·@Amxjdj1 두 계정이 따라 함."""
+    mine = await db._all("SELECT first_name, last_name, username FROM name_history WHERE user_id=? UNION "
+                         "SELECT first_name, last_name, username FROM users WHERE user_id=?", (uid, uid))
+    keys = {k for r in mine for k in (name_key(display_name(r["first_name"], r["last_name"], None)),) if len(k) >= 2}
+    ids = {(r["username"] or "").lower() for r in mine if r["username"] and len(r["username"]) >= 5}
+    if not keys and not ids:
+        return ""
+    rows = await db._all(
+        "SELECT h.user_id, h.first_name, h.last_name, h.username, h.ts FROM name_history h WHERE h.user_id != ? AND h.user_id IN "
+        "(SELECT DISTINCT o.user_id FROM members o WHERE o.chat_id IN (SELECT chat_id FROM members WHERE user_id=? AND chat_id<0)) "
+        "UNION ALL SELECT u.user_id, u.first_name, u.last_name, u.username, 0 FROM users u WHERE u.user_id != ? AND u.user_id IN "
+        "(SELECT DISTINCT o.user_id FROM members o WHERE o.chat_id IN (SELECT chat_id FROM members WHERE user_id=? AND chat_id<0))",
+        (uid, uid, uid, uid))
+    hit: dict[int, list[str]] = {}
+    for r in rows:
+        why = []
+        k = name_key(display_name(r["first_name"], r["last_name"], None))
+        if k and k in keys:
+            why.append(f"같은 이름 '{display_name(r['first_name'], r['last_name'], None)}'")
+        u = (r["username"] or "").lower()
+        if u and len(u) >= 5 and any(u != m and _edit(u, m) <= 2 for m in ids):
+            why.append(f"비슷한 아이디 @{r['username']}")
+        if why:
+            hit.setdefault(r["user_id"], [])
+            hit[r["user_id"]] += [w for w in why if w not in hit[r["user_id"]]]
+    if not hit:
+        return ""
+    async def first_seen(x: int) -> int:
+        r = await db._one("SELECT MIN(t) AS t FROM (SELECT MIN(ts) AS t FROM name_history WHERE user_id=? UNION ALL "
+                          "SELECT MIN(joined_at) FROM members WHERE user_id=? AND joined_at>0)", (x, x))
+        return (r["t"] if r and r["t"] else 0) or 0
+    me = await first_seen(uid)
+    lines = []
+    seen = {o: await first_seen(o) for o in list(hit)[:30]}
+    for other in sorted(seen, key=lambda o: seen[o] or 1 << 62)[:LOOKALIKE_MAX]:   # 먼저 본 계정부터
+        t = seen[other]
+        cur = await db._one("SELECT first_name, last_name, username FROM users WHERE user_id=?", (other,))
+        now = (display_name(cur["first_name"], cur["last_name"], None) + (f" @{cur['username']}" if cur["username"] else "")) if cur else "?"
+        when = datetime.fromtimestamp(t, tz).strftime("%m-%d") if t else "?"
+        older = "이 사람보다 먼저 봄" if t and me and t < me else "이 사람보다 나중에 봄" if t and me else ""
+        lines.append(f"- ID {other} 지금 {now} · {', '.join(hit[other])} · 처음 본 날 {when} {older}".rstrip())
+    head = f"닮은 계정 (사칭 확인용, 이 사람 처음 본 날 {datetime.fromtimestamp(me, tz):%m-%d}):" if me else "닮은 계정 (사칭 확인용):"
+    return head + "\n" + "\n".join(lines) + "\n(먼저 본 쪽이 원래 주인일 가능성이 큼 — 단정하지 말고 날짜와 함께 말할 것)"
+
+
 async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
     uid, note = await _resolve_who(ctx, str(a.get("who", "")))
     if not uid:
@@ -111,7 +172,8 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
             return f"ID {uid}: 소담이 본 적 없고 텔레그램도 알려주지 않음 (봇과 대화한 적 없는 사람)."
     cur = f"{display_name(row['first_name'], row['last_name'], None)}" + (f" @{row['username']}" if row["username"] else " (아이디 없음)")
     hist = _strip_html(await namehist.history_text(db, uid, ctx.svc.cfg.tz)) if not remote else ""
-    return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), hist, await _seen_rooms(ctx, uid)) if x)
+    look = await lookalikes(db, uid, ctx.svc.cfg.tz) if not remote else ""
+    return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), hist, look, await _seen_rooms(ctx, uid)) if x)
 
 
 async def t_grant_lookup(ctx: ToolCtx, a: dict) -> str:
@@ -281,8 +343,9 @@ async def t_owner_room_view(ctx: ToolCtx, a: dict) -> str:
 
 ROOM = {"type": "string", "description": "방 이름(일부) 또는 방 ID"}
 CHECKUP_TOOLS = [
-    (Tool("lookup_user", "숫자 ID·@아이디·이름으로 사람 찾기: 지금 이름·@아이디, 이름·아이디 변경 기록, 본 방(권한 따라). "
-          "'7647564988 누구야?', '@abc 예전 이름 뭐야?' 같은 질문에.",
+    (Tool("lookup_user", "숫자 ID·@아이디·이름으로 사람 찾기: 지금 이름·@아이디, 이름·아이디 변경 기록(allhistory), 같은 이름·비슷한 "
+          "아이디를 쓰는 다른 계정(사칭 확인), 본 방(권한 따라). '7647564988 누구야?', '@abc 예전 이름 뭐야?', '이름 뭐로 바꿨는지', "
+          "'누구 사칭이야?' 같은 질문에. 대상을 안 말했으면 답장한 사람.",
           {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"}}, ["who"], t_lookup_user), True),
     (Tool("grant_lookup", "[오너] 사람 찾기에서 모든 방을 볼 수 있는 권한을 특정 사람에게 주거나(on=true) 뺀다(on=false). "
           "'○○한테 사람 찾기 전체 권한 줘'. 이 1:1 에 확인 버튼을 보냄 (오너가 눌러야 저장).", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},

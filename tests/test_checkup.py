@@ -47,6 +47,31 @@ async def lookup_by_number_at_and_old_at_and_marks_tainted():
 
 
 @test
+async def lookalike_accounts_for_impersonation_check():
+    """실제 2026-10-07 백악관: 문주(@Amxjdjl, 09-28부터)를 @Amxjdjl1(10-01 들어옴)·@Amxjdj1(10-03) 두 계정이 '백문주'로 따라 함."""
+    db, svc, bot = await world()
+    real, fake1, fake2, other = 8759055440, 8885720677, 8960636142, 555
+    for uid, rows in ((real, [("문주", "백", None, 1000), ("문주", "백", "Amxjdjl", 5000)]),
+                      (fake1, [("\u2063", None, "boombooom6666", 2000), ("백문주", None, "Amxjdjl1", 9000)]),
+                      (fake2, [("끝까지쫒아감", None, "gogo822", 3000), ("백문주", None, "Amxjdj1", 9500)]),
+                      (other, [("다른사람", None, "someone99", 1500)]),
+                      (777, [("백문주", None, "zzzqqq", 9900)])):
+        for f, l, u, ts in rows:
+            await db._write("INSERT INTO name_history(user_id, first_name, last_name, username, ts) VALUES(?,?,?,?,?)", (uid, f, l, u, ts))
+        f, l, u, _ = rows[-1]
+        await add_member(db, A, fake_user(uid, f, u))
+        await db._write("UPDATE users SET last_name=? WHERE user_id=?", (l, uid))
+    out = await C.t_lookup_user(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(fake1)})
+    assert "닮은 계정" in out and str(real) in out and str(fake2) in out and str(other) not in out, out
+    assert "비슷한 아이디 @Amxjdjl" in out and "먼저 봄" in out
+    assert "ID 777" in out and "같은 이름 '백문주'" in out                                  # 아이디는 전혀 달라도 같은 이름
+    lines = [l for l in out.splitlines() if l.startswith("- ID")]
+    assert lines[0].startswith(f"- ID {real}"), lines                                   # 먼저 본 계정(원래 주인 후보)부터
+    out = await C.t_lookup_user(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(other)})
+    assert "닮은 계정" not in out
+
+
+@test
 async def seen_rooms_depend_on_who_asks():
     db, svc, bot = await world()
     owner = await C.t_lookup_user(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(LOVE)})
