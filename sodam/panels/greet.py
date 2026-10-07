@@ -95,7 +95,8 @@ async def s_text(c: PanelCtx) -> Screen:
     tpl = (await c.svc.db.get_settings(c.cid))["greet_template"]
     if tpl:
         text = (f"📄 <b>인사말</b> ({len(tpl)}자)\n\n<blockquote>{esc(tpl)}</blockquote>\n\n"
-                "<code>{names}</code> 자리에 새 멤버 이름(멘션)이 들어가요.")
+                "<code>{names}</code> 자리에 새 멤버 이름(멘션)이 들어가요. "
+                "<code>{username}</code> @아이디 · <code>{id}</code> 고유번호 · <code>{time}</code> 들어온 시각도 돼요.")
     else:
         text = ("📄 <b>인사말</b>: 비어 있음\n\n지금은 AI가 방 말투에 맞춰 매번 새로 인사해요.\n"
                 f"예: <i>{esc(FALLBACKS[0].replace('{names}', '홍길동'))}</i>\n\n"

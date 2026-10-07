@@ -122,7 +122,7 @@ menu.register_token_action("fw_del", t_delete, fresh=True)
 menu.register_input("fwt", (
     "📄 새 <b>퇴장 인사 문구</b>를 보내주세요.\n"
     "<code>{name}</code> 나간 사람 이름 (멘션 아님) · <code>{username}</code> @아이디 · "
-    "<code>{id}</code> 숫자 ID · <code>{count}</code> 남은 멤버 수\n"
+    "<code>{id}</code> 숫자 ID · <code>{count}</code> 남은 멤버 수 · <code>{time}</code> 나간 시각\n"
     "예: <code>{name}님이 나가셨어요. 현재 {count}명</code>\n"
     f"<code>{{id}}</code> 가 없으면 맨 아래에 🆔 줄을 붙여요. (최대 {farewell.MAX_TEMPLATE}자)"), "fw", in_text, s_fw)
 menu.register_input("fwb", (

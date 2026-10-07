@@ -26,7 +26,7 @@ from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHand
 from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, commands, diskguard, farewell, free, gametime, hooks, joinreq, memory, menu, namehist, news, persist, raid, reports, rules, security, semsearch, social,
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
-from . import addguard, agent, aiqueue, apikeys
+from . import addguard, agent, aiqueue, apikeys, subgate
 from . import mediastore, medialog, modactions
 from .agent import run_agent
 from .db import disk_full
@@ -210,6 +210,7 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     await svc.db.log_join(chat_id, user.id, user_name(user), user.username)
     if s["greet_enabled"]:
         svc.greeter.queue(bot, chat_id, user.id, user_name(user))
+    await subgate.on_join(svc, bot, chat_id, user, s)   # 채널 구독 필수 (선택) — 구독 전엔 채팅 금지 + 안내
 
 
 async def _cas_ban(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: User) -> None:
@@ -553,6 +554,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if notice is not None:  # "" = 지웠지만 안내는 생략 (잠긴 종류 안내는 10분에 한 번)
             if notice:
                 await send_temp(context, chat_id, notice)
+            return
+        if await subgate.gate(svc, bot, msg, s):   # 채널 구독 필수 (선택, sodam/subgate.py)
             return
 
     # 관리 검사를 통과한 메시지 → 백그라운드 후처리 (태그 알림 등). 실패해도 메시지 처리는 계속
