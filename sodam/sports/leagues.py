@@ -27,6 +27,7 @@ class League:
     korean: bool = False      # 국내 리그 (ESPN 에 없음)
     naver_codes: tuple[str, ...] = ()   # 네이버 종합대회(아시안게임 등): gameId[4:7] 종목 코드로 거름 (FBL 축구 · VVO 배구 · VBV 비치발리볼)
     minor: bool = False       # 이름으로 부를 때만 (종목 전체 '.스포츠 축구' 에선 빼서 ESPN 요청이 수십 개로 늘지 않게)
+    khl: bool = False         # KHL 공식 앱 API (providers.KHL — ESPN·API-Sports 에 없음)
 
 
 SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊",
@@ -112,6 +113,8 @@ _L = [
     League("wvleague", "V리그 여자", "volleyball", None, "wkovo", None, ("volleyball", 152),
            ("여자배구", "v리그 여자", "v리그여자", "wkovo", "여배"), korean=True),
     League("nhl", "NHL", "hockey", "hockey/nhl", None, "4380", None, ("nhl", "북미하키", "엔에이치엘", "미국하키")),
+    League("khl", "KHL", "hockey", aliases=("khl", "케이에이치엘", "콘티넨탈하키리그", "콘티넨탈 하키 리그", "콘티넨탈하키",
+                                            "러시아하키", "러시아아이스하키", "kontinental hockey league"), khl=True),
     League("ufc", "UFC", "mma", "mma/ufc", "ufc", None, None, ("ufc", "유에프씨")),
     # ── 2026-10-03 추가 ('우리 없는 데이터 전부' — 방 요청이 계속 옴). ESPN 실측으로 경기가 오는 것만, 이름으로 부를 때만 (minor)
     League("championship", "잉글랜드 챔피언십", "soccer", "soccer/eng.2", None, None, None, ('챔피언십', 'efl챔피언십', '잉글랜드2부', 'championship'), minor=True),
@@ -302,6 +305,28 @@ _T = [
     ("nhl", "Toronto Maple Leafs", "토론토 메이플리프스", "메이플리프스"), ("nhl", "Edmonton Oilers", "에드먼턴", "오일러스"),
     ("nhl", "New York Rangers", "뉴욕 레인저스"), ("nhl", "Boston Bruins", "보스턴 브루인스", "브루인스"),
     ("nhl", "Vegas Golden Knights", "베이거스", "골든나이츠"), ("nhl", "Florida Panthers", "플로리다", "팬서스"),
+    # KHL (소스 = KHL 공식 앱 API 러시아어 팀 이름, 실측 2026-10-08 22팀)
+    ("khl", "СКА", "SKA", "ska", "에스카", "ска", "상트페테르부르크"), ("khl", "ЦСКА", "CSKA", "cska", "цска", "씨에스카"),
+    ("khl", "Спартак", "스파르타크", "spartak", "спартак", "스파르타크 모스크바"),
+    ("khl", "Динамо М", "디나모 모스크바", "dynamo moscow", "dinamo moscow", "디나모모스크바"),
+    ("khl", "Динамо Мн", "디나모 민스크", "dinamo minsk", "dynamo minsk", "디나모민스크", "민스크"),
+    ("khl", "Локомотив", "로코모티프", "lokomotiv", "локомотив", "야로슬라블"),
+    ("khl", "Ак Барс", "악바르스", "ak bars", "ак барс", "악 바르스", "카잔"),
+    ("khl", "Авангард", "아방가르드", "avangard", "авангард", "옴스크"),
+    ("khl", "Металлург Мг", "메탈루르크", "metallurg", "metallurg magnitogorsk", "마그니토고르스크"),
+    ("khl", "Салават Юлаев", "살라바트 율라예프", "salavat yulaev", "율라예프", "우파"),
+    ("khl", "Трактор", "트락토르", "traktor", "трактор", "첼랴빈스크"),
+    ("khl", "Северсталь", "세베르스탈", "severstal", "северсталь", "체레포베츠"),
+    ("khl", "Торпедо", "토르페도", "torpedo", "торпедо", "니즈니노브고로드"),
+    ("khl", "Автомобилист", "아브토모빌리스트", "avtomobilist", "автомобилист", "예카테린부르크"),
+    ("khl", "Сибирь", "시비르", "sibir", "сибирь", "노보시비르스크"),
+    ("khl", "Нефтехимик", "네프테히미크", "neftekhimik", "нефтехимик", "니즈네캄스크"),
+    ("khl", "Адмирал", "아드미랄", "admiral", "адмирал", "블라디보스토크"),
+    ("khl", "Амур", "아무르", "amur", "амур", "하바롭스크"),
+    ("khl", "Барыс", "바리스", "barys", "барыс", "아스타나"),
+    ("khl", "Лада", "라다", "lada", "лада", "톨리야티"),
+    ("khl", "ХК Сочи", "소치", "sochi", "hc sochi", "хк сочи"),
+    ("khl", "Драконы", "상하이 드래곤스", "shanghai dragons", "드래곤스", "쿤룬", "kunlun"),
     # KBO (네이버 이름)
     ("kbo", "KIA", "KIA", "기아", "기아타이거즈", "타이거즈", "kia 타이거즈"), ("kbo", "LG", "LG", "엘지", "lg트윈스", "엘지트윈스"),
     ("kbo", "한화", "한화", "한화이글스", "이글스"), ("kbo", "삼성", "삼성", "삼성라이온즈", "라이온즈"),

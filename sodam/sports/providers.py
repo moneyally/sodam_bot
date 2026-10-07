@@ -720,3 +720,105 @@ class APISports(Provider):
         if not got:
             raise SportsError("경기 정보를 가져오지 못했어요. 잠시 후 다시 해주세요.")
         return sorted(games.values(), key=lambda g: g.start)
+
+
+# ── KHL (콘티넨탈 하키 리그) ────────────────────────────────
+# ESPN·API-Sports 에 없음 → KHL 공식 앱(khl.ru 모바일)이 쓰는 웹캐스터 API (키 없음, ESPN 처럼 비공식 공개 API).
+# 실측 2026-10-08 (서버, tests/fixtures/sports/khl_events.json): events_v2.json?q[start_at_lt_time_from_unixtime]=초
+# &order_direction=desc&page=N → 그 시각 이전 경기 16개씩 [{"event": {...}}]. game_state_key not_yet_started·in_progress·
+# finished · period(10·-1 같은 내부 값 — 안 씀) · score "team_a:team_b" (team_a = 홈 — location 이 team_a 도시) · start_at(ms) ·
+# scores.first_period…overtime·bullitt(슛아웃). 순위는 이 API 에서 확인 못 함. 끄기: SPORTS_KHL=0.
+KHL_URL = "https://khl.api.webcaster.pro/api/khl_mobile/events_v2.json"
+_KHL_STATE = {"not_yet_started": "pre", "in_progress": "in", "finished": "post"}
+KHL_PAGES = 3          # 하루치(보통 5~11경기)는 1~2쪽, 팀 경기는 3쪽(약 일주일)
+
+
+class KHL(Provider):
+    name = "khl"
+
+    def __init__(self, fetch: Fetch, on: bool | None = None, clock=None):
+        self.fetch = fetch
+        self._on = on
+        self.clock = clock or time.time
+        self._unknown: set[str] = set()
+
+    def enabled(self) -> bool:
+        return self._on if self._on is not None else os.getenv("SPORTS_KHL", "1") != "0"
+
+    def supports(self, lg: League) -> bool:
+        return lg.khl
+
+    async def _page(self, before: int, page: int) -> list[dict]:
+        data = await self.fetch(KHL_URL, {"q[start_at_lt_time_from_unixtime]": str(before), "order_direction": "desc",
+                                          "page": str(page)}, {"User-Agent": UA})
+        if not isinstance(data, list):
+            return []
+        return [x.get("event") or {} for x in data if isinstance(x, dict)]
+
+    def _state(self, key: str) -> str:
+        if key in _KHL_STATE:
+            return _KHL_STATE[key]
+        k = (key or "").lower()
+        for word, st in (("postpon", "postponed"), ("cancel", "cancel"), ("suspend", "suspended")):
+            if word in k:
+                return st
+        if key not in self._unknown:
+            self._unknown.add(key)
+            log.warning("KHL 모르는 상태 %s", key)
+        return "pre"
+
+    def parse(self, lg: League, ev: dict, src: str = "") -> Game | None:
+        try:
+            start = int(ev["start_at"]) // 1000
+        except (KeyError, TypeError, ValueError):
+            return None
+        a, b = ev.get("team_a") or {}, ev.get("team_b") or {}
+        state = self._state(ev.get("game_state_key") or "")
+        hs = as_ = None
+        if state in ("in", "post", "suspended"):
+            m = re.fullmatch(r"\s*(\d+)\s*:\s*(\d+)\s*", str(ev.get("score") or ""))
+            if m:
+                hs, as_ = int(m.group(1)), int(m.group(2))
+        sc = ev.get("scores") or {}
+        detail = ""
+        if state == "in":     # period 칸은 10·-1 같은 내부 값이라(실측) 안 씀 — 점수가 생긴 피리어드 칸으로 셈
+            done = [k for k in ("first_period", "second_period", "third_period") if sc.get(k) is not None]
+            detail = "슛아웃" if sc.get("bullitt") else "연장" if sc.get("overtime") else f"{len(done)}피리어드" if done else ""
+        elif state == "post":
+            detail = "슛아웃 끝" if sc.get("bullitt") else "연장 끝" if sc.get("overtime") else ""
+        return Game(f"khl:{ev.get('id')}", lg.code, start, a.get("name") or "?", b.get("name") or "?", hs, as_, state, detail, src=src)
+
+    async def _events(self, before: int, until: int | None = None) -> list[dict]:
+        """before 이전 경기를 최신부터. until 을 주면 그보다 앞선 경기가 나올 때까지만 (쪽 수 상한 KHL_PAGES)."""
+        out: list[dict] = []
+        for page in range(1, KHL_PAGES + 1):
+            evs = await self._page(before, page)
+            out += evs
+            starts = [int(e.get("start_at") or 0) // 1000 for e in evs]
+            if len(evs) < 16 or (until is not None and starts and min(starts) < until):
+                break
+        return out
+
+    async def day(self, lg: League, d: date, only: set[str] | None = None) -> list[Game]:
+        src = f"khl:{d.isoformat()}"
+        if only is not None and src not in only:
+            return []
+        begin = int(datetime(d.year, d.month, d.day, tzinfo=KST).timestamp())
+        games = {}
+        for ev in await self._events(begin + 86400, until=begin):
+            g = self.parse(lg, ev, src)
+            if g and kst_day(g.start) == d:
+                games[g.key] = g
+        return sorted(games.values(), key=lambda g: (g.start, g.key))
+
+    async def standings(self, lg: League) -> list[Row]:
+        raise SportsError(f"{lg.name} 순위는 아직 못 봐요 (경기 일정·점수·알림은 돼요).")
+
+    async def team_games(self, lg: League, team: str) -> list[Game]:
+        now = int(self.clock())
+        games = {}
+        for ev in await self._events(now + 4 * 86400):
+            g = self.parse(lg, ev, f"khl:{kst_day(int(ev.get('start_at') or 0) // 1000).isoformat()}")
+            if g and (same_team(g.home, team, lg.code) or same_team(g.away, team, lg.code)):
+                games[g.key] = g
+        return sorted(games.values(), key=lambda g: g.start)
