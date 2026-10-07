@@ -25,6 +25,9 @@ MAX_STEPS = 8          # 도구 호출 라운드 최대 횟수
 RUN_USD_CAP = 0.15     # 한 실행(도구 안 AI 포함, 그림·영상 만들기 요금은 빼고)이 이만큼 쓰면 더는 도구 라운드 안 함
 # (2026-10-07: 0.05 였을 땐 GPT-6 sol 한 라운드 ~$0.02 + 그림 한 장 ~$0.05 라 36시간 186번 중 23번이 일하다 끊김 —
 #  '30초 뒤 불러' '활동 좋은 사람 태그' 가 '처리 안 됐어요' 로 끝남. 라운드 수는 MAX_STEPS 가 막음)
+# 그림·스티커·움프를 만든 실행은 그룹방도 MEDIA_DEADLINE 까지 (2026-10-07 실측: 원본 고치기 16초 + 렌더 → 25초에 걸려 경고 고칠 기회 없이 버림)
+MAKES = frozenset({"make_image", "make_sticker", "make_profile_video", "run_code"})
+MEDIA_DEADLINE = 90
 DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금까지로 답 (OpenAI Agents SDK max_turns 같은 벽시계 상한 — 단톡방은 빨리)
 TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
 MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
@@ -463,8 +466,9 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
             run.event("cap", kind="usd", round=step)
             break
-        if step and time.monotonic() - started > deadline:        # 시간 상한: 기다리게 하지 말고 지금까지로 답
-            log.warning("에이전트 시간 상한 %d초 (chat=%s, %d라운드) → 도구 없이 마무리", deadline, ctx.chat_id, step)
+        limit = MEDIA_DEADLINE if ctx.chat_id < 0 and any(s.get("tool") in MAKES for s in run.steps) else deadline
+        if step and time.monotonic() - started > limit:          # 시간 상한: 기다리게 하지 말고 지금까지로 답
+            log.warning("에이전트 시간 상한 %d초 (chat=%s, %d라운드) → 도구 없이 마무리", limit, ctx.chat_id, step)
             run.event("cap", kind="time", round=step)
             break
         inject()

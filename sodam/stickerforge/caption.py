@@ -333,6 +333,11 @@ def glyph_check(text, font_path, style, threshold=0.6) -> dict:
     frames, info = render(text, font_path, replace(style, anims=(), typing=False))
     luma = frames[-1].convert("L"); ss = info["supersample"]; big = (S * ss, S * ss)
     font = ImageFont.truetype(font_path, info["size"] * ss); box = info["bbox"]
+    col = style.colors()
+    fill_luma = min(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] for c in (col["top"], col["mid"], col["bottom"]))
+    cut = min(70, fill_luma - 40)        # 글자 색 자체가 짙으면(남색 그라데이션 등) 그 색을 '먹힌 자리'로 세지 않게
+    if cut <= 10:                        # 글자가 테두리만큼 짙으면 밝기로는 못 가림 → 검사 건너뜀 (2026-10-07 루피 '출근완료' 오탐)
+        return {"worst": 0.0, "damaged": [], "ok": True}
     worst, damaged = 0.0, []
     for i, ch in enumerate(text):
         if ch == " ":
@@ -343,7 +348,7 @@ def glyph_check(text, font_path, style, threshold=0.6) -> dict:
         area = sum(mask.histogram()[255:])
         if not area:
             continue
-        dark = Image.composite(luma.point(lambda v: 255 if v < 70 else 0), Image.new("L", (S, S), 0), mask)
+        dark = Image.composite(luma.point(lambda v: 255 if v < cut else 0), Image.new("L", (S, S), 0), mask)
         pct = 100.0 * sum(dark.histogram()[255:]) / area
         worst = max(worst, pct)
         if pct > threshold:

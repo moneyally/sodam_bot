@@ -109,5 +109,19 @@ def every_font_has_hangul():
         assert not L.missing_glyphs("포인트 지급완료 출근 방가 ABC 123!?", name), name
 
 
+@test
+def dark_caption_colors_are_not_broken_glyphs():
+    """실측 2026-10-07 루피 '출근완료': 남색 그라데이션 글자 → 글자 색을 '먹힌 자리'로 세서 glyphs 2.48% 로 거절됨."""
+    from sodam.stickerforge import caption as C
+    style = C.Style(top=(245, 247, 252), mid=(175, 184, 204), bottom=(70, 84, 112), extrude=(25, 36, 57), stroke=6, depth=10,
+                    size_max=78, anims=("bounce", "punch", "shine"))
+    assert C.glyph_check("출근완료", SF.FONT, style)["ok"]
+    s, err = SF.sanitize({"mode": "cutout", "caption": {"text": "출근완료", "top": [245, 247, 252], "mid": [175, 184, 204],
+                                                       "bottom": [70, 84, 112], "extrude": [25, 36, 57], "stroke": 6, "depth": 10,
+                                                       "size_max": 78}})
+    res = SF.render_static(mascot(), s)
+    assert res.ok, res.summary()
+
+
 if __name__ == "__main__":
     run_all()

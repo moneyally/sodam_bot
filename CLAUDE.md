@@ -561,6 +561,12 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   피사체 자리·크기 = motion keyframes 한 점. 정지 스티커는 마지막 장면 한 장만 그림(build last_only, 7초→4초).
   **run_code 연계**: 코드가 `src_*.png` 로 저장한 그림은 방에 안 올리고 ctx.image(다음 make_sticker·make_profile_video 원본) ·
   그룹방 run_code 는 room_read 를 켜지만 make_sticker·make_profile_video 는 `tools.MAKE_AFTER_READ` 로 허용(결과가 그림 한 장뿐). 안내서 `guide/sticker.md`.
+- **스티커 따라 만들기** (2026-10-07 실측 대한동구 루피 2번 실패): ① 원본 고치기 16초+렌더로 그룹 25초 상한에 걸려 경고 고칠 기회 없이 버림 →
+  만들기 도구(agent.MAKES: make_image·make_sticker·make_profile_video·run_code)를 쓴 실행은 MEDIA_DEADLINE 90초 ·
+  redraw(그림 AI 값 냄) 뒤엔 가벼운 경고(자막 겹침)는 보내고 HARD_WARN(잘림·구멍·하얗게·까맣게·요란)만 고치게 ②
+  짙은 글자 색(남색 그라데이션)을 caption.glyph_check 가 '먹힌 글자'로 세서 규격 실패 → 글자 색 밝기 기준으로 문턱 ③ 스티커에 답장하며 새 글자만 →
+  원래 글자 위에 겹침 → COPY_CHECK: 답장한 그림에 새 글자를 얹고 redraw 가 없으면 원본 글자를 먼저 읽어(read_text, 몇 원) 있으면 안 그리고
+  'redraw+old_text 로 다시' (accept_warnings 면 그대로) · examples '스티커 따라' = 견본 글자 모양(위치·크기·글꼴·색·테두리·입체)을 text 레이어 값으로 베끼기.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)

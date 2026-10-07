@@ -31,6 +31,8 @@ FREE_DAILY = 5
 REDRAW_KEEP = ("Keep the same character, pose, expression, art style, line work and colors exactly. "
                "Do not write any text, letters, numbers or speech bubbles anywhere. "
                "Place it on a plain flat solid white background with nothing else.")
+COPY_CHECK = True   # 답장한 그림에 새 글자를 얹을 때 원본 글자 읽기 (작은 모델 몇 원 — 테스트 기본은 끔, tests/fakes.py)
+HARD_WARN = ("가장자리에서 잘림", "배경 빼기 구멍", "하얗게 날아감", "거의 까맣", "너무 요란")   # 이건 고쳐서 다시 (까맣게·하얗게 날아감·잘림)
 OCR_SYSTEM = ("You read text in a sticker image. Return JSON {\"texts\": [every piece of visible text exactly as written]}. "
               "Empty list if there is none. Do not guess hidden text.")
 
@@ -260,6 +262,16 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     if await db.counter(day, 0, f"stk:{uid}") >= FREE_DAILY:
         return f"스티커는 한 사람 하루 {FREE_DAILY}개까지. 내일 다시 가능하다고 안내."
+    new_words = [str((spec.get("caption") or {}).get("text") or "")] + [str(l.get("text") or "") for l in spec.get("layers") or []
+                                                                         if l.get("type") == "text"]
+    new_words = " ".join(w for w in new_words if w.strip())
+    if COPY_CHECK and new_words and not str(a.get("redraw") or "").strip() and not a.get("accept_warnings") and ctx.image is not None \
+            and src is ctx.image.data:   # 답장한 그림·스티커에 새 글자 = 따라 만들기 → 원본에 글자가 있으면 먼저 지워야 겹치지 않음
+        found = [t for t in (await read_text(ctx, src) or []) if _norm(t) and _norm(t) not in _norm(new_words)]
+        if found:
+            return (f"원본 그림에 이미 글자 '{' / '.join(found)[:40]}' 가 있음 (안 그렸음). 따라 만들기: redraw='remove the text "
+                    f"\\'{found[0][:20]}\\' only, keep the character and style' + old_text='{found[0][:20]}' 로 다시 부를 것 — 글자 모양(색·테두리·"
+                    "위치·크기)은 원본을 보고 text 레이어 값으로. 원래 글자를 일부러 남기는 거면 accept_warnings=true.")
     static = a.get("format") == "static"
     forge = SF.forge_static if static else SF.forge
     busy = asyncio.create_task(_busy(ctx))
@@ -293,6 +305,8 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
         log.warning("sticker failed: %s", res.summary())
         await L.log(db, chat_id=ctx.chat_id, user_id=uid, request=request, kind=res.keying, spec=spec, outcome="fail")
         return f"스티커가 텔레그램 규격 검사를 통과 못 함 ({res.summary()[:120]}). 효과를 줄이거나 다른 사진으로 다시 하자고 안내."
+    if res.warnings and redrawn and not any(h in w for w in res.warnings for h in HARD_WARN):
+        a = {**a, "accept_warnings": True}     # 그림 AI 값(원본 고치기)을 이미 냈으니 가벼운 경고(자막 겹침·움직임)면 버리지 않고 보냄
     if res.warnings and not a.get("accept_warnings"):   # 소담이는 결과를 못 보니 지표가 대신 말함 → 한 번 고쳐 다시
         return ("만들었지만 검수 경고 (아직 안 보냄): " + " / ".join(res.warnings)
                 + f". 지표 {res.metrics}. 경고가 말하는 것 하나만 고쳐 다시 부를 것 — 그래도 경고면 accept_warnings=true 로 보냄.")
