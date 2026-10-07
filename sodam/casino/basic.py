@@ -241,7 +241,9 @@ async def g_slot(ctx: Ctx) -> None:
 SPORTS = {
     # 명령: (이모지, 성공 값, 배당, 설명)
     "농구": ("🏀", {4, 5}, 2.4, "골인하면 ×2.4"),
-    "축구": ("⚽", {4, 5}, 2.4, "골이면 ×2.4"),   # 1~3 은 노골 (PTB 문서: 4·5 골)
+    # ⚽ 3·4·5 = 공이 골망에 들어가는 그림, 1·2 = 빗나감·골대. PTB 문서는 '4·5 골' 이라 적혀 있지만 실제 그림과 다름
+    # (2026-10-07 얼라이드: 3 이 골 그림인데 '아깝다 ❌' 로 5,962P 회수). 확률 60% → ×1.6 (예전 40%×2.4 와 같은 96%).
+    "축구": ("⚽", {3, 4, 5}, 1.6, "골이면 ×1.6"),
     "다트": ("🎯", {6}, 5.7, "정중앙이면 ×5.7"),
     "볼링": ("🎳", {6}, 5.7, "스트라이크면 ×5.7"),
 }
@@ -261,6 +263,7 @@ def _sport(name: str):
         v = await _roll(ctx, emoji, name, bet)
         if v is None:
             return
+        await record(ctx.svc.db, ctx.chat_id, name, str(v))            # 나중에 '골이었는데?' 를 값으로 확인
         payout = int(bet * mult) if v in wins else 0
         await finish(ctx, name, bet, payout, f"{emoji} <b>{name}</b> {'성공! ✅' if payout else '아깝다… ❌'}")
     return play

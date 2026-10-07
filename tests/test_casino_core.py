@@ -204,6 +204,18 @@ async def sports_emoji_games():
 
 
 @test
+async def football_three_is_goal():
+    # 실제 2026-10-07 얼라이드: ⚽ 공이 골망에 들어갔는데(값 3) '아깝다 ❌' 로 5,962P 회수 → 3·4·5 = 골
+    db, svc, bot, ctx = await setup(values=[3, 2])
+    await say(ctx, A, "!가입")
+    assert "+600P" in await say(ctx, A, "!축구 1000")                     # ⚽ 3 = 골 ×1.6
+    assert "-1,000P" in await say(ctx, A, "!축구 1000")                   # ⚽ 2 = 골대
+    from sodam.casino.board import recent
+    assert await recent(db, CHAT, "축구") == ["3", "2"]          # 값이 남아야 나중에 확인 가능
+    assert await ledger_ok(db, A.id)
+
+
+@test
 async def roulette_and_ladder_rules():
     assert basic.roulette_win(0, "빨강") == 0 and basic.roulette_win(0, "0") == 36
     assert basic.roulette_win(1, "빨강") == 2 and basic.roulette_win(2, "검정") == 2
@@ -238,8 +250,9 @@ async def rtp_simulation_all_basic_games():
         "사다리": rtp(lambda: basic.ladder_payout(basic.LADDER[r.randrange(4)], "좌")),
         "사다리 조합": rtp(lambda: basic.ladder_payout(basic.LADDER[r.randrange(4)], "우4짝")),
     }
-    # 성공 값은 코드가 아니라 문서 기준표로 (코드가 틀리면 여기서 잡히게) — PTB telegram.Dice 문서
-    goal = {"🏀": ({4, 5}, 5), "⚽": ({4, 5}, 5), "🎯": ({6}, 6), "🎳": ({6}, 6)}
+    # 성공 값은 코드가 아니라 기준표로 (코드가 틀리면 여기서 잡히게) — PTB telegram.Dice 문서, 단 ⚽ 는 실제 그림 기준
+    # (문서는 4·5 라고 하지만 3 도 골망에 들어감 — 2026-10-07 얼라이드)
+    goal = {"🏀": ({4, 5}, 5), "⚽": ({3, 4, 5}, 5), "🎯": ({6}, 6), "🎳": ({6}, 6)}
     for name, (emoji, wins, mult, _) in basic.SPORTS.items():
         assert wins == goal[emoji][0], (name, wins)
         results[name] = rtp(lambda: mult if r.randint(1, goal[emoji][1]) in wins else 0)
