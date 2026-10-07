@@ -70,6 +70,9 @@ async def new_member_blocked_until_subscribed_then_released_by_own_button():
     assert prompt, r.bot.calls
     kb = prompt[-1][3]["reply_markup"].inline_keyboard
     assert kb[0][0].url == "https://t.me/wh_channel" and kb[1][0].callback_data == f"sg:{NEW.id}"
+    rows = await r.db._all("SELECT action, detail FROM mod_log WHERE target_id=? ORDER BY id", (NEW.id,))
+    assert [x["action"] for x in rows][:2] == ["join_info", "subgate"], [dict(x) for x in rows]   # 누가·어떻게 + 구독 안 함
+    assert "직접 입장" in rows[0]["detail"] and "@newbie" in rows[0]["detail"]
     other = await press(r, BOSS, NEW.id)                       # 남이 누르면 안 됨
     assert "본인만" in str(other.answers)
     q = await press(r, NEW, NEW.id)                            # 아직 구독 안 함
@@ -94,7 +97,8 @@ async def existing_member_message_deleted_and_off_mode_or_subscriber_passes():
     assert await subgate.check(r.svc, r.bot, r.CHAT, old, st) is False
     SUBS["@wh_channel"].add(old.id)                            # 구독자는 그대로
     r2 = await room()
-    await r2.join(old)
+    await join(r2, old)                                        # 입장 때 이미 구독 → subgate_pass 기록
+    assert (await r2.db._one("SELECT action FROM mod_log WHERE target_id=? AND action LIKE 'subgate%'", (old.id,)))["action"] == "subgate_pass"
     await r2.say(old, "안녕하세요")
     assert not any(c[0] == "restrict" and c[2] == old.id for c in r2.bot.calls)
     r3 = await room(subgate_mode="off")                         # 꺼져 있으면 아무 일 없음

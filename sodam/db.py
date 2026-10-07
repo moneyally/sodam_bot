@@ -251,7 +251,8 @@ REPLY_JOIN = "LEFT JOIN users ru ON ru.user_id=msg.reply_to_user "
 
 # 오너만 보는 감사 기록(owner_room_log). 방 관리자용 기록(.기록·🗂️)에선 뺀다 (오너 1:1 요청이 방 관리자에게 보이지 않게)
 NOT_AUDIT = ("l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press!_%' ESCAPE '!' "
-             "AND l.action <> 'link_del'")   # link_del = 사람별 링크 삭제 (타임라인용, 양이 많아 관리 기록엔 안 보임)
+             "AND l.action NOT IN ('link_del', 'join_info', 'subgate_pass')")
+# link_del = 사람별 링크 삭제 (타임라인용) · join_info = 입장 경로 · subgate_pass = 입장 때 이미 구독 — 양이 많아 관리 기록엔 안 보임
 
 class DB:
     def __init__(self, path: str):
