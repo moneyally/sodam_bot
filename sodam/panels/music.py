@@ -136,6 +136,8 @@ async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | 
     jid = await store.add_job(db, chat_id, "music_play", payload, user.id, dedupe=False)
     st, res = await voice._wait(db, jid, timeout=voice.WAIT_JOB)
     await store.mark_notified(db, "voice_jobs", jid)
+    if res == "slow":                                       # 아직 처리 중 (앞 신청이 밀림) → 결과는 음성 담당이 그 글을 고침
+        return
     if st != "done" and not res.startswith("music:"):      # music:* 는 음성 담당이 이미 글을 고쳤음
         if res == "no_voice_right" and await voice._is_basic_group(bot, chat_id):
             res = "basic_group"
