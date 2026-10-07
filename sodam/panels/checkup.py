@@ -255,6 +255,13 @@ async def t_room_checkup(ctx: ToolCtx, a: dict) -> str:
         out.append("봇 권한: " + ("전부 있음" if not miss else "없는 권한 — " + ", ".join(miss)))
     except TelegramError as e:
         out.append(f"봇 권한 확인 실패: {e.message} (봇이 방에서 나갔거나 관리자가 아님)")
+    try:   # 2026-10-07 백악관: 멤버가 모르는 사람을 '추가' → 스팸 신고로 방이 막힘
+        perms = (await ctx.bot.get_chat(cid)).permissions
+        if perms is not None and getattr(perms, "can_invite_users", False):
+            out.append("⚠️ 일반 멤버도 사람 '추가' 가능 — 모르는 사람을 억지로 넣으면 신고로 방이 막힐 수 있음. "
+                       f"그룹 설정 → 권한 → '사용자 추가' 끄기 권장 (소담 강제 추가 막기: {s.get('add_guard', 'kick')})")
+    except TelegramError:
+        pass
     rows = await svc.db._all("SELECT status, COUNT(*) n FROM agent_runs WHERE chat_id=? AND ts>=? GROUP BY status",
                              (cid, int(time.time()) - 86400))
     counts = {r["status"]: r["n"] for r in rows}

@@ -97,6 +97,10 @@
 - 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
 - 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),
   홍보 @아이디 막기는 선택(기본 꺼짐, promo_mentions) — 켜면 채널·그룹(getChat 조회)·bot 아이디만 (사람 아이디는 조회 불가라 허용 — 말 안 한 멤버 태그 오탐 방지).
+- **강제 추가 막기**(`addguard.py`, tests/test_add_guard.py, 2026-10-07 백악관이 '연락처 강제 추가 → 스팸 신고'로 Chat_restricted):
+  입장의 '들어오게 한 사람'(입장 메시지·chat_member from_user)이 본인·관리자·자유 멤버가 아니면 mod_log forced_add(actor=추가한 사람) +
+  add_guard kick(기본, 추가된 사람 내보냄)/notify/off · 10분 3명↑ 추가하면 추가한 사람 1일 뮤트 + 관리자·오너 알림(incidents).
+  room_checkup 에 '멤버도 사람 추가 가능' 경고. 가입 신청 승인제여도 '추가'는 못 막음 → 그룹 권한 '사용자 추가' 끄기 권장.
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
   입장 검사 훅 `hooks.add_member_join_hook`.
 - 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).
