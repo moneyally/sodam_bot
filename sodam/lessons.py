@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS ai_lessons (
     ts      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ai_lessons_chat ON ai_lessons(chat_id, ts);
-""")
+""", migrate={"ai_lessons": "plain"})   # 방 ID 가 바뀌면 교훈도 새 방으로 (2026-10-07 백악관 이전 때 빠져 있었음)
 
 
 def clean(text: str) -> str:

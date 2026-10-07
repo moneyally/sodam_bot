@@ -88,3 +88,14 @@ async def duplicates_merge_cap_keeps_newest_and_panel_deletes_for_tg_admin_only(
 
 
 _ = (SimpleNamespace, reply)
+
+
+@test
+async def lessons_follow_room_id_change():
+    """실제 2026-10-07: 백악관을 새 방으로 옮길 때 교훈만 migrate 등록이 없어 옛 방에 남았음."""
+    r = Room()
+    await r.open()
+    await r.db._write("INSERT INTO ai_lessons (chat_id, text, by_user, ts) VALUES (?,?,?,?)", (r.CHAT, LESSON, 1, 1))
+    await r.db.migrate_chat(r.CHAT, -1009999)
+    rows = await r.db._all("SELECT chat_id FROM ai_lessons")
+    assert [x["chat_id"] for x in rows] == [-1009999], [dict(x) for x in rows]
