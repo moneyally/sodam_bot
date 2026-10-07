@@ -16,7 +16,7 @@ import re
 import secrets
 from datetime import timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyParameters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
 from ..util import esc, user_name
@@ -38,6 +38,13 @@ def anim_gap() -> float:
     return DICE_WAIT / 3
 
 
+def photo_file(data: bytes) -> InputFile:
+    """사진 bytes → 파일 이름 붙여서. 이름 없는 bytes 를 editMessageMedia 로 바꾸면 텔레그램이 사진 대신
+    'application.octet-stream' 문서로 보여 줌 (실제 2026-10-07 얼라이드 바카라 결과)."""
+    ext = "png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "jpg"
+    return InputFile(data, filename=f"card.{ext}")
+
+
 def _secs(e: RetryAfter) -> float:
     ra = e.retry_after
     return ra.total_seconds() if isinstance(ra, timedelta) else float(ra)
@@ -54,7 +61,7 @@ async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False,
                 if message_id is None:
                     return False
                 await bot.edit_message_media(chat_id=chat_id, message_id=message_id, reply_markup=kb,
-                                             media=InputMediaPhoto(media, caption=text, parse_mode="HTML"))
+                                             media=InputMediaPhoto(photo_file(media), caption=text, parse_mode="HTML"))
             elif caption:
                 await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, parse_mode="HTML",
                                                reply_markup=kb)

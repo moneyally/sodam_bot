@@ -176,6 +176,8 @@ async def blackjack_photo_buttons_swap_the_picture_and_money_is_unchanged():
     assert "딜러 <b>2</b> + 🎴" in cap and "나 <b>15</b>" in cap and "「" not in cap
     medias = bot.named("edit_media")
     assert len(medias) == 3, [m[0] for m in bot.calls]                # 히트 1 + 딜러 공개 1 + 결과 1
+    # 이름 없는 bytes 면 텔레그램이 'application.octet-stream' 문서로 보여 줌 (실제 2026-10-07 얼라이드)
+    assert all(m[3].media.filename.endswith((".jpg", ".png")) for m in medias), [m[3].media.filename for m in medias]
     check_row(media_png(medias[0]), 1, K.cs("♠10", "♦5", "♠3"))       # 히트: 내 카드 3장
     assert medias[0][4] is not None and "더블" not in str(medias[0][4])  # 버튼 유지 (더블은 처음 두 장만)
     check_row(media_png(medias[1]), 0, K.cs("♥2", "♣Q"))              # 공개: 숨긴 카드 뒤집힘
