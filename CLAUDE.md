@@ -849,6 +849,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   2026-10-01 첫 키는 실측 중 계정 정지됨(errors.access) — 오너가 dashboard.api-football.com 에서 확인 필요. ESPN 함정: dates 는 미국 동부 날짜·하루씩(범위 400) → 한국 하루 = 두 번 요청 ·
   순위는 /apis/v2/ · 상태 이름(POSTPONED 등)이 state 보다 우선. 네이버: categoryId 만(upperCategoryId 붙이면 농구·배구 0건) ·
   statusCode BEFORE/READY/STARTED/ENDED/RESULT + cancel/suspended.
+- **KHL**(2026-10-08 벳블리 '.스포츠 KHL' 못 찾음, tests/test_sports_khl.py): ESPN·API-Sports 에 없음 → `providers.KHL` = KHL 공식 앱 API
+  (khl.api.webcaster.pro events_v2, 키 없음·비공식, 컨테이너에선 연결 끊김 → 서버에서만). period 칸은 내부 값이라 피리어드는 점수 칸으로 셈, 순위 없음, 끄기 SPORTS_KHL=0.
 - 리그·팀 한국어 별칭은 leagues.py 표 하나 (리그 code 는 DB 에 저장되니 바꾸지 말 것). 팀 표시도 이 표로 한국어.
 - 명령 `.스포츠 [오늘|내일|어제] [리그/종목/팀]` · `라이브` · `순위 리그` · `팀 이름` · (관리자) `구독/해제 리그·팀` · `목록` · `알림종류` · `조용`.
   AI 도구 sports(action today/live/standings/team/follows, query 한국어 그대로). 1:1 허브 [⚽ 스포츠 알림](m:spt) + 🧩 기능 화면에 바로가기.
