@@ -215,7 +215,7 @@ class LLM:
         out = max(0, total - prompt)
         micro = extra_micro + (costs.usd_micro(model or self.cfg.model, prompt, cached, out, self.cfg.model, written=written)
                                if total else 0)
-        agentlog.add_usage(model, prompt, cached, out, micro)
+        agentlog.add_usage(model, prompt, cached, out, micro, purpose)
         rows: list[tuple[int, str, int]] = []
         if chat_id and total:
             rows.append((chat_id, ROOM_TOKENS, total))

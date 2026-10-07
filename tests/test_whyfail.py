@@ -73,6 +73,25 @@ async def redo_and_complaint_and_tool_error_signals():
 
 
 @test
+def not_mistakes_fixed_retry_card_flow_and_next_one():
+    """2026-10-07 아침 보고 오탐: run_code 첫 시도 경고 뒤 다시 해서 됨(#2636) · 연동 켜기 카드 뒤 다시 말함(#2732) · 메뉴 '다른걸로'×3 → '굿'(#2655)."""
+    row = {"id": 1, "chat_id": -1, "user_id": 5, "ts": 1000, "status": "answered", "events": "[]", "answer": "차트 올렸어요",
+           "mode": "call", "purpose": "agent:admin", "ms": 1, "usd_micro": 0, "trigger": "시간대별 채팅 차트 그려줘",
+           "steps": '[{"tool": "run_code", "result": "실행 중 오류", "gate": "error"}, {"tool": "run_code", "result": "실행 완료", "gate": "ok"}]'}
+    assert not whyfail.analyze(row)
+    assert {f.code for f in whyfail.analyze(row | {"steps": '[{"tool": "run_code", "result": "실행 중 오류", "gate": "error"}]'})} == {"error"}
+    again = [{"id": 2, "ts": 1060, "trigger": "허각 미친사랑의노래 틀어줘"}]
+    card = row | {"trigger": "허각 미친사랑의노래 틀어줘", "steps": '[{"tool": "bot_command", "result": "버튼을 방에 보냈음", "gate": "card", "w": 1}]'}
+    assert not whyfail.analyze(card, again)
+    assert [f.code for f in whyfail.analyze(card | {"steps": "[]"}, again)] == ["redo"]              # 카드 없이 다시 = 그대로 실수
+    nxt = row | {"trigger": "다른걸로", "steps": "[]", "answer": "회덮밥 어때?"}
+    assert not whyfail.analyze(nxt, [{"id": 3, "ts": 1060, "trigger": "다른걸로"}])
+    for t in ("다른 거", "소담아 하나 더", "또 추천해줘", "딴거"):
+        assert whyfail.NEXT_ONE.search(t), t
+    assert not whyfail.NEXT_ONE.search("방 전체 태그해줘 다른 사람 말고")
+
+
+@test
 async def owner_daily_report_and_diag_why():
     r = await room()
     await ask(r, A, [reply("뮤트했어요."), reply("뮤트했어요.")], "소담아 쟤 뮤트해", Role.MEMBER)

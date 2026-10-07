@@ -126,6 +126,26 @@ async def loop_runs_past_four_rounds_until_model_stops():
 
 
 @test
+async def media_cost_does_not_count_toward_run_cap():
+    """그림·영상 요금은 실행 상한에 안 셈 (2026-10-07: 그림 한 장 뒤 상한에 걸려 '처리 안 됐어요' 로 끝나던 23건)."""
+    old, real = fast_timers(), agent.execute
+
+    async def draws(name, args, ctx):
+        agentlog.add_usage("gpt-image-2.5-flare", 0, 0, 0, int(agent.RUN_USD_CAP * 1_000_000 * 2), "image")
+        return "그림 보냈음"
+    agent.execute = draws
+    try:
+        r = await _room(CodexLLM([*_rounds(3), reply("다 했어요")], usd=1000))
+        await r.say(BOSS, "소담아 그림 세 장 그려줘")
+        assert len(r.llm.think_calls) == 4 and not r.llm.think_script                 # 상한에 안 걸리고 끝까지
+        run = await r.db._one("SELECT events FROM agent_runs ORDER BY id DESC LIMIT 1")
+        assert '"cap"' not in run["events"]
+    finally:
+        agent.execute = real
+        restore_timers(old)
+
+
+@test
 async def run_cost_cap_stops_tool_rounds_and_still_answers():
     old = fast_timers()
     try:

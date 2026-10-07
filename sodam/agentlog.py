@@ -97,9 +97,10 @@ class Run:
     tok_cached: int = 0
     tok_out: int = 0
     usd_micro: int = 0
+    media_micro: int = 0     # 그 중 그림·영상 만들기 요금 (실행당 요금 상한엔 안 셈 — 그건 방 하루 그림·영상 한도가 막음)
     closed: bool = False
 
-    def add(self, model: str, inp: int, cached: int, out: int, micro: int) -> None:
+    def add(self, model: str, inp: int, cached: int, out: int, micro: int, media: bool = False) -> None:
         if self.closed:   # 끝난 뒤 뒤늦게 온 사용량(도구가 띄운 백그라운드 작업)은 이 실행에 안 넣음
             return
         if model:
@@ -108,6 +109,8 @@ class Run:
         self.tok_cached += cached
         self.tok_out += out
         self.usd_micro += micro
+        if media:
+            self.media_micro += micro
 
     def step(self, name: str, args: str | None, result: str, write: bool = False) -> None:
         """write = 읽기 도구가 아님 (실제로 무언가 바꾸거나 보내는 도구). gate = 결과 문구로 본 관문 (whyfail.gate_of)."""
@@ -126,11 +129,14 @@ class Run:
 current: ContextVar[Run | None] = ContextVar("sodam_agent_run", default=None)
 
 
-def add_usage(model: str, inp: int, cached: int, out: int, micro: int) -> None:
+MEDIA_PURPOSES = frozenset({"image", "video"})
+
+
+def add_usage(model: str, inp: int, cached: int, out: int, micro: int, purpose: str = "") -> None:
     """llm._record 가 부른다. 에이전트 실행 중이 아니면 아무것도 안 함."""
     run = current.get()
     if run is not None:
-        run.add(model, inp, cached, out, micro)
+        run.add(model, inp, cached, out, micro, media=purpose in MEDIA_PURPOSES)
 
 
 def start(chat_id: int, user_id: int | None, mode: str, trigger: str) -> tuple[Run, Token]:

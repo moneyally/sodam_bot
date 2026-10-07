@@ -65,6 +65,8 @@ COMPLAINT_SEC = 180
 # 한 번 잘 된 뒤 또 부탁하는 게 자연스러운 일 (게임 한 판 더·그림 하나 더) → '다시 요청'을 실패로 안 셈
 AGAIN_OK = frozenset({"start_game", "point_game", "make_image", "make_sticker", "make_profile_video", "make_video",
                       "mention_members", "greet_members", "sports", "news_headlines", "web_search"})
+# '다른 걸로·하나 더·또 추천' = 앞 답이 괜찮아서 다음 걸 달라는 말 (메뉴 추천 '다른걸로'×3 → '굿', 실제 #2655) → 재요청 실수 아님
+NEXT_ONE = re.compile(r"^\s*(소담아?\s*)?(다른\s?(걸로|거|것|거로|메뉴|곡|노래)|딴\s?거|하나\s?더|또\s?(추천|해|줘|하나)|다음\s?(거|꺼|곡))")
 COMPLAINT = re.compile(r"안\s?되(네|잖|냐|는데|노)|안\s?돼|안됨|틀렸|거짓말|아니\s?라고|왜\s?안|못\s?하(네|냐)|멍청|바보야|뭐\s?하냐|"
                        r"그게\s?아니|아니\s?그거|다시\s?해")
 
@@ -134,9 +136,10 @@ def analyze(row, later_runs: list | None = None, replies: list | None = None) ->
                            + (f" (시도한 {', '.join(tried)} 은 막히거나 실패)" if tried else " (도구를 안 씀)")))
     if answer and not st and refused(_col(row, "trigger"), answer):
         out.append(Finding("refuse", "해 달라는 일을 도구 하나 안 찾아보고 '못 해요·기능 없어요'로 끝냄"))
-    for s in st:
+    for i, s in enumerate(st):
         g = s.get("gate", "ok")
-        if g == "error":
+        fixed = any(t.get("tool") == s.get("tool") and t.get("gate", "ok") == "ok" for t in st[i + 1:])
+        if g == "error" and not fixed:            # 고쳐서 다시 불러 된 오류는 실수 아님 (run_code 첫 시도 경고 등)
             out.append(Finding("error", f"{s.get('tool')} 도구 오류: {s.get('result', '')[:60]}"))
         elif g == "off":
             out.append(Finding("off", f"{s.get('tool')}: 이 방에서 꺼진 기능을 쓰려 함"))
@@ -148,7 +151,8 @@ def analyze(row, later_runs: list | None = None, replies: list | None = None) ->
                                        "time": "시간 상한(단톡방 25초)에 걸려 중간에 답함"}.get(e.get("kind"), "상한에 걸림")))
     trig = row["trigger"] or ""
     did_ok = any(s.get("tool") in AGAIN_OK and s.get("gate", "ok") == "ok" for s in st)
-    for nxt in ([] if did_ok or trig.startswith("(이름만") else later_runs or []):
+    carded = any(s.get("gate") == "card" for s in st)   # 확인 카드·버튼을 올린 일 = 누른 뒤 다시 말하는 게 정상 흐름
+    for nxt in ([] if did_ok or carded or NEXT_ONE.search(trig) or trig.startswith("(이름만") else later_runs or []):
         if 0 < nxt["ts"] - row["ts"] <= REDO_SEC and similar(trig, nxt["trigger"] or "") >= 0.5:
             out.append(Finding("redo", f"같은 사람이 {max(1, (nxt['ts'] - row['ts']) // 60)}분 뒤 비슷한 요청을 다시 함 "
                                        f"(#{nxt['id']}) — 첫 답이 해결 못 한 것"))
