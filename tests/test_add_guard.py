@@ -44,6 +44,8 @@ async def member_adding_strangers_gets_them_kicked_logged_and_muted():
     assert sorted(kicked) == [p.id for p in PEOPLE], r.bot.calls
     rows = await r.db._all("SELECT actor_id, target_id FROM mod_log WHERE action='forced_add' ORDER BY id")
     assert [(x["actor_id"], x["target_id"]) for x in rows] == [(BAD.id, p.id) for p in PEOPLE]   # 다음엔 DB 에서 바로 범인
+    how = await r.db._all("SELECT detail FROM mod_log WHERE action='join_info' ORDER BY id")
+    assert len(how) == 5 and all("추가: 추가범(20)" in x["detail"] for x in how), [dict(x) for x in how]
     muted = [c for c in r.bot.calls if c[0] == "restrict" and c[2] == BAD.id]
     assert len(muted) == 1, "3명째에서 한 번만 뮤트"
     assert any("강제 추가 감지" in str(c) for c in r.bot.calls if c[0] in ("send_message", "edit_text")), "관리자·오너 알림"

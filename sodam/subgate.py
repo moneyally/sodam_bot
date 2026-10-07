@@ -146,8 +146,12 @@ async def on_join(svc: Services, bot, chat_id: int, user, s: dict) -> None:
     """handlers.handle_new_member (캡차를 안 띄운 경우) 끝에서."""
     if not active(s) or await _exempt(svc, bot, chat_id, user):
         return
-    if await check(svc, bot, chat_id, user, s) is False:
+    got = await check(svc, bot, chat_id, user, s)
+    if got is False:
         await _block(svc, bot, chat_id, user, s["subgate_channel"])
+    else:   # 입장 때 구독 여부도 기록 (막은 건 _block 이 'subgate' 로)
+        await svc.db.log_mod(chat_id, None, user.id, "subgate_pass" if got else "subgate_unknown",
+                             "입장 때 이미 구독" if got else "구독 여부 확인 못 함 (소담이 채널 관리자 아님?)")
 
 
 async def gate(svc: Services, bot, msg, s: dict) -> bool:

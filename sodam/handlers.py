@@ -170,12 +170,35 @@ def _first_join(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) 
     return True
 
 
+def join_how(cmu) -> str:
+    """멤버 상태 변경(chat_member)에서 어떻게 들어왔는지 (가입 신청 승인·초대링크 이름·폴더 링크)."""
+    if getattr(cmu, "via_join_request", False):
+        return "가입 신청 승인"
+    link = getattr(cmu, "invite_link", None)
+    if link is not None:
+        return "초대링크 " + (getattr(link, "name", None) or (getattr(link, "invite_link", "") or "")[-10:] or "?")
+    if getattr(cmu, "via_chat_folder_invite_link", False):
+        return "폴더 링크"
+    return ""
+
+
 async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, title: str | None, user: User,
-                            by: User | None = None) -> None:
-    """by = 텔레그램이 알려 준 '들어오게 한 사람' (직접 입장이면 본인, 추가·승인이면 그 사람)."""
+                            by: User | None = None, how: str = "") -> None:
+    """by = 텔레그램이 알려 준 '들어오게 한 사람' (직접 입장이면 본인, 추가·승인이면 그 사람). how = join_how."""
     if user.is_bot or not _first_join(context, chat_id, user.id):
         return
     svc, bot = _svc(context), context.bot
+    # 입장 기록: 누가·언제·어떻게 (2026-10-07 백악관 — 강제 추가·구독 확인을 나중에 DB 로 추적)
+    parts = [how] if how else []
+    if by is not None and by.id != user.id:
+        parts.append(f"{'승인' if 'request' in how or '신청' in how else '추가'}: {user_name(by)}({by.id})")
+    elif not how:
+        parts.append("직접 입장 (공개 링크·아이디)")
+    try:
+        await svc.db.log_mod(chat_id, by.id if by else None, user.id, "join_info",
+                             f"{user_name(user)} @{user.username or '-'} · " + " · ".join(parts))
+    except Exception:
+        log.exception("join info log failed")
     await svc.db.ensure_chat(chat_id, title)
     await svc.db.upsert_user(user)
     await svc.db.touch_member(chat_id, user.id, joined=True)
@@ -425,7 +448,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if old.status != new.status and (old.status in admin_states or new.status in admin_states):
         svc.perms.forget(cmu.chat.id)  # 관리자 목록 캐시 갱신
     if not _in_chat(old) and _in_chat(new):
-        await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user, getattr(cmu, "from_user", None))
+        await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user, getattr(cmu, "from_user", None), join_how(cmu))
     elif _in_chat(old) and not _in_chat(new):
         svc.joins.pop((cmu.chat.id, new.user.id), None)  # 다시 들어오면 캡차·CAS·사칭 검사를 다시 받게
         hooks.member_left(svc, cmu.chat.id, new.user.id)
