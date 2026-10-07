@@ -358,6 +358,9 @@ _blpanel.HELP_WAIT = 0.2
 from sodam.panels import sticker as _stkpanel  # noqa: E402
 
 _stkpanel.COPY_CHECK = False  # 원본 글자 읽기(AI 호출)는 대본을 쓰므로 기본 끔 — tests/test_stickerpack.py 가 켜서 검사      # 모르는 봇 /help 답 기다리기 (답하는 가짜 봇은 바로 답함)
+from sodam.panels import stickercopy as _stkcopy  # noqa: E402
+
+_stkcopy.SWAP_FIRST = False  # 글자 바꿔 그리기(그림 AI) 먼저 — tests/test_stickercopy.py 가 켜서 검사
 from sodam import news as _news  # noqa: E402
 
 

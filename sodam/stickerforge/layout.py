@@ -22,6 +22,8 @@ FONTS = {   # 이름: (파일, 설명) — 전부 OFL (data_files/fonts/LICENSE.
     "cute": ("Jua-Regular.ttf", "귀여운 둥근 손글씨풍"),
     "pen": ("NanumPenScript-Regular.ttf", "펜 손글씨"),
     "gothic": ("NanumGothic-ExtraBold.ttf", "깔끔한 굵은 고딕"),
+    "brush": ("EastSeaDokdo-Regular.ttf", "거친 붓글씨 (액션·먹물 느낌)"),
+    "brush2": ("NanumBrushScript-Regular.ttf", "부드러운 붓글씨"),
 }
 ALIGNS = ("center", "left", "right")
 ENTERS = ("none", "pop", "fade", "slide_up", "slide_left", "drop", "wipe", "zoom")
@@ -94,15 +96,18 @@ def _gradient(w: int, h: int, cols: list) -> Image.Image:
 # ── 글자 ─────────────────────────────────────────────────────────────────
 def render_text(text: str, font: str = "bold", size: int = 72, width: float = 0.9, align: str = "center",
                 color=(255, 255, 255), colors=None, stroke: int = 8, stroke_color=(0, 0, 0), depth: int = 0,
-                depth_color=(40, 40, 40), line_gap: float = 0.15) -> Image.Image:
-    """글자 덩어리 한 장 (투명 배경, 꼭 맞게 자른 RGBA). 폭(width×512)·높이(0.9×512)에 맞을 때까지 크기를 줄임."""
+                depth_color=(40, 40, 40), line_gap: float = 0.15, stroke2: int = 0, stroke2_color=(255, 255, 255),
+                glow: int = 0, glow_color=(170, 80, 255), slant: float = 0.0) -> Image.Image:
+    """글자 덩어리 한 장 (투명 배경, 꼭 맞게 자른 RGBA). 폭(width×512)·높이(0.9×512)에 맞을 때까지 크기를 줄임.
+    stroke2 = 테두리 바깥 두 번째 테두리, glow = 바깥 빛번짐(흐림 반경 px) — 견본 글자(금속·네온) 따라 하기용."""
+    outer = stroke + stroke2
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()][:4] or [" "]
     path = font_path(font)
     probe = ImageDraw.Draw(Image.new("L", (8, 8)))
     size = int(size)
     while True:
         ft = ImageFont.truetype(path, size * SS)
-        boxes = [probe.textbbox((0, 0), ln, font=ft, stroke_width=stroke * SS) for ln in lines]
+        boxes = [probe.textbbox((0, 0), ln, font=ft, stroke_width=outer * SS) for ln in lines]
         lw = [b[2] - b[0] for b in boxes]
         lh = [b[3] - b[1] for b in boxes]
         gap = int(size * SS * line_gap)
@@ -110,7 +115,7 @@ def render_text(text: str, font: str = "bold", size: int = 72, width: float = 0.
         if (tw <= width * S * SS and th <= 0.9 * S * SS) or size <= 14:
             break
         size = max(14, int(size * 0.92))
-    pad = (stroke + depth + 4) * SS
+    pad = (outer + depth + 4 + glow * 2) * SS
     W, H = tw + 2 * pad, th + 2 * pad
     back = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     mask = Image.new("L", (W, H), 0)
@@ -121,7 +126,10 @@ def render_text(text: str, font: str = "bold", size: int = 72, width: float = 0.
         yy = y - b[1]
         for k in range(depth * SS, 0, -1):                                   # 입체: 아래·오른쪽으로 겹쳐 찍기
             db.text((x + k * 0.5, yy + k), ln, font=ft, fill=tuple(depth_color) + (255,),
-                    stroke_width=stroke * SS, stroke_fill=tuple(stroke_color) + (255,))
+                    stroke_width=outer * SS, stroke_fill=tuple(stroke2_color if stroke2 else stroke_color) + (255,))
+        if stroke2:
+            db.text((x, yy), ln, font=ft, fill=tuple(stroke2_color) + (255,), stroke_width=outer * SS,
+                    stroke_fill=tuple(stroke2_color) + (255,))
         if stroke:
             db.text((x, yy), ln, font=ft, fill=tuple(stroke_color) + (255,), stroke_width=stroke * SS,
                     stroke_fill=tuple(stroke_color) + (255,))
@@ -129,7 +137,23 @@ def render_text(text: str, font: str = "bold", size: int = 72, width: float = 0.
         y += h + gap
     fill = _gradient(W, H, list(colors)) if colors and len(colors) >= 2 else Image.new("RGBA", (W, H), tuple(color) + (255,))
     back.paste(fill, (0, 0), mask)
+    if glow:                                                                  # 빛번짐: 글자 모양을 흐려 아래에 깔기
+        from PIL import ImageFilter
+        a = back.getchannel("A").filter(ImageFilter.GaussianBlur(glow * SS))
+        a = a.point(lambda v: min(255, int(v * 1.8)))
+        halo = Image.new("RGBA", (W, H), tuple(glow_color) + (0,))
+        halo.putalpha(a)
+        back = Image.alpha_composite(halo, back)
     img = back.resize((max(1, W // SS), max(1, H // SS)), Image.LANCZOS)
+    if slant:                                                                 # 기울임: 위가 오른쪽(+)으로 밀리는 이탤릭
+        extra = int(abs(slant) * img.height) + 2
+        wide = Image.new("RGBA", (img.width + extra, img.height), (0, 0, 0, 0))
+        wide.paste(img, (extra if slant > 0 else 0, 0))
+        img = wide.transform(wide.size, Image.AFFINE, (1, slant, -slant * img.height if slant > 0 else 0, 0, 1, 0),
+                             resample=Image.BICUBIC)
+        if img.width > width * S:                                             # 기울여서 넓어진 만큼 줄임
+            k = width * S / img.width
+            img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))), Image.LANCZOS)
     return img.crop(img.getbbox() or (0, 0, 1, 1))
 
 
@@ -261,15 +285,17 @@ def _place(frame: Image.Image, spr: Image.Image, anchor: tuple, at: tuple, m: tu
 
 def text(frame, u, ctx, text="", font="bold", at=(0.5, 0.85), size=72, width=0.9, align="center", color=(255, 255, 255),
          colors=None, stroke=8, stroke_color=(0, 0, 0), depth=0, depth_color=(40, 40, 40), rotate=0.0, opacity=1.0,
-         enter="pop", enter_dur=0.2, idle="none", amp=1.0, start=0.0, end=1.0, _layer=0, **_):
-    """글자 덩어리 — 위치·크기·여러 줄·글꼴·색/그라데이션·테두리·입체·기울기·등장·계속 움직임"""
+         enter="pop", enter_dur=0.2, idle="none", amp=1.0, start=0.0, end=1.0, _layer=0, stroke2=0,
+         stroke2_color=(255, 255, 255), glow=0, glow_color=(170, 80, 255), slant=0.0, **_):
+    """글자 덩어리 — 위치·크기·여러 줄·글꼴·색/그라데이션·테두리 2겹·빛번짐·입체·기울기·등장·계속 움직임"""
     p = _window(u, start, end)
     if p is None or not str(text).strip():
         return frame
     key = ("text", _layer)
     cache = ctx.setdefault("_layout", {})
     if key not in cache:
-        img = render_text(str(text), font, size, width, align, color, colors, stroke, stroke_color, depth, depth_color)
+        img = render_text(str(text), font, size, width, align, color, colors, stroke, stroke_color, depth, depth_color,
+                          stroke2=stroke2, stroke2_color=stroke2_color, glow=glow, glow_color=glow_color, slant=slant)
         cache[key] = (img, (img.width / 2, img.height / 2))
     spr, anchor = cache[key]
     m = _motion(p, u, enter, enter_dur, idle, amp, _layer)

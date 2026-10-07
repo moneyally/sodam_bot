@@ -10,5 +10,7 @@
 | Jua-Regular.ttf | Jua | Woowahan Brothers (The Jua Project Authors) |
 | NanumPenScript-Regular.ttf | Nanum Pen Script | NAVER Corporation (Sandoll) |
 | NanumGothic-ExtraBold.ttf | Nanum Gothic ExtraBold | NAVER Corporation (Sandoll) |
+| EastSeaDokdo-Regular.ttf | East Sea Dokdo | YoonDesign Inc |
+| NanumBrushScript-Regular.ttf | Nanum Brush Script | NHN Corporation |
 
 OFL 전문: https://openfontlicense.org/open-font-license-official-text/

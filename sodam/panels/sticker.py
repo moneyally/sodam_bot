@@ -69,13 +69,17 @@ def parts_text() -> str:
     lines = ["[motion ≤2] keyframes{pivot:[x,y]축, keys:[{t 0~1, scale, sx, sy, rotate(도,+시계), x, y(화면 비율), opacity, ease}]≤16} "
              f"ease={'|'.join(prims.EASES)} · 이름 있는 움직임: {', '.join(sorted(motions.PRESETS))}"]
     for name, schema in SF.layer_params().items():
-        lines.append(f"[{name}] " + " ".join(f"{k}:{_kind_str(v)}" for k, v in schema.items()))
+        cols = [k for k, v in schema.items() if v[0] == "color"]              # 색 키는 한 번에 (도구 결과 4000자 안)
+        parts = [f"{k}:{_kind_str(v)}" for k, v in schema.items() if v[0] != "color"]
+        if cols:
+            parts.append("·".join(cols) + ":[r,g,b]")
+        lines.append(f"[{name}] " + " ".join(parts))
     lines.append("공통 start·end(0~1 시간 창). particles angle 0=오른쪽 90=아래 -90=위 · blend add=빛(불티·네온) · 연기=smoke+blur 2~4+grow 2~3 · "
                  f"shape=char 면 char 에 글자(이모지는 비슷한 모양으로). 입자 합계 {SF.PARTICLE_BUDGET}, fx+layers ≤{SF.MAX_LAYERS}(text·shape 는 따로 ≤{SF.MAX_LIGHT}).")
-    lines.append("text·shape = 그리는 순서대로 겹침(말풍선 다음 글자). 피사체 자리·크기 = motion keyframes 한 점 {t:0, scale, x, y}. "
-                 "부품으로 안 되는 그림은 run_code 로 그려 src_*.png 로 저장 → 그게 원본.")
-    lines.append("transition = 앞에 그린 것 전체가 사라짐/나타남(direction out|in), to=[r,g,b] 면 그 색이 남음. "
-                 "움프 loop:false = 6초 한 번(타서 없어지기 등), 기본 = 3초 반복×2.")
+    lines.append("text·shape = 순서대로 겹침(말풍선 → 글자). 피사체 자리·크기 = keyframes 한 점 {t:0,scale,x,y}. "
+                 "부품으로 안 되는 그림은 run_code 로 src_*.png 저장 → 원본.")
+    lines.append("transition = 앞 그림 전체가 사라짐·나타남(direction out|in), to=[r,g,b] 면 그 색이 남음. "
+                 "움프 loop:false = 6초 한 번(타서 없어지기), 기본 3초×2.")
     named = sorted(n for n in SF.catalog()["fx"] if n not in prims.LAYERS)   # 같은 이름(flash)은 layers 에선 새 부품
     lines.append("[효과 이름도 layers 에 그대로] " + ", ".join(named) + " (설명은 section=effects)")
     return "\n".join(lines)
@@ -224,7 +228,7 @@ def leftover(texts: list[str], old_text: str, caption: str) -> str:
     return next((t for t in texts if old in _norm(t) or (len(_norm(t)) >= 2 and _norm(t) in old)), "")
 
 
-async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str) -> tuple[bytes | None, str]:
+async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str, keep: str = REDRAW_KEEP) -> tuple[bytes | None, str]:
     """그림 AI 로 원본 고치기 (원래 글자 지우기·자세 바꾸기 등 — 무엇을 바꿀지는 AI 가 말로, 지키는 규칙은 코드가 붙임)."""
     from openai import BadRequestError, OpenAIError
     from ..llm import BudgetExceeded
@@ -232,7 +236,7 @@ async def redraw_source(ctx: tools.ToolCtx, src: bytes, redraw: str, day: str) -
     if await ctx.svc.db.counter(day, ctx.chat_id, "image") >= ctx.settings["image_daily"]:
         return None, "오늘 이 방 그림 한도를 다 써서 원본 고치기(redraw)는 안 됨. redraw 없이 하거나 내일 하자고 안내."
     try:
-        out = await ctx.svc.llm.image(f"{redraw[:600]}. {REDRAW_KEEP}", Attached(src, "image/png", ctx.caller.id), ctx.chat_id)
+        out = await ctx.svc.llm.image(f"{redraw[:600]}. {keep}", Attached(src, "image/png", ctx.caller.id), ctx.chat_id)
     except BudgetExceeded:
         return None, "오늘 AI 사용량 한도를 다 써서 원본 고치기는 못 함."
     except BadRequestError:
