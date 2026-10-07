@@ -62,6 +62,13 @@ REFUSE_NOTE = ("검사: 해 달라는 일인데 도구를 하나도 안 쓰고 '
                "콕 집어 부르기·깨우기 = mention_members, 계산·차트·파일 = run_code, 움프·스티커 효과 = sticker_catalog 로 지금 부품을 보고 조합. "
                "② 빠진 값은 되묻기 전에 기록·조회 도구로 먼저 찾아본다. ③ 그래도 맞는 도구가 없으면 가장 가까운 대안을 실제로 하고, 모자란 부분은 "
                "feature_request 로 접수한 뒤 한 문장으로 알린다. 성적·자해·실제 사람·사칭·위험처럼 규칙상 안 되는 일이면 원래 답을 그대로 둔다.")
+# 만들어 달라는데 도구 없이 글자·기호로 때움 (실제 2026-10-07 얼라이드: '1' 스티커에 답장 '0~9 까지 이모지 만들어줘' →
+# '⓪ ① ② …' 글자만, 다시 '이모지 만들어줘' → '💜₀ 💜₁ …'. 텔레그램에서 이모지·이모티콘 = 스티커)
+_MAKE_ASK = re.compile(r"(이모지|이모티콘|스티커)[^\n]{0,20}(만들|그려|제작|뽑아)|(만들|그려|제작)[^\n]{0,10}(이모지|이모티콘|스티커)")
+_MAKERS = {"copy_sticker", "make_sticker"}
+MAKE_NOTE = ("검사: 만들어 달라는 요청인데 도구를 쓰지 않고 글자·기호·이모지 문자로 대신했습니다. 텔레그램에서 '이모지·이모티콘 만들어' 는 "
+             "스티커를 만들라는 뜻입니다 — 답장한 스티커가 견본이면 copy_sticker (여러 개면 texts), 새로 그리면 make_sticker 를 "
+             "지금 실제로 부르세요. 글자로 때우지 말 것.")
 # 답 첫머리에서 엉뚱한 사람을 부름 (일루왕 10/05: 루피가 '소담아' → '문의주세연님, 불렀죠?') — 보내기 전 코드 검사
 _VOCATIVE = re.compile(r"^\s*([^\s,!~?.]{2,20}?)\s*[,!~]")
 VOCATIVE_NOTE = ("검사: 답 첫머리에서 '{who}' 를 부르는데, 지금 말한 사람은 '{caller}' 이고 요청·답장·단서·도구 결과 어디에도 "
@@ -343,6 +350,8 @@ def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set
         return "advice", ADVICE_NOTE
     if act and not used and allowed and refused(request, text):   # act=False: 말싸움 길 (드립 속 '못 해' 는 거절이 아님)
         return "refuse", REFUSE_NOTE
+    if act and not used and allowed & _MAKERS and _MAKE_ASK.search(request or ""):   # 만들 도구가 꺼진 방이면 안 함
+        return "make", MAKE_NOTE
     people = getattr(ctx, "room_people", None)
     if people:
         c = ctx.caller
@@ -492,7 +501,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 if note:
                     checked = True
                     run.event("check", kind=kind)
-                    if light and kind == "refuse" and not chime:   # 작은 모델이 못 한다고 하면 큰 모델이 처음부터 (도구를 더 잘 찾음)
+                    if light and kind in ("refuse", "make") and not chime:   # 작은 모델이 못 한다고(글자로 때우면) 하면 큰 모델이 처음부터 (도구를 더 잘 찾음)
                         raise _Escalate("refuse", done)
                     messages += [{"role": "assistant", "content": text}, {"role": "system", "content": note}]
                     continue

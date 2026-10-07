@@ -58,6 +58,13 @@ def final_check_refuse_only_without_tools_and_not_banter():
     assert _final_check(Ctx(), ans, req, True, {"x"}, []) == ("", "")              # 도구를 써 보고 못 한 건 그대로
     assert _final_check(Ctx(), ans, req, False, {"x"}, [], act=False) == ("", "")  # 말싸움 길
     assert _final_check(Ctx(), ans, req, False, set(), []) == ("", "")             # 도구가 하나도 없는 실행
+    # 실제 2026-10-07 얼라이드: '1' 스티커에 답장 '다른버전은 0~9까지 이모지 만들어줘' → ⓪①② 글자로 때움
+    from sodam.agent import MAKE_NOTE
+    for req in ("다른버전은 0~9까지 이모지 만들어줘", "이모지 만들어줘", "이걸로 스티커 만들어줘"):
+        assert _final_check(Ctx(), "다른 버전은 이걸로요. ⓪ ① ② ③ 💜", req, False, {"copy_sticker"}, []) == ("make", MAKE_NOTE), req
+    assert _final_check(Ctx(), "⓪ ①", "이모지 뭐 좋아해?", False, {"copy_sticker"}, []) == ("", "")
+    assert _final_check(Ctx(), "보냈어요", "이모지 만들어줘", True, {"copy_sticker"}, []) == ("", "")
+    assert _final_check(Ctx(), "⓪ ①", "이모지 만들어줘", False, {"x"}, []) == ("", "")      # 만들 도구가 꺼진 방
 
 
 async def _room(llm, light="", settings=None):
@@ -183,7 +190,8 @@ def can_map_covers_real_refusals():
     """서버에서 '못 해요' 했던 말 → 지도에 그 말과 도구가 같은 줄에."""
     lines = _can_map().splitlines()
     for word, tool in (("깨워", "mention_members"), ("N분/N시간마다", "schedule_task"), ("효과 늘려", "sticker_catalog"),
-                       ("환율", "web_search"), ("차트", "run_code"), ("소담에 없는 기능", "feature_request")):
+                       ("환율", "web_search"), ("차트", "run_code"), ("소담에 없는 기능", "feature_request"),
+                       ("이모지", "copy_sticker"), ("0~9", "copy_sticker")):
         assert any(word in ln and tool in ln for ln in lines), (word, tool)
 
 
