@@ -180,11 +180,10 @@ async def _recent_made(ctx):
 
 
 async def t_copy_sticker(ctx: tools.ToolCtx, a: dict) -> str:
-    raw = a.get("texts") if isinstance(a.get("texts"), list) and a.get("texts") else [a.get("text")]
-    texts = [t for t in (str(x or "").replace("\\n", "\n").strip()[:60] for x in raw[:MAX_SET]) if t]
+    texts = variants_of(a)
     if not texts:
-        return "새로 넣을 글자(text·texts)가 비어 있음."
-    new_text = " · ".join(texts)
+        return "바꿀 것(text·texts·variants)이 비어 있음."
+    new_text = " · ".join(v["text"] or v["change"] or "꾸미기" for v in texts)
     if ctx.image is None:                      # 답장 없이 '이걸로' — 방금(15분) 소담이 이 사람에게 만든 정지 스티커
         ctx.image = await _recent_made(ctx)
     if ctx.image is None:
@@ -224,16 +223,52 @@ def _blank() -> bytes:
     return b.getvalue()
 
 
-async def _make(ctx, ana: dict, src: bytes, new_text: str, animated: bool, day: str, notes: list[str]):
-    """견본 하나 + 새 글자 하나 → (그림, spec) 또는 (None, 사람에게 보일 이유)."""
-    uid = ctx.caller.id
-    seed = (uid + len(new_text)) % 1000
+def variants_of(a: dict) -> list[dict]:
+    """도구 인자 → 한 장씩 바꿀 것 [{text, style, change}] (최대 MAX_SET). 정해진 종류 없이 아무 조합이나:
+    text = 새 글자(없으면 원래 글자 그대로) · style = 글자 레이어 값(색·테두리·빛번짐·글꼴·기울기…, 엔진 범위로 자름) ·
+    change = 그림 바꾸기 말 (표정·포즈·옷 — 그림 AI)."""
+    raw = a.get("variants") if isinstance(a.get("variants"), list) and a.get("variants") else None
+    if raw is None:
+        raw = [{"text": t} for t in (a.get("texts") if isinstance(a.get("texts"), list) and a.get("texts") else [a.get("text")])]
+    keys = set(SF.layer_params()["text"]) - {"text", "at", "width"}
+    out = []
+    for v in raw[:MAX_SET]:
+        v = v if isinstance(v, dict) else {"text": v}
+        text = str(v.get("text") or "").replace("\\n", "\n").strip()[:60] or None
+        style = {k: x for k, x in (v.get("style") or {}).items() if k in keys} if isinstance(v.get("style"), dict) else {}
+        change = " ".join(str(v.get("change") or "").split())[:200] or None
+        if text or style or change:
+            out.append({"text": text, "style": style, "change": change})
+    return out
+
+
+async def _make(ctx, ana: dict, src: bytes, v: dict, animated: bool, day: str, notes: list[str], seed: int):
+    """견본 하나 + 바꿀 것 하나 → (그림, spec) 또는 (None, 사람에게 보일 이유)."""
+    main = max(ana["texts"], key=lambda t: (t["box"][2] - t["box"][0]) * (t["box"][3] - t["box"][1]), default=None)
+    new_text = v["text"] or (main["text"] if main else "")
+
+    def code_text(base, redrawn):                                          # 글자는 코드가 견본 값(+ style)으로
+        spec = build_spec(ana, new_text, animated, seed, redrawn) if new_text else plain_spec(ana, animated, seed)
+        for lay in spec["layers"]:
+            if lay.get("type") == "text":
+                lay.update(v["style"])
+        return base, spec
+
     if ana.get("only_text"):                                               # 글자뿐인 스티커(숫자·낱말) → 그림 AI 없이 같은 틀로
-        spec = build_spec(ana, new_text, animated, seed)
+        base, spec = code_text(_blank(), False)
         spec["mode"], spec["keying"] = "cutout", {"mode": "none"}
-        return _blank(), spec
-    old = [t["text"] for t in ana["texts"] if S._norm(t["text"]) and S._norm(t["text"]) not in S._norm(new_text)]
-    if old and SWAP_FIRST:                                                 # 2-1. 글자 디자인 그대로 낱말만 바꾸기
+        return base, spec
+    old = [t["text"] for t in ana["texts"] if S._norm(t["text"])]
+    if v["change"]:                                                        # 그림 바꾸기: 글자는 지우고 코드로 다시 (글자 모양 유지)
+        prompt = f"{v['change']}. " + (REMOVE.format(old=", ".join(f"'{o}'" for o in old)) if old else "")
+        base, err = await S.redraw_source(ctx, src, prompt, day)
+        if not base:
+            return None, f"그림을 못 바꿨어요: {err.split('.')[0]}"
+        return code_text(base, True)
+    old = [o for o in old if S._norm(o) not in S._norm(new_text)]
+    if not old and not v["style"]:
+        return None, "바꿀 게 없어요 (원래와 같은 글자)"
+    if old and SWAP_FIRST and not v["style"]:                              # 2-1. 글자 디자인 그대로 낱말만 바꾸기
         bg = ("Keep the background exactly the same." if ana["background"] == "photo"
               else "Place it on a plain flat solid white background with nothing else.")
         swap, _ = await S.redraw_source(ctx, src, SWAP.format(old=", ".join(f"'{o}'" for o in old), new=new_text), day,
@@ -242,6 +277,8 @@ async def _make(ctx, ana: dict, src: bytes, new_text: str, animated: bool, day: 
             return swap, plain_spec(ana, animated, seed)
         if swap:
             log.info("sticker copy: swap spelled wrong → erase + code text")
+    if not old:                                                            # 같은 글자 + 꾸미기만 바꿈 → 원래 글자도 지움
+        old = [t["text"] for t in ana["texts"] if S._norm(t["text"])]
     base = src
     if old:                                                                # 2-2. 지우기
         prompt = REMOVE.format(old=", ".join(f"'{o}'" for o in old))
@@ -255,10 +292,10 @@ async def _make(ctx, ana: dict, src: bytes, new_text: str, animated: bool, day: 
                 base = again or base
                 if not again:
                     notes.append("원래 글자가 조금 남았을 수 있어요")
-    return base, build_spec(ana, new_text, animated, seed, base is not src)   # 3. 다시 쓰기
+    return code_text(base, base is not src)                                # 3. 다시 쓰기
 
 
-async def _job(ctx, src: bytes, texts: list[str], animated: bool, static: bool, reply, status_id, day: str, request: str) -> None:
+async def _job(ctx, src: bytes, texts: list[dict], animated: bool, static: bool, reply, status_id, day: str, request: str) -> None:
     bot, cid, uid, db = ctx.bot, ctx.chat_id, ctx.caller.id, ctx.svc.db
     notes: list[str] = []
     sent_n = 0
@@ -273,10 +310,10 @@ async def _job(ctx, src: bytes, texts: list[str], animated: bool, static: bool, 
             pass
     try:
         ana = await analyze(ctx, src)                                          # 1. 견본 읽기 (여러 개여도 한 번)
-        for new_text in texts:
-            base, spec = await _make(ctx, ana, src, new_text, animated, day, notes)
+        for i, v in enumerate(texts):
+            base, spec = await _make(ctx, ana, src, v, animated, day, notes, (uid + i * 37) % 1000)
             if base is None:
-                await tell(f"🙅 '{new_text[:10]}' {spec}" + (f" ({sent_n}개는 보냈어요)" if sent_n else ""))
+                await tell(f"🙅 {i + 1}번째: {spec}" + (f" ({sent_n}개는 보냈어요)" if sent_n else ""))
                 return
             spec, err = SF.sanitize(spec)
             if err:
@@ -326,10 +363,14 @@ tools.register_tool(tools.Tool(
     "copy_sticker",
     "답장한 스티커·그림을 견본으로 '따라 만들기' — 원래 글자를 지우고 그 자리에 새 글자를 원래 색·테두리로. "
     "'이 스티커로 출근완료 해서', '글자만 X로 바꿔', '이런 걸로 X 넣어서' 처럼 견본 + 새 글자만 있으면 이것 (make_sticker 말고). "
-    "'이걸로 0~9 까지'·'같은 걸로 여러 개' = texts 에 하나씩 (최대 10). '이모지·이모티콘 만들어' 도 이것 (⓪① 같은 글자로 때우지 않기). "
+    "'이걸로 0~9 까지' = texts, 색·꾸미기·표정까지 장마다 다르게 = variants (최대 10). '이모지·이모티콘 만들어' 도 이것 (⓪① 같은 글자로 때우지 않기). "
     "견본 읽기·지우기·배치는 코드가 함 — 글자만 정확히. 끝나면 스티커가 따로 올라감.",
     {"text": {"type": "string", "description": "새로 넣을 글자 그대로 (줄바꿈은 \\n)"},
-     "texts": {"type": "array", "items": {"type": "string"}, "description": "여러 개 만들 때 하나씩 (예: ['0','1',…,'9'])"},
+     "texts": {"type": "array", "items": {"type": "string"}, "description": "글자만 바꿔 여러 개 (예: ['0','1',…,'9'])"},
+     "variants": {"type": "array", "items": {"type": "object"}, "description":
+                  "한 장마다 바꿀 것 아무 조합 [{text?, style?, change?}] — style = 글자 값(colors·color·stroke·stroke_color·stroke2·"
+                  "stroke2_color·glow·glow_color·font·slant·depth…, 안 준 값은 견본 그대로), change = 그림 바꾸기 말(표정·포즈·옷). "
+                  "예: 색만 다르게 3개, 표정만 웃게·울게"},
      "format": {"type": "string", "enum": ["auto", "static", "video"], "description": "auto = 견본이 움직이면 움직이게"},
      "motion": {"type": "string", "enum": ["keep", "none"], "description": "none = 움직이는 견본이라도 정지로"},
      "request": {"type": "string", "description": "사용자 요청 원문"}},
