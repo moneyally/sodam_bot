@@ -569,6 +569,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   짙은 글자 색(남색 그라데이션)을 caption.glyph_check 가 '먹힌 글자'로 세서 규격 실패 → 글자 색 밝기 기준으로 문턱 ③ 스티커에 답장하며 새 글자만 →
   원래 글자 위에 겹침 → COPY_CHECK: 답장한 그림에 새 글자를 얹고 redraw 가 없으면 원본 글자를 먼저 읽어(read_text, 몇 원) 있으면 안 그리고
   'redraw+old_text 로 다시' (accept_warnings 면 그대로) · examples '스티커 따라' = 견본 글자 모양(위치·크기·글꼴·색·테두리·입체)을 text 레이어 값으로 베끼기.
+- **🧩 따라 만들기 copy_sticker** (`panels/stickercopy.py`, tests/test_stickercopy.py · 뮤테이션 5개, 2026-10-07 오너 '설계부터'): 견본 + 새 글자만 AI 가 정하고
+  순서는 코드 — ① 견본 읽기(guard 모델 그림 보기 → 글자·상자·색·테두리·그림자·굵기·배경, `clean_analysis` 가 범위로 자름) ② 원래 글자 있으면 redraw_source(REMOVE)
+  ③ `build_spec`: 새 글자를 가장 큰 원래 상자 가운데·폭에, 원래 색(2개↑면 그라데이션)·테두리·그림자로 text 레이어, 배경 photo 면 photo 아니면 cutout,
+  견본이 움직이면(vision frames) breathe ④ 원래 글자 남으면(read_text) 한 번 더 지움 ⑤ 가벼운 경고로 안 버림(HARD_WARN 만 한마디), 움직이는 게 규격 못 맞추면 정지로
+  ⑥ 뒤에서(persist.spawn, 사람당 1개 RUNNING) — '🧩 따라 만드는 중…' 답장 → 스티커 + 📦 버튼 → 안내 글 지움. agent.TERMINAL·MAKES·CORE_TOOLS·지도에 있음.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
