@@ -343,5 +343,30 @@ async def set_command_values_validated():
     assert render("farewell_mode", "on") == "켜짐"
 
 
+@test
+async def video_caption_with_time_nickname_and_id():
+    """실제 2026-10-07 백악관: 퇴장도 영상 + '시간·닉네임·고유번호' (입장과 같은 꼴)."""
+    svc, bot, ctx = await setup(farewell_template="백악관에 떠나셨네요\n{time} · {name} · {username} · {id}",
+                                farewell_media_type="video", farewell_media_id="VID1")
+    u = fake_user(51, "형님", "bro51")
+    await service_left(ctx, u)
+    await farewell.flush(ctx, CHAT)
+    vids = bot.named("send_video")
+    assert len(vids) == 1 and vids[0][2] == "VID1", bot.calls
+    cap = vids[0][3]
+    import re
+    assert "형님" in cap and "@bro51" in cap and "<code>51</code>" in cap and re.search(r"20\d\d-\d\d-\d\d \d\d:\d\d", cap), cap
+    assert not farewells(bot), "영상 설명으로 한 번만"
+
+
+@test
+def greet_placeholders_time_id_username():
+    from sodam.greet import fill, fill_values
+    v = fill_values([(7, "형님", "bro"), (8, "누님", None)], "2026-10-07 23:14")
+    out = fill("백악관에 오신 걸 환영합니다 {names}\n{time} {id} {username}", "<a>형님</a>, <a>누님</a>", v)
+    assert "2026-10-07 23:14" in out and "<code>7</code>, <code>8</code>" in out and "@bro, 아이디 없음" in out, out
+    assert fill("{name}님 <안녕>", "X") == "X님 &lt;안녕&gt;"
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
