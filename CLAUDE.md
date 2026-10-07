@@ -101,6 +101,9 @@
   입장의 '들어오게 한 사람'(입장 메시지·chat_member from_user)이 본인·관리자·자유 멤버가 아니면 mod_log forced_add(actor=추가한 사람) +
   add_guard kick(기본, 추가된 사람 내보냄)/notify/off · 10분 3명↑ 추가하면 추가한 사람 1일 뮤트 + 관리자·오너 알림(incidents).
   room_checkup 에 '멤버도 사람 추가 가능' 경고. 가입 신청 승인제여도 '추가'는 못 막음 → 그룹 권한 '사용자 추가' 끄기 권장.
+- **📢 채널 구독 필수**(`subgate.py`, `panels/subgate.py` 허브 m:sgt, tests/test_subgate.py, 2026-10-07 백악관 요청, 기본 꺼짐): subgate_mode on +
+  subgate_channel(@아이디·t.me·-100ID) → 구독 안 한 사람은 입장 때(캡차 없을 때)·말할 때(글 지움) 채팅 금지 + [📢 채널 들어가기][✅ 구독 확인](sg:, 본인만,
+  getChatMember 로 실제 확인 후 풂). 구독자 30분 캐시, 안내 60초 1번. 소담이 채널 관리자가 아니면 막지 않고 관리자 알림 하루 1번.
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
   입장 검사 훅 `hooks.add_member_join_hook`.
 - 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).
