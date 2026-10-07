@@ -354,7 +354,10 @@ _games.GAP_SECONDS = 0        # 게임 글 간격도 기다리지 않음
 _handlers.BURST_SECONDS = 0   # 테스트는 연달아 말해도 기다리지 않음 (연속 전송 합치기는 test_burst 가 따로 켬)
 from sodam.panels import botlink as _blpanel  # noqa: E402
 
-_blpanel.HELP_WAIT = 0.2      # 모르는 봇 /help 답 기다리기 (답하는 가짜 봇은 바로 답함)
+_blpanel.HELP_WAIT = 0.2
+from sodam.panels import sticker as _stkpanel  # noqa: E402
+
+_stkpanel.COPY_CHECK = False  # 원본 글자 읽기(AI 호출)는 대본을 쓰므로 기본 끔 — tests/test_stickerpack.py 가 켜서 검사      # 모르는 봇 /help 답 기다리기 (답하는 가짜 봇은 바로 답함)
 from sodam import news as _news  # noqa: E402
 
 

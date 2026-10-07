@@ -13,7 +13,8 @@ COMPOSE = (
     "말에 없는 효과를 습관처럼 넣지 말고, 같은 사람에게 직전과 같은 조합 금지, seed 는 매번 새로. "
     "경고(warnings)가 오면 말한 것 하나만 고쳐 한 번 더(두 번째는 accept_warnings). 정말 못 하는 것(사진 속 사람 팔다리·표정이 실제로 "
     "움직이기 = 생성형 영상 모델 필요)은 가장 가까운 조합 + wanted 에 원래 말 + 한계 한마디. request 에 요청 원문. "
-    "글자·말풍선 = layers text·shape. 부품으로 안 되는 그림은 run_code 로 src_*.png 를 그리면 그게 원본."
+    "글자·말풍선 = layers text·shape. 부품으로 안 되는 그림은 run_code 로 src_*.png 를 그리면 그게 원본. "
+    "스티커에 답장하며 새 글자만 말하면 = 그 스티커 따라 만들기 (예시 '스티커 따라')."
 )
 
 EXAMPLES = [
@@ -76,6 +77,15 @@ EXAMPLES = [
                                                         {"t": 0.85, "scale": 1.0}, {"t": 1, "scale": 0.6, "opacity": 0}]}],
               "layers": [{"type": "lightning", "count": 2, "origin": [0.3, 0.0], "target": [0.5, 0.55]},
                          {"type": "grade", "brightness": -0.05, "tint": [120, 110, 255], "tint_amount": 0.12}]}},
+    {"request": "(스티커에 답장) 스티커 따라 '출근완료' 해서 하나 만들어줘",
+     "why": "답장한 스티커 = 견본. 먼저 그 그림을 보고: ① 원래 글자가 있으면 redraw='remove the text \\'원래 글자\\' only, keep the "
+            "character' + old_text=원래 글자 (안 지우면 원래 글자 위에 겹침) ② 글자 모양을 값으로 베끼기 — 위치(at)·크기(size)·글꼴(굵으면 bold, "
+            "둥글면 round)·색(colors 위→아래)·테두리(stroke·stroke_color)·입체(depth) ③ 움직이는 스티커였으면 비슷한 움직임, 정지면 format=static "
+            "④ 배경이 투명했으면 mode=cutout. 새 글자는 caption 말고 text 레이어로",
+     "spec": {"mode": "cutout", "motion": [{"type": "breathe"}],
+              "layers": [{"type": "text", "text": "출근완료", "font": "bold", "at": [0.5, 0.86], "size": 84,
+                          "colors": [[255, 255, 255], [190, 200, 220]], "stroke": 8, "stroke_color": [20, 30, 60], "depth": 5,
+                          "depth_color": [20, 30, 60], "enter": "pop"}]}},
     {"request": "말풍선에 포인트 지급완료입니다 넣어서 정지 스티커로",
      "why": "정지 = format=static. 캐릭터는 keyframes 한 점으로 왼쪽 아래로 작게, 오른쪽 위 말풍선(shape bubble, 꼬리 tail 은 캐릭터 입 쪽) "
             "→ 그 위에 같은 at 으로 글자(text, 두 줄로 나눠 크게). 원본에 이미 글자가 있으면 redraw 로 지우고 old_text",

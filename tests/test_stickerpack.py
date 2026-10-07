@@ -182,5 +182,53 @@ async def remake_redraws_then_blocks_when_old_text_left():
         S.read_text = orig
 
 
+@test
+async def paid_redraw_keeps_soft_warnings_but_not_hard_ones():
+    """그림 AI 값을 낸 원본 고치기 뒤엔 자막 겹침 같은 가벼운 경고로 버리지 않음 (실측 2026-10-07 대한동구: 17% 겹침 → 안 보내고 끝남)."""
+    r = await room()
+
+    async def image(prompt, source=None, chat_id=None):
+        return png()
+    r.svc.llm.image = image
+    warn = ["자막이 피사체를 17% 덮음 → position=top"]
+    real = SF.forge_static
+
+    async def fake(src, spec):
+        return SF.Result(True, preview=png(), rows=[("size", "1", True)], keying="white", warnings=list(warn), spec=spec, still=b"RIFFxxxxWEBP")
+    SF.forge_static = fake
+    try:
+        args = {"spec": {"mode": "cutout"}, "format": "static", "redraw": "remove text", "request": "글자만 출근완료로"}
+        res, _ = await _agent(r, [tool_call("make_sticker", args)], png())
+        assert "보냈음" in res[0] and r.bot.named("send_sticker"), res
+        n = len(r.bot.named("send_sticker"))
+        res, _ = await _agent(r, [tool_call("make_sticker", {**args, "redraw": ""})], png())
+        assert "검수 경고" in res[0] and len(r.bot.named("send_sticker")) == n, "고치기 안 했으면 경고 그대로"
+        warn[:] = ["피사체가 가장자리에서 잘림(테두리 불투명 9%)"]
+        res, _ = await _agent(r, [tool_call("make_sticker", args)], png())
+        assert "검수 경고" in res[0] and len(r.bot.named("send_sticker")) == n, "잘림은 고쳐서 다시"
+    finally:
+        SF.forge_static = real
+
+
+@test
+async def copying_a_sticker_with_text_asks_to_remove_old_text_first():
+    """실측 2026-10-07 루피: '루피 등장' 스티커에 답장하며 '출근완료 해서 하나' → 원래 글자 위에 새 글자. 이제 원본 글자를 읽어 먼저 지우게."""
+    r = await room()
+    seen = []
+
+    async def ocr(ctx, data):
+        seen.append(data)
+        return ["루피 등장"]
+    orig, S.read_text, S.COPY_CHECK = S.read_text, ocr, True
+    try:
+        args = {"spec": {"mode": "cutout", "layers": [{"type": "text", "text": "출근완료"}]}, "format": "static"}
+        res, _ = await _agent(r, [tool_call("make_sticker", args)], png())
+        assert "루피 등장" in res[0] and "redraw" in res[0] and "old_text" in res[0] and not r.bot.named("send_sticker"), res
+        res, _ = await _agent(r, [tool_call("make_sticker", {**args, "accept_warnings": True})], png())
+        assert "보냈음" in res[0] and len(seen) == 1, "일부러 남기면(accept_warnings) 검사 없이"
+    finally:
+        S.read_text, S.COPY_CHECK = orig, False
+
+
 if __name__ == "__main__":
     run_all()
