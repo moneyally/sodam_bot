@@ -44,12 +44,13 @@ LINES_KEEP_DAYS = 7          # 통화 대화(받아쓰기·소담 답·도구) �
 LINE_MAX = 500
 
 
-async def add_job(db, chat_id: int, kind: str, payload: dict | None = None, by: int | None = None) -> int | None:
-    """같은 방·같은 종류 일이 이미 대기 중이면 None (연타)."""
+async def add_job(db, chat_id: int, kind: str, payload: dict | None = None, by: int | None = None,
+                  dedupe: bool = True) -> int | None:
+    """같은 방·같은 종류 일이 이미 대기 중이면 None (연타). 노래 신청(music_play)은 dedupe=False — 여러 곡을 연달아 신청."""
     now = int(time.time())
 
     def run(c):
-        if c.execute("SELECT 1 FROM voice_jobs WHERE chat_id=? AND kind=? AND status IN ('pending','running') AND ts>?",
+        if dedupe and c.execute("SELECT 1 FROM voice_jobs WHERE chat_id=? AND kind=? AND status IN ('pending','running') AND ts>?",
                      (chat_id, kind, now - JOB_TTL)).fetchone():
             return None
         return c.execute("INSERT INTO voice_jobs(chat_id, kind, payload, by_user, ts) VALUES(?,?,?,?,?)",

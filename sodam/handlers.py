@@ -1500,6 +1500,16 @@ BOT_MENU = [
     BotCommand("history", "이름·아이디 변경 기록 (답장·@아이디·ID)"),
     BotCommand("allhistory", "변경 기록 전체"),
     BotCommand("rules", "방 규칙"),
+    BotCommand("play", "🎵 노래 틀기 / 대기열 추가 (제목·유튜브 링크)"),
+    BotCommand("skip", "🎵 다음 곡"),
+    BotCommand("pause", "🎵 일시정지"),
+    BotCommand("resume", "🎵 다시 재생"),
+    BotCommand("queue", "🎵 대기열"),
+    BotCommand("remove", "🎵 대기열에서 곡 빼기 (번호)"),
+    BotCommand("seek", "🎵 위치 이동 (초)"),
+    BotCommand("volume", "🎵 노래 음량 (0~200)"),
+    BotCommand("end", "🎵 노래 끝 (음성채팅 나가기)"),
+    BotCommand("userbotjoin", "🎵 노래 도우미 계정 방에 부르기"),
 ]
 
 

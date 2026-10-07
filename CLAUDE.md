@@ -719,6 +719,26 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   멤버 타임라인 🎙 칸 = store.member_voice(통화 수·말 수) + store.voice_links(같은 통화 30초 안 이어 말함 = 음성판 답장 관계, 사람 말끼리만, 7일).
   방 멤버 이름을 지시문 끝·받아쓰기 prompt 로 → 실측 '지연님' 으로 들렸어도 '지영' 카드. 거절 안내는 그대로 방에 + voice_refused 기록 + 오너에겐 상태.
 
+## 🎵 소담 뮤직봇 (`voice/music.py`·`musicq.py`·worker 노래 일감·`panels/music.py`, tests/test_music.py · 뮤테이션 31개, 2026-10-08 오너 요청 '멜론봇처럼 DJ')
+- 구조(AnonXMusic·YukkiMusicBot MIT 참고, 코드는 새로): 봇이 `music_play` 일감(dedupe 없음) → 음성 담당이 찾기(yt-dlp)·받기(data/music, 600MB LRU)·
+  풀기(imageio ffmpeg → 48k 모노 10ms) → `Player` 가 10ms 마다 send_frame. 소리 줄 하나를 AI 대화(Bridge)와 같이 씀(`in_call`·`_maybe_leave`) —
+  Bridge 목소리는 `Worker._send` → `Player.voice_frame` 로 섞고 그동안 노래 DUCK 0.25 배. py-tgcalls 에 seek 가 없어 일시정지·이동·음량·음소거는 우리 코드.
+- 대기열 DB(music_queue: queued→playing→done/skipped/removed/failed, 방 30곡·한 사람 5곡) · music_sessions(끝 이유 idle 3분·end·chat_closed·kicked·restart).
+  재시작(배포)은 곡 위치 저장 → 다시 켜지면 30분 안 대기열 이어 틀기 (update.sh voice_busy 엔 안 넣음 — 노래 때문에 배포가 안 밀리게).
+- **유튜브 실측(Hetzner IP, 2026-10-08)**: 검색은 됨, 받기는 15곡 중 15곡 'Sign in to confirm you're not a bot' → 쿠키(버리는 구글 계정, 오너 🎵 m:mu
+  [🍪 쿠키 넣기], data/yt_cookies/*.txt 600, 크롬 확장의 '#HttpOnly_' 줄도 인정) 있으면 쿠키부터. 막히면 **SoundCloud 같은 노래**(키 없음):
+  유튜브 검색으로 정확한 곡 이름 → scsearch10 → 신청 낱말 다 담기(또는 유튜브 제목 낱말 75%, 한글↔영어 제목) · 유튜브 길이 ±20% · 신청에 없는
+  리믹스·커버·라이브·악기·'원곡' 버전 제외 · DRM 잠긴 공식 음원 건너뜀(실측 블랙핑크) → 없으면 틀지 않고 '못 찾았어요 (쿠키 넣으면 돼요)'.
+  실측 10곡: 8곡 원곡, 2곡(뉴진스·에스파 공식=DRM) 못 찾음 안내. 막힌 뒤 1시간(MUSIC_YT_RETRY)은 SoundCloud 먼저, 쿠키 바뀌면 바로 유튜브.
+  yt-dlp 는 deno(pip 'deno') JS 풀이 필요, 캐시는 data/cache (서비스 ProtectSystem=strict). 선택 MUSIC_PROXY.
+- 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
+  .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
+  .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).
+  권한: 신청 music_who(누구나) · 넘기기·멈춤 = 관리자·그 곡 신청자(music_ctrl=all 이면 누구나) · 끝 = 관리자(또는 남은 곡이 전부 내 곡) ·
+  이용 기간 방만 · 한 사람 4초 간격. 음악 파일에 답장 → 봇이 data/music/tg_* 로 받아 틀기(음성 담당은 data/music 밖 경로 거부).
+  AI 도구 `music`(CORE·LIGHT_WRITE, 지도 '노래 틀어 → music', 다른 봇을 콕 집으면 bot_command). 재생 카드 버튼 mu:pause/resume/skip/queue/end.
+  안내서 guide/music.md. 방 허브 🎵 m:mus.
+
 ## 🚀 빠른 설정 마법사 (`panels/onboard.py`, tests/test_onboard.py · 뮤테이션 15개)
 - 방 종류(💬 소통/💱 거래·업자/🎮 게임·이벤트/📢 공지·채널) → 핵심 질문 3개 → '현재 → 바꿀 값' 미리보기 → 한 번의 db.atomic 으로 적용(연타 1번) →
   10분 안 [↩️ 되돌리기](그 사이 손으로 바꾼 설정은 안 건드림). 프리셋 키는 import 때 `_validate()` 가 존재·타입·coerce 검사(틀리면 import 실패).
