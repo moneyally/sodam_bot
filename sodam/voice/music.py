@@ -213,7 +213,7 @@ class Source:
                     break
         if _blocked(last):
             self.blocked_at = time.time()
-            raise MusicError("blocked", "음원 서버가 잠깐 막혔어요 (운영자: 🎵 화면에서 인증 쿠키를 넣어 주세요).")
+            raise MusicError("blocked", "음원 서버가 잠깐 막혔어요. 잠시 뒤 다시 신청해 주세요.")   # 운영자 안내는 오너 1:1 로만 (worker)
         log.info("%s 못 가져옴: %s", where, _short(last, 300))
         raise MusicError("download", f"노래를 못 가져왔어요: {_short(_hide_src(last))}")
 
@@ -321,8 +321,8 @@ class Source:
                     log.info("대체 음원 후보 건너뜀 %s: %s", t["vid"], e)
         if fallback_of is not None:
             raise fallback_of
-        raise MusicError("not_found", f"'{_short(ref_title or req.text, 40)}' — 같은 노래를 못 찾았어요"
-                         " (운영자: 🎵 화면에서 인증 쿠키를 넣으면 돼요).")
+        raise MusicError("not_found", f"'{_short(ref_title or req.text, 40)}' — 지금은 이 노래를 못 가져왔어요. "
+                         "잠시 뒤 다시 신청해 주세요.")
 
     def fallback(self, title: str, ref_sec: int = 0) -> dict:
         """받으려던 곡이 막힘 → 대체 음원에서 같은 노래 (Player 가 부름)."""

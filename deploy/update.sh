@@ -47,19 +47,23 @@ db_file() {
     rel=${rel:-data/sodam.db}
     case $rel in /*) echo "$rel" ;; *) echo "$APP_DIR/$rel" ;; esac
 }
+# voice_busy [music] — 통화 중이면 0. music 을 주면 노래 트는 중도 셈 (테스트 미루기용 — 테스트가 CPU 를 다 써서 노래가 멈춤).
+# 음성 담당 재시작은 통화만 기다림: 노래는 재시작해도 하던 곡 위치부터 이어 트는데, 노래까지 기다리면 노래가 계속 나오는 방에선
+# 새 버전이 영영 안 들어감 (2026-10-09 실제: 우회 길 고침이 1시간 넘게 안 들어가 '쿠키' 오류가 계속 뜸).
 voice_busy() {
     local db n
     db=$(db_file)
     [ -f "$db" ] || return 1
-    n=$("$PY" - "$db" 2>/dev/null <<'PYEOF'
+    n=$("$PY" - "$db" "${1:-}" 2>/dev/null <<'PYEOF'
 import sqlite3, sys, time
 try:
     c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=5)
     n = c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
                   (int(time.time()) - 1200,)).fetchone()[0]
-    try:   # 🎵 노래 트는 중도 (테스트가 CPU 를 다 써서 '노래가 자꾸 멈춰요' — 2026-10-08 실제 신고). 지금 곡이 playing 인 방
-        n += c.execute("SELECT COUNT(*) FROM music_sessions s WHERE s.end_ts IS NULL AND EXISTS "
-                       "(SELECT 1 FROM music_queue q WHERE q.chat_id=s.chat_id AND q.state='playing')").fetchone()[0]
+    try:   # 🎵 노래 트는 중 (music 일 때만). 지금 곡이 playing 인 방
+        if sys.argv[2] == "music":
+            n += c.execute("SELECT COUNT(*) FROM music_sessions s WHERE s.end_ts IS NULL AND EXISTS "
+                           "(SELECT 1 FROM music_queue q WHERE q.chat_id=s.chat_id AND q.state='playing')").fetchone()[0]
     except sqlite3.Error:
         pass
     print(n)
@@ -72,7 +76,7 @@ PYEOF
 # 통화 중이면 0 (= 미룸). 처음 미룬 시각을 data/update.postponed 에 두고 VOICE_POSTPONE_MAX 가 지나면 그냥 진행.
 postpone_for_call() {
     local f="$APP_DIR/data/update.postponed" now first
-    if [ "$FORCE" -eq 1 ] || ! voice_busy; then rm -f "$f"; return 1; fi
+    if [ "$FORCE" -eq 1 ] || ! voice_busy music; then rm -f "$f"; return 1; fi
     now=$(date +%s)
     mkdir -p "$APP_DIR/data" 2>/dev/null || true
     [ -f "$f" ] || echo "$now" > "$f"

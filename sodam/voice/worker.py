@@ -83,6 +83,9 @@ def user_client(session: str, api_id: int, api_hash: str):
                           flood_sleep_threshold=10)   # 긴 FloodWait 동안 조용히 멈추지 않고 오류로 (다른 방 일이 안 막히게)
 
 
+OWNER_ALERT_SEC = 6 * 3600       # 🎵 음원 막힘 오너 알림 간격
+
+
 class Worker:
     def __init__(self, cfg, db, *, client_factory: Callable | None = None, calls_factory: Callable | None = None,
                  realtime_connect: Callable | None = None, media: Any = None,
@@ -646,7 +649,8 @@ class Worker:
             if e.code != "mix" or not hasattr(self.music_source, "mix_for"):
                 if e.code == "mix":
                     e = music.MusicError("not_found", "가수나 노래 제목을 같이 써 주세요.")
-                if e.code == "blocked":
+                if e.code == "blocked" or (e.code == "not_found" and hasattr(self.music_source, "primary_ok")
+                                           and not self.music_source.primary_ok()):
                     await self._music_health(str(e))
                 await self._music_edit(chat_id, status, str(e) if str(e).startswith("🎧") else f"⚠️ {e}")
                 return False, f"music:{e.code}"
@@ -800,11 +804,30 @@ class Worker:
 
     async def _music_health(self, err: str | None) -> None:
         cur = await self.db.get_state(0, musicq.HEALTH_KEY) or {}
+        now = int(time.time())
         if err:
-            cur.update(err=err[:200], err_ts=int(time.time()))
+            cur.update(err=err[:200], err_ts=now)
         else:
-            cur.update(ok_ts=int(time.time()))
+            cur.update(ok_ts=now)
+        alert = bool(err) and now - int(cur.get("alert_ts") or 0) >= OWNER_ALERT_SEC
+        if alert:
+            cur["alert_ts"] = now
         await self.db.set_state(0, musicq.HEALTH_KEY, cur)
+        if alert:                                  # 방엔 '잠시 뒤 다시'만, 운영자 할 일은 오너 1:1 로 (6시간에 한 번)
+            await self._alert_owners("🎵 <b>뮤직봇: 기본 음원이 막혀 노래를 못 틀었어요.</b>\n"
+                                     f"<code>{musicq._esc(err[:150])}</code>\n"
+                                     "우회 길(sodam-warp)이 죽었거나 막혔을 수 있어요. 1:1 🎵 화면에서 쿠키를 넣으면 예비로 써요.")
+
+    async def _alert_owners(self, text: str) -> None:
+        if not self.bot:
+            return
+        try:
+            ids = set(getattr(self.cfg, "owner_ids", ()) or ()) | set(await self.db.owner_ids())
+        except Exception:
+            ids = set(getattr(self.cfg, "owner_ids", ()) or ())
+        for uid in ids:
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(uid, text, parse_mode="HTML", disable_web_page_preview=True)
 
     async def _music_edit(self, chat_id: int, msg_id: int | None, text: str | None) -> None:
         """봇이 올린 '찾는 중' 글을 결과로 고침 (없으면 새로). text None = 그 글 지움."""
@@ -840,6 +863,9 @@ class Worker:
         if not self.bot:
             return
         if kind == "failed":
+            src = self.music_source
+            if src is not None and hasattr(src, "primary_ok") and not src.primary_ok():
+                await self._music_health(why or "기본 음원 막힘")
             await self._music_edit(chat_id, row.get("msg_id") if isinstance(row, dict) else None,
                                    musicq.card_text("failed", dict(row), why=why))
             return
