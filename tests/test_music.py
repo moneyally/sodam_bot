@@ -128,8 +128,17 @@ class FakeSource:
             raise music.MusicError("blocked", "유튜브가 서버를 '봇'으로 막았어요")
         if "없는노래" in query:
             raise music.MusicError("not_found", f"'{query}' 노래를 못 찾았어요.")
+        if "고르기" in query:
+            raise music.MusicChoice([{"vid": "aaaaaaaaaa1", "title": "가수 - 첫째 곡", "duration": 200, "kind": ""},
+                                     {"vid": "aaaaaaaaaa2", "title": "다른가수 - 첫째 곡 Cover", "duration": 210, "kind": "cover"}],
+                                    "partial", query)
         vid = music.link_id(query) or query.replace(" ", "")[:11].ljust(11, "x")
         return {"title": f"{query} (MV)", "url": f"https://www.youtube.com/watch?v={vid}", "vid": vid, "duration": 180}
+
+    def pick(self, item, req=None):
+        self.resolved.append(("pick", item["vid"]))
+        return {"title": item["title"], "url": f"https://www.youtube.com/watch?v={item['vid']}", "vid": item["vid"],
+                "duration": item["duration"]}
 
     def fetch(self, vid):
         self.fetched.append(vid)
@@ -745,9 +754,9 @@ class FakeYDL:
 
     def extract_info(self, url, download=False):
         FakeYDL.log.append(url)
-        for prefix in ("ytsearch5:", "scsearch10:"):
-            if url.startswith(prefix):
-                return {"entries": FakeYDL.SEARCH.get((prefix[:2], url[len(prefix):]), [])}
+        m = re.match(r"(yt|sc)search\d+:(.*)", url, re.S)
+        if m:
+            return {"entries": FakeYDL.SEARCH.get((m.group(1), m.group(2)), [])}
         if "soundcloud" in url and url.rsplit("A", 1)[-1] in FakeYDL.DRM:
             raise FakeYDL.DownloadError("ERROR: [soundcloud] 1: This video is DRM protected")
         if "youtube.com/watch" in url and FakeYDL.YT_BLOCKED:
@@ -778,7 +787,7 @@ def with_fake_ydl(fn):
 
 
 @test
-def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found():
+def blocked_primary_falls_back_to_the_same_song_or_says_not_found():
     FakeYDL.SEARCH = {
         ("yt", "아이유 밤편지"): [{"id": "EjMTw4xLcBI", "title": "아이유(IU) - 밤편지 [가사/Lyrics]", "duration": 254}],
         ("sc", "아이유(IU) - 밤편지"): [sc(5, "아이유 - 밤편지", 600), sc(1, "HANNI (하니) - 밤편지 아이유 cover", 254),
@@ -788,8 +797,10 @@ def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found(
         ("sc", "BTS (방탄소년단) 'Dynamite'"): [sc(10, "BTS Butter", 655), sc(11, "BTS (방탄소년단) - Dynamite", 199),
                                               sc(12, "BTS Dynamite", 237)],
         ("sc", "BTS dynamite"): [],
-        ("yt", "뉴진스 하입보이"): [{"id": "11cta61wi0g", "title": "NewJeans (뉴진스) 'Hype Boy' Official MV", "duration": 178}],
-        ("sc", "NewJeans (뉴진스) 'Hype Boy'"): [sc(21, "NewJeans - Hype Boy (Remix)", 175), sc(20, "NewJeans - Hype Boy", 179),
+        ("yt", "뉴진스 하입보이"): [{"id": "11cta61wi0g", "title": "NewJeans (뉴진스) 'Hype Boy' Official MV", "duration": 178},
+                               {"id": "hypeboylyr1", "title": "NewJeans (뉴진스) 'Hype Boy (하입보이)' 가사 (Color Coded Lyrics)",
+                                "duration": 179}],   # 서버 실측 2026-10-08 순서
+        ("sc", "NewJeans (뉴진스) 'Hype Boy (하입보이)'"): [sc(21, "NewJeans - Hype Boy (Remix)", 175), sc(20, "NewJeans - Hype Boy", 179),
                                                sc(22, "윈터 - Hype Boy Acoustic Ver", 175)],
         ("sc", "뉴진스 하입보이"): [],
     }
@@ -817,13 +828,13 @@ def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found(
             assert e.code == "not_found" and "쿠키" in str(e)
         FakeYDL.DRM = {"11"}
         got = y.resolve("뉴진스 하입보이")
-        assert got["vid"] == "sc20", ("한글 신청 ↔ 영어 제목 (유튜브 제목 낱말로)", got)
+        assert got["vid"] == "sc20", ("한글 신청 ↔ 영어 제목 (기준 곡 제목의 가수·노래로)", got)
         assert y.fetch("sc12").endswith("sc12.m4a") and y.fetch("sc12").endswith("sc12.m4a")
         alt = y.fallback("아이유(IU) - 밤편지 [가사/Lyrics]", 254)
         assert alt["vid"] == "sc3"
-        FakeYDL.SEARCH[("sc", "BTS 노래")] = [sc(30, "BTS - Butter", 229), sc(31, "방탄 노래 모음", 229)]
+        FakeYDL.SEARCH[("sc", "BTS (방탄소년단) 'Dynamite'")] = [sc(30, "BTS - Butter", 229), sc(31, "방탄 노래 모음", 229)]
         try:
-            y.alt_search("BTS 노래", wanted="BTS dynamite", ref_sec=229)
+            y.fallback("BTS (방탄소년단) 'Dynamite' Official MV", 229)
             raise AssertionError("길이가 같아도 다른 곡이면 안 틂")
         except music.MusicError as e:
             assert e.code == "not_found"
@@ -833,7 +844,7 @@ def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found(
 
 
 @test
-async def player_swaps_blocked_youtube_track_for_soundcloud():
+async def player_swaps_blocked_track_for_the_same_song_elsewhere():
     db = await make_db()
     clock = Clock()
     d = tempfile.mkdtemp()
@@ -1039,7 +1050,7 @@ def same_song_is_downloaded_once_even_when_asked_twice_at_once():
 
 
 @test
-def soundcloud_words_any_script_and_variant_word_boundaries():
+def alt_source_words_any_script_and_variant_word_boundaries():
     FakeYDL.SEARCH = {
         ("sc", "残酷な天使のテーゼ"): [sc(40, "Totally Different Song", 240), sc(41, "残酷な天使のテーゼ - 高橋洋子", 241)],
         ("sc", "未知の歌"): [sc(42, "Totally Different Song", 240)],
@@ -1050,18 +1061,19 @@ def soundcloud_words_any_script_and_variant_word_boundaries():
 
     def run():
         y = music.Source(Path(tempfile.mkdtemp()))
-        assert y.alt_search("残酷な天使のテーゼ")["vid"] == "sc41", "일본어 제목도 낱말로 비교"
+        alt = lambda q: y.alt_for(None, music.mm.parse(q))     # 기준 곡 없음(검색 실패) → 신청 낱말 전부
+        assert alt("残酷な天使のテーゼ")["vid"] == "sc41", "일본어 제목도 낱말로 비교"
         try:
-            y.alt_search("未知の歌")
+            alt("未知の歌")
             raise AssertionError("낱말이 하나도 안 맞으면 아무 곡이나 틀지 않음")
         except music.MusicError as e:
             assert e.code == "not_found"
-        assert y.alt_search("drivers license")["vid"] == "sc43", "'edition' 은 'edit' 변형이 아님"
-        assert y.alt_search("beyonce halo")["vid"] == "sc45", "악센트 무시"
+        assert alt("drivers license")["vid"] == "sc43", "'edition' 은 'edit' 변형이 아님"
+        assert alt("beyonce halo")["vid"] == "sc45", "악센트 무시"
         assert music._words("아이유 Beyoncé") == ["아이유", "beyonce"], "한글은 자모로 안 쪼갬 (NFKD 뒤 NFC)"
         FakeYDL.SEARCH[("sc", "♪ 노")] = [sc(46, "Totally Different Song", 240)]
         try:
-            y.alt_search("♪ 노")
+            alt("♪ 노")
             raise AssertionError("비교할 낱말이 없으면(기호·한 글자) 아무 곡이나 통과시키지 않음")
         except music.MusicError as e:
             assert e.code == "not_found"
@@ -1103,6 +1115,174 @@ def music_text_people_see_never_names_the_source():
     for f in ("sodam/voice/music.py", "sodam/panels/music.py", "sodam/voice/musicq.py"):
         said = re.findall(r"MusicError\([^)]*\)|return Screen\([^)]*\)|ctx\.reply\([^)]*\)", (root / f).read_text())
         assert not [x for x in said if any(w in x.lower() for w in bad)], (f, said)
+
+
+@test
+async def no_exact_song_posts_choice_buttons_only_the_requester_picks_once():
+    """'김연지 별이될께' 처럼 딱 맞는 곡이 없으면 엉뚱한 곡을 틀지 않고 신청 글을 고르기 버튼으로 (서버 실측 2026-10-08)."""
+    bot = FakeBot()
+    db, w, src, _ = await make_worker(bot)
+    row = await play(db, w, "고르기 첫째", status=77)
+    assert row["result"] == "music:choice" and not await musicq.current(db, CHAT), "틀지 않음"
+    edit = [c for c in bot.named("edit_text") if c[1] == CHAT][-1]
+    assert "딱 맞는 곡" in edit[2] and edit[3].get("reply_markup"), edit
+    datas = [b.callback_data for r in edit[3]["reply_markup"].inline_keyboard for b in r]
+    assert datas[-1].endswith(":x") and all(len(d.encode()) <= 64 for d in datas), datas
+    ch = await db._one("SELECT * FROM music_choices")
+    assert ch["msg_id"] == 77 and ch["by_id"] == 5
+
+    _, svc, pbot = await world()
+    svc.db = db
+    await ready(db)
+    pbot.member_status = {(CHAT, 4242): "member"}
+    from sodam.panels import music as Mp
+
+    def q(user, data):
+        x = FakeQuery(CHAT, user, data)
+        x.message.message_id = 77
+        return x
+    other = q(OTHER, datas[0])
+    await Mp.on_button(svc, pbot, other, datas[0].split(":")[1:])
+    assert other.answers[0][1] and "신청한 분" in other.answers[0][0] and not (await musicq.get_choice(db, ch["id"]))["used"]
+    stale = FakeQuery(CHAT, MEMBER, datas[0])
+    stale.message.message_id = 999
+    await Mp.on_button(svc, pbot, stale, datas[0].split(":")[1:])
+    assert "지난 버튼" in stale.answers[0][0], "다른 글의 버튼(옛 카드)"
+    t = asyncio.create_task(worker_answers(db, {"music_play": "playing"}))
+    mine = q(MEMBER, datas[1])
+    await Mp.on_button(svc, pbot, mine, datas[1].split(":")[1:])
+    again = q(MEMBER, datas[0])
+    await Mp.on_button(svc, pbot, again, datas[0].split(":")[1:])
+    job = None
+    for _ in range(200):
+        job = await db._one("SELECT * FROM voice_jobs WHERE kind='music_play' AND payload LIKE '%pick%'")
+        if job:
+            break
+        await asyncio.sleep(0.01)
+    t.cancel()
+    assert "준비 중" in mine.edits[0] and "이미 골랐" in again.answers[0][0], (mine.edits, again.answers)
+    import json
+    pl = json.loads(job["payload"])
+    assert pl["pick"]["vid"] == "aaaaaaaaaa2" and job["by_user"] == MEMBER.id and pl["status_msg"] == 77
+    await stop_all(w)
+
+
+@test
+async def picked_song_is_checked_again_by_the_worker_and_queued():
+    bot = FakeBot()
+    db, w, src, _ = await make_worker(bot)
+    bad = await run_job(db, w, "music_play", {"pick": {"vid": "../../etc/x", "title": "x"}, "by": 5, "by_name": "멤버"}, CHAT)
+    assert bad["result"] == "music:not_found" and not [x for x in src.resolved if x[0] == "pick"], "이상한 ID 는 안 받음"
+    ok = await run_job(db, w, "music_play", {"pick": {"vid": "aaaaaaaaaa1", "title": "가수 - 첫째 곡", "duration": 200},
+                                             "by": 5, "by_name": "멤버"}, CHAT)
+    assert ok["result"] in ("playing", "queued") and ("pick", "aaaaaaaaaa1") in src.resolved
+    await stop_all(w)
+
+
+@test
+async def choice_expires_and_cancel_works():
+    db, svc, bot = await world()
+    from sodam.panels import music as Mp
+    cid = await musicq.save_choice(db, CHAT, MEMBER.id, "멤버", "블루문", "partial",
+                                   [{"vid": "aaaaaaaaaa1", "title": "엔플라잉 - Blue Moon", "duration": 216, "kind": ""}])
+    await musicq.set_choice_msg(db, cid, 5)
+    x = FakeQuery(CHAT, MEMBER, f"mu:pk:{cid}:x")
+    x.message.message_id = 5
+    await Mp.on_button(svc, bot, x, ["pk", str(cid), "x"])
+    assert "취소" in x.edits[0] and (await musicq.get_choice(db, cid))["used"]
+    assert not await musicq.claim_choice(db, cid), "두 번째 차지는 실패 (동시에 눌러도 한 번만)"
+    cid = await musicq.save_choice(db, CHAT, MEMBER.id, "멤버", "블루문", "partial",
+                                   [{"vid": "aaaaaaaaaa1", "title": "엔플라잉 - Blue Moon", "duration": 216, "kind": ""}])
+    await db._write("UPDATE music_choices SET ts=ts-? WHERE id=?", (musicq.CHOICE_SEC + 5, cid))
+    y = FakeQuery(CHAT, MEMBER, f"mu:pk:{cid}:0")
+    y.message.message_id = 5
+    await Mp.on_button(svc, bot, y, ["pk", str(cid), "0"])
+    assert "10분" in y.answers[0][0] and not (await musicq.get_choice(db, cid))["used"]
+    z = FakeQuery(CHAT, MEMBER, f"mu:pk:{cid}:9")
+    z.message.message_id = 5
+    await db._write("UPDATE music_choices SET ts=? WHERE id=?", (int(time.time()), cid))
+    await Mp.on_button(svc, bot, z, ["pk", str(cid), "9"])
+    assert "지난 버튼" in z.answers[0][0] and not (await musicq.get_choice(db, cid))["used"], "없는 번호는 안 씀"
+
+
+@test
+async def same_song_twice_is_not_queued_again():
+    db = await make_db()
+    a = await musicq.add(db, CHAT, title="아로하", url="u", vid="sc62", duration=243, by_id=1, by_name="a")
+    b = await musicq.add(db, CHAT, title="아로하", url="u", vid="sc62", duration=243, by_id=2, by_name="b")
+    assert a[0] and b == (None, 0, "dup"), b
+    await musicq.finish(db, a[0], "done")
+    c = await musicq.add(db, CHAT, title="아로하", url="u", vid="sc62", duration=243, by_id=2, by_name="b")
+    assert c[0], "끝난 곡은 다시 신청 가능"
+    f1 = await musicq.add(db, CHAT, title="파일", url="", vid=None, duration=10, by_id=1, by_name="a", path="x")
+    f2 = await musicq.add(db, CHAT, title="파일", url="", vid=None, duration=10, by_id=1, by_name="a", path="x")
+    assert f1[0] and f2[0], "음악 파일(vid 없음)은 막지 않음"
+
+
+@test
+def ai_tool_says_play_again_means_resume_not_a_new_request():
+    d = tools._BY_NAME["music"].description
+    assert "resume" in d and "고르기 버튼" in d and "커버" in d
+
+
+@test
+def resolve_with_real_search_results_end_to_end():
+    """서버 실측 검색 결과로 Source.resolve 전체 (기본 음원 막힘 → 대체 음원 '같은 노래')."""
+    import json
+    data = json.loads((Path(__file__).parent / "fixtures/music/search_20261008.json").read_text())
+    FakeYDL.SEARCH = {("yt", q): v for q, v in data["yt"].items()}
+    FakeYDL.SEARCH.update({("sc", q): v for q, v in data["sc"].items()})
+    FakeYDL.DRM = set()
+
+    def run():
+        y = music.Source(Path(tempfile.mkdtemp()))
+        assert y.resolve("아이유 밤편지 틀어줘")["title"].startswith("아이유(IU) - 밤편지"), "막히기 전엔 기본 음원 원곡"
+        y.blocked_at = time.time()
+        got = y.resolve("조정석 아로하")
+        assert "CRAVITY" not in got["title"] and got["vid"].startswith("sc") and "조정석" in got["title"], got
+        for q, word in (("좋은 발라드", "가수나 노래 제목"), ("최유리 노래모음", "모음")):
+            try:
+                y.resolve(q)
+                raise AssertionError(q)
+            except music.MusicError as e:
+                assert e.code == "not_found" and word in str(e), (q, e)
+        try:
+            y.resolve("김연지 별이될께")
+            raise AssertionError("맨 위 '미친 사랑의 노래'(다른 곡)를 틀면 안 됨")
+        except music.MusicChoice as c:
+            assert "별이될께" in c.items[0]["title"] and len(c.items) <= 4, c.items
+    with_fake_ydl(run)
+
+
+@test
+def alt_source_refuses_other_versions_and_singerless_titles():
+    """대체 음원은 '같은 노래' 만 — 기준 곡과 낱말이 다 맞아도 라이브·괄호 버전·가수 없는 같은 제목은 안 틂."""
+    FakeYDL.SEARCH = {
+        ("sc", "아이유(IU) - 밤편지"): [sc(90, "아이유 - 밤편지 (Live)", 255)],
+        ("sc", "아이유 밤편지"): [],
+        ("sc", "말달리자 -- 크라잉 넛"): [sc(91, "말달리자 (Run your horse)", 190)],
+        ("sc", "말달리자 크라잉 넛"): [], ("sc", "말 달리자"): [sc(91, "말달리자 (Run your horse)", 190)],
+        ("sc", "잔나비 - 주저하는 연인들을 위해"): [sc(92, "잔나비 - 주저하는 연인들을 위해 (강희선성우ver)", 266)],
+        ("sc", "잔나비 주저하는 연인들을 위해"): [],
+    }
+    FakeYDL.DRM = set()
+
+    def run():
+        y = music.Source(Path(tempfile.mkdtemp()))
+        for ref, req, dur in (("아이유(IU) - 밤편지 [가사/Lyrics]", "아이유 밤편지", 254),
+                              ("말달리자 -- 크라잉 넛", "말 달리자", 188),
+                              ("잔나비 - 주저하는 연인들을 위해", "잔나비 주저하는 연인들을 위해", 270)):
+            try:
+                got = y.alt_for(ref, music.mm.parse(req), dur)
+                raise AssertionError((req, got))
+            except music.MusicError as e:
+                assert e.code == "not_found", e
+        assert y.alt_for("아이유(IU) - 밤편지 [가사/Lyrics]", music.mm.parse("아이유 라이브 밤편지"), 254)["vid"] == "sc90", \
+            "라이브를 원하면 라이브도"
+    with_fake_ydl(run)
+    assert music.mm.kind("설윤 (SULLYOON) - 밤편지 (Original Song by IU (아이유))", known="아이유(IU) - 밤편지") == "cover", \
+        "기준 곡 가수 이름이 'by' 뒤에 있어도 'Original Song by' 는 다른 가수"
+    assert music.mm.kind("린&찬혁이 부르는 AKMU의 '어떻게 이별까지 사랑하겠어'") == "cover"
 
 
 if __name__ == "__main__":

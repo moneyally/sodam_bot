@@ -20,14 +20,13 @@ import random
 import re
 import threading
 import time
-import unicodedata
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 
-from . import audio, musicq
+from . import audio, musicmatch as mm, musicq
 
 log = logging.getLogger("sodam.voice.music")
 
@@ -45,6 +44,14 @@ LINK_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#\s]*&)?v=|shorts/|live/|e
 URL = re.compile(r"https?://\S+")
 WATCH = "https://www.youtube.com/watch?v={}"
 OEMBED = "https://www.youtube.com/oembed?format=json&url="
+
+
+class MusicChoice(Exception):
+    """딱 맞는 곡이 없거나 버전(커버·라이브)을 골라야 함 → 신청한 사람이 버튼으로 고름."""
+
+    def __init__(self, items: list[dict], reason: str, query: str):
+        super().__init__(reason)
+        self.code, self.items, self.reason, self.query = "choice", items, reason, query
 
 
 class MusicError(Exception):
@@ -75,13 +82,7 @@ def _blocked(msg: str) -> bool:
 
 
 ALT_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
-VARIANT = ("remix", "cover", "slowed", "sped up", "speed up", "nightcore", "inst", "instrumental", "karaoke", "8d", "reverb", "mashup",
-           "disco", "80s", "lofi", "lo-fi", "phonk", "bootleg", "flip", "version", "ver.", "bass boost", "mix)",
-           "live", "concert", "라이브", "콘서트",
-           "cello", "violin", "guitar", "duo", "orgel", "music box", "kalimba", "8bit", "8-bit", "첼로", "바이올린", "오르골",
-           "원곡", "부른", "불러", "covered", "커버곡",       # '(원곡 이문세) 이보람' = 다른 가수가 부른 것 (실측)
-           "리믹스", "커버", "반주", "피아노", "piano", "acoustic", "jersey", "edit")
-HINT_NEED = 0.75                # 기본 음원 제목 낱말로 맞출 땐 이만큼 (한글 신청 '뉴진스 하입보이' ↔ 'NewJeans - Hype Boy')
+SEARCH_N = 8                     # 기본 음원 검색 후보 수
 ALT_TRY = 4                      # 실제로 받아지는지 확인해 볼 후보 수 (DRM 잠긴 공식 음원 건너뛰기)
 ALT_MIN_SEC = 45                 # 대체 음원 미리듣기(30초) 조각은 건너뜀
 PRIMARY_RETRY = int(os.getenv("MUSIC_RETRY_SEC", "3600"))   # 기본 음원이 막힌 뒤 이만큼은 대체 음원 먼저 (쿠키가 바뀌면 바로 다시)
@@ -91,34 +92,15 @@ _NOISE = re.compile(r"[\[(【](?:[^\])】]*?(?:mv|m/v|official|lyrics?|가사|au
 _WORDS = re.compile(r"(?i)\b(?:official\s*(?:music\s*)?(?:video|mv|audio)|m/?v|lyrics?|live\s*clip|lyric\s*video)\b")
 
 
-def _norm(text: str) -> str:
-    """소문자 + 악센트 뺌 (Beyoncé → beyonce) — 일본어·중국어 글자는 그대로."""
-    t = unicodedata.normalize("NFKD", (text or "").lower())
-    return unicodedata.normalize("NFC", "".join(c for c in t if not unicodedata.combining(c)))   # 한글은 다시 붙임
-
-
-def _words(text: str) -> list[str]:
-    """비교용 낱말 (2글자↑ — 한글·영문·숫자·일본어·중국어 등 모든 글자. 예전엔 한글·영문만이라 일본 노래는 낱말이 비어 아무 곡이나 통과)."""
-    return [w for w in re.findall(r"[^\W_]+", _norm(text)) if len(w) >= 2]
-
-
-def _variant(title: str, asked: str) -> bool:
-    """신청에 없는 리믹스·커버… 영어는 낱말 단위('edit' ⊄ 'edition', 'inst' ⊄ 'instinct'), 한글은 글자 포함."""
-    for v in VARIANT:
-        if v in asked:
-            continue
-        if v.isascii():
-            if re.search(rf"(?<![0-9a-z]){re.escape(v)}(?![0-9a-z])", title):
-                return True
-        elif v in title:
-            return True
-    return False
+_norm = mm.norm
+_words = mm.words
 
 
 def clean_title(title: str) -> str:
     """'[MV] Paul Kim(폴킴) _ Me After You(너를 만나) [가사/Lyrics]' → 다른 곳에서 찾을 검색어 (괄호 속 MV·가사 같은 것 뺌)."""
     t = _NOISE.sub(" ", title or "")
     t = _WORDS.sub(" ", t)
+    t = re.sub(r"가사(?:\s*첨부)?", " ", t)
     t = re.sub(r"[_|/]+", " ", t)
     return re.sub(r"\s+", " ", t).strip()[:100]
 
@@ -199,7 +181,8 @@ class Source:
         return info or {}
 
     def resolve(self, query: str) -> dict:
-        """검색어·링크 → {title, url, vid, duration}. 기본 음원이 막혀 있으면 대체 음원에서 같은 노래."""
+        """검색어·링크 → {title, url, vid, duration}. 딱 맞는 곡이 없거나 버전을 골라야 하면 MusicChoice.
+        신청 낱말을 전부 담은 원곡만 바로 틂 (musicmatch.choose) — 맨 위 곡을 그냥 믿지 않음."""
         vid = link_id(query)
         if vid:
             try:
@@ -207,85 +190,101 @@ class Source:
             except MusicError as e:
                 if e.code != "blocked":
                     raise
-                title = self._oembed_title(vid)      # 영상 제목은 막힌 IP 에서도 oEmbed 로 됨
+                title = self._oembed_title(vid)      # 제목은 막힌 IP 에서도 oEmbed 로 됨
                 if not title:
                     raise
-                return self.alt_search(clean_title(title), fallback_of=e, need=0.6)
+                return self.alt_for(title, mm.parse(""), 0, fallback_of=e)
         if URL.search(query):
             raise MusicError("not_found", "노래 링크나 제목만 돼요.")
-        # 기본 음원 검색은 막힌 IP 에서도 됨 (실측) → 정확한 곡 이름은 기본 음원에서 (대체 음원 검색은 리믹스·커버가 먼저 나오기도)
-        res = self._run(lambda y: y.extract_info(f"ytsearch5:{query}", download=False), extract_flat="in_playlist")
-        info = None
-        for e in (res or {}).get("entries") or []:
-            if not e or not e.get("id"):
-                continue
-            dur = int(e.get("duration") or 0)
-            if e.get("live_status") in ("is_live", "is_upcoming") or (dur and dur > self.max_sec):
-                continue
-            info = {"title": e.get("title") or query, "url": WATCH.format(e['id']),
-                    "vid": e["id"], "duration": dur}
-            break
-        if info and self.primary_ok():
-            return info
-        last = None
-        for q in ([clean_title(info["title"])] if info else []) + [query]:   # 기본 음원이 막혀 있음 → 같은 노래를 대체 음원에서
-            try:
-                return self.alt_search(q, wanted=query, ref_sec=info["duration"] if info else 0)
-            except MusicError as e:
-                last = e
-        if info and not self.cookies():
-            raise last                                # 쿠키도 없음 → 기본 음원으로 가 봐야 막힘 (안내는 대체 음원 쪽 이유)
-        if info:
-            return info                               # 대체 음원에도 없음 → 기본 음원으로 (쿠키가 생겼을 수도)
+        req = mm.parse(query)
+        if req.compilation:
+            raise MusicError("not_found", "노래 모음은 못 틀어요 — 곡 하나씩 신청해 주세요. 예: <code>.노래 아이유 밤편지</code>")
+        if req.generic:
+            raise MusicError("not_found", "가수나 노래 제목을 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>")
+        try:                                      # 검색은 막힌 IP 에서도 됨 (실측)
+            res = self._run(lambda y: y.extract_info(f"ytsearch{SEARCH_N}:{req.text}", download=False), extract_flat="in_playlist")
+        except MusicError as e:
+            log.info("기본 음원 검색 실패: %s", e)
+            res = None
+        cands = [e for e in (res or {}).get("entries") or [] if e]
+        if not cands:
+            return self.alt_for(None, req, 0)
+        got = mm.choose(req, cands, self.max_sec)
+        if got.item:
+            return self.pick(got.item, req)
+        if got.choices:
+            raise MusicChoice(got.choices, got.reason, req.text)
         raise MusicError("not_found", f"'{_short(query, 40)}' 노래를 못 찾았어요.")
 
-    def alt_search(self, query: str, fallback_of: MusicError | None = None, wanted: str = "", ref_sec: int = 0,
-                   need: float = 1.0) -> dict:
-        """대체 음원 검색 → 같은 노래 한 곡 (엉뚱한 곡을 트느니 못 찾았다고 함 — 실측: 공식 음원이 DRM 이면 '다이너마이트'에
-        '버터'가 걸림). 받아들이는 곡: 신청 낱말(wanted, 없으면 query)을 need 비율 이상 담고 · 신청에 없는 리믹스·커버·라이브가
-        아니고 · 기본 음원 원곡 길이(ref_sec)와 비슷함. 그중 낱말이 많이 겹치고 딴 이름이 덜 붙은 순, DRM 으로 잠긴 건 건너뜀.
-        vid = 'sc<번호>'."""
-        res = self._run(lambda y: y.extract_info(f"scsearch10:{query}", download=False), cookies=False,
-                        where="대체 음원", extract_flat="in_playlist")
-        asked = _norm(f"{wanted} {query}")
-        core = set(_words(wanted or query))                # 신청한 말 (가수·제목) — 가장 중요
-        hint = set(_words(asked)) - core                    # 기본 음원 제목에서 온 낱말 (영어 제목 등)
-        ok = []
-        for e in (res or {}).get("entries") or []:
-            if not e or not str(e.get("id") or "").isdecimal():
+    def pick(self, item: dict, req: mm.Req | None = None) -> dict:
+        """고른 곡(기본 음원 후보) → 틀 곡. 기본 음원이 막혀 있으면 대체 음원에서 '같은 노래'만."""
+        info = {"title": str(item.get("title") or "?")[:200], "url": WATCH.format(item["vid"]), "vid": item["vid"],
+                "duration": int(item.get("duration") or 0)}
+        if self.primary_ok():
+            return info
+        try:
+            return self.alt_for(info["title"], req or mm.parse(""), info["duration"])
+        except MusicError:
+            if self.cookies():
+                return info                           # 쿠키가 있음 → 기본 음원으로 한 번 더 (막히면 Player 가 안내)
+            raise
+
+    def alt_for(self, ref_title: str | None, req: mm.Req, ref_sec: int = 0,
+                fallback_of: MusicError | None = None) -> dict:
+        """대체 음원에서 기준 곡(ref_title)과 '같은 노래' 한 곡 — 가수·노래 두 쪽 다 맞아야 (musicmatch.same_song).
+        기준이 없으면(검색 실패) 신청 낱말 전부. 원하지 않은 버전(커버·라이브…)·길이 다른 것·DRM 잠긴 것은 건너뜀.
+        못 찾으면 엉뚱한 곡을 트느니 '못 찾았어요'. vid = 'sc<번호>'."""
+        allowed = req.allowed
+        if ref_title and mm.kind(ref_title, req.allowed):
+            allowed += " " + mm.norm(ref_title)          # 사람이 커버를 골랐으면 그 커버의 말은 허용
+        queries = []
+        if ref_title:
+            queries += [clean_title(ref_title), " ".join(w for main, _ in mm.split(ref_title) for w in main)]
+        if req.must:
+            queries.append(req.text)
+        seen = set()
+        for q in queries:
+            if not q or q in seen:
                 continue
-            dur = int(e.get("duration") or 0)
-            if dur < ALT_MIN_SEC or dur > self.max_sec:
-                continue
-            if ref_sec and abs(dur - ref_sec) > max(30, ref_sec * 0.2):
-                continue                                    # 원곡과 길이가 다름 (믹스·조각·다른 곡)
-            title = _norm(str(e.get("title") or ""))
-            if _variant(title, asked):
-                continue
-            core_ok = bool(core) and sum(1 for w in core if w in title) >= need * len(core)   # 낱말이 없으면 공짜 통과 아님
-            hint_ok = len(hint) >= 2 and sum(1 for w in hint if w in title) >= HINT_NEED * len(hint)
-            if not (core_ok or hint_ok):                   # 한글로 신청해도 영어 제목(기본 음원 제목 낱말)이면 같은 곡
-                continue
-            got = set(_words(title))
-            score = 3 * sum(1 for w in core if w in title) + sum(1 for w in hint if w in title) \
-                - 0.4 * len([w for w in got if w not in asked])   # 신청에 없는 이름이 붙음 (다른 가수 커버 등)
-            ok.append((score, {"title": e.get("title") or query, "url": ALT_TRACK.format(e["id"]), "vid": f"sc{e['id']}",
-                               "duration": dur}))
-        ok.sort(key=lambda x: x[0], reverse=True)           # 같은 점수면 대체 음원 순서 그대로 (sort 는 안정)
-        for _, t in ok[:ALT_TRY]:
-            try:
-                self._run(lambda y: y.extract_info(t["url"], download=False), cookies=False, where="대체 음원")
-                return t
-            except MusicError as e:
-                log.info("대체 음원 후보 건너뜀 %s: %s", t["vid"], e)
+            seen.add(q)
+            res = self._run(lambda y: y.extract_info(f"scsearch10:{q}", download=False), cookies=False,
+                            where="대체 음원", extract_flat="in_playlist")
+            ok = []
+            for n, e in enumerate((res or {}).get("entries") or []):
+                if not e or not str(e.get("id") or "").isdecimal():
+                    continue
+                dur = int(e.get("duration") or 0)
+                if dur < ALT_MIN_SEC or dur > self.max_sec:
+                    continue
+                if ref_sec and abs(dur - ref_sec) > max(30, ref_sec * 0.2):
+                    continue                              # 원곡과 길이가 다름 (믹스·조각·다른 곡)
+                title = str(e.get("title") or "")
+                k = mm.kind(title, allowed, ref_title or "")
+                if (k and k != req.intent) or (not req.intent and mm.odd_version(title, ref_title or "")):
+                    continue
+                same, score = mm.same_song(title, ref_title, req) if ref_title else (False, 0)
+                if not same and score == 0 and (not ref_title or mm.touches_all_parts(title, ref_title)):
+                    same, score = mm.alt_ok(title, req)   # 기준 제목이 지저분해도 신청 낱말 전부 (-1 = 다른 가수 이름 → 안 살림)
+                if not same:
+                    continue
+                extra = mm.extra_words(title, f"{ref_title or ''} {req.text}")
+                ok.append(((-score, extra, abs(dur - ref_sec) if ref_sec else 0, n),
+                           {"title": title or q, "url": ALT_TRACK.format(e["id"]), "vid": f"sc{e['id']}", "duration": dur}))
+            ok.sort(key=lambda x: x[0])
+            for _, t in ok[:ALT_TRY]:
+                try:
+                    self._run(lambda y: y.extract_info(t["url"], download=False), cookies=False, where="대체 음원")
+                    return t
+                except MusicError as e:
+                    log.info("대체 음원 후보 건너뜀 %s: %s", t["vid"], e)
         if fallback_of is not None:
             raise fallback_of
-        raise MusicError("not_found", f"'{_short(wanted or query, 40)}' — 같은 노래를 못 찾았어요"
+        raise MusicError("not_found", f"'{_short(ref_title or req.text, 40)}' — 같은 노래를 못 찾았어요"
                          " (운영자: 🎵 화면에서 인증 쿠키를 넣으면 돼요).")
 
     def fallback(self, title: str, ref_sec: int = 0) -> dict:
-        """기본 음원 곡을 받으려다 막힘 → 대체 음원에서 같은 노래 (Player 가 부름). 기본 음원 제목은 낱말이 많아 60%만."""
-        return self.alt_search(clean_title(title), wanted=clean_title(title), ref_sec=ref_sec, need=0.6)
+        """받으려던 곡이 막힘 → 대체 음원에서 같은 노래 (Player 가 부름)."""
+        return self.alt_for(title, mm.parse(""), ref_sec)
 
     def _oembed_title(self, vid: str) -> str | None:
         import json

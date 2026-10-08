@@ -731,6 +731,13 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   막히면 대체 음원에서 같은 노래: 기본 음원 검색으로 정확한 곡 이름 → 신청 낱말 다 담기(또는 기본 제목 낱말 75%) · 길이 ±20% · 신청에 없는
   리믹스·커버·라이브·악기·'원곡' 버전 제외 · DRM 잠긴 것 건너뜀 → 없으면 '못 찾았어요 (인증 쿠키)'. 실측 10곡 중 8곡 원곡.
   막힌 뒤 1시간(MUSIC_RETRY_SEC)은 대체 먼저, 쿠키 바뀌면 바로 기본. deno(pip) JS 풀이, 캐시 data/cache (ProtectSystem=strict). 선택 MUSIC_PROXY.
+- **곡 고르기 = `voice/musicmatch.py`** (tests/test_music_match.py·test_music.py, 뮤테이션 26개, 2026-10-08 오너 '이상한 노래' 원인 추적 —
+  자료 tests/fixtures/music/search_20261008.json = 실제 신청 36개 서버 검색 결과): 신청 정리(틀어줘 빼기·커버/라이브 의도·모음/일반 말이면 되묻기) →
+  기본 음원 8개 중 **신청 낱말 전부 담은 원곡만 바로**(검색 순서, 방송 무대 뒤로, 방송뿐이면 고르기) → 아니면 고르기 버튼(music_choices, mu:pk:<id>:<n|x>,
+  신청자·관리자만·10분·한 번, 고른 곡은 pick 일감 → worker 가 ID 다시 검사). 대체 음원은 기준 곡 제목을 가수/노래로 나눠 **두 쪽 다** 맞아야
+  (same_song, 후보에 모르는 이름 부분 있으면 커버, 'By 다른 사람'·'Original Song by'·'부르는'·붙은 remix·'(…ver)' 제외), 같은 점수면 딴 낱말 적은 쪽.
+  낱말 비교: 짧은 영어는 낱말 단위, 한글 4글자↑ 자모 0.85(별이될께≈별이될게, 3글자 이름은 안 함), 붙여 쓰기 허용. 같은 곡 대기열 중복 'dup'.
+  서버 실측(쿠키): 30곡 27곡 바로 맞음·3곡 고르기. 막힘(대체): 틀린 곡 0, 못 찾음 몇 곡(안전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
   .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).

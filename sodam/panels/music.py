@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -115,9 +116,13 @@ async def _helper_ready(svc, bot, chat_id: int, uid: int) -> str | None:
 
 
 async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | None = None, title: str = "",
-                  duration: int = 0, status_msg: int | None = None) -> None:
-    """뒤에서: 도우미 준비 → 음성 담당에 신청 → 결과(대기열 추가·재생 시작)는 음성 담당이 '찾는 중' 글을 고쳐서."""
+                  duration: int = 0, status_msg: int | None = None, pick: dict | None = None,
+                  by_id: int | None = None, by_name: str | None = None) -> None:
+    """뒤에서: 도우미 준비 → 음성 담당에 신청 → 결과(대기열 추가·재생 시작·고르기 버튼)는 음성 담당이 '찾는 중' 글을 고쳐서.
+    pick = 고르기 버튼으로 고른 곡 (신청한 사람 by_id·by_name 그대로)."""
     db = svc.db
+    uid = by_id if by_id is not None else user.id
+    name = by_name if by_name is not None else user_name(user)
 
     async def fail(text: str) -> None:
         try:
@@ -128,12 +133,14 @@ async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | 
         except TelegramError:
             pass
 
-    why = await _helper_ready(svc, bot, chat_id, user.id)
+    why = await _helper_ready(svc, bot, chat_id, uid)
     if why:
         return await fail(why)
     payload = {"query": query, "path": path, "title": title, "duration": duration, "status_msg": status_msg,
-               "by_name": user_name(user)}
-    jid = await store.add_job(db, chat_id, "music_play", payload, user.id, dedupe=False)
+               "by_name": name}
+    if pick:
+        payload["pick"] = {k: pick.get(k) for k in ("vid", "title", "duration", "kind")}
+    jid = await store.add_job(db, chat_id, "music_play", payload, uid, dedupe=False)
     st, res = await voice._wait(db, jid, timeout=voice.WAIT_JOB)
     await store.mark_notified(db, "voice_jobs", jid)
     if res == "slow":                                       # 아직 처리 중 (앞 신청이 밀림) → 결과는 음성 담당이 그 글을 고침
@@ -355,11 +362,61 @@ c_loop = _ctl("loop", arg="n")
 # 명령 등록은 sodam/commands.py (_music 이 늦게 이 모듈을 부름 — commands → menu → panels 순환 방지)
 
 
+# ── 고르기 버튼 mu:pk:<id>:<n|x> ─────────────────────────
+async def on_pick(svc, bot, q, parts, role: Role) -> None:
+    """딱 맞는 곡이 없을 때·버전 고르기 — 신청한 사람(또는 관리자)만, CHOICE_SEC 안, 한 번만."""
+    chat_id = q.message.chat_id
+    cid = int(parts[1]) if len(parts) > 1 and parts[1].isdecimal() else 0
+    n = parts[2] if len(parts) > 2 else ""
+    row = await musicq.get_choice(svc.db, cid) if cid else None
+    if not row or row["chat_id"] != chat_id or row["msg_id"] not in (None, q.message.message_id):
+        await q.answer("지난 버튼이에요.")
+        return
+    if q.from_user.id != row["by_id"] and role < Role.ADMIN:
+        await q.answer("신청한 분만 고를 수 있어요.", show_alert=True)
+        return
+    if row["used"]:
+        await q.answer("이미 골랐어요.")
+        return
+    if time.time() - row["ts"] > musicq.CHOICE_SEC:
+        await q.answer("10분이 지났어요 — 다시 신청해 주세요.", show_alert=True)
+        with contextlib.suppress(TelegramError):
+            await q.edit_message_reply_markup(None)
+        return
+    item = None
+    if n != "x":
+        if not n.isdecimal() or int(n) >= len(row["items"]):
+            await q.answer("지난 버튼이에요.")
+            return
+        item = row["items"][int(n)]
+    if not await musicq.claim_choice(svc.db, cid):
+        await q.answer("이미 골랐어요.")
+        return
+    if item is None:
+        await q.answer()
+        with contextlib.suppress(TelegramError):
+            await q.edit_message_text("❌ 취소했어요. 가수와 제목을 같이 써서 다시 신청해 주세요. (<code>.노래 아이유 밤편지</code>)",
+                                      parse_mode="HTML")
+        return
+    why = await precheck(svc, chat_id, role)
+    if why:
+        await q.answer(re.sub(r"<[^>]+>", "", why)[:190], show_alert=True)
+        return
+    await q.answer("🎵 고른 곡을 준비해요")
+    with contextlib.suppress(TelegramError):
+        await q.edit_message_text(f"🔎 <b>{esc(item.get('title') or '')[:80]}</b> 준비 중…", parse_mode="HTML")
+    persist.spawn(request(svc, bot, chat_id, q.from_user, pick=item, by_id=row["by_id"], by_name=row["by_name"] or "",
+                          status_msg=q.message.message_id))
+
+
 # ── 지금 곡 카드 버튼 mu:<op> ───────────────────────────
 async def on_button(svc, bot, q, parts) -> None:
     op = parts[0] if parts else ""
     chat_id = q.message.chat_id
     role = await svc.perms.role(bot, chat_id, q.from_user.id)
+    if op == "pk":
+        await on_pick(svc, bot, q, parts, role)
+        return
     if op == "queue":
         text = re.sub(r"<[^>]+>", "", await queue_text(svc, chat_id))
         await q.answer(text[:190], show_alert=True)
@@ -428,6 +485,9 @@ tools.register_tool(tools.Tool(
     "음성채팅에서 노래 틀기 (소담 뮤직봇). '아이유 밤편지 틀어줘'·'노래 틀어'·'이 링크 틀어' → play(query=제목·가수·링크 그대로). "
     "'다음 곡'·'스킵' → skip · '멈춰'·'일시정지' → pause · '다시 틀어' → resume · '노래 꺼'·'노래 끝' → stop · "
     "'대기열'·'뭐 나와?' → queue / now · '소리 줄여 50' → volume(value). 음악 파일에 답장하며 '이거 틀어' → play(query 비움). "
+    "'노래재생'·'다시 틀어'·'노래 켜' = resume (예전에 신청한 링크·제목을 다시 play 하지 말 것 — 사람이 새로 말한 곡만 play). "
+    "딱 맞는 곡이 없으면 신청 글이 고르기 버튼으로 바뀜 (신청한 사람이 고름) — '틀었어요'라고 하지 말 것. "
+    "커버·라이브를 원하면 query 에 '커버'·'라이브'를 그대로 넣음. "
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
     {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume"]},
      "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로)"},

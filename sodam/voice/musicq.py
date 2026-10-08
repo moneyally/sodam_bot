@@ -3,6 +3,7 @@
 music_queue    한 줄 = 신청한 곡 하나. state: queued(기다림) → playing(지금) → done/skipped/removed/failed.
                '대기열 #n' = 이 방 queued 를 신청 순(id)으로 센 n번째. 재시작해도 남음 (음성 담당이 이어서 틂).
 music_sessions 노래 틀기 한 번(도우미가 음성채팅에 들어가 있던 동안) = 한 줄. 끝난 이유·곡 수.
+music_choices  딱 맞는 곡이 없을 때·버전(커버·라이브)을 고를 때 올린 버튼 한 장 = 한 줄 (신청한 사람만, CHOICE_SEC 안, 한 번만).
 chat_state(0, music_health) = 음성 담당이 마지막으로 본 음원 상태 {ok_ts, err, err_ts} (오너 🎵 화면).
 """
 from __future__ import annotations
@@ -21,12 +22,16 @@ CREATE TABLE IF NOT EXISTS music_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, start_ts INTEGER NOT NULL,
     end_ts INTEGER, reason TEXT, tracks INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS music_sessions_chat ON music_sessions(chat_id, start_ts);
-""", migrate={"music_queue": "plain", "music_sessions": "plain"})
+CREATE TABLE IF NOT EXISTS music_choices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, by_name TEXT, query TEXT,
+    reason TEXT, items TEXT NOT NULL, ts INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, msg_id INTEGER);
+""", migrate={"music_queue": "plain", "music_sessions": "plain", "music_choices": "plain"})
 
 HEALTH_KEY = "music_health"
 QUEUE_MAX = 30               # 방마다 기다리는 곡
 PER_USER = 5                 # 한 사람이 동시에 걸어 둘 수 있는 곡
 KEEP_DAYS = 7                # 끝난 곡 기록 보관
+CHOICE_SEC = 600             # 고르기 버튼 유효 시간
 
 
 def _now() -> int:
@@ -36,7 +41,8 @@ def _now() -> int:
 async def add(db, chat_id: int, *, title: str, url: str, vid: str | None, duration: int, by_id: int | None,
               by_name: str, path: str | None = None, msg_id: int | None = None,
               queue_max: int = QUEUE_MAX, per_user: int = PER_USER) -> tuple[int | None, int, str]:
-    """대기열에 넣음 → (줄 id, 대기열 번호(1부터, 지금 아무것도 안 틀면 0), 이유). 꽉 찼으면 (None, 0, 'full'|'per_user')."""
+    """대기열에 넣음 → (줄 id, 대기열 번호(1부터, 지금 아무것도 안 틀면 0), 이유).
+    꽉 찼거나 같은 곡이 이미 있으면 (None, 0, 'full'|'per_user'|'dup')."""
     now = _now()
 
     def run(c):
@@ -47,6 +53,9 @@ async def add(db, chat_id: int, *, title: str, url: str, vid: str | None, durati
                 "SELECT COUNT(*) FROM music_queue WHERE chat_id=? AND by_id=? AND state='queued'",
                 (chat_id, by_id)).fetchone()[0] >= per_user:
             return None, 0, "per_user"
+        if vid and c.execute("SELECT 1 FROM music_queue WHERE chat_id=? AND vid=? AND state IN ('queued','playing')",
+                             (chat_id, vid)).fetchone():
+            return None, 0, "dup"                   # 같은 곡 두 번 (실측: AI 가 같은 링크를 세 번 넣음)
         playing = c.execute("SELECT 1 FROM music_queue WHERE chat_id=? AND state='playing'", (chat_id,)).fetchone()
         rid = c.execute("INSERT INTO music_queue(chat_id, title, url, vid, duration, by_id, by_name, path, msg_id, ts) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -223,3 +232,61 @@ def card_kb():
     return InlineKeyboardMarkup([[B("⏸ 일시정지", callback_data="mu:pause"), B("▶️ 다시", callback_data="mu:resume"),
                                   B("⏭ 다음", callback_data="mu:skip")],
                                  [B("📃 대기열", callback_data="mu:queue"), B("⏹ 끝내기", callback_data="mu:end")]])
+
+
+# ── 고르기 버튼 (딱 맞는 곡이 없을 때·버전 고르기) ─────────────────
+async def save_choice(db, chat_id: int, by_id: int | None, by_name: str, query: str, reason: str, items: list[dict]) -> int:
+    import json
+    now = _now()
+
+    def run(c):
+        c.execute("DELETE FROM music_choices WHERE ts<?", (now - 86400,))
+        return c.execute("INSERT INTO music_choices(chat_id, by_id, by_name, query, reason, items, ts) VALUES(?,?,?,?,?,?,?)",
+                         (chat_id, by_id, (by_name or "")[:60], (query or "")[:200], reason,
+                          json.dumps(items[:4], ensure_ascii=False), now)).lastrowid
+    return await db.atomic(run)
+
+
+async def set_choice_msg(db, cid: int, msg_id: int | None) -> None:
+    await db._write("UPDATE music_choices SET msg_id=? WHERE id=?", (msg_id, cid))
+
+
+async def get_choice(db, cid: int) -> dict | None:
+    import json
+    row = await db._one("SELECT * FROM music_choices WHERE id=?", (cid,))
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["items"] = [x for x in json.loads(out["items"]) if isinstance(x, dict)]
+    except ValueError:
+        out["items"] = []
+    return out
+
+
+async def claim_choice(db, cid: int) -> bool:
+    """한 번만 (연타·두 사람이 같이 눌러도)."""
+    def run(c):
+        return c.execute("UPDATE music_choices SET used=1 WHERE id=? AND used=0", (cid,)).rowcount == 1
+    return await db.atomic(run)
+
+
+def choice_text(reason: str, query: str) -> str:
+    q = _esc(query)[:60]
+    if reason == "intent":
+        return f"🎵 <b>{q}</b> — 어떤 버전으로 틀까요?\n(신청한 분이 골라 주세요 · 10분)"
+    return (f"🎵 <b>{q}</b> — 딱 맞는 곡을 못 찾았어요. 이 중에 있으면 골라 주세요.\n"
+            "(신청한 분이 골라 주세요 · 10분 · 없으면 가수와 제목을 같이 써서 다시)")
+
+
+def choice_kb(cid: int, items: list[dict]):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup
+    from .musicmatch import KIND_LABEL
+    rows = []
+    for i, it in enumerate(items[:4]):
+        label = KIND_LABEL.get(it.get("kind") or "", "🎵")
+        title = str(it.get("title") or "?")
+        title = title if len(title) <= 40 else title[:39] + "…"
+        rows.append([B(f"{label} {title} ({fmt_dur(it.get('duration'))})", callback_data=f"mu:pk:{cid}:{i}")])
+    rows.append([B("❌ 전부 아님", callback_data=f"mu:pk:{cid}:x")])
+    return InlineKeyboardMarkup(rows)
