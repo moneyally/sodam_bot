@@ -1592,7 +1592,7 @@ def update_sh_slows_tests_down_when_music_plays_during_them():
     (clone / "data" / "update.postponed").write_text(str(int(time.time()) - 3700))   # 60분 다 미뤄서 이번엔 시험을 돌림
     r = _run_update(clone, log, THROTTLE_EVERY="0.2")
     sets = [x.strip() for x in log.read_text().splitlines() if "set-property" in x]
-    assert r.returncode == 0 and "set-property --runtime sodam-autoupdate.service CPUQuota=30%" in sets, \
+    assert r.returncode == 0 and "set-property --runtime sodam-autoupdate.service CPUQuota=60%" in sets, \
         ("노래 중이면 시험 힘을 낮춤", sets, r.stdout + r.stderr)
     assert sets[-1].endswith("CPUQuota=150%"), ("끝나면 원래대로", sets)
 

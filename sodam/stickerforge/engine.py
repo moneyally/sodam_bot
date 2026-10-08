@@ -29,6 +29,9 @@ from . import fx as FX
 from . import caption as CAP
 from . import qc
 
+# ffmpeg 한 번 상한 (초). 서버 올리기 시험은 노래 중이면 힘을 낮춰 돌아서 update.sh 가 늘림 (2026-10-09 시간 초과로 시험 실패)
+FFMPEG_TIMEOUT = int(os.getenv("STICKER_FFMPEG_TIMEOUT", "120") or 120)
+
 LADDERS = {
     "cutout": (("460k", "28"), ("400k", "31"), ("340k", "34"), ("280k", "37"), ("220k", "40"), ("170k", "44")),
     "photo":  (("660k", "20"), ("560k", "24"), ("460k", "28"), ("380k", "32"), ("300k", "36"), ("240k", "40")),
@@ -328,7 +331,7 @@ def _encode(frames_dir, out, bitrate, crf, fps=FPS, extra_vf=None):
         # 1차 패스는 통계만 모으므로 빠르게(cpu-used 4), 2차만 cpu-used 1 (best/0 대비 PSNR 같고 10배 빠름: 44→4초)
         for p, dst, speed in (("1", os.devnull, "4"), ("2", out, "1")):
             subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args, "-cpu-used", speed,
-                            "-pass", p, "-passlogfile", log, dst], check=True, timeout=120)
+                            "-pass", p, "-passlogfile", log, dst], check=True, timeout=FFMPEG_TIMEOUT)
     return os.path.getsize(out)
 
 
@@ -365,7 +368,7 @@ def encode_profile(frames_dir, out, side=PROFILE_SIDE, loops=PROFILE_LOOPS, limi
         subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *_input(frames_dir, fps, loops),
                         "-vf", vf, "-t", f"{seconds * loops:.4f}", "-c:v", "libx264", "-profile:v", "main", "-preset", "veryfast",
                         "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", out],
-                       check=True, timeout=120)
+                       check=True, timeout=FFMPEG_TIMEOUT)
         size = os.path.getsize(out)
         if size <= limit or crf >= 36:
             break
