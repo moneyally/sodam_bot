@@ -1,0 +1,44 @@
+# 🎧 오디오 실험실: 음질 설정 패치한 ntgcalls 휠 만들기 (docs/AUDIO_LAB.md)
+# 원본 pytgcalls/ntgcalls v3.0.0 (LGPL-3.0) + deploy/ntgcalls/patch_hq.py → 서버(파이썬 3.12, x86_64) 용 휠 하나.
+# 결과는 Actions 의 'ntgcalls-hq-wheel' 아티팩트. 서버 컴퓨터는 안 씀.
+name: ntgcalls HQ wheel
+permissions:
+  contents: read
+on:
+  push:
+    branches: [claude/audio-lab]
+    paths: ["deploy/ntgcalls/**", ".github/workflows/ntgcalls-hq.yml"]
+  workflow_dispatch:
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    container:
+      image: ghcr.io/pytgcalls/ntgcalls/manylinux-x86_64:latest
+    steps:
+      - name: 우리 패치 받기
+        uses: actions/checkout@v4
+        with:
+          path: sodam
+      - name: ntgcalls v3.0.0 원본 받기
+        run: git clone --depth 1 --branch v3.0.0 --recurse-submodules --shallow-submodules https://github.com/pytgcalls/ntgcalls ntgcalls
+      - name: 패치
+        run: python3 sodam/deploy/ntgcalls/patch_hq.py ntgcalls
+      - name: 휠 빌드 (cp312 만)
+        working-directory: ntgcalls
+        run: |
+          python3 -m pip install "git+https://github.com/pytgcalls/cibuildwheel.git" setuptools
+          python3 -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: cp312-manylinux_x86_64
+          CIBW_CONTAINER_ENGINE: none
+          CIBW_ENVIRONMENT: "PYPI_TAGS=1"
+          CIBW_TEST_SKIP: "*"
+      - name: 휠 해시
+        run: sha256sum ntgcalls/wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ntgcalls-hq-wheel
+          path: ntgcalls/wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 90
