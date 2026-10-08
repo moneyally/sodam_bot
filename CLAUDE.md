@@ -728,6 +728,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **음원 출처는 숨김 (오너 결정 2026-10-08)**: 방에 보이는 글·안내서·AI 도구 설명·재생 카드에 출처(사이트 이름) 안 씀, 오류 글은 `music._hide_src`.
   코드·주석도 '기본 음원 / 대체 음원' 으로만 (`Source.primary_ok`·`alt_search`·`ALT_*`). 서버 실측 2026-10-08: 기본 음원은 검색만 되고 받기는 IP 차단 →
   인증 쿠키(버리는 구글 계정, 오너 🎵 m:mu [🍪 쿠키 넣기], data/music_auth/*.txt 600, '#HttpOnly_' 줄도 인정) 있으면 쿠키부터 돌아가며.
+  **🌐 WARP 우회 길 (2026-10-08, 쿠키가 몇 시간 만에 죽던 것)**: sodam-warp.service = Cloudflare WARP 무료(wgcf 등록) → wireproxy SOCKS5 127.0.0.1:40000,
+  sodam-voice 에 MUSIC_PROXY → `Source._run` 이 **쿠키 없이 그 길 먼저**, 실패하면 예전 순서(쿠키 → 쿠키 없이). 서버 실측: 쿠키 없이 3곡 다 받음.
+  update.sh warp_setup 이 설치(고정 버전, /opt/sodam-warp). 쿠키 넣기는 옛 쿠키 지우고 바로 실제로 받아지는지 확인(COOKIE_CHECK).
   막히면 대체 음원에서 같은 노래: 기본 음원 검색으로 정확한 곡 이름 → 신청 낱말 다 담기(또는 기본 제목 낱말 75%) · 길이 ±20% · 신청에 없는
   리믹스·커버·라이브·악기·'원곡' 버전 제외 · DRM 잠긴 것 건너뜀 → 없으면 '못 찾았어요 (인증 쿠키)'. 실측 10곡 중 8곡 원곡.
   막힌 뒤 1시간(MUSIC_RETRY_SEC)은 대체 먼저, 쿠키 바뀌면 바로 기본. deno(pip) JS 풀이, 캐시 data/cache (ProtectSystem=strict). 선택 MUSIC_PROXY.

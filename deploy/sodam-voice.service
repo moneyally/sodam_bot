@@ -14,6 +14,8 @@ Group=sodam
 WorkingDirectory=/opt/sodam
 ExecStart=/opt/sodam/.venv/bin/python -m sodam.voice.worker
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# 노래 받기는 WARP 우회 길로 먼저 (sodam-warp.service). 길이 죽어 있으면 코드가 바로 예전 방식(쿠키)으로 넘어감
+Environment=MUSIC_PROXY=socks5://127.0.0.1:40000
 Restart=always
 RestartSec=10
 KillSignal=SIGTERM

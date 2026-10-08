@@ -169,6 +169,38 @@ diag_setup() {
 # 🔐 SSH 웹소켓 다리 (sodam/sshws.py, 오너 결정 2026-10-01): 클로드 작업 환경은 HTTPS 만 나가서 22번이 막힘 → Caddy /sshws → 127.0.0.1:22.
 # 지키는 것: 다리 = 점검 토큰 필요 · sshd = 127.0.0.1 에서 온 접속은 비밀번호 로그인 금지(키만) · 클로드 키 = from="127.0.0.1,::1" 로만.
 # 끄기: systemctl disable --now sodam-sshws (다음 배포 때 다시 켜지지 않게 하려면 deploy/sodam-sshws.service 를 지우고 배포)
+# 🎵 노래 받기 우회 길 (Cloudflare WARP → wireproxy SOCKS5 127.0.0.1:40000). 프로그램은 고정 버전·해시 확인, WARP 무료 계정은 처음 한 번 등록.
+WARP_DIR=${WARP_DIR:-/opt/sodam-warp}
+WGCF_URL=https://github.com/ViRb3/wgcf/releases/download/v2.2.29/wgcf_2.2.29_linux_amd64
+WIREPROXY_URL=https://github.com/whyvl/wireproxy/releases/download/v1.0.9/wireproxy_linux_amd64.tar.gz
+warp_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-warp.service" ] || return 0
+    mkdir -p "$WARP_DIR" && chmod 755 "$WARP_DIR"
+    if [ ! -x "$WARP_DIR/wireproxy" ]; then
+        curl -fsSL --max-time 120 "$WIREPROXY_URL" | tar xz -C "$WARP_DIR" wireproxy \
+            || { log "warp: wireproxy 받기 실패 (노래는 예전 방식)"; report warp_setup.status "warp_fail wireproxy"; return 0; }
+    fi
+    if [ ! -s "$WARP_DIR/wgcf-profile.conf" ]; then
+        [ -x "$WARP_DIR/wgcf" ] || { curl -fsSL --max-time 120 -o "$WARP_DIR/wgcf" "$WGCF_URL" && chmod +x "$WARP_DIR/wgcf"; } \
+            || { log "warp: wgcf 받기 실패"; report warp_setup.status "warp_fail wgcf"; return 0; }
+        (cd "$WARP_DIR" && { [ -s wgcf-account.toml ] || ./wgcf register --accept-tos >/dev/null 2>&1; } && ./wgcf generate >/dev/null 2>&1) \
+            || { log "warp: WARP 등록 실패"; report warp_setup.status "warp_fail register"; return 0; }
+    fi
+    printf 'WGConfig = %s/wgcf-profile.conf\n\n[Socks5]\nBindAddress = 127.0.0.1:40000\n' "$WARP_DIR" > "$WARP_DIR/wireproxy.conf"
+    chown -R "$RUN_AS:" "$WARP_DIR"; chmod 600 "$WARP_DIR"/wgcf-*.* 2>/dev/null || true
+    if ! cmp -s "$APP_DIR/deploy/sodam-warp.service" "$UNIT_DIR/sodam-warp.service"; then
+        cp "$APP_DIR/deploy/sodam-warp.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q sodam-warp 2>/dev/null || $SYSTEMCTL enable -q sodam-warp
+    $SYSTEMCTL is-active -q sodam-warp 2>/dev/null || $SYSTEMCTL restart sodam-warp
+    sleep 3
+    if curl -s --max-time 15 -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q '^warp=on'; then
+        report warp_setup.status "warp_ok"
+    else
+        log "warp: 길이 안 열림 (노래는 예전 방식으로 계속)"; report warp_setup.status "warp_fail 연결"
+    fi
+}
+
 sshws_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-sshws.service" ] && [ -f "$APP_DIR/deploy/claude_ssh.pub" ] || return 0
     local pub line mark_b="# >>> sodam-sshws" mark_e="# <<< sodam-sshws" tmp
@@ -326,6 +358,10 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
         diag_setup
         sshws_setup
     fi
+    # 노래 우회 길이 안 떠 있으면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-warp.service" ] && ! $SYSTEMCTL is-active -q sodam-warp 2>/dev/null; then
+        warp_setup
+    fi
     # 작업실이 안 떠 있거나 마지막 점검이 실패면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] \
         && { ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null || ! grep -q ' workshop_ok' "$APP_DIR/data/workshop_setup.status" 2>/dev/null; }; then
@@ -378,6 +414,7 @@ if restart_and_verify "$VER"; then
     voice_setup
     diag_setup
     sshws_setup
+    warp_setup
     workshop_setup
     unit_setup
     exit 0

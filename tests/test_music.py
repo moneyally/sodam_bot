@@ -728,6 +728,22 @@ def youtube_retries_next_cookie_only_when_blocked():
         assert os.environ["DENO_DIR"].startswith(d) or "DENO_DIR" in os.environ
         calls.clear()
 
+        seen = []                                    # 우회 길(WARP)이 있으면 쿠키 없이 그 길 먼저, 죽었으면 예전 순서
+        os.environ["MUSIC_PROXY"] = "socks5://127.0.0.1:40000"
+        try:
+            assert y._run(lambda ydl: seen.append((ydl.opts.get("proxy"), ydl.opts.get("cookiefile"))) or "ok") == "ok"
+            assert seen == [("socks5://127.0.0.1:40000", None)], ("쿠키 안 쓰고 우회 길로", seen)
+            seen.clear()
+
+            def dead_proxy(ydl):
+                seen.append((ydl.opts.get("proxy"), ydl.opts.get("cookiefile")))
+                if ydl.opts.get("proxy"):
+                    raise DownloadError("ERROR: Unable to connect to proxy")
+                return "ok"
+            assert y._run(dead_proxy) == "ok" and seen[0][0] and not seen[1][0] and seen[1][1], ("길이 죽으면 쿠키로", seen)
+        finally:
+            os.environ.pop("MUSIC_PROXY", None)
+
         def always(ydl):
             calls.append(1)
             raise DownloadError("ERROR: Sign in to confirm you're not a bot")

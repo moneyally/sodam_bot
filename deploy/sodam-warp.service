@@ -1,0 +1,33 @@
+# /etc/systemd/system/sodam-warp.service — 🎵 노래 받기용 우회 길 (Cloudflare WARP, wireproxy SOCKS5 127.0.0.1:40000).
+# 서버(데이터센터) IP 는 기본 음원이 '봇이냐?'로 막는데 WARP 로 나가면 쿠키 없이도 받아짐 (서버 실측 2026-10-08).
+# 노래 받기(yt-dlp, MUSIC_PROXY)만 이 길로 — 텔레그램·통화·나머지는 그대로. deploy/update.sh warp_setup 이 설치.
+[Unit]
+Description=Sodam music egress (Cloudflare WARP via wireproxy)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam-warp
+ExecStart=/opt/sodam-warp/wireproxy -s -c /opt/sodam-warp/wireproxy.conf
+Restart=always
+RestartSec=10
+CPUWeight=50
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+SyslogIdentifier=sodam-warp
+
+[Install]
+WantedBy=multi-user.target
