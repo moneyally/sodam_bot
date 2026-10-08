@@ -738,6 +738,16 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   (same_song, 후보에 모르는 이름 부분 있으면 커버, 'By 다른 사람'·'Original Song by'·'부르는'·붙은 remix·'(…ver)' 제외), 같은 점수면 딴 낱말 적은 쪽.
   낱말 비교: 짧은 영어는 낱말 단위, 한글 4글자↑ 자모 0.85(별이될께≈별이될게, 3글자 이름은 안 함), 붙여 쓰기 허용. 같은 곡 대기열 중복 'dup'.
   서버 실측(쿠키): 30곡 27곡 바로 맞음·3곡 고르기. 막힘(대체): 틀린 곡 0, 못 찾음 몇 곡(안전).
+- **2차 기능 (2026-10-08, tests/test_music_extras.py · 뮤테이션 21개)**: music_queue 에 sort(섞기 순서, 없으면 id — 순서는 musicq.ORDER 하나)·
+  auto(자동 재생 곡)·orig_vid(대체 음원으로 바뀌기 전 ID) · 방 모드 chat_state music_modes {loopq, autoplay, vc_title(기본 켬)} (음성 담당은 패널 설정
+  기본값을 모르니 설정 표 대신 chat_state) · 🔀 `.섞기`(can_control)·`.대기열비우기`(can_end, 지금 곡 그대로) · 🔁 `.전체반복`(다 튼 곡을 맨 뒤로 requeue_end) ·
+  📻 `.자동재생`(관리자): 대기열 비면 Player._autoplay → Source.related = **곡 링크+&list=RD<ID> 믹스**(playlist?list=RD 는 'unviewable' 실측),
+  방 최근 50곡(ID·song_key) 빼고 원곡만, 사람 신청 없이 AUTO_MAX 10곡 · 🏷 음성채팅 제목 = '🎵 곡'(Telethon EditGroupCallTitle, 처음 제목 기억 → 끝나면 되돌림,
+  권한 없으면 조용히) · 📃 재생목록 링크(list= 만 있을 때, 곡+list 공유 링크는 그 곡) 15곡(PLAYLIST_MAX, 한 사람 한도 대신) · 📝 가사 = 곡 틀 때 뒤에서
+  공개 가사 DB(lrclib.net, 키 없음, 가끔 503) 같은 곡(same_song·길이 ±5초)만 music_lyrics 에 전문 → AI 도구 music lyrics 는 전문(tainted, '물어본 부분만 인용'),
+  `.가사` 는 앞 8줄 (저작권) · 🏆 `.인기곡` = 사람 신청·튼 곡, orig_vid 로 묶음, 보관 90일 · AI 도구 music action 16개('전체 꺼줘'=stop·clear·shuffle·
+  loop_queue·autoplay·lyrics·top·remove·seek). 서버 실측: 믹스 이어 틀기·재생목록 15곡·가사 5곡 중 3곡.
+- 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
   .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).

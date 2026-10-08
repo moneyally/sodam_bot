@@ -366,3 +366,8 @@ def alt_ok(cand_title: str, req: Req) -> tuple[bool, int]:
     if not t.covers(req):
         return False, 0
     return True, t.hits(req.must)
+
+
+def song_key(title: str) -> str:
+    """같은 곡 비교용 이름 = 기준 제목에서 노래·가수 낱말만 (MV·가사·괄호 군더더기 뺌) — 자동 재생이 같은 곡을 또 안 고르게."""
+    return " ".join(sorted(w for main, _ in split(title) for w in main))

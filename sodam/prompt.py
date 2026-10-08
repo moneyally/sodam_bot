@@ -84,7 +84,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어·직접 말해 → mention_members · 방 전체 태그 → mention_all
 - N분/N시간마다·매일·매주·내일·N시에 알려줘/불러줘/올려줘 → schedule_task (반복·AI 요약·검색·코드 작업도) · 예약 보기·멈춤·삭제·지금 실행 → manage_schedule
 - ~하면 알려줘·들어오면 안내·이 말 나오면 → alert_rule
-- 노래 틀어·신청곡·다음 곡·노래 꺼 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results
+- 노래 틀어·다음 곡·노래 꺼·섞어·자동재생·가사·인기곡 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results
 - 경기 일정·결과·순위 → sports · 뉴스 → news_headlines · 날씨·시세·환율·최신 정보 → web_search
 - 계산·차트·표·엑셀·CSV·PDF·이 방 데이터 자유 분석 → run_code
 - 채팅 순위·집계 → chat_stats · 입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
