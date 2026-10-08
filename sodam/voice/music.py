@@ -175,7 +175,7 @@ class Source:
             self._sig, self.blocked_at = sig, 0.0
         return time.time() - self.blocked_at >= PRIMARY_RETRY
 
-    def _opts(self, cookie: str | None, **extra) -> dict:
+    def _opts(self, cookie: str | None, proxy: str | None = None, **extra) -> dict:
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 15, "retries": 2,
                 "logger": _Quiet(), "noprogress": True}
         deno_bin = _deno()
@@ -183,8 +183,8 @@ class Source:
             opts["js_runtimes"] = {"deno": {"path": deno_bin}}
         if cookie:
             opts["cookiefile"] = cookie
-        if os.getenv("MUSIC_PROXY"):                 # 막히면 주거용 프록시 (선택, 오너가 .env 에)
-            opts["proxy"] = os.environ["MUSIC_PROXY"]
+        if proxy:
+            opts["proxy"] = proxy
         opts.update(extra)
         return opts
 
@@ -194,14 +194,21 @@ class Source:
         import yt_dlp
         self._env()
         jar = self.cookies() if cookies else []
-        tries: list[str | None] = random.sample(jar, len(jar)) + [None]
+        proxy = os.getenv("MUSIC_PROXY", "").strip()
+        # 나가는 길(MUSIC_PROXY, 예: WARP socks5://127.0.0.1:40000)이 있으면 쿠키 없이 그 길로 먼저 — 서버 IP 는 '봇이냐?'로 막혀도
+        # 그 길은 됨 (서버 실측 2026-10-08: 쿠키 없이 3곡 다 받음). 그 길이 죽었거나 막히면 예전처럼 쿠키 → 쿠키 없이.
+        tries: list[tuple[str | None, str | None]] = ([(None, proxy)] if proxy else []) + \
+            [(c, None) for c in random.sample(jar, len(jar))] + [(None, None)]
         last = ""
-        for cookie in tries:
+        for cookie, via in tries:
             try:
-                with yt_dlp.YoutubeDL(self._opts(cookie, **extra)) as ydl:
+                with yt_dlp.YoutubeDL(self._opts(cookie, via, **extra)) as ydl:
                     return fn(ydl)
             except yt_dlp.utils.DownloadError as e:
                 last = str(e)
+                if via:
+                    log.info("%s 우회 길 실패 → 서버 IP 로: %s", where, _short(last, 200))
+                    continue
                 if not _blocked(last):
                     break
         if _blocked(last):
