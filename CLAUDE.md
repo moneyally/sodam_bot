@@ -747,6 +747,13 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   공개 가사 DB(lrclib.net, 키 없음, 가끔 503) 같은 곡(same_song·길이 ±5초)만 music_lyrics 에 전문 → AI 도구 music lyrics 는 전문(tainted, '물어본 부분만 인용'),
   `.가사` 는 앞 8줄 (저작권) · 🏆 `.인기곡` = 사람 신청·튼 곡, orig_vid 로 묶음, 보관 90일 · AI 도구 music action 16개('전체 꺼줘'=stop·clear·shuffle·
   loop_queue·autoplay·lyrics·top·remove·seek). 서버 실측: 믹스 이어 틀기·재생목록 15곡·가사 5곡 중 3곡.
+- **분위기 신청 ('잔잔한 플리 틀어줘')**: `music.wants_mix` → MusicError("mix") → worker 가 `Source.mix_for` → 재생목록 검색(검색어 '<분위기> 노래'·'플레이리스트', 각 8개, 최대 14목록 —
+  실측: 앞 8개가 전부 1시간 모음 영상일 때 있음) → 8분 안·원곡·`MIX_JUNK`(하루종일·듣기 좋은·플리 …) 아닌 곡 15개, 몇 곡뿐이면 첫 곡 믹스로 채움.
+  모르는 말은 MIX_MIN 곡 넘게 제목에 나올 때만 가수로 거름. 서버 실측 5번 다 15곡.
+- **소리 튐 대책 (2026-10-08 고객 '사운드가 튀네요')**: ntgcalls 소스 확인 = 밖에서 넣은 조각을 **버퍼 없이** 바로 WebRTC 로(늦으면 받는 쪽이 메움 → 튐),
+  send_frame 은 코어 수만큼 스레드풀(서버 2개), 에코·자동 음량은 꺼져 있음, Opus 모노·음성 모드·ptime 60. 우리 쪽 고침: 크기 바뀜은 조각마다 조금씩(`glide`
+  줄임 50ms·키움 250ms, 말 사이 0.3초 틈엔 안 키움), 한계 넘는 소리 `soft_limit`(딱딱 잘림 X), 조각 비면 마지막 조각을 줄이며 끝·다시 0 에서, 곡 시작 전 0.5초 미리 풀기.
+  끝 로그 '흔들림(30ms↑)·보내기 느림(20ms↑)' 으로 원인 확인 → 그래도 튀면 FIFO 파이프 소스(ntgcalls C++ 시계) 검토.
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·

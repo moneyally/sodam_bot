@@ -303,8 +303,13 @@ async def player_mute_and_ducking_change_what_is_sent():
     await musicq.add(db, CHAT, title="t", url="u", vid="vvvvvvvvvvv", duration=999, by_id=1, by_name="a")
     task = asyncio.create_task(pl.run())
     await until(lambda: 8000 in sent)
-    pl.voice_frame(np.full(480, 1000, "<i2").tobytes())
+    for _ in range(20):
+        pl.voice_frame(np.full(480, 1000, "<i2").tobytes())
     await until(lambda: 3000 in sent), "소담 목소리 나오는 동안 노래는 DUCK 배"
+    i = sent.index(3000)
+    assert all(3000 <= x <= 9000 for x in sent[sent.index(8000):i]), "줄이는 중간 값을 거침 (한 번에 1→0.25 X)"
+    assert len(set(sent[sent.index(8000):i])) >= 3, ("50ms 에 걸쳐 줄임", sent[-30:])
+    await until(lambda: sent[-1] == 8000)
     pl.volume = 50
     await until(lambda: sent[-1] == 4000)
     pl.muted = True
@@ -1155,7 +1160,7 @@ async def no_exact_song_posts_choice_buttons_only_the_requester_picks_once():
     again = q(MEMBER, datas[0])
     await Mp.on_button(svc, pbot, again, datas[0].split(":")[1:])
     job = None
-    for _ in range(200):
+    for _ in range(1000):
         job = await db._one("SELECT * FROM voice_jobs WHERE kind='music_play' AND payload LIKE '%pick%'")
         if job:
             break
@@ -1241,12 +1246,17 @@ def resolve_with_real_search_results_end_to_end():
         y.blocked_at = time.time()
         got = y.resolve("조정석 아로하")
         assert "CRAVITY" not in got["title"] and got["vid"].startswith("sc") and "조정석" in got["title"], got
-        for q, word in (("좋은 발라드", "가수나 노래 제목"), ("최유리 노래모음", "모음")):
+        for q in ("좋은 발라드", "최유리 노래모음", "잔잔한 플리 하나 틀어줘"):
             try:
                 y.resolve(q)
                 raise AssertionError(q)
             except music.MusicError as e:
-                assert e.code == "not_found" and word in str(e), (q, e)
+                assert e.code == "mix", (q, e)            # 분위기·모음 → 워커가 여러 곡 (예전: '못 틀어요')
+        try:
+            y.resolve("노래 틀어줘")
+            raise AssertionError("아무 말도 없으면 되묻기")
+        except music.MusicError as e:
+            assert e.code == "not_found" and "분위기" in str(e), e
         try:
             y.resolve("김연지 별이될께")
             raise AssertionError("맨 위 '미친 사랑의 노래'(다른 곡)를 틀면 안 됨")
@@ -1288,3 +1298,82 @@ def alt_source_refuses_other_versions_and_singerless_titles():
 
 if __name__ == "__main__":
     run_all()
+
+
+@test
+def loud_mix_is_softly_limited_and_gain_glides_both_ways():
+    """'사운드가 튀네요' (2026-10-08): 크게 녹음된 곡 + 목소리 + 볼륨 200% → 딱딱 잘림(지직), 목소리 끝나면 한 번에 커짐(쿵)."""
+    out = np.frombuffer(music.mix(np.full(480, 20000, "<i2").tobytes(), np.full(480, 10000, "<i2").tobytes(), 1.0), "<i2")
+    assert music.LIMIT < int(out[0]) < 30000, ("한계 넘는 소리는 부드럽게 눌림", int(out[0]))
+    quiet = np.frombuffer(music.mix(np.full(480, 8000, "<i2").tobytes(), None, 1.0), "<i2")
+    assert int(quiet[0]) == 8000, "작은 소리는 그대로"
+    g, steps = music.DUCK, 0
+    while g < 1.0:
+        g = music.glide(g, 1.0)
+        steps += 1
+    assert steps >= 15, ("다시 키울 땐 천천히 (0.15초↑)", steps)
+    assert music.glide(1.0, music.DUCK) > music.DUCK, "줄일 때도 한 조각에 다 X"
+    ramp = np.frombuffer(music.mix(np.full(480, 8000, "<i2").tobytes(), None, 0.5, 1.0), "<i2")
+    assert ramp[0] > ramp[-1] and abs(int(ramp[-1]) - 4000) < 50, "조각 안에서 매끄럽게"
+
+
+@test
+async def short_gaps_between_voice_frames_keep_music_ducked():
+    db = await make_db()
+    clock = Clock()
+    sent = []
+
+    async def send(f):
+        sent.append(int(np.frombuffer(f, "<i2")[-1]))
+
+    async def sleep(s):
+        clock.t += s
+        await asyncio.sleep(0.001)
+    Const.LEN = 100000
+    pl = music.Player(db, CHAT, send, source=FakeSource(tempfile.mkdtemp()), decoder=Const, clock=clock, sleep=sleep, poll=0.02)
+    await musicq.add(db, CHAT, title="t", url="u", vid="vvvvvvvvvvv", duration=999, by_id=1, by_name="a")
+    task = asyncio.create_task(pl.run())
+    await until(lambda: 8000 in sent)
+    for _ in range(10):
+        pl.voice_frame(np.full(480, 1000, "<i2").tobytes())
+    await until(lambda: not pl.voice)
+    n = len(sent)
+    await until(lambda: len(sent) >= n + 15)
+    assert all(x <= 2100 for x in sent[n + 1:n + 15]), ("말 사이 0.15초 틈엔 노래를 다시 안 키움", sent[n:n + 15])
+    pl.stop("end")
+    await task
+
+
+class Gappy(Const):
+    """20 조각마다 3 조각 비는 소리 (풀기가 잠깐 밀림)."""
+    n = 0
+
+    def frame(self):
+        Gappy.n += 1
+        if Gappy.n % 23 in (0, 1, 2):
+            return None
+        return super().frame()
+
+
+@test
+async def underrun_fades_out_instead_of_cutting_and_fades_back_in():
+    db = await make_db()
+    clock = Clock()
+    frames = []
+
+    async def send(f):
+        frames.append(np.frombuffer(f, "<i2").copy())
+
+    async def sleep(s):
+        clock.t += s
+        await asyncio.sleep(0.001)
+    Const.LEN = 100000
+    pl = music.Player(db, CHAT, send, source=FakeSource(tempfile.mkdtemp()), decoder=Gappy, clock=clock, sleep=sleep, poll=0.02)
+    await musicq.add(db, CHAT, title="t", url="u", vid="vvvvvvvvvvv", duration=999, by_id=1, by_name="a")
+    task = asyncio.create_task(pl.run())
+    await until(lambda: pl.stats["underrun"] >= 3 and len(frames) > 80)
+    pl.stop("end")
+    await task
+    for a, b in zip(frames, frames[1:]):
+        jump = abs(int(b[0]) - int(a[-1]))
+        assert jump <= 1500, ("조각 사이에 소리가 한 번에 크게 바뀌지 않음 ('딱')", int(a[-1]), int(b[0]))

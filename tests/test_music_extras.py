@@ -321,5 +321,107 @@ async def ai_tool_does_everything_by_words():
     assert "자동 재생" in q.answers[0][0], "대기열에 켜진 모드 표시"
 
 
+@test
+def mood_requests_pick_songs_from_playlists_skipping_long_mixes_and_other_artists():
+    """실제 사례 2026-10-08 자이 '소담아 잔잔한 플리 하나 틀어줘' → '노래 모음은 못 틀어요'. 서버 실측: 첫 재생목록이 1시간 모음 영상뿐."""
+    src = music.Source(tempfile.mkdtemp())
+    lists = {
+        "search": [{"id": "PLmix"}, {"id": "PLgood"}, {"id": "PLmore"}],
+        "PLmix": [{"id": f"mixAAAAAA{i:02d}", "title": "발라드 노래모음 1시간", "duration": 5555} for i in range(5)],
+        "PLgood": [{"id": "goodAAAAA01", "title": "최유리 - 숲", "duration": 229},
+                   {"id": "goodAAAAA02", "title": "최유리 - 숲 [가사]", "duration": 230},
+                   {"id": "goodAAAAA03", "title": "숲 (Live) - 최유리", "duration": 240},
+                   {"id": "goodAAAAA04", "title": "아이유 - 밤편지", "duration": 254},
+                   {"id": "goodAAAAA05", "title": "최유리 - 잘 지내자, 우리", "duration": 257}],
+        "PLmore": [{"id": f"moreAAAAA{i:02d}", "title": f"최유리 - 노래{i}", "duration": 200} for i in range(5)]
+                  + [{"id": "moreAAAAA99", "title": "잔잔한 밤 - 다른가수", "duration": 200}],   # 분위기 말이 제목에 한 번 → 가수로 보면 안 됨
+    }
+    seen_urls = []
+
+    def entries(url):
+        seen_urls.append(url)
+        if "results?search_query=" in url:
+            return lists["search"]
+        return lists.get(url.rsplit("=", 1)[-1], [])
+    src._entries = entries
+    got = src.mix_for("최유리 노래모음")
+    titles = [g["title"] for g in got]
+    assert titles[:2] == ["최유리 - 숲", "최유리 - 잘 지내자, 우리"], ("모음 영상·같은 곡·라이브·다른 가수 빼고", titles)
+    assert len(got) >= music.MIX_MIN and all("1시간" not in t for t in titles)
+    import urllib.parse
+    assert urllib.parse.unquote(seen_urls[0]).split("search_query=")[1].startswith("최유리 노래&"), seen_urls[0]
+    seen_urls.clear()
+    got = src.mix_for("소담아 잔잔한 플리 하나 틀어줘")
+    q = urllib.parse.unquote(seen_urls[0]).split("search_query=")[1]
+    assert q.startswith("잔잔한 노래&"), ("'소담아·하나·틀어줘' 는 검색어에서 뺌", q)
+    assert any("밤편지" in g["title"] for g in got), "분위기 말('잔잔한')은 가수로 보지 않음 (실측: 가수 필터에 걸려 0곡)"
+    src._entries = lambda url: [] if "results" in url else []
+    try:
+        src.mix_for("잔잔한 노래")
+        raise AssertionError("못 찾으면 안내")
+    except music.MusicError as e:
+        assert e.code == "not_found" and "분위기" in str(e)
+
+
+@test
+def mood_skips_compilation_titles_and_fills_from_mix_and_scans_far():
+    """서버 실측: '☕ 하루종일 듣기 좋은 카페음악' 한 개만 나옴 · 앞 8개 목록이 전부 1시간 모음 영상이라 0곡."""
+    src = music.Source(tempfile.mkdtemp())
+    search = [{"id": f"PLjunk{i}"} for i in range(9)] + [{"id": "PLone"}]
+    lists = {f"PLjunk{i}": [{"id": f"junkAAAA{i:03d}", "title": "모음", "duration": 5000}] for i in range(9)}
+    lists["PLone"] = [{"id": "cafeAAAAA01", "title": "☕ 하루종일 듣기 좋은 카페음악", "duration": 300},
+                      {"id": "seedAAAAA01", "title": "아이유 - 밤편지", "duration": 254}]
+    mix = [{"id": "seedAAAAA01", "title": "아이유 - 밤편지", "duration": 254}] + \
+          [{"id": f"mixxAAAAA{i:02d}", "title": f"가수{i} - 노래{i}", "duration": 200} for i in range(6)]
+
+    calls = []
+
+    def entries(url):
+        if "results?search_query=" in url:
+            calls.append(url)
+            return search[:8] if len(calls) == 1 else search[2:]   # 두 번째 검색어에서 새 목록이 나옴
+        if "list=RD" in url:
+            return mix
+        return lists[url.rsplit("=", 1)[-1]]
+    src._entries = entries
+    got = [g["title"] for g in src.mix_for("잔잔한 플리")]
+    assert not any("하루종일" in t for t in got), got
+    assert got[0] == "아이유 - 밤편지" and len(got) >= music.MIX_MIN, ("몇 곡뿐이면 믹스로 채움", got)
+    assert len(got) == len(set(got)), "같은 곡 두 번 X"
+
+
+class MixSource(FakeSource):
+    def resolve(self, query):
+        if "플리" in query:
+            raise music.MusicError("mix", "분위기 신청")
+        return super().resolve(query)
+
+    def mix_for(self, text, limit=music.PLAYLIST_MAX):
+        return [{"title": f"잔잔곡{i}", "url": "u", "vid": f"calm{i:07d}", "duration": 200} for i in range(6)]
+
+
+@test
+async def mood_request_fills_the_queue_and_says_so():
+    db, w, _, _ = await make_worker()
+    w.music_source = MixSource(tempfile.mkdtemp())
+    row = await run_job(db, w, "music_play", {"query": "잔잔한 플리 하나 틀어줘", "by": 5, "by_name": "자이", "status_msg": 9}, CHAT)
+    assert row["result"] == "playlist", row
+    assert len(await db._all("SELECT id FROM music_queue WHERE by_id=5")) == 6
+    edit = [c for c in w.bot.named("edit_text") if c[1] == CHAT][-1][2]
+    assert "분위기에 맞는" in edit and "6곡" in edit and "못 틀어요" not in edit, edit
+    await stop_all(w)
+
+
 if __name__ == "__main__":
     run_all()
+
+
+@test
+def mood_word_seen_once_is_not_treated_as_artist():
+    """모르는 말이 제목에 한두 번만 → 가수로 보고 거르면 1곡만 남음. MIX_MIN 곡 넘을 때만 가수로."""
+    src = music.Source(tempfile.mkdtemp())
+    items = [{"id": f"onceAAAAA{i:02d}", "title": f"가수{i} - 노래{i}", "duration": 200} for i in range(6)]
+    items.append({"id": "onceAAAAA99", "title": "몽글몽글 - 누구", "duration": 200})
+    src._entries = lambda url: [{"id": "PLx"}] if "results" in url else (items if url.endswith("PLx") else [])
+    got = src.mix_for("몽글몽글 노래")
+    assert len(got) == 7, [g["title"] for g in got]

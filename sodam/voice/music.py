@@ -36,6 +36,8 @@ IDLE_SEC = float(os.getenv("MUSIC_IDLE_SEC", "180"))       # 틀 곡 없음·일
 PAUSE_MAX = float(os.getenv("MUSIC_PAUSE_MAX", "900"))     # 일시정지는 15분까지 기다림
 STALL_FRAMES = 1500                                        # 15초 동안 풀린 조각이 없으면 곡을 끝냄
 DUCK = 0.25                                                # 소담이 말하는 동안 노래 크기
+VOICE_HOLD = 30                                            # 목소리 조각이 끊겨도 0.3초는 줄인 채 (말 사이마다 노래가 '쿵' 커지지 않게)
+PREBUFFER = 50                                             # 곡 시작 전 미리 풀어 둘 조각 (0.5초)
 AHEAD = 300                                                # 미리 풀어 두는 조각 (3초) — 디스크·CPU 가 잠깐 늦어도 안 끊김
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
 SILENCE = bytes(audio.FRAME_BYTES)
@@ -66,6 +68,24 @@ PLAYLIST = re.compile(r"(?:youtube\.com|youtu\.be)/\S*?[?&]list=([A-Za-z0-9_-]{1
 PLAYLIST_URL = "https://www.youtube.com/playlist?list={}"
 PLAYLIST_MAX = 15                                       # 재생목록 링크 한 번에 넣는 곡
 LYRICS_API = "https://lrclib.net/api/search"             # 공개 가사 DB (키 없음, 2026-10-08)
+
+
+MIX_MIN = 4                                             # 분위기 플리로 넣을 곡 수 (이보다 적게 찾으면 다음 목록도 봄)
+MIX_JUNK = re.compile(r"(?i)하루\s*종일|듣기\s*좋은|광고\s*없는|playlist|플레이리스트|플리|연속\s*재생|베스트\s*\d+|top\s*\d+|\d+\s*곡")   # 모음 영상 제목
+MIX_MAX_SEC = 480                                       # 플리 곡 하나 최대 8분 (모음 영상 빼기)
+SEARCH_PLAYLISTS = "https://www.youtube.com/results?search_query={}&sp=EgIQAw%253D%253D"   # 검색 '재생목록만'
+
+
+FILLER = {"노래", "음악", "곡", "노래들", "한곡", "하나", "아무", "아무거나", "아무노래", "아무곡", "다른", "다른노래",
+          "song", "songs", "music"}
+
+
+def wants_mix(req) -> bool:
+    """가수·제목 대신 분위기·모음을 신청 ('잔잔한 플리'·'최유리 노래모음'·'신나는 노래') → 여러 곡."""
+    mood = [w for w in req.must if w not in FILLER]
+    if not mood and not req.compilation:
+        return False                                    # '노래 틀어줘'·'아무 노래' — 분위기 말이 없음 → 되묻기
+    return req.compilation or req.generic
 
 
 def playlist_id(text: str) -> str | None:
@@ -211,10 +231,11 @@ class Source:
         if URL.search(query):
             raise MusicError("not_found", "노래 링크나 제목만 돼요.")
         req = mm.parse(query)
-        if req.compilation:
-            raise MusicError("not_found", "노래 모음은 못 틀어요 — 곡 하나씩 신청해 주세요. 예: <code>.노래 아이유 밤편지</code>")
+        if wants_mix(req):                         # '잔잔한 플리'·'최유리 노래모음'·'신나는 노래' → 워커가 mix_for 로 여러 곡
+            raise MusicError("mix", "분위기 신청")
         if req.generic:
-            raise MusicError("not_found", "가수나 노래 제목을 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>")
+            raise MusicError("not_found", "🎧 어떤 노래로 틀까요? 가수·제목이나 분위기를 같이 써 주세요. "
+                                          "예: <code>.노래 아이유 밤편지</code> · <code>.노래 잔잔한 플리</code>")
         try:                                      # 검색은 막힌 IP 에서도 됨 (실측)
             res = self._run(lambda y: y.extract_info(f"ytsearch{SEARCH_N}:{req.text}", download=False), extract_flat="in_playlist")
         except MusicError as e:
@@ -325,6 +346,70 @@ class Source:
         if not out:
             raise MusicError("not_found", "재생목록에서 틀 수 있는 곡을 못 찾았어요.")
         return out
+
+    def mix_for(self, text: str, limit: int = PLAYLIST_MAX) -> list[dict]:
+        """분위기·모음 신청 → 재생목록 검색 → 앞 목록부터 곡을 골라 limit 곡까지.
+        모음 영상(8분 넘음)·커버·라이브·리믹스 빼고, 가수 이름을 썼으면 그 가수 곡만, 같은 곡은 한 번 (서버 실측 2026-10-08:
+        첫 목록이 1시간짜리 모음 영상뿐인 경우가 있어 다음 목록으로 넘어감)."""
+        import urllib.parse
+        req = mm.parse(text)
+        words = [w for w in req.must if w not in FILLER and w not in ("소담", "소담아", "소담이")]   # '소담아 잔잔한 플리 하나' → '잔잔한'
+        base = " ".join(words) or "인기"
+        queries = [f"{base} 노래", f"{base} 플레이리스트"]   # 실측: '잔잔한 플레이리스트' 는 1시간 모음 영상 목록만, '잔잔한 노래' 는 곡 102개
+        names = [w for w in words if w not in mm.GENERIC]   # 가수 이름일 수도('최유리'), 분위기 말일 수도('잔잔한')
+        out, named, seen = [], [], set()
+        lists = []
+        for q in queries:
+            lists += [pl for pl in self._entries(SEARCH_PLAYLISTS.format(urllib.parse.quote(q)))[:8] if pl not in lists]
+        for pl in lists[:14]:                             # 검색 순서가 매번 달라 앞 몇 개가 모음 영상 목록뿐일 때가 있음 (실측: 앞 8개 전부 1시간 영상)
+            try:
+                items = self._entries(PLAYLIST_URL.format(pl["id"]))
+            except MusicError as e:
+                log.info("플리 목록 못 가져옴 %s: %s", pl.get("id"), e)
+                continue
+            for e in items:
+                title = str(e.get("title") or "")
+                key = mm.song_key(title) or title
+                if not self._mix_ok(e, req, seen):
+                    continue
+                seen.add(key)
+                item = {"title": title[:200], "url": WATCH.format(e["id"]), "vid": e["id"], "duration": int(e.get("duration") or 0)}
+                out.append(item)
+                if names and mm.Title(f"{title} {e.get('channel') or e.get('uploader') or ''}").hits(names):
+                    named.append(item)
+            if len(named if names else out) >= limit:
+                break
+        if names and len(named) >= MIX_MIN:
+            out = named                                  # 그 말이 곡 제목에 자주 나오면 가수 이름 → 그 가수 곡만
+        if 0 < len(out) < MIX_MIN:                       # 몇 곡뿐 → 그 곡의 믹스(비슷한 노래)로 채움 (검색 순서가 매번 달라서)
+            for e in self._mix_entries(out[0]["vid"]):
+                title = str(e.get("title") or "")
+                key = mm.song_key(title) or title
+                if not self._mix_ok(e, req, seen):
+                    continue
+                seen.add(key)
+                out.append({"title": title[:200], "url": WATCH.format(e["id"]), "vid": e["id"],
+                            "duration": int(e.get("duration") or 0)})
+                if len(out) >= limit:
+                    break
+        if not out:
+            raise MusicError("not_found", f"🎧 '{_short(' '.join(words) or req.text, 30)}' 분위기 곡을 못 찾았어요. 다른 말로 다시 해 주세요 "
+                                          "(예: <code>.노래 잔잔한 발라드 플리</code>).")
+        return out[:limit]
+
+    def _mix_ok(self, e: dict, req, seen: set) -> bool:
+        """플리에 넣을 곡: 8분 안·원곡·같은 곡 아님·'하루종일 듣기 좋은 …' 같은 모음 영상 제목 아님."""
+        title = str(e.get("title") or "")
+        return (bool(title) and self._playable(e) and int(e.get("duration") or 0) <= MIX_MAX_SEC
+                and not mm.kind(title, req.allowed) and not MIX_JUNK.search(title)
+                and (mm.song_key(title) or title) not in seen)
+
+    def _mix_entries(self, seed_vid: str) -> list[dict]:
+        try:
+            return self._entries(WATCH.format(seed_vid) + "&list=RD" + seed_vid)
+        except MusicError as e:
+            log.info("믹스 못 가져옴 %s: %s", seed_vid, e)
+            return []
 
     def related(self, seed_vid: str, seen_vids: set[str], seen_titles: set[str]) -> dict | None:
         """자동 재생: 기준 곡의 믹스(비슷한 노래 목록)에서 이 방이 최근에 안 튼 원곡 하나. 없으면 None."""
@@ -551,18 +636,41 @@ class Decoder:
                 await self._proc.wait()
 
 
-def mix(music: bytes | None, voice: bytes | None, gain: float) -> bytes:
-    """노래(gain 배) + 소담 목소리. 둘 다 없으면 무음."""
+LIMIT = 0.85 * 32767                                       # 이보다 큰 소리는 부드럽게 눌러 줌 (딱딱 잘리면 '지직·튐')
+DUCK_DOWN = 0.15                                           # 한 조각(10ms)에 줄이는 크기 → 1→0.25 가 50ms
+DUCK_UP = 0.03                                             # 다시 키울 때 → 0.25→1 이 250ms (한 번에 바뀌면 '딱' 소리)
+
+
+def soft_limit(x: np.ndarray) -> np.ndarray:
+    """LIMIT 넘는 부분만 tanh 로 눌러서 32767 안에 (노래 + 목소리 + 볼륨 200% 가 겹쳐도 딱딱 잘리지 않게)."""
+    over = np.abs(x) > LIMIT
+    if over.any():
+        room = 32767 - LIMIT
+        a = np.abs(x[over]) - LIMIT
+        x[over] = np.sign(x[over]) * (LIMIT + room * np.tanh(a / room))
+    return x
+
+
+def glide(cur: float, target: float) -> float:
+    """조각마다 크기를 조금씩 (줄일 땐 빨리, 키울 땐 천천히)."""
+    if target < cur:
+        return max(target, cur - DUCK_DOWN)
+    return min(target, cur + DUCK_UP)
+
+
+def mix(music: bytes | None, voice: bytes | None, gain: float, start: float | None = None) -> bytes:
+    """노래(gain 배, start 가 있으면 조각 안에서 start→gain 으로 매끄럽게) + 소담 목소리. 둘 다 없으면 무음."""
     if not music and not voice:
         return SILENCE
     out = np.zeros(audio.FRAME_BYTES // 2, dtype=np.float32)
-    if music and gain > 0:
+    if music and (gain > 0 or (start or 0) > 0):
         m = np.frombuffer(music[: audio.FRAME_BYTES], dtype="<i2").astype(np.float32)
-        out[: len(m)] += m * gain
+        g = gain if start is None or start == gain else np.linspace(start, gain, len(m), dtype=np.float32)
+        out[: len(m)] += m * g
     if voice:
         v = np.frombuffer(voice[: audio.FRAME_BYTES], dtype="<i2").astype(np.float32)
         out[: len(v)] += v
-    return np.clip(out, -32768, 32767).astype("<i2").tobytes()
+    return np.clip(soft_limit(out), -32768, 32767).astype("<i2").tobytes()
 
 
 # ── 틀기 ─────────────────────────────────────────────────
@@ -593,7 +701,11 @@ class Player:
         self._wake = asyncio.Event()        # 새 곡이 들어옴
         self._quiet_since = clock()
         self._paused_at: float | None = None
-        self.stats = {"frames": 0, "late": 0, "underrun": 0}
+        self.stats = {"frames": 0, "late": 0, "underrun": 0, "jitter": 0, "max_late_ms": 0,
+                      "send_slow": 0, "send_max_ms": 0}
+        self._voice_tail = 0
+        self._last: bytes | None = None     # 마지막으로 꺼낸 노래 조각 (비었을 때 줄이며 끝내기용)
+        self._gain = 1.0                    # 지금 노래 크기 (목소리 줄이기·볼륨을 조각마다 조금씩 따라감)
         self._starved = 0
         self._auto_tried = False            # 대기열이 빈 뒤 자동 재생을 한 번 시도했나 (곡이 틀어지면 다시 False)
 
@@ -675,6 +787,9 @@ class Player:
             await old.close()
         dec = self._decoder(path, start_ms)
         await dec.start()
+        t0 = self.clock()                                  # 0.5초는 미리 풀어 두고 시작 (첫 조각부터 비면 '툭툭')
+        while len(getattr(dec, "buf", ())) < PREBUFFER and not getattr(dec, "eof", True) and self.clock() - t0 < 2:
+            await asyncio.sleep(0.02)
         self.dec, self.pos_ms = dec, start_ms
 
     async def _conductor(self) -> None:
@@ -829,11 +944,12 @@ class Player:
         step = audio.FRAME_MS / 1000
         nxt = self.clock()
         while not self.done:
-            music = None
+            music = fade = None
             dec = self.dec
             if dec and self.row and not self.paused:
                 music = dec.frame()
                 if music is not None:
+                    self._last = music
                     self.pos_ms += audio.FRAME_MS
                     self._quiet_since = self.clock()
                 elif dec.finished:
@@ -841,6 +957,7 @@ class Player:
                 else:
                     self.stats["underrun"] += 1
                     self._starved += 1
+                    fade, self._last = self._last, None   # 조각이 비면 무음으로 '딱' 끊지 말고 마지막 조각을 줄이며 끝 → 다시 나오면 천천히 키움
                     if self._starved >= STALL_FRAMES:   # 풀기가 멈춤 (깨진 파일 등) → 무음으로 곡을 붙잡지 않고 넘김
                         log.warning("노래 풀기 멈춤 %s → 다음 곡", self.chat_id)
                         dec.failed = dec.failed or "stalled"
@@ -852,9 +969,20 @@ class Player:
                 self.stop("idle")
                 return
             voice = self.voice.popleft() if self.voice else None
-            gain = 0.0 if self.muted else self.volume / 100 * (DUCK if voice else 1.0)
+            target = 0.0 if self.muted else self.volume / 100 * (DUCK if voice or self._voice_tail > 0 else 1.0)
+            self._voice_tail = VOICE_HOLD if voice else max(0, self._voice_tail - 1)   # 말 사이 짧은 틈엔 다시 키우지 않음
+            if fade is not None:
+                prev, self._gain = self._gain, 0.0
+                frame = mix(fade, voice, 0.0, prev)
+            elif music is None:                            # 멈춤·곡 사이 → 다음 소리는 0 에서 천천히 (다시 재생·이동·새 곡 '툭' 방지)
+                self._gain = 0.0
+                frame = mix(None, voice, 0.0)
+            else:
+                prev, self._gain = self._gain, glide(self._gain, target)
+                frame = mix(music, voice, self._gain, prev)
+            t_send = self.clock()
             try:
-                await self._send(mix(music, voice, gain))
+                await self._send(frame)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -862,10 +990,19 @@ class Player:
                 self.stop("chat_closed" if "not in a call" in str(e).lower() else "error:play")
                 return
             self.stats["frames"] += 1
+            took = (self.clock() - t_send) * 1000         # ntgcalls 는 버퍼 없이 바로 WebRTC 로 → 보내기가 밀리면 그대로 '튐' (소스 확인 2026-10-08)
+            if took > 20:
+                self.stats["send_slow"] += 1
+            self.stats["send_max_ms"] = max(self.stats["send_max_ms"], int(took))
             nxt += step
             wait = nxt - self.clock()
             if wait > 0:
                 await self.sleep(wait)
-            elif wait < -0.2:
-                self.stats["late"] += 1
-                nxt = self.clock()
+            else:
+                late = -wait * 1000
+                if late > 30:                   # 30ms 넘게 밀림 = 받는 쪽 버퍼가 비어 '튐' 가능
+                    self.stats["jitter"] += 1
+                self.stats["max_late_ms"] = max(self.stats["max_late_ms"], int(late))
+                if wait < -0.2:
+                    self.stats["late"] += 1
+                    nxt = self.clock()
