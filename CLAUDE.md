@@ -724,7 +724,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   풀기(imageio ffmpeg → 48k 모노 10ms) → `Player` 가 10ms 마다 send_frame. 소리 줄 하나를 AI 대화(Bridge)와 같이 씀(`in_call`·`_maybe_leave`) —
   Bridge 목소리는 `Worker._send` → `Player.voice_frame` 로 섞고 그동안 노래 DUCK 0.25 배. py-tgcalls 에 seek 가 없어 일시정지·이동·음량·음소거는 우리 코드.
 - 대기열 DB(music_queue: queued→playing→done/skipped/removed/failed, 방 30곡·한 사람 5곡) · music_sessions(끝 이유 idle 3분·end·chat_closed·kicked·restart).
-  재시작(배포)은 곡 위치 저장 → 다시 켜지면 30분 안 대기열 이어 틀기 (update.sh voice_busy 엔 안 넣음 — 노래 때문에 배포가 안 밀리게).
+  재시작(배포)은 곡 위치 저장 → 다시 켜지면 30분 안 대기열 이어 틀기. **update.sh voice_busy 에 노래 트는 중(music_sessions 열림 + playing 곡)도 넣음** (2026-10-08 '노래가 자꾸 멈춰요' = 배포 테스트가 2코어를 꽉 채움, 최대 60분만 미룸).
 - **음원 출처는 숨김 (오너 결정 2026-10-08)**: 방에 보이는 글·안내서·AI 도구 설명·재생 카드에 출처(사이트 이름) 안 씀, 오류 글은 `music._hide_src`.
   코드·주석도 '기본 음원 / 대체 음원' 으로만 (`Source.primary_ok`·`alt_search`·`ALT_*`). 서버 실측 2026-10-08: 기본 음원은 검색만 되고 받기는 IP 차단 →
   인증 쿠키(버리는 구글 계정, 오너 🎵 m:mu [🍪 쿠키 넣기], data/music_auth/*.txt 600, '#HttpOnly_' 줄도 인정) 있으면 쿠키부터 돌아가며.

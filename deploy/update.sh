@@ -55,8 +55,14 @@ voice_busy() {
 import sqlite3, sys, time
 try:
     c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=5)
-    print(c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
-                    (int(time.time()) - 1200,)).fetchone()[0])
+    n = c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
+                  (int(time.time()) - 1200,)).fetchone()[0]
+    try:   # 🎵 노래 트는 중도 (테스트가 CPU 를 다 써서 '노래가 자꾸 멈춰요' — 2026-10-08 실제 신고). 지금 곡이 playing 인 방
+        n += c.execute("SELECT COUNT(*) FROM music_sessions s WHERE s.end_ts IS NULL AND EXISTS "
+                       "(SELECT 1 FROM music_queue q WHERE q.chat_id=s.chat_id AND q.state='playing')").fetchone()[0]
+    except sqlite3.Error:
+        pass
+    print(n)
 except sqlite3.Error:
     print(0)
 PYEOF

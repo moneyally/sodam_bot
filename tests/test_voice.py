@@ -1513,6 +1513,31 @@ def update_sh_postpones_tests_during_a_call_but_not_forever():
         assert not (clone / "data" / "update.postponed").exists()
 
 
+@test
+def update_sh_also_waits_while_music_is_playing():
+    """실제 신고 2026-10-08 '노래가 자꾸 멈춰요': 배포 테스트(2코어 꽉)가 노래 트는 동안 돌았음."""
+    import sqlite3
+    from test_fix_ops import _fake_repo, _head, _run_update
+    for playing in (True, False):
+        clone, log = _fake_repo(tests_pass=True)
+        (log.parent / "start_ok").write_text("")
+        before = _head(clone)
+        (clone / "data").mkdir(exist_ok=True)
+        c = sqlite3.connect(clone / "data" / "sodam.db")
+        c.execute("CREATE TABLE voice_calls (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
+        c.execute("CREATE TABLE music_sessions (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
+        c.execute("CREATE TABLE music_queue (id INTEGER PRIMARY KEY, chat_id INTEGER, state TEXT)")
+        c.execute("INSERT INTO music_sessions(chat_id, start_ts) VALUES(?,?)", (CHAT, int(time.time())))
+        c.execute("INSERT INTO music_queue(chat_id, state) VALUES(?,?)", (CHAT, "playing" if playing else "done"))
+        c.commit()
+        c.close()
+        r = _run_update(clone, log)
+        if playing:
+            assert _head(clone) == before and not log.exists(), ("노래 트는 중엔 테스트·재시작 미룸", r.stdout + r.stderr)
+        else:
+            assert "restart sodam" in log.read_text(), ("곡이 안 돌면 진행", r.stdout + r.stderr)
+
+
 def _voice_commit(clone, call_during_tests: bool):
     """원격에 음성 파일이 바뀐 새 커밋. call_during_tests 면 그 커밋의 테스트(약 20분) 도중 통화가 시작됨 (DB 에 안 끝난 통화)."""
     import subprocess
