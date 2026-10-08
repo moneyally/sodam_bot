@@ -1518,7 +1518,7 @@ def update_sh_also_waits_while_music_is_playing():
     """실제 신고 2026-10-08 '노래가 자꾸 멈춰요': 배포 테스트(2코어 꽉)가 노래 트는 동안 돌았음."""
     import sqlite3
     from test_fix_ops import _fake_repo, _head, _run_update
-    for playing in (True, False):
+    for playing in ("playing", "between", False):                  # between = 곡과 곡 사이 (다음 곡만 기다림) — 이때도 노래 중
         clone, log = _fake_repo(tests_pass=True)
         (log.parent / "start_ok").write_text("")
         before = _head(clone)
@@ -1527,8 +1527,10 @@ def update_sh_also_waits_while_music_is_playing():
         c.execute("CREATE TABLE voice_calls (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
         c.execute("CREATE TABLE music_sessions (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
         c.execute("CREATE TABLE music_queue (id INTEGER PRIMARY KEY, chat_id INTEGER, state TEXT)")
-        c.execute("INSERT INTO music_sessions(chat_id, start_ts) VALUES(?,?)", (CHAT, int(time.time())))
-        c.execute("INSERT INTO music_queue(chat_id, state) VALUES(?,?)", (CHAT, "playing" if playing else "done"))
+        c.execute("INSERT INTO music_sessions(chat_id, start_ts, end_ts) VALUES(?,?,?)",
+                  (CHAT, int(time.time()) - 7 * 3600, None if playing else int(time.time())))
+        c.execute("INSERT INTO music_queue(chat_id, state) VALUES(?,?)",
+                  (CHAT, {"playing": "playing", "between": "queued"}.get(playing, "done")))
         c.commit()
         c.close()
         r = _run_update(clone, log)
@@ -1563,6 +1565,36 @@ def update_sh_restarts_voice_even_while_music_plays():
     r = _run_update(clone, log, VOICE_SETUP="1", UNIT_DIR=str(log.parent))
     assert r.returncode == 0 and any(x.strip() == "restart sodam-voice" for x in log.read_text().splitlines()), \
         ("노래 중이어도 음성 담당은 재시작", r.stdout + r.stderr + log.read_text())
+
+
+@test
+def update_sh_slows_tests_down_when_music_plays_during_them():
+    """실제 2026-10-09 '0.01초씩 끊김': 시험(2코어 꽉) 도중 노래가 나옴 → 시험 힘을 낮추고, 끝나면 원래대로."""
+    import sqlite3
+    import subprocess
+
+    from test_fix_ops import _GIT, _fake_repo, _run_update
+    clone, log = _fake_repo(tests_pass=True)
+    (log.parent / "start_ok").write_text("")
+    origin = clone.parent / "origin"
+    (origin / "tests" / "run_all.py").write_text("import time; time.sleep(1.5)\n")
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "slow tests"], check=True)
+    (clone / "data").mkdir(exist_ok=True)
+    c = sqlite3.connect(clone / "data" / "sodam.db")
+    c.execute("CREATE TABLE voice_calls (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
+    c.execute("CREATE TABLE music_sessions (id INTEGER PRIMARY KEY, chat_id INTEGER, start_ts INTEGER, end_ts INTEGER)")
+    c.execute("CREATE TABLE music_queue (id INTEGER PRIMARY KEY, chat_id INTEGER, state TEXT)")
+    c.execute("INSERT INTO music_sessions(chat_id, start_ts) VALUES(?,?)", (CHAT, int(time.time())))
+    c.execute("INSERT INTO music_queue(chat_id, state) VALUES(?, 'playing')", (CHAT,))
+    c.commit()
+    c.close()
+    (clone / "data" / "update.postponed").write_text(str(int(time.time()) - 3700))   # 60분 다 미뤄서 이번엔 시험을 돌림
+    r = _run_update(clone, log, THROTTLE_EVERY="0.2")
+    sets = [x.strip() for x in log.read_text().splitlines() if "set-property" in x]
+    assert r.returncode == 0 and "set-property --runtime sodam-autoupdate.service CPUQuota=30%" in sets, \
+        ("노래 중이면 시험 힘을 낮춤", sets, r.stdout + r.stderr)
+    assert sets[-1].endswith("CPUQuota=150%"), ("끝나면 원래대로", sets)
 
 
 def _voice_commit(clone, call_during_tests: bool):

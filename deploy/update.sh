@@ -61,9 +61,10 @@ try:
     n = c.execute("SELECT COUNT(*) FROM voice_calls WHERE end_ts IS NULL AND start_ts>?",
                   (int(time.time()) - 1200,)).fetchone()[0]
     try:   # 🎵 노래 트는 중 (music 일 때만). 지금 곡이 playing 인 방
-        if sys.argv[2] == "music":
-            n += c.execute("SELECT COUNT(*) FROM music_sessions s WHERE s.end_ts IS NULL AND EXISTS "
-                           "(SELECT 1 FROM music_queue q WHERE q.chat_id=s.chat_id AND q.state='playing')").fetchone()[0]
+        if sys.argv[2] == "music":   # 곡과 곡 사이 빈틈에도 (2026-10-09: 그 틈에 시험이 시작돼 노래가 0.01초씩 끊김) — 열린 노래 자리면 셈
+            n += c.execute("SELECT COUNT(*) FROM music_sessions s WHERE s.end_ts IS NULL AND (s.start_ts>? OR EXISTS "
+                           "(SELECT 1 FROM music_queue q WHERE q.chat_id=s.chat_id AND q.state IN ('playing','queued')))",
+                           (int(time.time()) - 6 * 3600,)).fetchone()[0]
     except sqlite3.Error:
         pass
     print(n)
@@ -415,7 +416,28 @@ fi
 as_user=()
 if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_AS" --); fi
 log "tests…"
-if ! (cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py --jobs 2 > "$TMP/tests.log" 2>&1); then
+# 시험(약 20분) 도중 노래가 시작되면 시험 힘을 확 낮춤 — 노래 조각이 제때 못 나가 0.01초씩 끊기던 것 (2026-10-09 실제 신고)
+MUSIC_TEST_QUOTA=${MUSIC_TEST_QUOTA:-30%}
+AU_QUOTA=$(sed -n 's/^CPUQuota=//p' "$UNIT_DIR/sodam-autoupdate.service" 2>/dev/null | tail -1 || true)
+throttle_watch() {
+    local slow=0
+    while sleep "${THROTTLE_EVERY:-20}"; do
+        if voice_busy music; then
+            [ "$slow" -eq 1 ] || { $SYSTEMCTL set-property --runtime sodam-autoupdate.service "CPUQuota=$MUSIC_TEST_QUOTA" >/dev/null 2>&1 \
+                && log "노래 나오는 중 → 시험 힘 $MUSIC_TEST_QUOTA 로 낮춤"; slow=1; }
+        elif [ "$slow" -eq 1 ]; then
+            $SYSTEMCTL set-property --runtime sodam-autoupdate.service "CPUQuota=${AU_QUOTA:-150%}" >/dev/null 2>&1; slow=0
+        fi
+    done
+}
+voice_busy music || $SYSTEMCTL set-property --runtime sodam-autoupdate.service "CPUQuota=${AU_QUOTA:-150%}" >/dev/null 2>&1 || true   # 지난번 낮춘 게 남지 않게
+throttle_watch & THROTTLE_PID=$!
+tests_rc=0
+(cd "$TMP" && "${as_user[@]}" env HOME="$TMP" TMPDIR="$TMP" "$PY" tests/run_all.py --jobs 2 > "$TMP/tests.log" 2>&1) || tests_rc=$?
+kill "$THROTTLE_PID" 2>/dev/null || true
+wait "$THROTTLE_PID" 2>/dev/null || true
+$SYSTEMCTL set-property --runtime sodam-autoupdate.service "CPUQuota=${AU_QUOTA:-150%}" >/dev/null 2>&1 || true
+if [ "$tests_rc" -ne 0 ]; then
     { grep -B1 -A15 -E '^FAIL' "$TMP/tests.log" | head -80; } || true   # 어떤 테스트가 왜 (끝 40줄엔 안 남는 경우가 많았음)
     tail -n 40 "$TMP/tests.log"
     report update.status "tests_failed $(g rev-parse --short "$NEW"): $(grep -E '^FAIL' "$TMP/tests.log" | head -5 | tr '\n' ' ')"
