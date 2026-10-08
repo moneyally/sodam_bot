@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -718,7 +719,8 @@ async def r_cookie(c: PanelCtx) -> Screen:
     return Screen("🍪 <b>인증 쿠키 넣기</b>\n"
                   "1) PC 크롬 <b>시크릿 창</b>에서 버리는 구글 계정으로 구글 동영상 사이트 로그인\n"
                   "2) 확장 프로그램 'Get cookies.txt LOCALLY' 로 그 사이트 쿠키를 <b>Netscape 형식 .txt</b> 로 저장\n"
-                  "3) 시크릿 창은 로그아웃하지 말고 그냥 닫기 (로그아웃하면 쿠키가 무효)\n"
+                  "   (내보내기 전에 주소창에 <code>youtube.com/robots.txt</code> 를 띄워 두기 — 동영상 화면이 열려 있으면 쿠키가 바뀜)\n"
+                  "3) 시크릿 창은 로그아웃하지 말고 <b>바로</b> 닫기 (로그아웃하거나 계속 쓰면 쿠키가 무효)\n"
                   "4) 그 .txt 파일을 여기 1:1 로 보내기 — 받자마자 메시지는 지워요.\n\n5분 안에 · 그만두려면 <code>취소</code>",
                   menu._kb([[B("❌ 취소", "m:mu")]]))
 
@@ -751,11 +753,49 @@ async def i_cookie(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     d = cookie_dir(c.svc)
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
+    for old in d.glob("*.txt"):                   # 새 쿠키 = 옛 쿠키 버림 (죽은 쿠키를 먼저 잡아 헛손질하던 것, 2026-10-08)
+        old.unlink(missing_ok=True)
     path = d / f"cookies_{int(time.time())}.txt"
     path.write_text(text, encoding="utf-8")
     os.chmod(path, 0o600)
     log.info("음원 인증 쿠키 저장 (%d줄)", len(text.splitlines()))
-    return True, "✅ 쿠키를 넣었어요. 다음 노래부터 써요."
+    try:
+        works = await asyncio.wait_for(asyncio.to_thread(COOKIE_CHECK, str(path)), 60)
+    except Exception as e:                        # 확인 못 함 (네트워크 등) — 쿠키는 그대로 둠
+        log.info("쿠키 확인 못 함: %r", e)
+        works = None
+    if works is False:
+        return True, ("⚠️ 쿠키는 넣었는데 <b>지금 바로 막혀요</b> (이미 기한이 끝난 쿠키). 시크릿 창에서 새로 로그인 → "
+                      "<code>youtube.com/robots.txt</code> 에서 내보내고 → 창을 바로 닫은 뒤 다시 보내 주세요.")
+    if works is None:
+        return True, "✅ 쿠키를 넣었어요 (바로 확인은 못 했어요). 다음 노래부터 써요."
+    return True, "✅ 쿠키를 넣고 <b>노래 받기 되는 것까지 확인</b>했어요. 다음 노래부터 써요."
+
+
+CHECK_VIDEO = "https://www.youtube.com/watch?v=jNQXAC9IVRw"   # 가장 오래된 공개 영상 (19초) — 받기 되는지만 봄
+
+
+def _check_cookie(path: str) -> bool:
+    """이 쿠키로 실제 소리 주소까지 받아지나 (내려받지는 않음). '봇 아니냐'로 막히면 False."""
+    import tempfile
+    import shutil
+    from ..voice import music as vm
+    with tempfile.TemporaryDirectory() as tmp:
+        jar = os.path.join(tmp, "c.txt")         # yt-dlp 가 쿠키 파일을 고쳐 쓰므로 사본으로
+        shutil.copy(path, jar)
+        src = vm.Source(tmp)
+        try:
+            import yt_dlp
+            with yt_dlp.YoutubeDL(src._opts(jar, format="bestaudio/best")) as y:
+                info = y.extract_info(CHECK_VIDEO, download=False)
+            return bool(info and (info.get("url") or info.get("requested_formats") or info.get("formats")))
+        except Exception as e:
+            if "not a bot" in str(e).lower() or "sign in" in str(e).lower():
+                return False
+            raise
+
+
+COOKIE_CHECK = _check_cookie
 
 
 async def r_cookie_clear(c: PanelCtx) -> Screen:
