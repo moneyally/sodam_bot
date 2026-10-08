@@ -603,8 +603,9 @@ class Worker:
             if mine and chat_id not in self.players:
                 await self._vc_title(chat_id, None)       # 음성채팅 제목 원래대로
             await self._maybe_leave(chat_id)
-        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 비어 있음 %s", chat_id, reason, pl.tracks,
-                 pl.stats["frames"], pl.stats["late"], pl.stats["underrun"])
+        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 흔들림 %s(최대 %sms) · 보내기 느림 %s(최대 %sms) · 비어 있음 %s",
+                 chat_id, reason, pl.tracks, pl.stats["frames"], pl.stats["late"], pl.stats["jitter"], pl.stats["max_late_ms"],
+                 pl.stats["send_slow"], pl.stats["send_max_ms"], pl.stats["underrun"])
 
     def _music_path(self, path: str | None) -> str | None:
         """봇이 받아 둔 텔레그램 음악 파일 — data/music 안만 (DB 일감이라도 다른 파일을 열지 않게)."""
@@ -642,10 +643,21 @@ class Worker:
             await self._music_choice(chat_id, status, by, name, c)
             return False, "music:choice"
         except music.MusicError as e:
-            if e.code == "blocked":
-                await self._music_health(str(e))
-            await self._music_edit(chat_id, status, f"⚠️ {e}")
-            return False, f"music:{e.code}"
+            if e.code != "mix" or not hasattr(self.music_source, "mix_for"):
+                if e.code == "mix":
+                    e = music.MusicError("not_found", "가수나 노래 제목을 같이 써 주세요.")
+                if e.code == "blocked":
+                    await self._music_health(str(e))
+                await self._music_edit(chat_id, status, str(e) if str(e).startswith("🎧") else f"⚠️ {e}")
+                return False, f"music:{e.code}"
+            try:                                         # '잔잔한 플리' → 분위기 곡 여러 개
+                items = await asyncio.to_thread(self.music_source.mix_for, str(p.get("query") or "")[:300])
+            except music.MusicError as e2:
+                await self._music_edit(chat_id, status, f"⚠️ {e2}" if not str(e2).startswith("🎧") else str(e2))
+                return False, f"music:{e2.code}"
+            return await self._add_many(chat_id, p, by, name, status, items,
+                                        lambda n, tail: f"🎧 <b>{musicq._esc(str(p.get('query') or ''))[:40]}</b> — "
+                                                        f"분위기에 맞는 <b>{n}곡</b> 골라 넣었어요{tail}. <code>.대기열</code> · <code>.섞기</code>")
         rid, pos, why = await musicq.add(self.db, chat_id, title=info["title"], url=info["url"], vid=info["vid"],
                                          duration=info["duration"], by_id=by, by_name=name, path=info.get("path"),
                                          msg_id=status)
@@ -669,6 +681,10 @@ class Worker:
     async def _music_playlist(self, chat_id: int, p: dict, by, name: str, status) -> tuple[bool, str]:
         """재생목록 링크 → 최대 PLAYLIST_MAX 곡을 대기열에 (받기는 차례가 오면). 한 사람 한도 대신 목록 한도."""
         items = await asyncio.to_thread(self.music_source.playlist, music.playlist_id(str(p.get("query") or "")))
+        return await self._add_many(chat_id, p, by, name, status, items,
+                                    lambda n, tail: f"📃 재생목록에서 <b>{n}곡</b> 넣었어요{tail}. <code>.대기열</code> 로 확인")
+
+    async def _add_many(self, chat_id: int, p: dict, by, name: str, status, items: list[dict], done_text) -> tuple[bool, str]:
         added, skipped = [], 0
         for it in items:
             rid, pos, why = await musicq.add(self.db, chat_id, title=it["title"], url=it["url"], vid=it["vid"],
@@ -688,7 +704,7 @@ class Worker:
                 await musicq.finish(self.db, rid, "failed")
             return False, res
         tail = f" (이미 있는 곡 {skipped}개 뺌)" if skipped else ""
-        await self._music_edit(chat_id, status, f"📃 재생목록에서 <b>{len(added)}곡</b> 넣었어요{tail}. <code>.대기열</code> 로 확인")
+        await self._music_edit(chat_id, status, done_text(len(added), tail))
         pl.wake()
         return True, "playlist"
 
