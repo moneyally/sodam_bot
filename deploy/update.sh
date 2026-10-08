@@ -101,7 +101,7 @@ HQ_DIR=${HQ_DIR:-/opt/sodam-hq}
 HQ_SHA=5ef208e14f9485dbb6b0c19e8d389dc21a3354489324e154ee7913e0cac24bd0
 hq_wheel() {
     local w so
-    w=$(ls "$HQ_DIR"/ntgcalls-3.0.0-cp312-*.whl 2>/dev/null | head -n1)
+    w=$(ls "$HQ_DIR"/ntgcalls-3.0.0-cp312-*.whl 2>/dev/null | head -n1 || true)
     [ -n "$w" ] || return 0
     [ "$(sha256sum "$w" | cut -d' ' -f1)" = "$HQ_SHA" ] || { log "voice: 음질 부품 해시가 다름 → 안 깖"; return 0; }
     so=$("$PY" -c 'import importlib.util as u; print(u.find_spec("ntgcalls").origin)' 2>/dev/null) || return 0
