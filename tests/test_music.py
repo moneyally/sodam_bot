@@ -5,6 +5,7 @@
 """
 import asyncio
 import os
+import re
 import tempfile
 import time
 import wave
@@ -67,8 +68,8 @@ async def queue_positions_caps_and_remove_rules():
 def youtube_links_and_mix_ducking():
     for u in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=3", "https://youtu.be/dQw4w9WgXcQ?si=x",
               "https://youtube.com/shorts/dQw4w9WgXcQ", "https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RD"):
-        assert music.youtube_id(u) == "dQw4w9WgXcQ", u
-    assert music.youtube_id("아이유 밤편지") is None
+        assert music.link_id(u) == "dQw4w9WgXcQ", u
+    assert music.link_id("아이유 밤편지") is None
     m = np.full(480, 8000, "<i2").tobytes()
     v = np.full(480, 1000, "<i2").tobytes()
     assert set(np.frombuffer(music.mix(m, None, 1.0), "<i2")) == {8000}
@@ -127,7 +128,7 @@ class FakeSource:
             raise music.MusicError("blocked", "유튜브가 서버를 '봇'으로 막았어요")
         if "없는노래" in query:
             raise music.MusicError("not_found", f"'{query}' 노래를 못 찾았어요.")
-        vid = music.youtube_id(query) or query.replace(" ", "")[:11].ljust(11, "x")
+        vid = music.link_id(query) or query.replace(" ", "")[:11].ljust(11, "x")
         return {"title": f"{query} (MV)", "url": f"https://www.youtube.com/watch?v={vid}", "vid": vid, "duration": 180}
 
     def fetch(self, vid):
@@ -652,7 +653,7 @@ async def owner_cookie_upload_validates_and_is_private():
     assert ok and msg.deleted, text
     files = list(M.cookie_dir(svc).glob("*.txt"))
     assert len(files) == 1 and oct(files[0].stat().st_mode)[-3:] == "600"
-    src = music.YouTube(Path(svc.cfg.db_path).parent)
+    src = music.Source(Path(svc.cfg.db_path).parent)
     assert src.cookies() == [str(files[0])], "음성 담당이 같은 곳에서 읽음"
     bot.files["BAD"] = b"not cookies"
     ok, text = await M.i_cookie(PanelCtx(svc, bot, 7, 0, []), FakeMsg(7, fake_user(7, "오너"),
@@ -682,11 +683,11 @@ def youtube_retries_next_cookie_only_when_blocked():
     sys.modules["yt_dlp"] = fake
     try:
         d = tempfile.mkdtemp()
-        y = music.YouTube(Path(d))
-        (Path(d) / "yt_cookies").mkdir()
-        (Path(d) / "yt_cookies" / "a.txt").write_text("x")
+        y = music.Source(Path(d))
+        (Path(d) / "music_auth").mkdir()
+        (Path(d) / "music_auth" / "a.txt").write_text("x")
 
-        (Path(d) / "yt_cookies" / "b.txt").write_text("x")
+        (Path(d) / "music_auth" / "b.txt").write_text("x")
 
         def blocked(ydl):
             calls.append(ydl.opts.get("cookiefile"))
@@ -694,7 +695,7 @@ def youtube_retries_next_cookie_only_when_blocked():
                 raise DownloadError("ERROR: [youtube] x: Sign in to confirm you're not a bot")
             return "ok"
         assert y._run(blocked) == "ok" and calls[-1] is None and len(calls) == 3
-        assert set(calls[:2]) == {str(Path(d) / "yt_cookies" / n) for n in ("a.txt", "b.txt")}, "쿠키부터"
+        assert set(calls[:2]) == {str(Path(d) / "music_auth" / n) for n in ("a.txt", "b.txt")}, "쿠키부터"
         assert os.environ["DENO_DIR"].startswith(d) or "DENO_DIR" in os.environ
         calls.clear()
 
@@ -796,14 +797,14 @@ def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found(
 
     def run():
         d = tempfile.mkdtemp()
-        y = music.YouTube(Path(d))
+        y = music.Source(Path(d))
         got = y.resolve("아이유 밤편지")
-        assert got["vid"] == "EjMTw4xLcBI" and y.yt_ok(), "검색만 했을 땐 아직 막힌 줄 모름 → 유튜브 곡"
+        assert got["vid"] == "EjMTw4xLcBI" and y.primary_ok(), "검색만 했을 땐 아직 막힌 줄 모름 → 유튜브 곡"
         try:
             y.fetch("EjMTw4xLcBI")
             raise AssertionError("막혀야 함")
         except music.MusicError as e:
-            assert e.code == "blocked" and not y.yt_ok(), "받기가 막히면 그 뒤로 SoundCloud 먼저"
+            assert e.code == "blocked" and not y.primary_ok(), "받기가 막히면 그 뒤로 SoundCloud 먼저"
         got = y.resolve("아이유 밤편지")
         assert got["vid"] == "sc3", ("커버·라이브·1시간 듣기 말고 원곡", got)
         got = y.resolve("BTS dynamite")
@@ -822,7 +823,7 @@ def blocked_youtube_falls_back_to_the_same_song_on_soundcloud_or_says_not_found(
         assert alt["vid"] == "sc3"
         FakeYDL.SEARCH[("sc", "BTS 노래")] = [sc(30, "BTS - Butter", 229), sc(31, "방탄 노래 모음", 229)]
         try:
-            y.soundcloud("BTS 노래", wanted="BTS dynamite", ref_sec=229)
+            y.alt_search("BTS 노래", wanted="BTS dynamite", ref_sec=229)
             raise AssertionError("길이가 같아도 다른 곡이면 안 틂")
         except music.MusicError as e:
             assert e.code == "not_found"
@@ -845,7 +846,7 @@ async def player_swaps_blocked_youtube_track_for_soundcloud():
 
         def fallback(self, title, ref_sec=0):
             self.asked = (title, ref_sec)
-            return {"title": "밤편지 - 아이유", "url": music.SC_TRACK.format(3), "vid": "sc3", "duration": 252}
+            return {"title": "밤편지 - 아이유", "url": music.ALT_TRACK.format(3), "vid": "sc3", "duration": 252}
     said = []
 
     async def say(kind, chat_id, row, why=""):
@@ -864,7 +865,7 @@ async def player_swaps_blocked_youtube_track_for_soundcloud():
     task = asyncio.create_task(pl.run())
     await until(lambda: said)
     assert said[0][0] == "now" and said[0][1]["vid"] == "sc3" and "soundcloud" in said[0][1]["url"]
-    assert "SoundCloud" in musicq.card_text("now", said[0][1])
+    assert "soundcloud" not in musicq.card_text("now", said[0][1]).lower(), "출처는 안 보임"
     assert src.asked == ("아이유(IU) - 밤편지 [가사/Lyrics]", 254)
     row = await db._one("SELECT * FROM music_queue")
     assert row["vid"] == "sc3" and row["title"] == "밤편지 - 아이유"
@@ -1013,7 +1014,7 @@ async def old_dj_cleanup_does_not_wipe_a_new_request():
 def same_song_is_downloaded_once_even_when_asked_twice_at_once():
     import threading as th
     d = tempfile.mkdtemp()
-    y = music.YouTube(Path(d))
+    y = music.Source(Path(d))
     n = []
 
     def slow_fetch(vid):
@@ -1048,19 +1049,19 @@ def soundcloud_words_any_script_and_variant_word_boundaries():
     FakeYDL.DRM = set()
 
     def run():
-        y = music.YouTube(Path(tempfile.mkdtemp()))
-        assert y.soundcloud("残酷な天使のテーゼ")["vid"] == "sc41", "일본어 제목도 낱말로 비교"
+        y = music.Source(Path(tempfile.mkdtemp()))
+        assert y.alt_search("残酷な天使のテーゼ")["vid"] == "sc41", "일본어 제목도 낱말로 비교"
         try:
-            y.soundcloud("未知の歌")
+            y.alt_search("未知の歌")
             raise AssertionError("낱말이 하나도 안 맞으면 아무 곡이나 틀지 않음")
         except music.MusicError as e:
             assert e.code == "not_found"
-        assert y.soundcloud("drivers license")["vid"] == "sc43", "'edition' 은 'edit' 변형이 아님"
-        assert y.soundcloud("beyonce halo")["vid"] == "sc45", "악센트 무시"
+        assert y.alt_search("drivers license")["vid"] == "sc43", "'edition' 은 'edit' 변형이 아님"
+        assert y.alt_search("beyonce halo")["vid"] == "sc45", "악센트 무시"
         assert music._words("아이유 Beyoncé") == ["아이유", "beyonce"], "한글은 자모로 안 쪼갬 (NFKD 뒤 NFC)"
         FakeYDL.SEARCH[("sc", "♪ 노")] = [sc(46, "Totally Different Song", 240)]
         try:
-            y.soundcloud("♪ 노")
+            y.alt_search("♪ 노")
             raise AssertionError("비교할 낱말이 없으면(기호·한 글자) 아무 곡이나 통과시키지 않음")
         except music.MusicError as e:
             assert e.code == "not_found"
@@ -1082,6 +1083,26 @@ async def slow_result_leaves_the_status_message_to_the_worker():
     finally:
         P._wait = real
     assert not bot.named("edit_text") and not [x for x in bot.named("send_message") if "느" in x[2]]
+
+
+@test
+def music_text_people_see_never_names_the_source():
+    """오너 결정 2026-10-08: 방에 보이는 글·안내서·도구 설명·명령 설명에 음원 사이트 이름을 안 씀."""
+    assert music._hide_src("ERROR: [youtube] dQw4w9WgXcQ: Video unavailable https://www.youtube.com/watch?v=x") == "Video unavailable"
+    assert "soundcloud" not in music._hide_src("ERROR: [soundcloud] 12: This video is DRM protected").lower()
+    root = Path(__file__).resolve().parent.parent
+    bad = ("유튜브", "youtube", "soundcloud", "사클")
+    guide = (root / "sodam/guide/music.md").read_text().lower()
+    body = guide.split("---", 2)[2]                      # tags 의 '유튜브링크' 는 찾기용 낱말 (본문엔 없음)
+    assert not [w for w in bad if w in body], "안내서 본문에 출처"
+    t = tools._BY_NAME["music"]
+    desc = t.description + str(t.params)
+    assert not [w for w in bad if w in desc.lower()], desc
+    card = musicq.card_text("now", {"title": "밤편지", "duration": 250, "url": music.ALT_TRACK.format(3)})
+    assert not [w for w in bad if w in card.lower()], card
+    for f in ("sodam/voice/music.py", "sodam/panels/music.py", "sodam/voice/musicq.py"):
+        said = re.findall(r"MusicError\([^)]*\)|return Screen\([^)]*\)|ctx\.reply\([^)]*\)", (root / f).read_text())
+        assert not [x for x in said if any(w in x.lower() for w in bad)], (f, said)
 
 
 if __name__ == "__main__":

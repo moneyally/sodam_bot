@@ -1377,7 +1377,7 @@ COMMANDS: list[Cmd] = [
     Cmd(("포인트", "points"), c_points, help="게임 포인트 랭킹", group="게임"),
     Cmd(("스포츠", "sports"), c_sports, usage="[오늘|내일 리그|라이브|순위 리그|팀 이름|구독 리그·팀|해제|목록]",
         help="경기 일정·스코어·순위·자동 알림", group="스포츠"),
-    Cmd(("노래", "재생", "play", "음악"), _music("c_play"), usage="<제목|유튜브 링크> (음악 파일 답장도)",
+    Cmd(("노래", "재생", "play", "음악"), _music("c_play"), usage="<제목|링크> (음악 파일 답장도)",
         help="음성채팅에 노래 틀기·대기열 추가", group="🎵 뮤직봇"),
     Cmd(("스킵", "다음곡", "skip", "next"), _music("c_skip"), help="다음 곡으로", group="🎵 뮤직봇"),
     Cmd(("일시정지", "pause"), _music("c_pause"), help="일시정지", group="🎵 뮤직봇"),

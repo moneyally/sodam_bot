@@ -678,7 +678,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   끼어들기 = 우리 줄에 소담 소리 있을 때 큰 소리 0.3초(소리 길이로 셈) → 줄만 비움 · 받아쓰기 조각 1.2초 끊기면 한 줄 · '부를 때만'은 지시문뿐 ·
   인사 = session.started 뒤 instructions.append · 소리는 started 뒤(3.11 wait_for 는 취소를 삼켜 asyncio.timeout 씀) · **조용해도 분당 $0.05** →
   idle 60초가 중요 · 요금 = usage.seconds(누적) + 백엔드 토큰. 켜기 전 실제 통화로 확인할 것(끼어들기·여럿·부를 때만).
-- 봇 계정은 통화(phone.*) 불가 → 음악봇(오픈소스 YukkiMusicBot 구조 참고, 코드는 새로)처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
+- 봇 계정은 통화(phone.*) 불가 → 음악봇처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.
 - 별도 프로세스 `python -m sodam.voice.worker`(systemd sodam-voice, update.sh 가 본체 재시작 성공 뒤 패키지 requirements-voice.txt·서비스 설치/재시작,
@@ -719,18 +719,18 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   멤버 타임라인 🎙 칸 = store.member_voice(통화 수·말 수) + store.voice_links(같은 통화 30초 안 이어 말함 = 음성판 답장 관계, 사람 말끼리만, 7일).
   방 멤버 이름을 지시문 끝·받아쓰기 prompt 로 → 실측 '지연님' 으로 들렸어도 '지영' 카드. 거절 안내는 그대로 방에 + voice_refused 기록 + 오너에겐 상태.
 
-## 🎵 소담 뮤직봇 (`voice/music.py`·`musicq.py`·worker 노래 일감·`panels/music.py`, tests/test_music.py · 뮤테이션 31개, 2026-10-08 오너 요청 '멜론봇처럼 DJ')
-- 구조(AnonXMusic·YukkiMusicBot MIT 참고, 코드는 새로): 봇이 `music_play` 일감(dedupe 없음) → 음성 담당이 찾기(yt-dlp)·받기(data/music, 600MB LRU)·
+## 🎵 소담 뮤직봇 (`voice/music.py`·`musicq.py`·worker 노래 일감·`panels/music.py`, tests/test_music.py · 뮤테이션 31개, 2026-10-08 오너 요청 'DJ')
+- 구조: 봇이 `music_play` 일감(dedupe 없음) → 음성 담당이 찾기·받기(`music.Source`, data/music 600MB LRU)·
   풀기(imageio ffmpeg → 48k 모노 10ms) → `Player` 가 10ms 마다 send_frame. 소리 줄 하나를 AI 대화(Bridge)와 같이 씀(`in_call`·`_maybe_leave`) —
   Bridge 목소리는 `Worker._send` → `Player.voice_frame` 로 섞고 그동안 노래 DUCK 0.25 배. py-tgcalls 에 seek 가 없어 일시정지·이동·음량·음소거는 우리 코드.
 - 대기열 DB(music_queue: queued→playing→done/skipped/removed/failed, 방 30곡·한 사람 5곡) · music_sessions(끝 이유 idle 3분·end·chat_closed·kicked·restart).
   재시작(배포)은 곡 위치 저장 → 다시 켜지면 30분 안 대기열 이어 틀기 (update.sh voice_busy 엔 안 넣음 — 노래 때문에 배포가 안 밀리게).
-- **유튜브 실측(Hetzner IP, 2026-10-08)**: 검색은 됨, 받기는 15곡 중 15곡 'Sign in to confirm you're not a bot' → 쿠키(버리는 구글 계정, 오너 🎵 m:mu
-  [🍪 쿠키 넣기], data/yt_cookies/*.txt 600, 크롬 확장의 '#HttpOnly_' 줄도 인정) 있으면 쿠키부터. 막히면 **SoundCloud 같은 노래**(키 없음):
-  유튜브 검색으로 정확한 곡 이름 → scsearch10 → 신청 낱말 다 담기(또는 유튜브 제목 낱말 75%, 한글↔영어 제목) · 유튜브 길이 ±20% · 신청에 없는
-  리믹스·커버·라이브·악기·'원곡' 버전 제외 · DRM 잠긴 공식 음원 건너뜀(실측 블랙핑크) → 없으면 틀지 않고 '못 찾았어요 (쿠키 넣으면 돼요)'.
-  실측 10곡: 8곡 원곡, 2곡(뉴진스·에스파 공식=DRM) 못 찾음 안내. 막힌 뒤 1시간(MUSIC_YT_RETRY)은 SoundCloud 먼저, 쿠키 바뀌면 바로 유튜브.
-  yt-dlp 는 deno(pip 'deno') JS 풀이 필요, 캐시는 data/cache (서비스 ProtectSystem=strict). 선택 MUSIC_PROXY.
+- **음원 출처는 숨김 (오너 결정 2026-10-08)**: 방에 보이는 글·안내서·AI 도구 설명·재생 카드에 출처(사이트 이름) 안 씀, 오류 글은 `music._hide_src`.
+  코드·주석도 '기본 음원 / 대체 음원' 으로만 (`Source.primary_ok`·`alt_search`·`ALT_*`). 서버 실측 2026-10-08: 기본 음원은 검색만 되고 받기는 IP 차단 →
+  인증 쿠키(버리는 구글 계정, 오너 🎵 m:mu [🍪 쿠키 넣기], data/music_auth/*.txt 600, '#HttpOnly_' 줄도 인정) 있으면 쿠키부터 돌아가며.
+  막히면 대체 음원에서 같은 노래: 기본 음원 검색으로 정확한 곡 이름 → 신청 낱말 다 담기(또는 기본 제목 낱말 75%) · 길이 ±20% · 신청에 없는
+  리믹스·커버·라이브·악기·'원곡' 버전 제외 · DRM 잠긴 것 건너뜀 → 없으면 '못 찾았어요 (인증 쿠키)'. 실측 10곡 중 8곡 원곡.
+  막힌 뒤 1시간(MUSIC_RETRY_SEC)은 대체 먼저, 쿠키 바뀌면 바로 기본. deno(pip) JS 풀이, 캐시 data/cache (ProtectSystem=strict). 선택 MUSIC_PROXY.
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
   .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).
