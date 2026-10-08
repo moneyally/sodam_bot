@@ -1,14 +1,14 @@
 """🎵 소담 뮤직봇 — 봇 쪽 (노래 찾기·받기·틀기는 음성 담당 프로세스 sodam/voice/music.py).
 
-명령 (멜론봇과 같은 이름 + 한국어):
-  .노래 / /play <제목·유튜브 링크>  (음악 파일에 답장해도 됨)   .스킵 /skip   .일시정지 /pause   .다시재생 /resume
+명령 (흔한 음악봇 영어 이름 + 한국어):
+  .노래 / /play <제목·노래 링크>  (음악 파일에 답장해도 됨)   .스킵 /skip   .일시정지 /pause   .다시재생 /resume
   .대기열 /queue   .빼기 /remove <번호>   .음소거 / .음소거해제 (노래만 — /mute 는 멤버 뮤트)   .이동 /seek <초|+초|-초>
   .노래끝 /end (음성채팅 나가기)   .볼륨 /volume <0~200>   .반복 /loop <0~10>   .지금곡 /np   .도우미부르기 /userbotjoin
-  영어 이름을 '@봇' 없이 쓰는 건(`/play`) 방 설정 music_bare 를 켰을 때만 — 다른 음악봇(멜론봇 등)이 있는 방에서
+  영어 이름을 '@봇' 없이 쓰는 건(`/play`) 방 설정 music_bare 를 켰을 때만 — 다른 음악봇이 있는 방에서
   둘 다 틀지 않게. 명령 메뉴에서 고르면 텔레그램이 '/play@sodam_ai_bot' 로 붙여 줌.
 권한: 신청 = music_who(누구나/관리자) · 넘기기·일시정지·되감기·음량 = 관리자 또는 지금 곡 신청자(music_ctrl=all 이면 누구나) ·
   끝내기 = 관리자(또는 남은 곡이 전부 내 곡) · 빼기 = 관리자는 아무 곡, 아니면 내 곡.
-이용 기간 중인 방만. AI 비용 없음 (유튜브 → 음성채팅). 오너 메인 🎵 — 유튜브 상태·쿠키(서버 IP 가 막힐 때).
+이용 기간 중인 방만. AI 비용 없음. 오너 메인 🎵 — 음원 상태·인증 쿠키(서버 IP 가 막힐 때).
 """
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None) -
     query = (query or "").strip()[:300]
     last = svc.__dict__.setdefault("_music_last", {})
     now = time.monotonic()
-    if now - last.get((chat_id, user.id), -1e9) < COOLDOWN:      # 연타 = 유튜브 검색만 늘어남 (서버 IP 막힘 위험)
+    if now - last.get((chat_id, user.id), -1e9) < COOLDOWN:      # 연타 = 음원 검색만 늘어남 (서버 IP 막힘 위험)
         return f"⏳ 노래 신청은 {COOLDOWN:g}초에 한 번씩 해 주세요."
     last[(chat_id, user.id)] = now
     if len(last) > 5000:
@@ -188,7 +188,7 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None) -
     if isinstance(tg, str):
         return tg
     if not tg and not query:
-        return "🎵 노래 제목이나 유튜브 링크를 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>"
+        return "🎵 노래 제목이나 링크를 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>"
     head = f"🔎 <b>{esc(tg[1] if tg else query)[:80]}</b> 찾는 중…"
     try:
         sent = await (msg.reply_text(head, parse_mode="HTML") if msg is not None
@@ -319,7 +319,7 @@ async def c_remove(ctx) -> None:
 
 
 async def c_userbotjoin(ctx) -> None:
-    """노래 도우미 계정을 방에 넣기만 (멜론봇 /userbotjoin)."""
+    """노래 도우미 계정을 방에 넣기만 (/userbotjoin)."""
     if ctx.chat_id > 0 or await _skip_bare(ctx):
         return
     if ctx.role < Role.ADMIN:
@@ -425,12 +425,12 @@ async def t_music(ctx: tools.ToolCtx, a: dict) -> str:
 
 tools.register_tool(tools.Tool(
     "music",
-    "음성채팅에서 노래 틀기 (소담 뮤직봇, 유튜브). '아이유 밤편지 틀어줘'·'노래 틀어'·'유튜브 링크 틀어' → play(query=제목·가수·링크 그대로). "
+    "음성채팅에서 노래 틀기 (소담 뮤직봇). '아이유 밤편지 틀어줘'·'노래 틀어'·'이 링크 틀어' → play(query=제목·가수·링크 그대로). "
     "'다음 곡'·'스킵' → skip · '멈춰'·'일시정지' → pause · '다시 틀어' → resume · '노래 꺼'·'노래 끝' → stop · "
     "'대기열'·'뭐 나와?' → queue / now · '소리 줄여 50' → volume(value). 음악 파일에 답장하며 '이거 틀어' → play(query 비움). "
-    "AI 목소리 대화(voice_call)와 다름.",
+    "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
     {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume"]},
-     "query": {"type": "string", "description": "노래 제목·가수 또는 유튜브 링크 (요청 글 그대로)"},
+     "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로)"},
      "value": {"type": "integer", "description": "volume 0~200"}},
     ["action"], t_music, where="room"))
 
@@ -446,7 +446,7 @@ async def s_room(c: PanelCtx) -> Screen:
     s = await c.svc.db.get_settings(c.cid)
     cur = await musicq.current(c.svc.db, c.cid)
     n = len(await musicq.waiting(c.svc.db, c.cid))
-    lines = ["🎵 <b>뮤직봇</b> — 소담이 음성채팅에서 노래를 틀어요 (유튜브 제목·링크·음악 파일).",
+    lines = ["🎵 <b>뮤직봇</b> — 소담이 음성채팅에서 노래를 틀어요 (제목·링크·음악 파일).",
              f"지금: {('🎶 ' + esc(cur['title'])[:60] + f' · 대기 {n}곡') if cur else '쉬는 중'}", "",
              f"뮤직봇: <b>{'켜짐' if s['music_enabled'] else '꺼짐'}</b>",
              f"노래 신청: <b>{settings.render('music_who', s['music_who'])}</b>",
@@ -469,12 +469,12 @@ menu.register_hub(HubItem(58, "mus", "🎵 뮤직봇", ADMIN))
 menu.register_screen("mus", s_room, ADMIN)
 
 
-# ── 오너 메인 🎵 (유튜브 상태·쿠키) ───────────────────────
+# ── 오너 메인 🎵 (음원 상태·인증 쿠키) ───────────────────────
 COOKIE_MAX = 1024 * 1024
 
 
 def cookie_dir(svc) -> Path:
-    return data_dir(svc) / "yt_cookies"
+    return data_dir(svc) / "music_auth"
 
 
 async def s_owner(c: PanelCtx) -> Screen:
@@ -491,9 +491,8 @@ async def s_owner(c: PanelCtx) -> Screen:
         return f"{m}분 전" if m < 120 else f"{m // 60}시간 전" if m < 2880 else f"{m // 1440}일 전"
     rows = await c.svc.db._all("SELECT COUNT(*) n FROM music_queue WHERE ts>?", (int(now) - 7 * 86400,))
     lines = ["🎵 <b>뮤직봇 (오너)</b>",
-             "노래는 유튜브에서 받아 음성 도우미 계정이 틀어요. 서버 IP 를 유튜브가 '봇이냐?'로 막으면(지금 서버는 쿠키 없이 막힘 — 실측) "
-             "<b>SoundCloud 에서 같은 노래</b>를 찾아 대신 틀어요 (원곡이 잠긴 곡은 못 찾음). 유튜브로 다 되게 하려면 "
-             "<b>버리는 구글 계정</b>의 유튜브 쿠키(cookies.txt)를 넣어 주세요 — 본 계정 쿠키는 정지될 수 있어 쓰지 마세요.", "",
+             "기본 음원이 서버 IP 를 막으면 <b>대체 음원에서 같은 노래</b>를 찾아 틀어요 (잠긴 원곡은 못 찾음). "
+             "기본 음원으로 다 되게 하려면 <b>버리는 구글 계정</b>의 인증 쿠키(cookies.txt)를 넣어 주세요 — 본 계정은 정지될 수 있어 쓰지 마세요.", "",
              f"마지막 성공: {ago(h.get('ok_ts'))}",
              f"마지막 막힘: {ago(h.get('err_ts'))}" + (f" — {esc(h.get('err', ''))[:80]}" if h.get("err_ts") else ""),
              f"쿠키 파일: {len(files)}개" + (f" (가장 최근 {ago(max(f.stat().st_mtime for f in files))})" if files else ""),
@@ -510,9 +509,9 @@ async def r_cookie(c: PanelCtx) -> Screen:
     if c.uid not in await c.svc.perms.owners():
         return Screen("오너만 할 수 있어요.", None)
     c.svc.inputs[c.uid] = PendingInput("muc", 0)
-    return Screen("🍪 <b>유튜브 쿠키 넣기</b>\n"
-                  "1) PC 크롬 <b>시크릿 창</b>에서 버리는 구글 계정으로 youtube.com 로그인\n"
-                  "2) 확장 프로그램 'Get cookies.txt LOCALLY' 로 youtube.com 쿠키를 <b>Netscape 형식 .txt</b> 로 저장\n"
+    return Screen("🍪 <b>인증 쿠키 넣기</b>\n"
+                  "1) PC 크롬 <b>시크릿 창</b>에서 버리는 구글 계정으로 구글 동영상 사이트 로그인\n"
+                  "2) 확장 프로그램 'Get cookies.txt LOCALLY' 로 그 사이트 쿠키를 <b>Netscape 형식 .txt</b> 로 저장\n"
                   "3) 시크릿 창은 로그아웃하지 말고 그냥 닫기 (로그아웃하면 쿠키가 무효)\n"
                   "4) 그 .txt 파일을 여기 1:1 로 보내기 — 받자마자 메시지는 지워요.\n\n5분 안에 · 그만두려면 <code>취소</code>",
                   menu._kb([[B("❌ 취소", "m:mu")]]))
@@ -542,14 +541,14 @@ async def i_cookie(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     except TelegramError as e:
         return False, f"파일을 못 받았어요 ({esc(e.message)})."
     if not valid_cookies(text):
-        return False, "유튜브 쿠키(Netscape 형식, youtube.com 줄)가 아니에요."
+        return False, "인증 쿠키(Netscape 형식)가 아니에요."
     d = cookie_dir(c.svc)
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
     path = d / f"cookies_{int(time.time())}.txt"
     path.write_text(text, encoding="utf-8")
     os.chmod(path, 0o600)
-    log.info("유튜브 쿠키 저장 (%d줄)", len(text.splitlines()))
+    log.info("음원 인증 쿠키 저장 (%d줄)", len(text.splitlines()))
     return True, "✅ 쿠키를 넣었어요. 다음 노래부터 써요."
 
 

@@ -1,10 +1,10 @@
 """🎵 소담 뮤직봇 — 음성 담당 프로세스(worker) 안에서 노래를 찾고·받고·풀어서 음성채팅에 틀어 준다.
 
-구조 (오픈소스 음악봇 AnonXMusic(MIT)·YukkiMusicBot(MIT) 구조를 참고해 새로 씀 — 코드는 가져오지 않음):
-  찾기   YouTube: 링크면 영상 ID 그대로, 아니면 yt-dlp 'ytsearch5:' 로 찾아 길이 맞는 첫 곡 (키 없음)
-  받기   yt-dlp bestaudio → data/music/<id>.<ext> (같은 곡은 다시 안 받음, MUSIC_CACHE_MB 넘으면 오래된 것부터 지움).
-         유튜브는 2025-11 부터 JS 풀이(deno)가 필요 → pip 'deno' 의 실행 파일, 서버 IP 를 '봇이냐?'로 막으면
-         data/yt_cookies/*.txt (오너가 1:1 🎵 화면에서 넣음, 여러 개면 돌아가며)
+구조:
+  찾기   Source: 링크면 ID 그대로, 아니면 기본 음원 검색으로 길이 맞는 첫 곡 (키 없음)
+  받기   bestaudio → data/music/<id>.<ext> (같은 곡은 다시 안 받음, MUSIC_CACHE_MB 넘으면 오래된 것부터 지움).
+         JS 풀이(deno)가 필요 → pip 'deno' 의 실행 파일, 서버 IP 가 막히면
+         data/music_auth/*.txt 인증 쿠키 (오너가 1:1 🎵 화면에서 넣음, 여러 개면 돌아가며) → 그래도 막히면 대체 음원
   풀기   ffmpeg(imageio-ffmpeg 정적 바이너리) → 48 kHz 모노 s16le 10 ms 조각, -ss 로 되감기·건너뛰기
   틀기   Player 가 10 ms 마다 한 조각을 send_frame (통화 = ExternalMedia 소리 줄 하나).
          소담 AI 목소리(Bridge)가 같은 방에 있으면 그 조각을 받아 섞음 — 소담이 말하는 동안 노래를 DUCK 배로 줄임 (DJ).
@@ -40,9 +40,11 @@ DUCK = 0.25                                                # 소담이 말하는
 AHEAD = 300                                                # 미리 풀어 두는 조각 (3초) — 디스크·CPU 가 잠깐 늦어도 안 끊김
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
 SILENCE = bytes(audio.FRAME_BYTES)
-YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#\s]*&)?v=|shorts/|live/|embed/)|youtu\.be/|music\.youtube\.com/watch\?(?:[^#\s]*&)?v=)"
+LINK_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#\s]*&)?v=|shorts/|live/|embed/)|youtu\.be/|music\.youtube\.com/watch\?(?:[^#\s]*&)?v=)"
                    r"([A-Za-z0-9_-]{11})")
 URL = re.compile(r"https?://\S+")
+WATCH = "https://www.youtube.com/watch?v={}"
+OEMBED = "https://www.youtube.com/oembed?format=json&url="
 
 
 class MusicError(Exception):
@@ -53,8 +55,8 @@ class MusicError(Exception):
         self.code = code
 
 
-def youtube_id(text: str) -> str | None:
-    m = YT_ID.search(text or "")
+def link_id(text: str) -> str | None:
+    m = LINK_ID.search(text or "")
     return m.group(1) if m else None
 
 
@@ -72,17 +74,17 @@ def _blocked(msg: str) -> bool:
     return "sign in to confirm" in m or "not a bot" in m or "http error 429" in m or "po token" in m
 
 
-SC_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
+ALT_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
 VARIANT = ("remix", "cover", "slowed", "sped up", "speed up", "nightcore", "inst", "instrumental", "karaoke", "8d", "reverb", "mashup",
            "disco", "80s", "lofi", "lo-fi", "phonk", "bootleg", "flip", "version", "ver.", "bass boost", "mix)",
            "live", "concert", "라이브", "콘서트",
            "cello", "violin", "guitar", "duo", "orgel", "music box", "kalimba", "8bit", "8-bit", "첼로", "바이올린", "오르골",
            "원곡", "부른", "불러", "covered", "커버곡",       # '(원곡 이문세) 이보람' = 다른 가수가 부른 것 (실측)
            "리믹스", "커버", "반주", "피아노", "piano", "acoustic", "jersey", "edit")
-HINT_NEED = 0.75                # 유튜브 제목 낱말로 맞출 땐 이만큼 (한글 신청 '뉴진스 하입보이' ↔ 'NewJeans - Hype Boy')
-SC_TRY = 4                      # 실제로 받아지는지 확인해 볼 후보 수 (DRM 잠긴 공식 음원 건너뛰기)
-SC_MIN_SEC = 45                 # SoundCloud 미리듣기(30초) 조각은 건너뜀
-YT_RETRY = int(os.getenv("MUSIC_YT_RETRY", "3600"))   # 유튜브가 막힌 뒤 이만큼은 SoundCloud 먼저 (쿠키가 바뀌면 바로 다시)
+HINT_NEED = 0.75                # 기본 음원 제목 낱말로 맞출 땐 이만큼 (한글 신청 '뉴진스 하입보이' ↔ 'NewJeans - Hype Boy')
+ALT_TRY = 4                      # 실제로 받아지는지 확인해 볼 후보 수 (DRM 잠긴 공식 음원 건너뛰기)
+ALT_MIN_SEC = 45                 # 대체 음원 미리듣기(30초) 조각은 건너뜀
+PRIMARY_RETRY = int(os.getenv("MUSIC_RETRY_SEC", "3600"))   # 기본 음원이 막힌 뒤 이만큼은 대체 음원 먼저 (쿠키가 바뀌면 바로 다시)
 _NOISE = re.compile(r"[\[(【](?:[^\])】]*?(?:mv|m/v|official|lyrics?|가사|audio|video|live|4k|hd|remaster)[^\])】]*)[\])】]", re.I)
 
 
@@ -121,20 +123,20 @@ def clean_title(title: str) -> str:
     return re.sub(r"\s+", " ", t).strip()[:100]
 
 
-class YouTube:
-    """yt-dlp 로 찾기·받기 (유튜브 → 막히면 SoundCloud). 전부 스레드에서 (이벤트 루프를 안 막게).
-    실측 2026-10-08 Hetzner IP: 유튜브 검색은 되고 받기는 15곡 중 15곡 '봇이냐?' (쿠키 필요) ·
-    SoundCloud 는 키·쿠키 없이 검색·받기 됨 (한국 노래도 사용자 업로드로 꽤 있음)."""
+class Source:
+    """yt-dlp 로 찾기·받기 (기본 음원 → 막히면 대체 음원). 전부 스레드에서 (이벤트 루프를 안 막게).
+    실측 2026-10-08 서버 IP: 기본 음원 검색은 되고 받기는 15곡 중 15곡 '봇이냐?' (쿠키 필요) ·
+    대체 음원은 키·쿠키 없이 검색·받기 됨 (한국 노래도 사용자 업로드로 꽤 있음)."""
 
     def __init__(self, data_dir: Path, max_sec: int = MAX_SEC, cache_mb: int = CACHE_MB):
         self.dir = Path(data_dir) / "music"
-        self.cookie_dir = Path(data_dir) / "yt_cookies"
+        self.cookie_dir = Path(data_dir) / "music_auth"
         self.cache_dir = Path(data_dir) / "cache"
         self.max_sec, self.cache_mb = max_sec, cache_mb
-        self.blocked_at = 0.0           # 유튜브가 마지막으로 막은 시각
+        self.blocked_at = 0.0           # 기본 음원이 마지막으로 막은 시각
         self._locks: dict[str, threading.Lock] = {}   # 같은 곡을 두 곳(미리 받기·두 방)에서 동시에 받지 않게
         self._locks_guard = threading.Lock()
-        self._sig: tuple = ()           # 쿠키 파일 모양 (바뀌면 유튜브 다시 시도)
+        self._sig: tuple = ()           # 쿠키 파일 모양 (바뀌면 기본 음원 다시 시도)
 
     def _env(self) -> None:
         """음성 담당 서비스는 data/ 에만 쓸 수 있음 (ProtectSystem=strict·ProtectHome) → yt-dlp·deno 캐시도 그 안으로."""
@@ -147,15 +149,15 @@ class YouTube:
         except OSError:
             return []
 
-    def yt_ok(self) -> bool:
-        """유튜브로 받아 볼 만한지: 최근에 막혔으면 YT_RETRY 동안은 아님 (쿠키가 새로 들어오면 바로 다시)."""
+    def primary_ok(self) -> bool:
+        """기본 음원으로 받아 볼 만한지: 최근에 막혔으면 PRIMARY_RETRY 동안은 아님 (쿠키가 새로 들어오면 바로 다시)."""
         try:
             sig = tuple((p, os.stat(p).st_mtime) for p in self.cookies())
         except OSError:
             sig = ()
         if sig != self._sig:
             self._sig, self.blocked_at = sig, 0.0
-        return time.time() - self.blocked_at >= YT_RETRY
+        return time.time() - self.blocked_at >= PRIMARY_RETRY
 
     def _opts(self, cookie: str | None, **extra) -> dict:
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 15, "retries": 2,
@@ -170,7 +172,7 @@ class YouTube:
         opts.update(extra)
         return opts
 
-    def _run(self, fn: Callable[[dict], Any], *, cookies: bool = True, where: str = "유튜브", **extra):
+    def _run(self, fn: Callable[[dict], Any], *, cookies: bool = True, where: str = "기본 음원", **extra):
         """쿠키가 있으면 쿠키부터(여러 개면 무작위 순서), '봇이냐?'로 막히면 다음 쿠키 → 마지막에 쿠키 없이.
         (쿠키 없이 먼저 두드리면 막힌 IP 로 요청만 늘어남)"""
         import yt_dlp
@@ -188,29 +190,30 @@ class YouTube:
                     break
         if _blocked(last):
             self.blocked_at = time.time()
-            raise MusicError("blocked", "유튜브가 서버를 '봇'으로 막았어요 (운영자: 🎵 화면에서 유튜브 쿠키를 넣어 주세요).")
-        raise MusicError("download", f"{where}에서 못 가져왔어요: {_short(last)}")
+            raise MusicError("blocked", "음원 서버가 잠깐 막혔어요 (운영자: 🎵 화면에서 인증 쿠키를 넣어 주세요).")
+        log.info("%s 못 가져옴: %s", where, _short(last, 300))
+        raise MusicError("download", f"노래를 못 가져왔어요: {_short(_hide_src(last))}")
 
     def _info(self, ydl, url: str) -> dict:
         info = ydl.extract_info(url, download=False)
         return info or {}
 
     def resolve(self, query: str) -> dict:
-        """검색어·링크 → {title, url, vid, duration}. 유튜브가 막혀 있으면 SoundCloud 에서 같은 노래."""
-        vid = youtube_id(query)
+        """검색어·링크 → {title, url, vid, duration}. 기본 음원이 막혀 있으면 대체 음원에서 같은 노래."""
+        vid = link_id(query)
         if vid:
             try:
-                return self._check(self._run(lambda y: self._info(y, f"https://www.youtube.com/watch?v={vid}")))
+                return self._check(self._run(lambda y: self._info(y, WATCH.format(vid))))
             except MusicError as e:
                 if e.code != "blocked":
                     raise
                 title = self._oembed_title(vid)      # 영상 제목은 막힌 IP 에서도 oEmbed 로 됨
                 if not title:
                     raise
-                return self.soundcloud(clean_title(title), fallback_of=e, need=0.6)
+                return self.alt_search(clean_title(title), fallback_of=e, need=0.6)
         if URL.search(query):
-            raise MusicError("not_found", "유튜브 링크나 노래 제목만 돼요.")
-        # 유튜브 검색은 막힌 IP 에서도 됨 (실측) → 정확한 곡 이름은 유튜브에서 (SoundCloud 검색은 리믹스·커버가 먼저 나오기도)
+            raise MusicError("not_found", "노래 링크나 제목만 돼요.")
+        # 기본 음원 검색은 막힌 IP 에서도 됨 (실측) → 정확한 곡 이름은 기본 음원에서 (대체 음원 검색은 리믹스·커버가 먼저 나오기도)
         res = self._run(lambda y: y.extract_info(f"ytsearch5:{query}", download=False), extract_flat="in_playlist")
         info = None
         for e in (res or {}).get("entries") or []:
@@ -219,40 +222,40 @@ class YouTube:
             dur = int(e.get("duration") or 0)
             if e.get("live_status") in ("is_live", "is_upcoming") or (dur and dur > self.max_sec):
                 continue
-            info = {"title": e.get("title") or query, "url": f"https://www.youtube.com/watch?v={e['id']}",
+            info = {"title": e.get("title") or query, "url": WATCH.format(e['id']),
                     "vid": e["id"], "duration": dur}
             break
-        if info and self.yt_ok():
+        if info and self.primary_ok():
             return info
         last = None
-        for q in ([clean_title(info["title"])] if info else []) + [query]:   # 유튜브가 막혀 있음 → 같은 노래를 SoundCloud 에서
+        for q in ([clean_title(info["title"])] if info else []) + [query]:   # 기본 음원이 막혀 있음 → 같은 노래를 대체 음원에서
             try:
-                return self.soundcloud(q, wanted=query, ref_sec=info["duration"] if info else 0)
+                return self.alt_search(q, wanted=query, ref_sec=info["duration"] if info else 0)
             except MusicError as e:
                 last = e
         if info and not self.cookies():
-            raise last                                # 쿠키도 없음 → 유튜브로 가 봐야 막힘 (안내는 SoundCloud 쪽 이유)
+            raise last                                # 쿠키도 없음 → 기본 음원으로 가 봐야 막힘 (안내는 대체 음원 쪽 이유)
         if info:
-            return info                               # SoundCloud 에도 없음 → 유튜브로 (쿠키가 생겼을 수도)
+            return info                               # 대체 음원에도 없음 → 기본 음원으로 (쿠키가 생겼을 수도)
         raise MusicError("not_found", f"'{_short(query, 40)}' 노래를 못 찾았어요.")
 
-    def soundcloud(self, query: str, fallback_of: MusicError | None = None, wanted: str = "", ref_sec: int = 0,
+    def alt_search(self, query: str, fallback_of: MusicError | None = None, wanted: str = "", ref_sec: int = 0,
                    need: float = 1.0) -> dict:
-        """SoundCloud 검색 → 같은 노래 한 곡 (엉뚱한 곡을 트느니 못 찾았다고 함 — 실측: 공식 음원이 DRM 이면 '다이너마이트'에
+        """대체 음원 검색 → 같은 노래 한 곡 (엉뚱한 곡을 트느니 못 찾았다고 함 — 실측: 공식 음원이 DRM 이면 '다이너마이트'에
         '버터'가 걸림). 받아들이는 곡: 신청 낱말(wanted, 없으면 query)을 need 비율 이상 담고 · 신청에 없는 리믹스·커버·라이브가
-        아니고 · 유튜브 원곡 길이(ref_sec)와 비슷함. 그중 낱말이 많이 겹치고 딴 이름이 덜 붙은 순, DRM 으로 잠긴 건 건너뜀.
+        아니고 · 기본 음원 원곡 길이(ref_sec)와 비슷함. 그중 낱말이 많이 겹치고 딴 이름이 덜 붙은 순, DRM 으로 잠긴 건 건너뜀.
         vid = 'sc<번호>'."""
         res = self._run(lambda y: y.extract_info(f"scsearch10:{query}", download=False), cookies=False,
-                        where="SoundCloud", extract_flat="in_playlist")
+                        where="대체 음원", extract_flat="in_playlist")
         asked = _norm(f"{wanted} {query}")
         core = set(_words(wanted or query))                # 신청한 말 (가수·제목) — 가장 중요
-        hint = set(_words(asked)) - core                    # 유튜브 제목에서 온 낱말 (영어 제목 등)
+        hint = set(_words(asked)) - core                    # 기본 음원 제목에서 온 낱말 (영어 제목 등)
         ok = []
         for e in (res or {}).get("entries") or []:
             if not e or not str(e.get("id") or "").isdecimal():
                 continue
             dur = int(e.get("duration") or 0)
-            if dur < SC_MIN_SEC or dur > self.max_sec:
+            if dur < ALT_MIN_SEC or dur > self.max_sec:
                 continue
             if ref_sec and abs(dur - ref_sec) > max(30, ref_sec * 0.2):
                 continue                                    # 원곡과 길이가 다름 (믹스·조각·다른 곡)
@@ -261,34 +264,34 @@ class YouTube:
                 continue
             core_ok = bool(core) and sum(1 for w in core if w in title) >= need * len(core)   # 낱말이 없으면 공짜 통과 아님
             hint_ok = len(hint) >= 2 and sum(1 for w in hint if w in title) >= HINT_NEED * len(hint)
-            if not (core_ok or hint_ok):                   # 한글로 신청해도 영어 제목(유튜브 제목 낱말)이면 같은 곡
+            if not (core_ok or hint_ok):                   # 한글로 신청해도 영어 제목(기본 음원 제목 낱말)이면 같은 곡
                 continue
             got = set(_words(title))
             score = 3 * sum(1 for w in core if w in title) + sum(1 for w in hint if w in title) \
                 - 0.4 * len([w for w in got if w not in asked])   # 신청에 없는 이름이 붙음 (다른 가수 커버 등)
-            ok.append((score, {"title": e.get("title") or query, "url": SC_TRACK.format(e["id"]), "vid": f"sc{e['id']}",
+            ok.append((score, {"title": e.get("title") or query, "url": ALT_TRACK.format(e["id"]), "vid": f"sc{e['id']}",
                                "duration": dur}))
-        ok.sort(key=lambda x: x[0], reverse=True)           # 같은 점수면 SoundCloud 순서 그대로 (sort 는 안정)
-        for _, t in ok[:SC_TRY]:
+        ok.sort(key=lambda x: x[0], reverse=True)           # 같은 점수면 대체 음원 순서 그대로 (sort 는 안정)
+        for _, t in ok[:ALT_TRY]:
             try:
-                self._run(lambda y: y.extract_info(t["url"], download=False), cookies=False, where="SoundCloud")
+                self._run(lambda y: y.extract_info(t["url"], download=False), cookies=False, where="대체 음원")
                 return t
             except MusicError as e:
-                log.info("SoundCloud 후보 건너뜀 %s: %s", t["vid"], e)
+                log.info("대체 음원 후보 건너뜀 %s: %s", t["vid"], e)
         if fallback_of is not None:
             raise fallback_of
-        raise MusicError("not_found", f"'{_short(wanted or query, 40)}' — 유튜브가 서버를 막아 다른 곳에서 찾았는데 같은 노래가 없어요"
-                         " (운영자: 🎵 화면에서 유튜브 쿠키를 넣으면 돼요).")
+        raise MusicError("not_found", f"'{_short(wanted or query, 40)}' — 같은 노래를 못 찾았어요"
+                         " (운영자: 🎵 화면에서 인증 쿠키를 넣으면 돼요).")
 
     def fallback(self, title: str, ref_sec: int = 0) -> dict:
-        """유튜브 곡을 받으려다 막힘 → SoundCloud 에서 같은 노래 (Player 가 부름). 유튜브 제목은 낱말이 많아 60%만."""
-        return self.soundcloud(clean_title(title), wanted=clean_title(title), ref_sec=ref_sec, need=0.6)
+        """기본 음원 곡을 받으려다 막힘 → 대체 음원에서 같은 노래 (Player 가 부름). 기본 음원 제목은 낱말이 많아 60%만."""
+        return self.alt_search(clean_title(title), wanted=clean_title(title), ref_sec=ref_sec, need=0.6)
 
     def _oembed_title(self, vid: str) -> str | None:
         import json
         import urllib.parse
         import urllib.request
-        url = "https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(f"https://www.youtube.com/watch?v={vid}")
+        url = OEMBED + urllib.parse.quote(WATCH.format(vid))
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=10) as r:
                 return str(json.load(r).get("title") or "")[:200] or None
@@ -302,11 +305,11 @@ class YouTube:
         dur = int(info.get("duration") or 0)
         if dur > self.max_sec:
             raise MusicError("too_long", f"{self.max_sec // 60}분 넘는 영상은 못 틀어요.")
-        return {"title": info.get("title") or "?", "url": info.get("webpage_url") or f"https://www.youtube.com/watch?v={info.get('id')}",
+        return {"title": info.get("title") or "?", "url": info.get("webpage_url") or WATCH.format(info.get('id')),
                 "vid": info.get("id"), "duration": dur}
 
     def fetch(self, vid: str) -> str:
-        """오디오 파일 경로 (이미 받았으면 그대로). vid 'sc…' = SoundCloud. 같은 곡은 한 번에 하나만 받음."""
+        """오디오 파일 경로 (이미 받았으면 그대로). vid 'sc…' = 대체 음원. 같은 곡은 한 번에 하나만 받음."""
         with self._locks_guard:
             lock = self._locks.setdefault(vid, threading.Lock())
         with lock:
@@ -319,8 +322,8 @@ class YouTube:
             os.utime(old)                                   # 오래된 것부터 지울 때 '최근에 씀'
             return old
         sc = vid.startswith("sc") and vid[2:].isdecimal()
-        url = SC_TRACK.format(vid[2:]) if sc else f"https://www.youtube.com/watch?v={vid}"
-        self._run(lambda y: y.download([url]), cookies=not sc, where="SoundCloud" if sc else "유튜브",
+        url = ALT_TRACK.format(vid[2:]) if sc else WATCH.format(vid)
+        self._run(lambda y: y.download([url]), cookies=not sc, where="대체 음원" if sc else "기본 음원",
                   format="bestaudio/best", outtmpl=str(self.dir / (f"{vid}.%(ext)s" if sc else "%(id)s.%(ext)s")),
                   overwrites=False, max_filesize=80 * 1024 * 1024, match_filter=self._too_long)
         got = self._cached(vid)
@@ -376,6 +379,13 @@ class _Quiet:
 
     def error(self, msg):
         log.debug("yt-dlp: %s", msg)
+
+
+def _hide_src(msg: str) -> str:
+    """방에 보일 오류 글에서 음원 출처(추출기 이름·주소)를 뺌."""
+    msg = re.sub(r"^(?:ERROR:\s*)?(?:\[[^\]]*\]\s*)+", "", msg or "")
+    msg = re.sub(r"^[\w-]+:\s+", "", msg)                     # 'abc123def45: ' 곡 ID
+    return URL.sub("", msg).strip()
 
 
 def _short(s: str, n: int = 120) -> str:
@@ -604,7 +614,7 @@ class Player:
             else:
                 try:
                     path = await asyncio.to_thread(self.source.fetch, row["vid"])
-                except MusicError as e:          # 유튜브가 막음 → 같은 노래를 SoundCloud 에서 (쿠키 없을 때 실측 전부 막힘)
+                except MusicError as e:          # 기본 음원이 막음 → 같은 노래를 대체 음원에서 (쿠키 없을 때 실측 전부 막힘)
                     if e.code != "blocked" or not hasattr(self.source, "fallback"):
                         raise
                     alt = await asyncio.to_thread(self.source.fallback, row["title"], int(row["duration"] or 0))

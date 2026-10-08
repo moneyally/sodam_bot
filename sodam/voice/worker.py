@@ -3,7 +3,7 @@
 어시스턴트(사람) 계정 1개 = Telethon 세션(data/voice_assistant.session, 0600) + py-tgcalls.
 봇(소담 본체)과는 DB 의 voice_jobs 로만 이야기함 → ntgcalls(네이티브) 가 죽어도 본체는 그대로.
 
-흐름 (오픈소스 음악봇 YukkiMusicBot 의 '어시스턴트 계정' 구조를 참고해 새로 씀):
+흐름 ('어시스턴트 계정' 구조):
   join  : 봇이 만든 1회용 초대링크로 방에 들어감 (이미 멤버면 통과)
   start : play(외부 오디오 48k 모노, auto_start=True → 음성채팅이 없고 어시스턴트가 '음성채팅 관리' 권한이 있으면 새로 엶)
           + record(외부 오디오) → 들어온 10 ms 조각을 Bridge.feed, Bridge 가 만든 소리를 send_frame
@@ -111,7 +111,7 @@ class Worker:
         self.locks: dict[int, asyncio.Lock] = {}
         self._health_at = 0.0
         # 🎵 뮤직봇 (voice/music.py): 방마다 Player 하나. 통화(소리 줄)는 AI 대화·노래가 같이 씀 → in_call
-        self.music_source = music_source or music.YouTube(Path(getattr(cfg, "db_path", "data/sodam.db")).parent)
+        self.music_source = music_source or music.Source(Path(getattr(cfg, "db_path", "data/sodam.db")).parent)
         self.music_decoder = music_decoder or music.Decoder
         self.music_opts = music_opts or {}          # 테스트: 가짜 시계·짧은 대기
         self.players: dict[int, music.Player] = {}

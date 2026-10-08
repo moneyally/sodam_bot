@@ -1500,7 +1500,7 @@ BOT_MENU = [
     BotCommand("history", "이름·아이디 변경 기록 (답장·@아이디·ID)"),
     BotCommand("allhistory", "변경 기록 전체"),
     BotCommand("rules", "방 규칙"),
-    BotCommand("play", "🎵 노래 틀기 / 대기열 추가 (제목·유튜브 링크)"),
+    BotCommand("play", "🎵 노래 틀기 / 대기열 추가 (제목·링크)"),
     BotCommand("skip", "🎵 다음 곡"),
     BotCommand("pause", "🎵 일시정지"),
     BotCommand("resume", "🎵 다시 재생"),

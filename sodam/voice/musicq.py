@@ -3,7 +3,7 @@
 music_queue    한 줄 = 신청한 곡 하나. state: queued(기다림) → playing(지금) → done/skipped/removed/failed.
                '대기열 #n' = 이 방 queued 를 신청 순(id)으로 센 n번째. 재시작해도 남음 (음성 담당이 이어서 틂).
 music_sessions 노래 틀기 한 번(도우미가 음성채팅에 들어가 있던 동안) = 한 줄. 끝난 이유·곡 수.
-chat_state(0, music_health) = 음성 담당이 마지막으로 본 유튜브 상태 {ok_ts, err, err_ts} (오너 🎵 화면).
+chat_state(0, music_health) = 음성 담당이 마지막으로 본 음원 상태 {ok_ts, err, err_ts} (오너 🎵 화면).
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ async def set_path(db, row_id: int, path: str | None) -> None:
 
 
 async def set_track(db, row_id: int, title: str, url: str, vid: str, duration: int) -> None:
-    """유튜브가 막혀 다른 곳(SoundCloud)의 같은 노래로 바꿈."""
+    """기본 음원이 막혀 대체 음원의 같은 노래로 바꿈."""
     await db._write("UPDATE music_queue SET title=?, url=?, vid=?, duration=? WHERE id=?",
                     (title[:200], url[:500], vid, int(duration or 0), row_id))
 
@@ -210,8 +210,7 @@ def _esc(s) -> str:
 def card_text(kind: str, row: dict, *, pos: int = 0, why: str = "") -> str:
     title, dur = _esc(row.get("title"))[:120], fmt_dur(row.get("duration"))
     by = _esc(row.get("by_name") or "")[:40]
-    src = " · SoundCloud" if "soundcloud" in str(row.get("url") or "") else ""
-    tail = f"⏱ {dur}{src}" + (f" · 신청: {by}" if by else "")
+    tail = f"⏱ {dur}" + (f" · 신청: {by}" if by else "")
     if kind == "now":
         return f"🎶 <b>재생 시작</b>\n<b>{title}</b>\n{tail}"
     if kind == "queued":
