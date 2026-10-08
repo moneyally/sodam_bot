@@ -861,7 +861,7 @@ def blocked_primary_falls_back_to_the_same_song_or_says_not_found():
             y.resolve("뉴진스 하입보이")
             raise AssertionError("원곡이 잠겼으면 리믹스·커버를 틀지 않음")
         except music.MusicError as e:
-            assert e.code == "not_found" and "쿠키" in str(e)
+            assert e.code == "not_found" and "쿠키" not in str(e) and "운영자" not in str(e), ("방에 운영자 안내 X", str(e))
         FakeYDL.DRM = {"11"}
         got = y.resolve("뉴진스 하입보이")
         assert got["vid"] == "sc20", ("한글 신청 ↔ 영어 제목 (기준 곡 제목의 가수·노래로)", got)
@@ -1420,3 +1420,24 @@ async def underrun_fades_out_instead_of_cutting_and_fades_back_in():
     for a, b in zip(frames, frames[1:]):
         jump = abs(int(b[0]) - int(a[-1]))
         assert jump <= 1500, ("조각 사이에 소리가 한 번에 크게 바뀌지 않음 ('딱')", int(a[-1]), int(b[0]))
+
+
+@test
+async def blocked_song_tells_only_the_owner_once():
+    """실제 2026-10-09: 방에 '(운영자: 🎵 화면에서 인증 쿠키…)' 가 계속 뜸 → 방엔 '잠시 뒤 다시', 오너 1:1 에 6시간 1번."""
+    bot = FakeBot()
+    db, w, src, _ = await make_worker(bot)
+    w.cfg.owner_ids = [777]
+    sent = []
+    real = bot.send_message
+
+    async def send(chat_id, text, **k):
+        sent.append((chat_id, text))
+        return await real(chat_id, text, **k)
+    bot.send_message = send
+    await w._music_health("막힘 1")
+    await w._music_health("막힘 2")
+    owner = [t for c, t in sent if c == 777]
+    assert len(owner) == 1 and "막혀" in owner[0], ("오너에게 한 번만", sent)
+    assert "운영자" not in str(music.MusicError("blocked", "")) and all(c == 777 for c, _ in sent)
+    await stop_all(w)
