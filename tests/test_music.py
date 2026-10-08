@@ -663,9 +663,17 @@ async def owner_cookie_upload_validates_and_is_private():
     assert M.valid_cookies(good) and not M.valid_cookies("hello") and not M.valid_cookies(".example.com\tTRUE\t/\tx\t1\ta\tb")
     bot.files["DOC"] = good.encode()
     msg = FakeMsg(7, fake_user(7, "오너"), document=SimpleNamespace(file_id="DOC", file_size=len(good)))
-    ok, text = await M.i_cookie(PanelCtx(svc, bot, 7, 0, []), msg)
-    assert ok and msg.deleted, text
+    M.cookie_dir(svc).mkdir(parents=True, exist_ok=True)
+    (M.cookie_dir(svc) / "cookies_1.txt").write_text(good)    # 기한 끝난 옛 쿠키
+    checked, real_check = [], M.COOKIE_CHECK
+    M.COOKIE_CHECK = lambda path: checked.append(path) or True
+    try:
+        ok, text = await M.i_cookie(PanelCtx(svc, bot, 7, 0, []), msg)
+    finally:
+        M.COOKIE_CHECK = real_check
+    assert ok and msg.deleted and "확인" in text and checked, text
     files = list(M.cookie_dir(svc).glob("*.txt"))
+    assert files[0].name != "cookies_1.txt", "새 쿠키를 넣으면 옛 쿠키는 지움"
     assert len(files) == 1 and oct(files[0].stat().st_mode)[-3:] == "600"
     src = music.Source(Path(svc.cfg.db_path).parent)
     assert src.cookies() == [str(files[0])], "음성 담당이 같은 곳에서 읽음"
@@ -673,6 +681,13 @@ async def owner_cookie_upload_validates_and_is_private():
     ok, text = await M.i_cookie(PanelCtx(svc, bot, 7, 0, []), FakeMsg(7, fake_user(7, "오너"),
                                                                        document=SimpleNamespace(file_id="BAD", file_size=11)))
     assert not ok and "아니에요" in text
+    M.COOKIE_CHECK = lambda path: False
+    msg = FakeMsg(7, fake_user(7, "오너"), document=SimpleNamespace(file_id="DOC", file_size=len(good)))
+    try:
+        ok, text = await M.i_cookie(PanelCtx(svc, bot, 7, 0, []), msg)
+    finally:
+        M.COOKIE_CHECK = real_check
+    assert ok and "막혀요" in text and "robots.txt" in text, ("넣자마자 막히면 바로 알려 줌", text)
 
 
 @test
