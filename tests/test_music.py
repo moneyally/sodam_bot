@@ -415,7 +415,7 @@ async def restart_saves_position_and_resumes_from_there():
         mtproto.write_session(session_path(w.cfg), "SESSION")
         t = asyncio.create_task(w2.run())
         await until(lambda: CHAT in w2.players)
-        assert FakeDecoder.opened[-1][0].startswith("이어틀기") and FakeDecoder.opened[-1][1] >= 200
+        await until(lambda: FakeDecoder.opened[-1][0].startswith("이어틀기") and FakeDecoder.opened[-1][1] >= 200)
         s = await db._all("SELECT reason FROM music_sessions ORDER BY id")
         assert s[0]["reason"] == "restart"
         t.cancel()
@@ -1154,18 +1154,30 @@ async def no_exact_song_posts_choice_buttons_only_the_requester_picks_once():
     stale.message.message_id = 999
     await Mp.on_button(svc, pbot, stale, datas[0].split(":")[1:])
     assert "지난 버튼" in stale.answers[0][0], "다른 글의 버튼(옛 카드)"
-    t = asyncio.create_task(worker_answers(db, {"music_play": "playing"}))
-    mine = q(MEMBER, datas[1])
-    await Mp.on_button(svc, pbot, mine, datas[1].split(":")[1:])
-    again = q(MEMBER, datas[0])
-    await Mp.on_button(svc, pbot, again, datas[0].split(":")[1:])
-    job = None
-    for _ in range(1000):
-        job = await db._one("SELECT * FROM voice_jobs WHERE kind='music_play' AND payload LIKE '%pick%'")
-        if job:
-            break
-        await asyncio.sleep(0.01)
-    t.cancel()
+    import json
+    taken, real_take = [], store.take_jobs
+
+    async def take_jobs(*a, **k):                         # 가져가면 payload 를 지우므로 (서버가 빠르면 먼저 가져감) 가져간 걸 기록
+        got = await real_take(*a, **k)
+        taken.extend({"kind": j["kind"], "payload": json.dumps(j["payload"], ensure_ascii=False), "by_user": j["by"]} for j in got)
+        return got
+    store.take_jobs = take_jobs
+    try:
+        t = asyncio.create_task(worker_answers(db, {"music_play": "playing"}))
+        mine = q(MEMBER, datas[1])
+        await Mp.on_button(svc, pbot, mine, datas[1].split(":")[1:])
+        again = q(MEMBER, datas[0])
+        await Mp.on_button(svc, pbot, again, datas[0].split(":")[1:])
+        job = None
+        for _ in range(1000):
+            job = next((j for j in taken if j["kind"] == "music_play" and "pick" in (j.get("payload") or "")), None) \
+                or await db._one("SELECT * FROM voice_jobs WHERE kind='music_play' AND payload LIKE '%pick%'")
+            if job:
+                break
+            await asyncio.sleep(0.01)
+        t.cancel()
+    finally:
+        store.take_jobs = real_take
     assert "준비 중" in mine.edits[0] and "이미 골랐" in again.answers[0][0], (mine.edits, again.answers)
     import json
     pl = json.loads(job["payload"])
