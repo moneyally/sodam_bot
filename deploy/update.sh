@@ -95,6 +95,21 @@ VOICE_SETUP=${VOICE_SETUP:-auto}
 RETRY_STAMP="$APP_DIR/data/update.retry"   # 새 커밋 없을 때 설치 재시도 간격 (10분)
 REQ_STAMP="$APP_DIR/data/requirements.installed"   # 마지막으로 설치 성공한 requirements.txt 의 sha256 — 같으면 pip 건너뜀
 VOICE_PENDING="$APP_DIR/data/voice.restart_pending"   # 통화 중이라 못 한 음성 재시작 → 다음 타이머(새 커밋 없어도)에서
+# 🎧 음질 높인 ntgcalls (deploy/ntgcalls/patch_hq.py 를 GitHub Actions 'ntgcalls HQ wheel' 로 빌드, 서버 /opt/sodam-hq 에 둠).
+# 해시가 맞을 때만, 설치된 게 원래 부품이면 덮어씀 (pip 가 같은 3.0.0 이라 그냥 두지만 venv 를 새로 만들면 원래 것으로 돌아가서).
+HQ_DIR=${HQ_DIR:-/opt/sodam-hq}
+HQ_SHA=5ef208e14f9485dbb6b0c19e8d389dc21a3354489324e154ee7913e0cac24bd0
+hq_wheel() {
+    local w so
+    w=$(ls "$HQ_DIR"/ntgcalls-3.0.0-cp312-*.whl 2>/dev/null | head -n1)
+    [ -n "$w" ] || return 0
+    [ "$(sha256sum "$w" | cut -d' ' -f1)" = "$HQ_SHA" ] || { log "voice: 음질 부품 해시가 다름 → 안 깖"; return 0; }
+    so=$("$PY" -c 'import importlib.util as u; print(u.find_spec("ntgcalls").origin)' 2>/dev/null) || return 0
+    grep -q NTG_OPUS_BITRATE "$so" 2>/dev/null && return 0
+    "$PY" -m pip install -q --disable-pip-version-check --force-reinstall --no-deps "$w" \
+        && log "voice: 음질 높인 ntgcalls 설치" || log "voice: 음질 부품 설치 실패 (원래 것으로 계속)"
+}
+
 voice_setup() {
     case $VOICE_SETUP in
         0) return 0 ;;
@@ -118,6 +133,7 @@ voice_setup() {
     rm -f "$VOICE_PENDING"
     "$PY" -m pip install -q --disable-pip-version-check -r "$APP_DIR/requirements-voice.txt" \
         || { log "voice: 패키지 설치 실패 (본체는 정상)"; return 0; }
+    hq_wheel
     if ! cmp -s "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/sodam-voice.service"; then
         cp "$APP_DIR/deploy/sodam-voice.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
     fi
