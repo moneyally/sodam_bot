@@ -600,6 +600,8 @@ class Worker:
             if reason != "restart" and mine and chat_id not in self.players:   # 재시작이 아니면 남은 곡은 정리
                 await musicq.clear(self.db, chat_id, "removed")
             await musicq.session_end(self.db, sid, reason, pl.tracks)
+            if mine and chat_id not in self.players:
+                await self._vc_title(chat_id, None)       # 음성채팅 제목 원래대로
             await self._maybe_leave(chat_id)
         log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 비어 있음 %s", chat_id, reason, pl.tracks,
                  pl.stats["frames"], pl.stats["late"], pl.stats["underrun"])
@@ -631,6 +633,8 @@ class Worker:
                 if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(item.get("vid") or "")):
                     raise music.MusicError("not_found", "고른 곡을 못 찾았어요.")
                 info = await asyncio.to_thread(self.music_source.pick, item)
+            elif hasattr(self.music_source, "playlist") and music.playlist_id(str(p.get("query") or "")):
+                return await self._music_playlist(chat_id, p, by, name, status)
             else:
                 info = await asyncio.to_thread(self.music_source.resolve, str(p.get("query") or "")[:300])
                 await self._music_health(None)
@@ -661,6 +665,60 @@ class Worker:
             await self._music_edit(chat_id, status, musicq.card_text("queued", row, pos=pos))
         pl.wake()
         return True, "queued" if pos else "playing"
+
+    async def _music_playlist(self, chat_id: int, p: dict, by, name: str, status) -> tuple[bool, str]:
+        """재생목록 링크 → 최대 PLAYLIST_MAX 곡을 대기열에 (받기는 차례가 오면). 한 사람 한도 대신 목록 한도."""
+        items = await asyncio.to_thread(self.music_source.playlist, music.playlist_id(str(p.get("query") or "")))
+        added, skipped = [], 0
+        for it in items:
+            rid, pos, why = await musicq.add(self.db, chat_id, title=it["title"], url=it["url"], vid=it["vid"],
+                                             duration=it["duration"], by_id=by, by_name=name, per_user=music.PLAYLIST_MAX)
+            if why == "full":
+                break
+            if rid:
+                added.append(rid)
+            else:
+                skipped += 1
+        if not added:
+            await self._music_edit(chat_id, status, f"⚠️ 넣을 곡이 없어요 (대기열 {musicq.QUEUE_MAX}곡까지·이미 있는 곡 빼고).")
+            return False, "music:full"
+        pl, res = await self._get_player(chat_id, p, by)
+        if pl is None:
+            for rid in added:
+                await musicq.finish(self.db, rid, "failed")
+            return False, res
+        tail = f" (이미 있는 곡 {skipped}개 뺌)" if skipped else ""
+        await self._music_edit(chat_id, status, f"📃 재생목록에서 <b>{len(added)}곡</b> 넣었어요{tail}. <code>.대기열</code> 로 확인")
+        pl.wake()
+        return True, "playlist"
+
+    async def _vc_title(self, chat_id: int, title: str | None) -> None:
+        """음성채팅 제목을 지금 곡으로 (방 설정 vc_title). title None = 처음 제목으로 되돌림.
+        도우미에게 '음성채팅 관리' 권한이 있어야 함 (노래 신청 때 봇이 줌) — 안 되면 조용히 건너뜀."""
+        if not self.client:
+            return
+        try:
+            if title is not None and not (await musicq.modes(self.db, chat_id))["vc_title"]:
+                return
+            from telethon.tl.functions.channels import GetFullChannelRequest
+            from telethon.tl.functions.phone import EditGroupCallTitleRequest, GetGroupCallRequest
+            full = await self.client(GetFullChannelRequest(await self.client.get_input_entity(chat_id)))
+            call = full.full_chat.call
+            if not call:
+                return
+            saved = self.__dict__.setdefault("_vc_orig", {})
+            if title is None:
+                if chat_id not in saved:
+                    return
+                new = saved.pop(chat_id)
+            else:
+                if chat_id not in saved:                 # 처음 바꿀 때 원래 제목을 기억 (끝나면 되돌림)
+                    got = await self.client(GetGroupCallRequest(call=call, limit=1))
+                    saved[chat_id] = getattr(got.call, "title", None) or ""
+                new = ("🎵 " + re.sub(r"\s+", " ", title)).strip()[:64]
+            await self.client(EditGroupCallTitleRequest(call=call, title=new))
+        except Exception as e:
+            log.info("음성채팅 제목 못 바꿈 %s: %r", chat_id, e)
 
     async def _music_ctl(self, chat_id: int, op: str, p: dict) -> tuple[bool, str]:
         pl = self.players.get(chat_id)
@@ -769,6 +827,9 @@ class Worker:
             await self._music_edit(chat_id, row.get("msg_id") if isinstance(row, dict) else None,
                                    musicq.card_text("failed", dict(row), why=why))
             return
+        t = asyncio.create_task(self._vc_title(chat_id, str(row["title"] or "")))
+        self.__dict__.setdefault("_bg", set()).add(t)
+        t.add_done_callback(self.__dict__["_bg"].discard)
         text, kb = musicq.card_text("now", dict(row)), musicq.card_kb()
         prev = self.__dict__.setdefault("_now_msg", {}).get(chat_id)
         if prev:                                   # 지난 곡 카드의 버튼은 뗌 (누르면 엉뚱한 곡이 멈추지 않게)

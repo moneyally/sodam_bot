@@ -1102,6 +1102,7 @@ def music_text_people_see_never_names_the_source():
     """오너 결정 2026-10-08: 방에 보이는 글·안내서·도구 설명·명령 설명에 음원 사이트 이름을 안 씀."""
     assert music._hide_src("ERROR: [youtube] dQw4w9WgXcQ: Video unavailable https://www.youtube.com/watch?v=x") == "Video unavailable"
     assert "soundcloud" not in music._hide_src("ERROR: [soundcloud] 12: This video is DRM protected").lower()
+    assert music._hide_src("ERROR: [youtube:tab] PLx: YouTube said: The playlist does not exist.") == "The playlist does not exist."
     root = Path(__file__).resolve().parent.parent
     bad = ("유튜브", "youtube", "soundcloud", "사클")
     guide = (root / "sodam/guide/music.md").read_text().lower()

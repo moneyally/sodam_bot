@@ -1510,6 +1510,10 @@ BOT_MENU = [
     BotCommand("volume", "🎵 노래 음량 (0~200)"),
     BotCommand("end", "🎵 노래 끝 (음성채팅 나가기)"),
     BotCommand("userbotjoin", "🎵 노래 도우미 계정 방에 부르기"),
+    BotCommand("shuffle", "🎵 대기열 섞기"),
+    BotCommand("autoplay", "🎵 자동 재생 켜기·끄기"),
+    BotCommand("lyrics", "🎵 지금 곡 가사"),
+    BotCommand("topsongs", "🎵 이 방 인기곡"),
 ]
 
 

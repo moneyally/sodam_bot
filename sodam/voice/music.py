@@ -62,6 +62,20 @@ class MusicError(Exception):
         self.code = code
 
 
+PLAYLIST = re.compile(r"(?:youtube\.com|youtu\.be)/\S*?[?&]list=([A-Za-z0-9_-]{10,64})")
+PLAYLIST_URL = "https://www.youtube.com/playlist?list={}"
+PLAYLIST_MAX = 15                                       # 재생목록 링크 한 번에 넣는 곡
+LYRICS_API = "https://lrclib.net/api/search"             # 공개 가사 DB (키 없음, 2026-10-08)
+
+
+def playlist_id(text: str) -> str | None:
+    """'…/playlist?list=PL…' 처럼 곡 ID(v=) 없이 목록만 있는 링크 → 목록 ID. 곡 링크에 붙은 list= 는 그 곡만 (공유 링크 흔함)."""
+    m = PLAYLIST.search(text or "")
+    if not m or LINK_ID.search(text or ""):
+        return None
+    return m.group(1)
+
+
 def link_id(text: str) -> str | None:
     m = LINK_ID.search(text or "")
     return m.group(1) if m else None
@@ -286,6 +300,80 @@ class Source:
         """받으려던 곡이 막힘 → 대체 음원에서 같은 노래 (Player 가 부름)."""
         return self.alt_for(title, mm.parse(""), ref_sec)
 
+    def _entries(self, url: str) -> list[dict]:
+        res = self._run(lambda y: y.extract_info(url, download=False), extract_flat="in_playlist", noplaylist=False,
+                        playlistend=50)
+        return [e for e in (res or {}).get("entries") or [] if e and e.get("id")]
+
+    def _playable(self, e: dict) -> bool:
+        dur = int(e.get("duration") or 0)
+        title = str(e.get("title") or "")
+        return (bool(re.fullmatch(r"[A-Za-z0-9_-]{11}", str(e.get("id"))))
+                and e.get("live_status") not in ("is_live", "is_upcoming")
+                and 30 <= dur <= self.max_sec and title not in ("[Private video]", "[Deleted video]"))
+
+    def playlist(self, list_id: str, limit: int = PLAYLIST_MAX) -> list[dict]:
+        """재생목록 → 틀 수 있는 곡 [{title, url, vid, duration}] (최대 limit, 라이브·20분 넘는 것·지운 영상 빼고).
+        곡은 넣어 두기만 — 받기는 차례가 오면 (막혔으면 그때 대체 음원)."""
+        out = []
+        for e in self._entries(PLAYLIST_URL.format(list_id)):
+            if self._playable(e):
+                out.append({"title": str(e.get("title"))[:200], "url": WATCH.format(e["id"]), "vid": e["id"],
+                            "duration": int(e.get("duration") or 0)})
+            if len(out) >= limit:
+                break
+        if not out:
+            raise MusicError("not_found", "재생목록에서 틀 수 있는 곡을 못 찾았어요.")
+        return out
+
+    def related(self, seed_vid: str, seen_vids: set[str], seen_titles: set[str]) -> dict | None:
+        """자동 재생: 기준 곡의 믹스(비슷한 노래 목록)에서 이 방이 최근에 안 튼 원곡 하나. 없으면 None."""
+        try:
+            entries = self._entries(WATCH.format(seed_vid) + "&list=RD" + seed_vid)   # 믹스는 곡 링크로만 열림 (실측: playlist?list=RD… 는 'unviewable')
+        except MusicError as e:
+            log.info("자동 재생 목록 못 가져옴 %s: %s", seed_vid, e)
+            return None
+        for e in entries:
+            title = str(e.get("title") or "")
+            if e["id"] == seed_vid or e["id"] in seen_vids or mm.song_key(title) in seen_titles:
+                continue
+            if not self._playable(e) or mm.kind(title):          # 커버·라이브·모음·리믹스 말고 원곡만
+                continue
+            return {"title": title[:200], "url": WATCH.format(e["id"]), "vid": e["id"], "duration": int(e.get("duration") or 0)}
+        return None
+
+    def lyrics(self, title: str, duration: int = 0) -> dict | None:
+        """공개 가사 DB 에서 같은 곡 가사 → {track, artist, plain} — 길이 ±5초·가수/노래 둘 다 맞을 때만 (엉뚱한 가사 X)."""
+        import json
+        import urllib.parse
+        import urllib.request
+        q = clean_title(title)
+        if not q:
+            return None
+        req = urllib.request.Request(LYRICS_API + "?" + urllib.parse.urlencode({"q": q}),
+                                     headers={"User-Agent": "sodam-music/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                items = json.loads(r.read(2_000_000).decode("utf-8", "replace"))
+        except Exception as e:
+            log.info("가사 못 가져옴 %s: %r", q[:40], e)
+            return None
+        best = None
+        for it in items if isinstance(items, list) else []:
+            plain = str(it.get("plainLyrics") or "").strip()
+            if not plain or it.get("instrumental"):
+                continue
+            d = int(float(it.get("duration") or 0))
+            if duration and d and abs(d - duration) > 5:
+                continue
+            cand = f"{it.get('artistName') or ''} - {it.get('trackName') or ''}"
+            same, score = mm.same_song(cand, title)
+            if not same:
+                continue
+            if best is None or score > best[0]:
+                best = (score, {"track": str(it.get("trackName") or ""), "artist": str(it.get("artistName") or ""), "plain": plain})
+        return best[1] if best else None
+
     def _oembed_title(self, vid: str) -> str | None:
         import json
         import urllib.parse
@@ -384,6 +472,7 @@ def _hide_src(msg: str) -> str:
     """방에 보일 오류 글에서 음원 출처(추출기 이름·주소)를 뺌."""
     msg = re.sub(r"^(?:ERROR:\s*)?(?:\[[^\]]*\]\s*)+", "", msg or "")
     msg = re.sub(r"^[\w-]+:\s+", "", msg)                     # 'abc123def45: ' 곡 ID
+    msg = re.sub(r"(?i)\b(?:youtube|you\s*tube|soundcloud|yt-dlp)\b(?:\s+said)?:?", "", msg)   # 'YouTube said: …' (실측)
     return URL.sub("", msg).strip()
 
 
@@ -506,6 +595,7 @@ class Player:
         self._paused_at: float | None = None
         self.stats = {"frames": 0, "late": 0, "underrun": 0}
         self._starved = 0
+        self._auto_tried = False            # 대기열이 빈 뒤 자동 재생을 한 번 시도했나 (곡이 틀어지면 다시 False)
 
     # ── 밖에서 부름 (worker 일감) ──
     def stop(self, reason: str = "end") -> None:
@@ -593,6 +683,8 @@ class Player:
             if self.done:                                  # 꺼내는 사이 멈춤 (곡은 playing 그대로 — 끝 정리·재시작이 처리)
                 return
             if not row:
+                if not self._auto_tried and await self._autoplay():
+                    continue
                 if self._quiet_for() >= self.idle_sec and not self.has_voice():
                     return self.stop("idle")
                 self._wake.clear()
@@ -600,6 +692,50 @@ class Player:
                     await asyncio.wait_for(self._wake.wait(), self.poll)
                 continue
             await self._play(row)
+
+    async def _autoplay(self) -> bool:
+        """대기열이 비었고 자동 재생이 켜져 있으면 방금 곡과 비슷한 노래 하나를 넣음 (사람 신청 없이 AUTO_MAX 곡까지)."""
+        self._auto_tried = True
+        try:
+            if not hasattr(self.source, "related") or not (await musicq.modes(self.db, self.chat_id))["autoplay"]:
+                return False
+            if await musicq.auto_streak(self.db, self.chat_id) >= musicq.AUTO_MAX:
+                log.info("자동 재생 %s: 연속 %s곡 → 멈춤", self.chat_id, musicq.AUTO_MAX)
+                return False
+            recent = [dict(r) for r in await musicq.recent_tracks(self.db, self.chat_id)]
+            ids = [r.get("orig_vid") or r.get("vid") or "" for r in recent if r.get("state") != "removed"]
+            seed = next((v for v in ids if re.fullmatch(r"[A-Za-z0-9_-]{11}", v)), None)
+            if not seed:
+                return False
+            seen_v = {v for r in recent for v in (r.get("vid"), r.get("orig_vid")) if v}
+            seen_t = {mm.song_key(r.get("title") or "") for r in recent}
+            got = await asyncio.to_thread(self.source.related, seed, seen_v, seen_t)
+            if not got or self.done:
+                return False
+            rid, _, why = await musicq.add(self.db, self.chat_id, title=got["title"], url=got["url"], vid=got["vid"],
+                                           duration=got["duration"], by_id=None, by_name="📻 자동 재생", per_user=0, auto=True)
+            return bool(rid)
+        except Exception as e:                          # 자동 재생이 실패해도 DJ 는 그대로 (조용히 나가기만)
+            log.info("자동 재생 실패 %s: %r", self.chat_id, e)
+            return False
+
+    def _lyrics_later(self, row: dict) -> None:
+        """틀기 시작한 곡의 가사를 뒤에서 찾아 기록 (소담이 '가사 뭐야'에 답할 수 있게). 실패는 조용히."""
+        if not row.get("vid") or not hasattr(self.source, "lyrics"):
+            return
+
+        async def run():
+            try:
+                if await musicq.lyrics(self.db, row["vid"]):
+                    return
+                got = await asyncio.to_thread(self.source.lyrics, row["title"], int(row["duration"] or 0))
+                if got:
+                    await musicq.save_lyrics(self.db, row["vid"], row["title"], got["track"], got["artist"], got["plain"], "lrclib")
+            except Exception as e:
+                log.info("가사 기록 실패 %s: %r", self.chat_id, e)
+        t = asyncio.create_task(run())
+        self.__dict__.setdefault("_bg", set()).add(t)
+        t.add_done_callback(self.__dict__["_bg"].discard)
 
     async def _play(self, row) -> None:
         self._end.clear()
@@ -639,9 +775,11 @@ class Player:
         if self.done:                                      # 받는 사이 끝내기·재시작 → 재생 카드 안 올림
             return
         self.tracks += 1
+        self._auto_tried = False
         self.paused, self._paused_at = False, None
         await self._say("now", row)
         self._prefetch()
+        self._lyrics_later(row)
         await self._end.wait()
         state = self._end_state
         if self.done and self.reason == "restart":
@@ -654,6 +792,8 @@ class Player:
                 state = "failed"
                 await self._say("failed", row, "노래를 푸는 중 오류가 났어요.")
             await musicq.finish(self.db, row["id"], "removed" if self.done else state)
+            if state == "done" and not self.done and (await musicq.modes(self.db, self.chat_id))["loopq"]:
+                await musicq.requeue_end(self.db, row)     # 대기열 전체 반복: 다 튼 곡을 맨 뒤로
         self.row = None
         self._quiet_since = self.clock()
         if self.dec:
