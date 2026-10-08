@@ -626,9 +626,17 @@ class Worker:
                     raise music.MusicError("not_found", "음악 파일을 못 찾았어요.")
                 info = {"title": str(p.get("title") or "음악 파일")[:200], "url": "", "vid": None,
                         "duration": int(p.get("duration") or 0), "path": path}
+            elif isinstance(p.get("pick"), dict):            # 고르기 버튼으로 고른 곡 (봇이 그대로 넘김 — 다시 검사)
+                item = p["pick"]
+                if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(item.get("vid") or "")):
+                    raise music.MusicError("not_found", "고른 곡을 못 찾았어요.")
+                info = await asyncio.to_thread(self.music_source.pick, item)
             else:
                 info = await asyncio.to_thread(self.music_source.resolve, str(p.get("query") or "")[:300])
                 await self._music_health(None)
+        except music.MusicChoice as c:
+            await self._music_choice(chat_id, status, by, name, c)
+            return False, "music:choice"
         except music.MusicError as e:
             if e.code == "blocked":
                 await self._music_health(str(e))
@@ -639,6 +647,7 @@ class Worker:
                                          msg_id=status)
         if not rid:
             text = (f"⚠️ 대기열이 꽉 찼어요 ({musicq.QUEUE_MAX}곡)." if why == "full"
+                    else f"🎶 이미 틀고 있거나 대기열에 있는 곡이에요: {musicq._esc(info['title'])[:80]}" if why == "dup"
                     else f"⚠️ 한 사람이 걸어 둘 수 있는 곡은 {musicq.PER_USER}개까지예요.")
             await self._music_edit(chat_id, status, text)
             return False, f"music:{why}"
@@ -736,6 +745,21 @@ class Worker:
                 await self.bot.send_message(chat_id, text, parse_mode="HTML")
         except Exception as e:
             log.info("뮤직 글 고치기 실패 %s: %r", chat_id, e)
+
+    async def _music_choice(self, chat_id: int, msg_id: int | None, by, name: str, c) -> None:
+        """딱 맞는 곡이 없음·버전 고르기 → '찾는 중' 글을 고르기 버튼으로 (신청한 사람이 누르면 봇이 pick 일감)."""
+        cid = await musicq.save_choice(self.db, chat_id, by, name, c.query, c.reason, c.items)
+        if not self.bot:
+            return
+        text, kb = musicq.choice_text(c.reason, c.query), musicq.choice_kb(cid, c.items)
+        try:
+            if msg_id:
+                await self.bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=kb)
+            else:
+                msg_id = getattr(await self.bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb), "message_id", None)
+            await musicq.set_choice_msg(self.db, cid, msg_id)
+        except Exception as e:
+            log.info("고르기 버튼 올리기 실패 %s: %r", chat_id, e)
 
     async def _music_say(self, kind: str, chat_id: int, row, why: str = "") -> None:
         """Player 가 부름: now(재생 시작 — 처음 곡은 '찾는 중' 글을 고침) · failed."""
