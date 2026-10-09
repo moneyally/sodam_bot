@@ -6,7 +6,8 @@
 보내기: copy_message(원본 글) 먼저 — 서식·움직이는 이모지·미디어가 원본 그대로. 원본이 지워졌거나 복사가 안 되면
        저장해 둔 사본(텔레그램 HTML + 미디어 file_id; 사진·영상·GIF·파일은 mediastore 보관 원본)으로.
 도배 막기: 같은 낱말은 방 설정 autoreply_gap 초(기본 30)에 1번(DB 한 문장 UPDATE 로 차지 — 재시작해도 그대로),
-       한 사람은 USER_GAP 초에 1번, 방 하루 DAILY_MAX 번. 막힌 건 조용히 넘어감.
+       한 사람은 USER_WINDOW 초에 USER_MAX 번(다른 낱말은 바로바로 — 10초에 1번이던 때 '인사'→'공지'가 씹혔음, 2026-10-10 뉴월드),
+       방 하루 DAILY_MAX 번. 막힌 건 조용히 넘어감.
 지우기: `.reply 취소 공지` · `.답글취소 공지` · 메뉴 🗑 · AI 도구.
 낱말이 소담 명령어(.공지 등)·포인트 게임(!…)과 겹치면 저장 안 함 (명령이 먼저라 울릴 수 없음).
 """
@@ -32,7 +33,7 @@ log = logging.getLogger(__name__)
 
 MAX_PER_ROOM = 50
 WORD_MAX = 30
-USER_GAP = 10            # 한 사람이 연달아 쳐도 10초에 1번
+USER_MAX, USER_WINDOW = 5, 60   # 한 사람: 1분에 5번까지 (다른 낱말을 연달아 치는 건 됨)
 DAILY_MAX = 200          # 방 하루
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
@@ -66,7 +67,7 @@ _TRAIL = "?!.~ ？！。…"
 _EMOJI_TAG = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
 
 _cache: dict[int, dict[str, int]] = {}          # 방 → {key: id}  (이 프로세스, 바꿀 때 비움)
-_user_last: dict[tuple[int, int], float] = {}
+_user_hits: dict[tuple[int, int], list[float]] = {}
 _daily: dict[tuple[int, str], int] = {}
 
 
@@ -256,7 +257,8 @@ async def maybe_reply(svc, bot, msg, text: str) -> bool:
     user = msg.from_user
     now = time.time()
     uk = (chat_id, user.id if user else 0)
-    if now - _user_last.get(uk, 0) < USER_GAP:
+    hits = [t for t in _user_hits.get(uk, ()) if now - t < USER_WINDOW]
+    if len(hits) >= USER_MAX:
         return True
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
     if _daily.get((chat_id, day), 0) >= DAILY_MAX:
@@ -267,7 +269,9 @@ async def maybe_reply(svc, bot, msg, text: str) -> bool:
         (int(now), rid, chat_id, int(now), gap)).rowcount)
     if not claimed:
         return True
-    _user_last[uk] = now
+    if len(_user_hits) > 5000:
+        _user_hits.clear()
+    _user_hits[uk] = hits + [now]
     if len(_daily) > 2000:
         _daily.clear()
     _daily[(chat_id, day)] = _daily.get((chat_id, day), 0) + 1

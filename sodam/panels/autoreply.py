@@ -34,7 +34,7 @@ async def s_ar(c: PanelCtx) -> Screen:
         lines.append(f"등록된 낱말 {len(items)}/{AR.MAX_PER_ROOM}개 (눌러서 보기·지우기):")
     else:
         lines.append("아직 없어요. 아래 ➕ 로 만들거나 방에서 위처럼 해 보세요.")
-    lines.append(f"\n같은 낱말은 <b>{int(s['autoreply_gap'])}초</b>에 한 번만 답해요 (도배 막기).")
+    lines.append(f"\n같은 낱말은 <b>{int(s['autoreply_gap'])}초</b>에 한 번만 답해요 (도배 막기 · 한 사람은 1분에 5번까지).")
     rows = []
     row = []
     for r in items:

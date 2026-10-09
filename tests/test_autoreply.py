@@ -35,7 +35,7 @@ async def setup():
     await db.ensure_chat(CHAT, "방")
     await db.set_setting(CHAT, "cas_enabled", False)
     AR._cache.clear()
-    AR._user_last.clear()
+    AR._user_hits.clear()
     AR._daily.clear()
     bot = Bot()
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(),
@@ -102,22 +102,24 @@ async def flood_is_limited_per_word_and_per_person():
         await say(ctx, uid, "공지")
     assert len(copies(bot)) == 1, "같은 낱말은 간격(기본 30초)에 한 번"
     await db._write("UPDATE auto_replies SET last_used=0")          # 간격이 지났다고 치고
-    await say(ctx, MEMBER, "공지")
-    assert len(copies(bot)) == 1, "같은 사람은 10초에 한 번"
-    await say(ctx, 9, "공지")                                          # (OTHER 는 같은 글 반복이라 도배 검사에 걸림)
+    await say(ctx, 9, "공지")                                          # (MEMBER·OTHER 는 같은 글 반복이라 도배 검사에 걸림)
     assert len(copies(bot)) == 2
 
 
 @test
-async def same_person_waits_even_when_the_word_is_free():
+async def one_person_different_words_answer_at_once_but_flood_stops():
+    """2026-10-10 뉴월드: NASA 님이 '인사'(00:58:29) → '공지'(5초 뒤) → '이벤트'(6초 뒤) — 한 사람 10초 규칙에 씹혔음."""
     db, svc, bot, ctx = await setup()
-    await say(ctx, ADMIN, ".reply 공지", reply_to=photo_msg())
+    words = ["인사", "공지", "이벤트", "규칙", "제휴", "가격"]
+    for w in words:
+        await say(ctx, ADMIN, f".reply {w}", reply_to=photo_msg())
     u = fake_user(20, "연타")
-    assert await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, "공지", message_id=901), "공지")
-    await db._write("UPDATE auto_replies SET last_used=0")
-    assert await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, "공지", message_id=902), "공지")   # 조용히 넘어감
-    assert len(copies(bot)) == 1
-    assert not await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, "다른 말", message_id=903), "다른 말")
+    for i, w in enumerate(words[:5]):
+        assert await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, w, message_id=900 + i), w)
+    assert len(copies(bot)) == 5, "다른 낱말은 바로바로"
+    assert await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, "가격", message_id=910), "가격")   # 1분에 6번째 → 조용히
+    assert len(copies(bot)) == 5
+    assert not await AR.maybe_reply(svc, bot, FakeMsg(CHAT, u, "다른 말", message_id=911), "다른 말")
 
 
 @test
