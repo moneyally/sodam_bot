@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Awaitable, Callable
 
 from openai import BadRequestError, OpenAIError
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, User
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
@@ -294,6 +294,22 @@ async def t_chat_stats(ctx: ToolCtx, a: dict) -> str:
                 return err
             uid, label = row["user_id"], _row_name(row)
         return _plain(await stats.member_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, uid, label))
+    if a.get("show") and ctx.chat_id < 0:      # '통계표 보여줘' → 표 그대로 방에 (AI 가 한 문장으로 줄이지 않게, 2026-10-09 얼라이드)
+        table = (await stats.summary_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period) + "\n\n"
+                 + await stats.ranking_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, 10))
+        req_id = getattr(ctx.request_msg, "message_id", None)
+        try:
+            sent = await ctx.bot.send_message(ctx.chat_id, table, parse_mode="HTML",
+                                              reply_parameters=ReplyParameters(req_id, allow_sending_without_reply=True)
+                                              if req_id else None)
+        except TelegramError as e:
+            return f"표를 방에 못 올림 ({e.message}). 아래 숫자로 짧게 답할 것.\n" + _plain(table)
+        try:
+            await ctx.svc.db.log_message(ctx.chat_id, ctx.bot.id, getattr(sent, "message_id", None), _plain(table), is_bot=True)
+        except Exception:
+            pass
+        ctx.quiet = True
+        return "통계표를 방에 그대로 올렸음 (따로 답하지 않는다)."
     summary = await stats.summary_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period)
     ranking = await stats.ranking_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, 5)
     return _plain(summary + "\n" + ranking + "\n(한 사람 수·순위는 name 으로 다시 — 위 랭킹에 없다고 0개가 아님)")
@@ -1175,7 +1191,9 @@ TOOLS: list[Tool] = [
          {"period": PERIOD}, [], t_my_requests),
     Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다 ('어제' = 어제 하루만). 한 사람의 수·순위('나 몇 개야'·'이분 채팅집계')는 "
          "name 에 그 사람 (말한 본인은 '나', '이분'·'걔'는 답장 대상이나 방금 말한 사람 이름).",
-         {"period": PERIOD, "name": {"type": "string", "description": "한 사람만: 이름·@아이디·ID 또는 '나'"}, **ROOM_PARAM}, [],
+         {"period": PERIOD, "name": {"type": "string", "description": "한 사람만: 이름·@아이디·ID 또는 '나'"},
+          "show": {"type": "boolean", "description": "'통계표·랭킹표·순위표·표로 보여줘' 면 true → 표(통계+랭킹 10위)를 방에 그대로 올림"},
+          **ROOM_PARAM}, [],
          room_scoped(t_chat_stats)),
     Tool("search_chat", "방 대화 기록에서 키워드를 검색한다 (2글자 이상 부분 일치). 여러 낱말은 띄어 쓰면 하나라도 들어간 "
          "메시지를 많이 맞는 순으로 찾고, 뜻이 비슷한 글(≈ 표시, 예: '먹튀' → '입금했는데 잠수')도 같이 찾는다.",
