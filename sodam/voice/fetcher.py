@@ -28,7 +28,7 @@ from . import music
 
 SLOTS = 2                    # 동시에 도는 자식 수 (미리 받기 + 다른 방 신청)
 TIMEOUT = 300.0              # 한 번 일의 상한 (분위기 신청 mix_for 가 가장 김 ~20초)
-METHODS = ("resolve", "pick", "playlist", "mix_for", "related", "lyrics", "fetch", "fallback", "alt_for")
+METHODS = ("resolve", "pick", "playlist", "mix_for", "related", "lyrics", "fetch", "fallback", "alt_for", "loudness")
 FACTORY = "sodam.voice.music:Source"
 
 

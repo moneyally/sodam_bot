@@ -1475,6 +1475,52 @@ def voice_unit_has_cpu_priority_and_autoupdate_is_throttled():
     assert "sodam-autoupdate.service" in up and "deploy/sodam-voice.service" in up    # 바뀌면 설치하는 곳
 
 
+@test
+def music_has_two_warp_routes_and_one_dead_route_is_not_fatal():
+    """우회 길 두 개 (2026-10-09): 한 길이 죽어도 다른 길이 되면 warp_ok, 두 길의 나가는 IP 를 상태에 남김."""
+    import os
+    import re
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    dep = Path(__file__).resolve().parent.parent / "deploy"
+    up = (dep / "update.sh").read_text()
+    w2 = (dep / "sodam-warp2.service").read_text()
+    assert "/opt/sodam-warp2/wireproxy -s -c /opt/sodam-warp2/wireproxy.conf" in w2 and "/opt/sodam-warp/" not in w2
+    assert "MUSIC_PROXY=socks5://127.0.0.1:40000,socks5://127.0.0.1:40001" in (dep / "sodam-voice.service").read_text()
+    funcs = "\n".join(m.group(0) for m in re.finditer(r"(?ms)^(warp_one|warp_setup)\(\) \{.*?^\}", up))
+    assert "warp_one sodam-warp2" in funcs, "둘째 길 설치"
+    t = Path(tempfile.mkdtemp())
+    app, units = t / "app", t / "units"
+    (app / "deploy").mkdir(parents=True)
+    units.mkdir()
+    for u in ("sodam-warp.service", "sodam-warp2.service"):
+        (app / "deploy" / u).write_text((dep / u).read_text())
+    for d in ("w", "w2"):                                   # 이미 설치된 상태 (받기·등록 안 함)
+        (t / d).mkdir()
+        for exe in ("wireproxy", "wgcf"):
+            (t / d / exe).write_text("#!/bin/sh\n")
+            (t / d / exe).chmod(0o755)
+        (t / d / "wgcf-profile.conf").write_text("[Interface]\n")
+    script = f"""set -euo pipefail
+RUN_AS=$(id -un); APP_DIR={app}; UNIT_DIR={units}; WARP_DIR={t}/w; WIREPROXY_URL=x; WGCF_URL=x
+SYSTEMCTL=true
+log() {{ echo "LOG $*"; }}
+report() {{ echo "$2" > {t}/$1; }}
+sleep() {{ :; }}
+curl() {{ case "$*" in *40000*) printf 'ip=104.28.1.1\\nwarp=on\\n';; *) return 7;; esac; }}
+{funcs}
+warp_setup
+echo done
+"""
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={**os.environ})
+    assert r.returncode == 0 and "done" in r.stdout, (r.stdout, r.stderr)
+    st = (t / "warp_setup.status").read_text()
+    assert st.startswith("warp_ok") and "sodam-warp=ok(104.28.1.1)" in st and "sodam-warp2=fail" in st, st
+    assert "BindAddress = 127.0.0.1:40001" in (t / "w2" / "wireproxy.conf").read_text()
+    assert (units / "sodam-warp2.service").exists()
+
+
 def _voice_db(clone, open_call: bool, started_ago: int = 60):
     import sqlite3
     (clone / "data").mkdir(exist_ok=True)

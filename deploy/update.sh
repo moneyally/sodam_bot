@@ -195,32 +195,52 @@ diag_setup() {
 WARP_DIR=${WARP_DIR:-/opt/sodam-warp}
 WGCF_URL=https://github.com/ViRb3/wgcf/releases/download/v2.2.29/wgcf_2.2.29_linux_amd64
 WIREPROXY_URL=https://github.com/whyvl/wireproxy/releases/download/v1.0.9/wireproxy_linux_amd64.tar.gz
+# 길 두 개 (2026-10-09): WARP 계정 둘 = 따로 도는 터널 둘 → 한쪽 프로그램이 죽거나 막혀도 다른 길로 (코드가 지난번에 된 길부터).
+# 나가는 IP 는 Cloudflare 가 정해서 같을 수도 있음 → 상태 파일에 두 길의 IP 를 남김.
+warp_one() {   # warp_one <유닛 이름> <폴더> <포트>
+    local unit=$1 dir=$2 port=$3
+    [ -f "$APP_DIR/deploy/$unit.service" ] || return 1
+    mkdir -p "$dir" && chmod 755 "$dir"
+    if [ ! -x "$dir/wireproxy" ]; then
+        if [ -x "$WARP_DIR/wireproxy" ] && [ "$dir" != "$WARP_DIR" ]; then cp "$WARP_DIR/wireproxy" "$dir/wireproxy"
+        else curl -fsSL --max-time 120 "$WIREPROXY_URL" | tar xz -C "$dir" wireproxy \
+            || { log "warp: $unit wireproxy 받기 실패 (노래는 다른 길·예전 방식)"; WARP_ST="$WARP_ST $unit=fail_wireproxy"; return 1; }
+        fi
+    fi
+    if [ ! -s "$dir/wgcf-profile.conf" ]; then
+        if [ ! -x "$dir/wgcf" ]; then
+            if [ -x "$WARP_DIR/wgcf" ] && [ "$dir" != "$WARP_DIR" ]; then cp "$WARP_DIR/wgcf" "$dir/wgcf"
+            else { curl -fsSL --max-time 120 -o "$dir/wgcf" "$WGCF_URL" && chmod +x "$dir/wgcf"; } \
+                || { log "warp: $unit wgcf 받기 실패"; WARP_ST="$WARP_ST $unit=fail_wgcf"; return 1; }
+            fi
+        fi
+        (cd "$dir" && { [ -s wgcf-account.toml ] || ./wgcf register --accept-tos >/dev/null 2>&1; } && ./wgcf generate >/dev/null 2>&1) \
+            || { log "warp: $unit WARP 등록 실패"; WARP_ST="$WARP_ST $unit=fail_register"; return 1; }
+    fi
+    printf 'WGConfig = %s/wgcf-profile.conf\n\n[Socks5]\nBindAddress = 127.0.0.1:%s\n' "$dir" "$port" > "$dir/wireproxy.conf"
+    chown -R "$RUN_AS:" "$dir"; chmod 600 "$dir"/wgcf-*.* 2>/dev/null || true
+    if ! cmp -s "$APP_DIR/deploy/$unit.service" "$UNIT_DIR/$unit.service"; then
+        cp "$APP_DIR/deploy/$unit.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q "$unit" 2>/dev/null || $SYSTEMCTL enable -q "$unit"
+    $SYSTEMCTL is-active -q "$unit" 2>/dev/null || $SYSTEMCTL restart "$unit"
+    sleep 3
+    local trace
+    trace=$(curl -s --max-time 15 -x "socks5h://127.0.0.1:$port" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
+    if printf '%s' "$trace" | grep -q '^warp=on'; then
+        WARP_ST="$WARP_ST $unit=ok($(printf '%s' "$trace" | sed -n 's/^ip=//p' | head -n1 || true))"
+    else
+        log "warp: $unit 길이 안 열림 (노래는 다른 길·예전 방식으로 계속)"; WARP_ST="$WARP_ST $unit=fail_연결"
+        return 1
+    fi
+}
 warp_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-warp.service" ] || return 0
-    mkdir -p "$WARP_DIR" && chmod 755 "$WARP_DIR"
-    if [ ! -x "$WARP_DIR/wireproxy" ]; then
-        curl -fsSL --max-time 120 "$WIREPROXY_URL" | tar xz -C "$WARP_DIR" wireproxy \
-            || { log "warp: wireproxy 받기 실패 (노래는 예전 방식)"; report warp_setup.status "warp_fail wireproxy"; return 0; }
-    fi
-    if [ ! -s "$WARP_DIR/wgcf-profile.conf" ]; then
-        [ -x "$WARP_DIR/wgcf" ] || { curl -fsSL --max-time 120 -o "$WARP_DIR/wgcf" "$WGCF_URL" && chmod +x "$WARP_DIR/wgcf"; } \
-            || { log "warp: wgcf 받기 실패"; report warp_setup.status "warp_fail wgcf"; return 0; }
-        (cd "$WARP_DIR" && { [ -s wgcf-account.toml ] || ./wgcf register --accept-tos >/dev/null 2>&1; } && ./wgcf generate >/dev/null 2>&1) \
-            || { log "warp: WARP 등록 실패"; report warp_setup.status "warp_fail register"; return 0; }
-    fi
-    printf 'WGConfig = %s/wgcf-profile.conf\n\n[Socks5]\nBindAddress = 127.0.0.1:40000\n' "$WARP_DIR" > "$WARP_DIR/wireproxy.conf"
-    chown -R "$RUN_AS:" "$WARP_DIR"; chmod 600 "$WARP_DIR"/wgcf-*.* 2>/dev/null || true
-    if ! cmp -s "$APP_DIR/deploy/sodam-warp.service" "$UNIT_DIR/sodam-warp.service"; then
-        cp "$APP_DIR/deploy/sodam-warp.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
-    fi
-    $SYSTEMCTL is-enabled -q sodam-warp 2>/dev/null || $SYSTEMCTL enable -q sodam-warp
-    $SYSTEMCTL is-active -q sodam-warp 2>/dev/null || $SYSTEMCTL restart sodam-warp
-    sleep 3
-    if curl -s --max-time 15 -x socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q '^warp=on'; then
-        report warp_setup.status "warp_ok"
-    else
-        log "warp: 길이 안 열림 (노래는 예전 방식으로 계속)"; report warp_setup.status "warp_fail 연결"
-    fi
+    WARP_ST=""
+    local ok=0
+    warp_one sodam-warp "$WARP_DIR" 40000 && ok=1
+    warp_one sodam-warp2 "${WARP_DIR}2" 40001 && ok=1
+    if [ "$ok" = 1 ]; then report warp_setup.status "warp_ok$WARP_ST"; else report warp_setup.status "warp_fail$WARP_ST"; fi
 }
 
 sshws_setup() {
@@ -381,7 +401,8 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
         sshws_setup
     fi
     # 노래 우회 길이 안 떠 있으면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
-    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-warp.service" ] && ! $SYSTEMCTL is-active -q sodam-warp 2>/dev/null; then
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-warp.service" ] \
+        && { ! $SYSTEMCTL is-active -q sodam-warp 2>/dev/null || { [ -f "$APP_DIR/deploy/sodam-warp2.service" ] && ! $SYSTEMCTL is-active -q sodam-warp2 2>/dev/null; }; }; then
         warp_setup
     fi
     # 작업실이 안 떠 있거나 마지막 점검이 실패면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
@@ -397,8 +418,15 @@ if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
 fi
 log "$(g rev-parse --short "$PREV") → $(g rev-parse --short "$NEW") ($BRANCH)"
 
+# 설명 글만 바뀐 커밋(docs/·.claude/·.github/·맨 위 *.md — sodam/guide 는 코드라 아님)은 시험(약 20분)을 건너뜀
+ONLY_DOCS=0
+CHANGED=$(g diff --name-only "$PREV" "$NEW" || true)
+if [ -n "$CHANGED" ] && ! printf '%s\n' "$CHANGED" | grep -qvE '^(docs/|\.claude/|\.github/)|^[^/]+\.md$'; then
+    ONLY_DOCS=1
+fi
+
 # 0) 음성 통화 중이면 무거운 테스트(약 10분·1.5코어)를 다음 타이머(2분 뒤 다시 확인)로 — 통화 소리가 끊기지 않게 (최대 60분, --force 는 바로)
-if postpone_for_call; then
+if [ "$ONLY_DOCS" -eq 0 ] && postpone_for_call; then
     log "voice: 통화 중 → 테스트·재시작을 다음 타이머로 미룸 (바로 하려면 sodam-update --force)"
     exit 0
 fi
@@ -416,6 +444,9 @@ if [ "$(cat "$REQ_STAMP" 2>/dev/null)" != "$REQ_SUM" ]; then
 fi
 as_user=()
 if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_AS" --); fi
+if [ "$ONLY_DOCS" -eq 1 ]; then
+    log "설명 글만 바뀜 → 시험 건너뜀"
+else
 log "tests…"
 # 시험(약 20분) 도중 노래가 시작되면 시험 힘을 확 낮춤 — 노래 조각이 제때 못 나가 0.01초씩 끊기던 것 (2026-10-09 실제 신고)
 MUSIC_TEST_QUOTA=${MUSIC_TEST_QUOTA:-60%}   # 30% 는 스티커 그리기 시험이 시간 초과로 실패 (2026-10-09)
@@ -445,10 +476,15 @@ if [ "$tests_rc" -ne 0 ]; then
     log "!! 테스트 실패 → 적용 안 함. 봇은 이전 코드($(g rev-parse --short "$PREV"))로 계속 돔"
     exit 1
 fi
-log "tests ok"
+log "tests ok ($(sed -n 's/^느린 모듈: //p' "$TMP/tests.log" | tail -1 || true))"
+fi
 
 # 2) 적용 + 재시작 + 시작 확인
-g merge -q --ff-only "$NEW"
+# 손으로 급히 넣은 파일이 있으면 merge --ff-only 가 아무 말 없이 멈춰(set -e) 시험 통과한 버전이 안 들어갔음 (2026-10-09 dae7a10)
+# → 시험한 그 커밋으로 정확히 맞춤 (data·.env 는 git 이 안 다루는 파일이라 그대로)
+DIRTY=$(g status --porcelain --untracked-files=no | head -5 | tr '\n' ' ' || true)
+[ -z "$DIRTY" ] || log "손으로 바꾼 파일을 시험한 버전으로 덮음: $DIRTY"
+g reset -q --hard "$NEW"
 VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then

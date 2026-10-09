@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -85,6 +86,19 @@ def user_client(session: str, api_id: int, api_hash: str):
 
 MIC_OVER = 120                  # 1초에 이보다 많이 보내면 두 군데서 보내는 것 (정상 100)
 OWNER_ALERT_SEC = 6 * 3600       # 🎵 음원 막힘 오너 알림 간격
+# 🎵 끊김 감시: 1분마다 방마다 숫자를 보고, 최근 5분에 이만큼 넘으면 오너 1:1 (방마다 1시간에 1번)
+STUTTER_EVERY = 60
+STUTTER_WIN = 300
+STUTTER_ALERT_SEC = 3600
+STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
+STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
+STUTTER_KEY = "music_stutter_alert"
+REJOIN_EVERY = 15                # 🎵 음성채팅이 닫혀 멈춘 방: 다시 열렸는지 확인 간격
+# 🎵 새벽에 인기곡 미리 받기: 한국시각 4시대, 노래 트는 방이 없을 때만, 하루 한 번, 곡 사이 쉬면서
+PREFETCH_HOUR = 4
+PREFETCH_MAX = 20
+PREFETCH_GAP = 20
+PREFETCH_KEY = "music_prefetch_day"
 
 
 class Worker:
@@ -131,6 +145,10 @@ class Worker:
         self._plocks: dict[int, asyncio.Lock] = {}
         self._mic_win: dict[int, list] = {}         # 방마다 [1초 창 시작, 조각 수, 보낸 곳]
         self._mic_warned: dict[int, float] = {}
+        self._swin: dict[int, deque] = {}           # 끊김 감시: 방마다 [(시각, 숫자, 어느 DJ)]
+        self._watch_at = 0.0
+        self._rejoin_at = 0.0
+        self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -538,6 +556,19 @@ class Worker:
             t = asyncio.create_task(self._run_job(job))
             self.jobs.add(t)
             t.add_done_callback(self.jobs.discard)
+        if self.players and time.monotonic() - self._watch_at >= STUTTER_EVERY:
+            self._watch_at = time.monotonic()
+            try:
+                await self._music_watch()
+            except Exception as e:
+                log.warning("끊김 감시 실패: %s", e)
+        if self.client and time.monotonic() - self._rejoin_at >= REJOIN_EVERY:
+            self._rejoin_at = time.monotonic()
+            try:
+                await self._music_rejoin()
+            except Exception as e:
+                log.warning("노래 다시 들어가기 확인 실패: %s", e)
+        self._maybe_night_prefetch()
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
             try:
@@ -576,6 +607,10 @@ class Worker:
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "restart")
         await self._stop_music("restart")
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._prefetch_task
         if hasattr(self.music_source, "close"):     # 받기 담당 자식 프로그램도 끝냄
             self.music_source.close()
 
@@ -643,15 +678,23 @@ class Worker:
             if mine:
                 self.players.pop(chat_id, None)
                 self.ptasks.pop(chat_id, None)
-            if reason != "restart" and mine and chat_id not in self.players:   # 재시작이 아니면 남은 곡은 정리
+            if reason not in music.RESUME_REASONS and mine and chat_id not in self.players:   # 재시작·닫힘이 아니면 남은 곡은 정리
                 await musicq.clear(self.db, chat_id, "removed")
-            await musicq.session_end(self.db, sid, reason, pl.tracks)
+            if reason == "chat_closed" and mine and chat_id not in self.players and await musicq.has_queue(self.db, chat_id):
+                st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}      # 다시 열리면 이어서 (15분 안)
+                st[str(chat_id)] = int(time.time()) + musicq.REJOIN_SEC
+                await self.db.set_state(0, musicq.REJOIN_KEY, st)
+            await musicq.session_end(self.db, sid, reason, pl.tracks, dict(pl.stats))
+            if mine:
+                self._swin.pop(chat_id, None)
             if mine and chat_id not in self.players:
                 await self._vc_title(chat_id, None)       # 음성채팅 제목 원래대로
             await self._maybe_leave(chat_id)
-        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 흔들림 %s(최대 %sms) · 보내기 느림 %s(최대 %sms) · 비어 있음 %s",
+        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 흔들림 %s(최대 %sms) · 보내기 느림 %s(최대 %sms) · 비어 있음 %s · "
+                 "겹쳐 넘김 %s · 바로 이어 붙임 %s",
                  chat_id, reason, pl.tracks, pl.stats["frames"], pl.stats["late"], pl.stats["jitter"], pl.stats["max_late_ms"],
-                 pl.stats["send_slow"], pl.stats["send_max_ms"], pl.stats["underrun"])
+                 pl.stats["send_slow"], pl.stats["send_max_ms"], pl.stats["underrun"], pl.stats.get("xfade", 0),
+                 pl.stats.get("gapless", 0))
 
     def _music_path(self, path: str | None) -> str | None:
         """봇이 받아 둔 텔레그램 음악 파일 — data/music 안만 (DB 일감이라도 다른 파일을 열지 않게)."""
@@ -829,8 +872,10 @@ class Worker:
 
     async def music_resume(self, chats: list[int]) -> None:
         """재시작으로 끊긴 방(세션이 열려 있던 방)은 남은 곡을 이어서, 나머지 방의 묵은 대기열은 정리.
-        (예전: 신청 시각 30분 기준이라 긴 대기열 앞쪽 곡이 지워졌음)"""
-        await musicq.drop_except(self.db, chats)
+        (예전: 신청 시각 30분 기준이라 긴 대기열 앞쪽 곡이 지워졌음) 음성채팅이 닫혀 기다리는 방의 곡도 남김."""
+        waiting = await self.db.get_state(0, musicq.REJOIN_KEY) or {}
+        now = int(time.time())
+        await musicq.drop_except(self.db, list(chats) + [int(k) for k, dl in waiting.items() if int(dl or 0) > now])
         if not self.client or not self.calls:
             for chat_id in chats:
                 await musicq.clear(self.db, chat_id, "removed")
@@ -844,6 +889,92 @@ class Worker:
             else:
                 pl.wake()
                 log.info("노래 이어 틀기 %s", chat_id)
+
+    def _maybe_night_prefetch(self, now: float | None = None) -> None:
+        kst = time.gmtime((time.time() if now is None else now) + 9 * 3600)
+        if kst.tm_hour != PREFETCH_HOUR or self.players or (self._prefetch_task and not self._prefetch_task.done()):
+            return
+        day = time.strftime("%Y-%m-%d", kst)
+        if self.__dict__.get("_prefetch_day") == day:
+            return
+        self._prefetch_day = day
+        self._prefetch_task = asyncio.create_task(self._night_prefetch(day))
+
+    async def _night_prefetch(self, day: str, gap: float = PREFETCH_GAP) -> int:
+        """많이 튼 곡을 미리 받고 크기도 재 둠 → 신청하면 바로 (받기 기다림·음원 막힘 영향 없음). 노래가 시작되면 멈춤.
+        받기는 다른 프로그램(fetcher, 낮은 우선순위)이 해서 소리 박자에는 안 닿음."""
+        if await self.db.get_state(0, PREFETCH_KEY) == day:
+            return 0
+        await self.db.set_state(0, PREFETCH_KEY, day)
+        src, got = self.music_source, 0
+        for vid in await musicq.popular_vids(self.db, limit=PREFETCH_MAX):
+            if self.players:
+                log.info("인기곡 미리 받기 멈춤 (노래 시작)")
+                break
+            cached = getattr(src, "_cached", None)
+            if cached and cached(vid):
+                continue
+            try:
+                path = await asyncio.to_thread(src.fetch, vid)
+                if hasattr(src, "loudness"):
+                    await asyncio.to_thread(src.loudness, path)
+                got += 1
+            except music.MusicError as e:
+                log.info("인기곡 미리 받기 %s: %s", vid, e)
+                if e.code == "blocked":
+                    break
+                continue
+            except Exception as e:
+                log.info("인기곡 미리 받기 %s: %r", vid, e)
+                continue
+            if gap:
+                await asyncio.sleep(gap)
+        log.info("인기곡 미리 받기: %s곡", got)
+        return got
+
+    async def _call_open(self, chat_id: int) -> bool:
+        """그 방에 음성채팅이 열려 있나 (우리가 켜지 않고 보기만 — 관리자가 닫은 걸 다시 켜면 안 됨)."""
+        try:
+            from telethon.tl.functions.channels import GetFullChannelRequest
+            full = await self.client(GetFullChannelRequest(await self.client.get_input_entity(chat_id)))
+            return bool(full.full_chat.call)
+        except Exception as e:
+            log.info("음성채팅 열림 확인 실패 %s: %r", chat_id, e)
+            return False
+
+    async def _music_rejoin(self, now: int | None = None) -> None:
+        """음성채팅이 닫혀 멈춘 방: 15분 안에 다시 열리면 들어가서 남은 곡을 이어서. 지나면 대기열 정리.
+        (예전: 닫히는 순간 대기열을 지워서 관리자가 실수로 닫았다 열어도 처음부터 다시 신청해야 했음)"""
+        st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}
+        if not st:
+            return
+        now = int(time.time()) if now is None else now
+        keep = {}
+        for key, deadline in st.items():
+            chat_id = int(key)
+            pl = self.players.get(chat_id)
+            if pl is not None and not pl.done:          # 그 사이 새 신청으로 이미 다시 틂
+                continue
+            if now > int(deadline or 0):
+                log.info("노래 다시 들어가기 포기 %s (음성채팅이 %s분 안 열림)", chat_id, musicq.REJOIN_SEC // 60)
+                await musicq.clear(self.db, chat_id, "removed")
+                continue
+            if not await musicq.has_queue(self.db, chat_id):
+                continue
+            if not await self._call_open(chat_id):
+                keep[key] = deadline
+                continue
+            pl, res = await self._get_player(chat_id, {}, None)
+            if pl is None:
+                log.info("노래 다시 들어가기 못 함 %s: %s", chat_id, res)
+                keep[key] = deadline
+                continue
+            pl.wake()
+            log.info("노래 다시 들어가기 %s", chat_id)
+            if self.bot:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_message(chat_id, "🎵 음성채팅이 다시 열려서 남은 곡을 이어서 틀어요.")
+        await self.db.set_state(0, musicq.REJOIN_KEY, keep or None)
 
     async def _music_health(self, err: str | None) -> None:
         cur = await self.db.get_state(0, musicq.HEALTH_KEY) or {}
@@ -860,6 +991,50 @@ class Worker:
             await self._alert_owners("🎵 <b>뮤직봇: 기본 음원이 막혀 노래를 못 틀었어요.</b>\n"
                                      f"<code>{musicq._esc(err[:150])}</code>\n"
                                      "우회 길(sodam-warp)이 죽었거나 막혔을 수 있어요. 1:1 🎵 화면에서 쿠키를 넣으면 예비로 써요.")
+
+    async def _music_watch(self, now: float | None = None) -> None:
+        """끊김 숫자를 1분마다 찍어 두고 최근 5분 늘어난 양이 기준을 넘으면 오너에게 (사람이 '끊겨요' 하기 전에 앎)."""
+        now = time.monotonic() if now is None else now
+        for chat_id in list(self._swin):
+            if chat_id not in self.players:
+                self._swin.pop(chat_id, None)
+        for chat_id, pl in list(self.players.items()):
+            if pl.done:
+                continue
+            snap = {k: int(pl.stats.get(k, 0)) for k in STUTTER_LIMITS}
+            snap["max_late"], pl.win_max_late = int(getattr(pl, "win_max_late", 0)), 0
+            hist = self._swin.setdefault(chat_id, deque())
+            hist.append((now, snap, id(pl)))
+            while hist and (now - hist[0][0] > STUTTER_WIN + 1 or hist[0][2] != id(pl)):
+                hist.popleft()
+            if len(hist) < 2:
+                continue
+            first = hist[0][1]
+            grew = {k: snap[k] - first[k] for k in STUTTER_LIMITS}
+            bad = [k for k, lim in STUTTER_LIMITS.items() if grew[k] >= lim]
+            if bad:
+                worst = max(s["max_late"] for _, s, _ in list(hist)[1:])
+                await self._stutter_alert(chat_id, pl, grew, worst, int(now - hist[0][0]))
+
+    async def _stutter_alert(self, chat_id: int, pl: Any, grew: dict, worst: int, span: int) -> None:
+        sent = await self.db.get_state(0, STUTTER_KEY) or {}
+        wall = int(time.time())
+        if wall - int(sent.get(str(chat_id)) or 0) < STUTTER_ALERT_SEC:
+            return
+        sent = {k: v for k, v in sent.items() if wall - int(v or 0) < STUTTER_ALERT_SEC}
+        sent[str(chat_id)] = wall
+        await self.db.set_state(0, STUTTER_KEY, sent)
+        try:
+            load = "%.1f" % os.getloadavg()[0]
+        except OSError:
+            load = "?"
+        nums = " · ".join(f"{STUTTER_NAMES[k]} {grew[k]}번" for k in STUTTER_LIMITS if grew[k])
+        title = musicq._esc(str((pl.row or {}).get("title") or "")[:60]) if getattr(pl, "row", None) else ""
+        log.warning("노래 끊김 감지 %s: %s (최대 %sms, 부하 %s)", chat_id, nums, worst, load)
+        await self._alert_owners(f"🎵 <b>뮤직봇 소리 끊김 감지</b> (방 <code>{chat_id}</code>)\n"
+                                 f"최근 {max(1, span // 60)}분: {nums}\n가장 크게 밀림 {worst}ms · 서버 부하 {load} (코어 2개)"
+                                 + (f"\n지금 곡: {title}" if title else "")
+                                 + "\n같은 방은 1시간에 한 번만 알려요.")
 
     async def _alert_owners(self, text: str) -> None:
         if not self.bot:

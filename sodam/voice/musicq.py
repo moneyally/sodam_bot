@@ -10,6 +10,7 @@ chat_state(0, music_health) = 음성 담당이 마지막으로 본 음원 상태
 """
 from __future__ import annotations
 
+import json
 import time
 
 from .. import db as dbm
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS music_queue (
 CREATE INDEX IF NOT EXISTS music_queue_chat ON music_queue(chat_id, state, id);
 CREATE TABLE IF NOT EXISTS music_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, start_ts INTEGER NOT NULL,
-    end_ts INTEGER, reason TEXT, tracks INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0);
+    end_ts INTEGER, reason TEXT, tracks INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, stats TEXT);
 CREATE INDEX IF NOT EXISTS music_sessions_chat ON music_sessions(chat_id, start_ts);
 CREATE TABLE IF NOT EXISTS music_choices (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, by_name TEXT, query TEXT,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS music_lyrics (
 """, migrate={"music_queue": "plain", "music_sessions": "plain", "music_choices": "plain"})
 # sort = 섞기 순서 (없으면 id) · auto = 자동 재생으로 들어온 곡 · orig_vid = 대체 음원으로 바뀌기 전 기본 음원 ID (자동 재생 기준·통계)
 dbm.register_columns("music_queue", {"sort": "REAL", "auto": "INTEGER NOT NULL DEFAULT 0", "orig_vid": "TEXT"})
+dbm.register_columns("music_sessions", {"stats": "TEXT"})   # 끊김 숫자 (JSON) — 원격 점검으로 세션마다 봄
 
 HEALTH_KEY = "music_health"
 QUEUE_MAX = 30               # 방마다 기다리는 곡
@@ -241,6 +243,15 @@ async def top_tracks(db, chat_id: int, days: int = 30, limit: int = 10) -> list[
     return out
 
 
+async def popular_vids(db, days: int = 30, limit: int = 20, min_n: int = 2) -> list[str]:
+    """모든 방에서 사람이 신청해 실제로 튼 곡 중 많이 튼 것 (새벽에 미리 받아 둘 곡) — 실제로 받은 ID 기준."""
+    since = _now() - max(1, min(KEEP_DAYS, int(days))) * 86400
+    rows = await db._all("SELECT vid, COUNT(*) n FROM music_queue WHERE auto=0 AND started_ts IS NOT NULL AND ts>=? "
+                         "AND vid IS NOT NULL AND vid<>'' GROUP BY vid HAVING n>=? ORDER BY n DESC, MAX(id) DESC LIMIT ?",
+                         (since, min_n, limit))
+    return [r["vid"] for r in rows]
+
+
 async def top_requesters(db, chat_id: int, days: int = 30, limit: int = 5) -> list[dict]:
     since = _now() - max(1, min(KEEP_DAYS, int(days))) * 86400
     rows = await db._all("SELECT by_id, MAX(by_name) name, COUNT(*) n FROM music_queue WHERE chat_id=? AND auto=0 AND by_id IS NOT NULL "
@@ -280,13 +291,22 @@ async def drop_except(db, keep: list[int]) -> int:
 
 
 # ── 세션 ──────────────────────────────────────────────
+REJOIN_SEC = 900                  # 음성채팅이 닫혀 멈춘 노래: 이 안에 다시 열리면 이어서 (음성 담당이 15초마다 확인)
+REJOIN_KEY = "music_rejoin"       # chat_state(0): {방: 기다림 끝 시각}
+
+
+async def has_queue(db, chat_id: int) -> bool:
+    return bool(await db._one("SELECT 1 FROM music_queue WHERE chat_id=? AND state IN ('queued','playing') LIMIT 1",
+                              (chat_id,)))
+
+
 async def session_start(db, chat_id: int, by: int | None) -> int:
     return await db._write("INSERT INTO music_sessions(chat_id, by_id, start_ts) VALUES(?,?,?)", (chat_id, by, _now()))
 
 
-async def session_end(db, sid: int, reason: str, tracks: int) -> None:
-    await db._write("UPDATE music_sessions SET end_ts=?, reason=?, tracks=? WHERE id=? AND end_ts IS NULL",
-                    (_now(), reason[:40], tracks, sid))
+async def session_end(db, sid: int, reason: str, tracks: int, stats: dict | None = None) -> None:
+    await db._write("UPDATE music_sessions SET end_ts=?, reason=?, tracks=?, stats=? WHERE id=? AND end_ts IS NULL",
+                    (_now(), reason[:40], tracks, json.dumps(stats) if stats else None, sid))
 
 
 async def active_session(db, chat_id: int):

@@ -4,6 +4,7 @@
 'Sign in to confirm you're not a bot' (Hetzner IP) → 쿠키 넣는 길. 네트워크·py-tgcalls·yt-dlp 없이 가짜로 (ffmpeg 풀기만 진짜).
 """
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -413,9 +414,10 @@ async def restart_saves_position_and_resumes_from_there():
         from sodam import mtproto
         from sodam.voice.worker import session_path
         mtproto.write_session(session_path(w.cfg), "SESSION")
+        n0 = len(FakeDecoder.opened)                    # 다음 곡을 미리 풀어 두므로 마지막 줄이 아닐 수 있음
         t = asyncio.create_task(w2.run())
         await until(lambda: CHAT in w2.players)
-        await until(lambda: FakeDecoder.opened[-1][0].startswith("이어틀기") and FakeDecoder.opened[-1][1] >= 200)
+        await until(lambda: any(o[0].startswith("이어틀기") and o[1] >= 200 for o in FakeDecoder.opened[n0:]))
         s = await db._all("SELECT reason FROM music_sessions ORDER BY id")
         assert s[0]["reason"] == "restart"
         t.cancel()
@@ -743,6 +745,18 @@ def youtube_retries_next_cookie_only_when_blocked():
                     raise DownloadError("ERROR: Unable to connect to proxy")
                 return "ok"
             assert y._run(dead_proxy) == "ok" and seen[0][0] and not seen[1][0] and seen[1][1], ("길이 죽으면 쿠키로", seen)
+            seen.clear()
+            os.environ["MUSIC_PROXY"] = "socks5://127.0.0.1:40000, socks5://127.0.0.1:40001"   # 길 두 개
+
+            def first_dead(ydl):
+                seen.append((ydl.opts.get("proxy"), ydl.opts.get("cookiefile")))
+                if ydl.opts.get("proxy") != "socks5://127.0.0.1:40001":
+                    raise DownloadError("ERROR: Unable to connect to proxy")
+                return "ok"
+            assert y._run(first_dead) == "ok" and seen == [("socks5://127.0.0.1:40000", None), ("socks5://127.0.0.1:40001", None)], \
+                ("첫 길이 죽으면 쿠키보다 둘째 길 먼저", seen)
+            seen.clear()
+            assert y._run(first_dead) == "ok" and seen == [("socks5://127.0.0.1:40001", None)], ("다음엔 된 길부터", seen)
         finally:
             os.environ.pop("MUSIC_PROXY", None)
 
@@ -1444,6 +1458,150 @@ async def blocked_song_tells_only_the_owner_once():
     assert "운영자" not in str(music.MusicError("blocked", "")) and all(c == 777 for c, _ in sent)
     await stop_all(w)
 
+
+
+class CallClient(Client):
+    """GetFullChannel 에 음성채팅이 열려 있는지(call)만 답함."""
+    open = False
+
+    async def get_input_entity(self, chat_id):
+        return chat_id
+
+    async def __call__(self, req):
+        if type(req).__name__ == "GetFullChannelRequest":
+            return SimpleNamespace(full_chat=SimpleNamespace(call="CALL" if self.open else None))
+        return None
+
+
+@test
+async def closed_voice_chat_keeps_the_queue_and_rejoins_when_reopened():
+    """예전: 음성채팅이 닫히면 대기열을 바로 지움 → 관리자가 실수로 닫았다 열어도 처음부터 다시 신청."""
+    bot = FakeBot()
+    db, w, _, _ = await make_worker(bot)
+    sent = []
+    real = bot.send_message
+
+    async def send(chat_id, text, **k):
+        sent.append((chat_id, text))
+        return await real(chat_id, text, **k)
+    bot.send_message = send
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "닫힘곡")
+        await until(lambda: CHAT in w.players and w.players[CHAT].pos_ms >= 300)
+        await play(db, w, "다음곡")
+        w.players[CHAT].stop("chat_closed")             # 관리자가 음성채팅을 닫음 (LEFT_CALL)
+        await until(lambda: CHAT not in w.players)
+        cur = await musicq.current(db, CHAT)
+        assert cur and cur["title"].startswith("닫힘곡") and cur["pos_ms"] >= 300, "지금 곡은 위치까지 남김"
+        assert len(await musicq.waiting(db, CHAT)) == 1, "남은 곡 그대로"
+        st = await db.get_state(0, musicq.REJOIN_KEY)
+        assert str(CHAT) in st, st
+        svc = SimpleNamespace(db=db)
+        await M.tick(svc, bot)
+        assert any("다시 열면 남은 곡을 이어서" in t for c, t in sent if c == CHAT), sent
+
+        w.client = CallClient()
+        await w._music_rejoin()
+        assert CHAT not in w.players and str(CHAT) in (await db.get_state(0, musicq.REJOIN_KEY)), "닫혀 있는 동안은 기다림 (우리가 켜지 않음)"
+        n0 = len(FakeDecoder.opened)
+        w.client.open = True
+        await w._music_rejoin()
+        await until(lambda: CHAT in w.players)
+        await until(lambda: any(o[0].startswith("닫힘곡") and o[1] >= 300 for o in FakeDecoder.opened[n0:]))
+        assert any("다시 열려서" in t for c, t in sent if c == CHAT), sent
+        assert not await db.get_state(0, musicq.REJOIN_KEY)
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+
+
+@test
+async def closed_voice_chat_gives_up_after_the_wait_and_survives_a_restart():
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "닫힘곡")
+        await until(lambda: CHAT in w.players)
+        w.players[CHAT].stop("chat_closed")
+        await until(lambda: CHAT not in w.players)
+    finally:
+        FakeDecoder.LEN = 40
+    await w.music_resume([])                            # 음성 담당이 그 사이 재시작돼도 기다리는 방 곡은 안 지움
+    assert await musicq.has_queue(db, CHAT)
+    w.client = CallClient()
+    await w._music_rejoin(int(time.time()) + musicq.REJOIN_SEC + 5)
+    assert not await musicq.has_queue(db, CHAT) and not await db.get_state(0, musicq.REJOIN_KEY), "15분 지나면 정리"
+    await stop_all(w)
+
+
+@test
+async def popular_songs_are_fetched_at_night_once_and_stop_when_music_starts():
+    from sodam.voice import worker as W
+    db, w, src, _ = await make_worker()
+    now = int(time.time())
+    for vid, n in (("hotAAAAAAAA", 3), ("twoAAAAAAAA", 2), ("oneAAAAAAAA", 1), ("autAAAAAAAA", 5)):
+        for _ in range(n):
+            rid, _, _ = await musicq.add(db, -1000 - len(vid) - n, title=vid, url="u", vid=vid, duration=100, by_id=1, by_name="x",
+                                         per_user=0, auto=vid.startswith("aut"))
+            await db._write("UPDATE music_queue SET started_ts=?, state='done' WHERE id=?", (now, rid))
+    assert await musicq.popular_vids(db) == ["hotAAAAAAAA", "twoAAAAAAAA"], "두 번 넘게 사람이 튼 곡만 (자동 재생 빼고)"
+    src.fetched.clear()
+    assert await w._night_prefetch("2026-10-09", gap=0) == 2 and src.fetched == ["hotAAAAAAAA", "twoAAAAAAAA"]
+    assert await w._night_prefetch("2026-10-09", gap=0) == 0, "하루 한 번"
+    src.fetched.clear()
+    w.players[CHAT] = SimpleNamespace(done=False)        # 노래가 시작됨 → 받지 않음
+    assert await w._night_prefetch("2026-10-10", gap=0) == 0 and not src.fetched
+    w.players.pop(CHAT)
+    import calendar
+    kst4 = calendar.timegm((2026, 10, 10, W.PREFETCH_HOUR, 30, 0, 0, 0, 0)) - 9 * 3600   # 한국시각 4시 30분
+    w._maybe_night_prefetch(kst4 - 3600)                # 3시 → 안 함
+    assert w._prefetch_task is None
+    w._maybe_night_prefetch(kst4)
+    assert w._prefetch_task is not None
+    w._prefetch_task.cancel()
+    await stop_all(w)
+
+
+@test
+async def stutter_watch_tells_the_owner_once_an_hour_with_numbers():
+    """사람이 '끊겨요' 하기 전에: 1분마다 숫자를 찍고 최근 5분에 기준을 넘으면 오너 1:1 (방마다 1시간에 1번)."""
+    from sodam.voice import worker as W
+    bot = FakeBot()
+    db, w, _, _ = await make_worker(bot)
+    w.cfg.owner_ids = [777]
+    sent = []
+    real = bot.send_message
+
+    async def send(chat_id, text, **k):
+        sent.append((chat_id, text))
+        return await real(chat_id, text, **k)
+    bot.send_message = send
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "끊기는곡")
+        await until(lambda: CHAT in w.players)
+        pl = w.players[CHAT]
+        await w._music_watch(0)
+        pl.stats["jitter"] += W.STUTTER_LIMITS["jitter"] - 1           # 기준 바로 아래 → 조용
+        await w._music_watch(60)
+        assert not [t for c, t in sent if c == 777], sent
+        pl.stats["jitter"] += 1
+        pl.win_max_late = 230
+        await w._music_watch(120)
+        owner = [t for c, t in sent if c == 777]
+        assert len(owner) == 1 and "끊김" in owner[0] and "30ms 넘게 밀림 15번" in owner[0] and "230ms" in owner[0], owner
+        pl.stats["late"] += 50
+        await w._music_watch(180)
+        assert len([t for c, t in sent if c == 777]) == 1, "같은 방은 1시간에 한 번"
+        pl.stats["underrun"] += 0
+        await w._music_watch(181 + W.STUTTER_WIN + 60)                   # 5분 넘게 늘지 않음 → 옛 숫자는 창 밖
+        assert len(w._swin[CHAT]) <= 2
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+    rows = await db._all("SELECT stats FROM music_sessions WHERE stats IS NOT NULL")
+    assert rows and json.loads(rows[-1]["stats"])["jitter"] >= 15, "세션 끝에 끊김 숫자를 남김 (원격 점검으로 봄)"
 
 
 @test
