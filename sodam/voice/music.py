@@ -56,13 +56,19 @@ class MusicChoice(Exception):
         super().__init__(reason)
         self.code, self.items, self.reason, self.query = "choice", items, reason, query
 
+    def __reduce__(self):                                   # 다른 프로그램(fetcher)에서 건너올 수 있게
+        return (MusicChoice, (self.items, self.reason, self.query))
+
 
 class MusicError(Exception):
     """방에 그대로 보일 이유 (code = blocked·not_found·too_long·live·download·decode)."""
 
     def __init__(self, code: str, text: str = ""):
         super().__init__(text or code)
-        self.code = code
+        self.code, self.text = code, text
+
+    def __reduce__(self):
+        return (MusicError, (self.code, self.text))
 
 
 PLAYLIST = re.compile(r"(?:youtube\.com|youtu\.be)/\S*?[?&]list=([A-Za-z0-9_-]{10,64})")
@@ -120,6 +126,7 @@ ALT_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
 SEARCH_N = 8                     # 기본 음원 검색 후보 수
 ALT_TRY = 4                      # 실제로 받아지는지 확인해 볼 후보 수 (DRM 잠긴 공식 음원 건너뛰기)
 ALT_MIN_SEC = 45                 # 대체 음원 미리듣기(30초) 조각은 건너뜀
+PROXY_RETRY = 300                                          # 우회 길이 있을 때 막힌 뒤 쉬는 시간
 PRIMARY_RETRY = int(os.getenv("MUSIC_RETRY_SEC", "3600"))   # 기본 음원이 막힌 뒤 이만큼은 대체 음원 먼저 (쿠키가 바뀌면 바로 다시)
 _NOISE = re.compile(r"[\[(【](?:[^\])】]*?(?:mv|m/v|official|lyrics?|가사|audio|video|live|4k|hd|remaster)[^\])】]*)[\])】]", re.I)
 
@@ -174,7 +181,10 @@ class Source:
             sig = ()
         if sig != self._sig:
             self._sig, self.blocked_at = sig, 0.0
-        return time.time() - self.blocked_at >= PRIMARY_RETRY
+        wait = PRIMARY_RETRY
+        if os.getenv("MUSIC_PROXY", "").strip():   # 우회 길(WARP) 막힘은 잠깐씩 왔다 감 (서버 실측 2026-10-09) → 1시간 대신 5분
+            wait = min(wait, PROXY_RETRY)
+        return time.time() - self.blocked_at >= wait
 
     def _opts(self, cookie: str | None, proxy: str | None = None, **extra) -> dict:
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 15, "retries": 2,

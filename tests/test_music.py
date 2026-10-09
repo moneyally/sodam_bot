@@ -1542,3 +1542,18 @@ async def two_senders_on_one_call_are_logged():
         logging.getLogger("sodam.voice").removeHandler(h)
     assert any("너무 많음" in m and "dj,voice" in m for m in seen), seen
     await stop_all(w)
+
+
+
+@test
+def with_the_detour_a_block_only_pauses_the_main_source_for_minutes():
+    """우회 길 막힘은 잠깐씩 왔다 감 → 1시간 동안 대체 음원만 쓰면 '못 가져왔어요'가 줄줄이 (2026-10-09)."""
+    y = music.Source(Path(tempfile.mkdtemp()))
+    y.primary_ok()
+    y.blocked_at = time.time() - music.PROXY_RETRY - 5
+    os.environ["MUSIC_PROXY"] = "socks5://127.0.0.1:40000"
+    try:
+        assert y.primary_ok(), "우회 길이 있으면 5분 뒤 다시 기본 음원"
+    finally:
+        os.environ.pop("MUSIC_PROXY")
+    assert not y.primary_ok(), "우회 길이 없으면 예전처럼 오래 쉼"
