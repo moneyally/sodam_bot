@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 import struct
@@ -150,6 +151,8 @@ def _child(data_dir: str, factory: str) -> None:
     proto_out = os.fdopen(os.dup(1), "wb")                     # 주고받기 전용 통로
     os.dup2(2, 1)                                              # 받기 라이브러리가 찍는 글은 표준 오류로
     proto_in = sys.stdin.buffer
+    # 자식의 기록(우회 길 실패 이유 등)도 서버 기록에 남게 — 예전엔 설정이 없어 INFO 가 버려져 왜 막혔는지 몰랐음 (2026-10-09)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s[받기] %(levelname)s %(message)s")
     try:
         os.nice(5)                                             # 소리 쪽보다 낮게
     except OSError:
