@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -85,6 +86,13 @@ def user_client(session: str, api_id: int, api_hash: str):
 
 MIC_OVER = 120                  # 1초에 이보다 많이 보내면 두 군데서 보내는 것 (정상 100)
 OWNER_ALERT_SEC = 6 * 3600       # 🎵 음원 막힘 오너 알림 간격
+# 🎵 끊김 감시: 1분마다 방마다 숫자를 보고, 최근 5분에 이만큼 넘으면 오너 1:1 (방마다 1시간에 1번)
+STUTTER_EVERY = 60
+STUTTER_WIN = 300
+STUTTER_ALERT_SEC = 3600
+STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
+STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
+STUTTER_KEY = "music_stutter_alert"
 
 
 class Worker:
@@ -131,6 +139,8 @@ class Worker:
         self._plocks: dict[int, asyncio.Lock] = {}
         self._mic_win: dict[int, list] = {}         # 방마다 [1초 창 시작, 조각 수, 보낸 곳]
         self._mic_warned: dict[int, float] = {}
+        self._swin: dict[int, deque] = {}           # 끊김 감시: 방마다 [(시각, 숫자, 어느 DJ)]
+        self._watch_at = 0.0
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -538,6 +548,12 @@ class Worker:
             t = asyncio.create_task(self._run_job(job))
             self.jobs.add(t)
             t.add_done_callback(self.jobs.discard)
+        if self.players and time.monotonic() - self._watch_at >= STUTTER_EVERY:
+            self._watch_at = time.monotonic()
+            try:
+                await self._music_watch()
+            except Exception as e:
+                log.warning("끊김 감시 실패: %s", e)
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
             try:
@@ -645,13 +661,17 @@ class Worker:
                 self.ptasks.pop(chat_id, None)
             if reason != "restart" and mine and chat_id not in self.players:   # 재시작이 아니면 남은 곡은 정리
                 await musicq.clear(self.db, chat_id, "removed")
-            await musicq.session_end(self.db, sid, reason, pl.tracks)
+            await musicq.session_end(self.db, sid, reason, pl.tracks, dict(pl.stats))
+            if mine:
+                self._swin.pop(chat_id, None)
             if mine and chat_id not in self.players:
                 await self._vc_title(chat_id, None)       # 음성채팅 제목 원래대로
             await self._maybe_leave(chat_id)
-        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 흔들림 %s(최대 %sms) · 보내기 느림 %s(최대 %sms) · 비어 있음 %s",
+        log.info("노래 끝 %s %s · %s곡 · 조각 %s · 늦음 %s · 흔들림 %s(최대 %sms) · 보내기 느림 %s(최대 %sms) · 비어 있음 %s · "
+                 "겹쳐 넘김 %s · 바로 이어 붙임 %s",
                  chat_id, reason, pl.tracks, pl.stats["frames"], pl.stats["late"], pl.stats["jitter"], pl.stats["max_late_ms"],
-                 pl.stats["send_slow"], pl.stats["send_max_ms"], pl.stats["underrun"])
+                 pl.stats["send_slow"], pl.stats["send_max_ms"], pl.stats["underrun"], pl.stats.get("xfade", 0),
+                 pl.stats.get("gapless", 0))
 
     def _music_path(self, path: str | None) -> str | None:
         """봇이 받아 둔 텔레그램 음악 파일 — data/music 안만 (DB 일감이라도 다른 파일을 열지 않게)."""
@@ -860,6 +880,50 @@ class Worker:
             await self._alert_owners("🎵 <b>뮤직봇: 기본 음원이 막혀 노래를 못 틀었어요.</b>\n"
                                      f"<code>{musicq._esc(err[:150])}</code>\n"
                                      "우회 길(sodam-warp)이 죽었거나 막혔을 수 있어요. 1:1 🎵 화면에서 쿠키를 넣으면 예비로 써요.")
+
+    async def _music_watch(self, now: float | None = None) -> None:
+        """끊김 숫자를 1분마다 찍어 두고 최근 5분 늘어난 양이 기준을 넘으면 오너에게 (사람이 '끊겨요' 하기 전에 앎)."""
+        now = time.monotonic() if now is None else now
+        for chat_id in list(self._swin):
+            if chat_id not in self.players:
+                self._swin.pop(chat_id, None)
+        for chat_id, pl in list(self.players.items()):
+            if pl.done:
+                continue
+            snap = {k: int(pl.stats.get(k, 0)) for k in STUTTER_LIMITS}
+            snap["max_late"], pl.win_max_late = int(getattr(pl, "win_max_late", 0)), 0
+            hist = self._swin.setdefault(chat_id, deque())
+            hist.append((now, snap, id(pl)))
+            while hist and (now - hist[0][0] > STUTTER_WIN + 1 or hist[0][2] != id(pl)):
+                hist.popleft()
+            if len(hist) < 2:
+                continue
+            first = hist[0][1]
+            grew = {k: snap[k] - first[k] for k in STUTTER_LIMITS}
+            bad = [k for k, lim in STUTTER_LIMITS.items() if grew[k] >= lim]
+            if bad:
+                worst = max(s["max_late"] for _, s, _ in list(hist)[1:])
+                await self._stutter_alert(chat_id, pl, grew, worst, int(now - hist[0][0]))
+
+    async def _stutter_alert(self, chat_id: int, pl: Any, grew: dict, worst: int, span: int) -> None:
+        sent = await self.db.get_state(0, STUTTER_KEY) or {}
+        wall = int(time.time())
+        if wall - int(sent.get(str(chat_id)) or 0) < STUTTER_ALERT_SEC:
+            return
+        sent = {k: v for k, v in sent.items() if wall - int(v or 0) < STUTTER_ALERT_SEC}
+        sent[str(chat_id)] = wall
+        await self.db.set_state(0, STUTTER_KEY, sent)
+        try:
+            load = "%.1f" % os.getloadavg()[0]
+        except OSError:
+            load = "?"
+        nums = " · ".join(f"{STUTTER_NAMES[k]} {grew[k]}번" for k in STUTTER_LIMITS if grew[k])
+        title = musicq._esc(str((pl.row or {}).get("title") or "")[:60]) if getattr(pl, "row", None) else ""
+        log.warning("노래 끊김 감지 %s: %s (최대 %sms, 부하 %s)", chat_id, nums, worst, load)
+        await self._alert_owners(f"🎵 <b>뮤직봇 소리 끊김 감지</b> (방 <code>{chat_id}</code>)\n"
+                                 f"최근 {max(1, span // 60)}분: {nums}\n가장 크게 밀림 {worst}ms · 서버 부하 {load} (코어 2개)"
+                                 + (f"\n지금 곡: {title}" if title else "")
+                                 + "\n같은 방은 1시간에 한 번만 알려요.")
 
     async def _alert_owners(self, text: str) -> None:
         if not self.bot:

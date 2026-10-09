@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -678,7 +679,7 @@ class Decoder:
     def frame(self) -> bytes | None:
         return self.buf.popleft() if self.buf else None
 
-    def left(self) -> int | None:
+    def frames_left(self) -> int | None:
         """끝까지 남은 조각 수 — 다 풀었을 때만 (그 전엔 None). 곡 끝 겹쳐 넘어가기 시점을 잴 때."""
         return len(self.buf) if self.eof else None
 
@@ -788,7 +789,15 @@ class Player:
         self._quiet_since = clock()
         self._paused_at: float | None = None
         self.stats = {"frames": 0, "late": 0, "underrun": 0, "jitter": 0, "max_late_ms": 0,
-                      "send_slow": 0, "send_max_ms": 0}
+                      "send_slow": 0, "send_max_ms": 0, "xfade": 0, "gapless": 0}
+        self._next: dict | None = None      # 미리 풀어 둔 다음 곡 {id, path, pos, dec, checked}
+        self._xf: dict | None = None        # 겹쳐 넘어가는 중 {n 전체 조각, i 지난 조각, got 다음 곡에서 꺼낸 조각}
+        self._carry: dict | None = None     # 겹쳐 넘어가서 이미 틀고 있는 다음 곡 (다음 _play 가 이어받음)
+        self._prev_dec = None               # 넘어가며 끝난 앞 곡 풀기 (그 곡의 _play 가 닫음)
+        self._ncur = 1.0                    # 지금 곡에 걸린 크기 맞춤 배수 (조각마다 dec.norm 쪽으로 조금씩)
+        self._arm_lock = asyncio.Lock()
+        self._bg: set = set()
+        self.win_max_late = 0               # 끊김 감시가 1분마다 읽고 0 으로 (그 1분 동안 가장 크게 밀린 ms)
         self._voice_tail = 0
         self._last: bytes | None = None     # 마지막으로 꺼낸 노래 조각 (비었을 때 줄이며 끝내기용)
         self._gain = 1.0                    # 지금 노래 크기 (목소리 줄이기·볼륨을 조각마다 조금씩 따라감)
@@ -808,12 +817,19 @@ class Player:
 
     def wake(self) -> None:
         self._wake.set()
+        if self.row and self._next is None and not self.done:   # 틀고 있는데 새 곡이 들어옴 → 다음 곡 미리 준비
+            with contextlib.suppress(RuntimeError):
+                self._prefetch()
 
     def skip(self) -> bool:
         if not self.row:
             return False
         self.loop = 0
         self._end_state = "skipped"
+        if self._xf is not None and self.dec is not None:      # 겹치는 중 → 들어오던 다음 곡을 그대로 이어받음 (끊김 없이 커짐)
+            n = self._xf["n"]
+            self._gain *= math.sin(min(1.0, self._xf["i"] / n) * math.pi / 2)
+            self._promote(self.dec)
         self._end.set()
         return True
 
@@ -853,25 +869,51 @@ class Player:
     # ── 실행 ──
     async def run(self) -> str:
         pacer = asyncio.create_task(self._pacer())
+        pacer.add_done_callback(self._pacer_died)
         try:
             await self._conductor()
         finally:
             pacer.cancel()
             with contextlib.suppress(BaseException):
                 await pacer
-            if self.dec:
-                await self.dec.close()
-                self.dec = None
+            for t in list(self._bg):                               # 뒤에서 하던 미리 받기·크기 재기도 끊음 (끝난 뒤 풀기 프로그램을 띄우지 않게)
+                t.cancel()
+            for t in list(self._bg):
+                with contextlib.suppress(BaseException):
+                    await t
+            carried = self._carry is not None and self.dec is self._carry["dec"]
+            decs = [self.dec, self._prev_dec, (self._next or {}).get("dec"), (self._carry or {}).get("dec")]
+            for d in {id(d): d for d in decs if d is not None}.values():
+                with contextlib.suppress(Exception):
+                    await d.close()
+            self.dec = self._prev_dec = self._next = self._carry = self._xf = None
             if self.row and self.reason in ("restart",):           # 재시작: 곡 위치를 남겨 이어서
                 with contextlib.suppress(Exception):
-                    await musicq.save_pos(self.db, self.row["id"], self.pos_ms)
+                    if carried:                                    # 앞 곡은 다 틀고 다음 곡으로 넘어가던 중 → 앞 곡은 끝, 다음 곡은 처음부터
+                        await musicq.finish(self.db, self.row["id"], "done")
+                    else:
+                        await musicq.save_pos(self.db, self.row["id"], self.pos_ms)
         return self.reason or "end"
 
+    def _pacer_died(self, t: asyncio.Task) -> None:
+        """박자 담당이 예상 못 한 오류로 죽으면 곡이 영영 안 끝남 → 기록하고 끝냄 (조용히 멈춘 채 붙잡지 않게)."""
+        if not t.cancelled() and t.exception() is not None and not self.done:
+            log.warning("노래 박자 담당 오류 %s: %r", self.chat_id, t.exception())
+            self.stop("error:play")
+
     async def _open(self, path: str, start_ms: int) -> None:
+        if self._xf is not None:                           # 겹치는 중에 이동 → 겹치기 취소, 다음 곡은 다시 준비
+            self._drop_next()
+            self._prefetch()
         old, self.dec = self.dec, None
+        keep = getattr(old, "norm", None) if old is not None and getattr(old, "path", None) == path else None
         if old:
             await old.close()
         dec = self._decoder(path, start_ms)
+        if keep is not None:                               # 같은 곡 이동 → 재 둔 크기 그대로
+            dec.norm = keep
+        self._ncur = getattr(dec, "norm", 1.0)
+        self._gain = 0.0                                   # 새로 연 소리는 0 에서 천천히 (앞 곡이 큰 채로 바로 바뀌면 '툭')
         await dec.start()
         t0 = self.clock()                                  # 0.5초는 미리 풀어 두고 시작 (첫 조각부터 비면 '툭툭')
         while len(getattr(dec, "buf", ())) < PREBUFFER and not getattr(dec, "eof", True) and self.clock() - t0 < 2:
@@ -943,9 +985,17 @@ class Player:
         self._end_state = "done"
         if self.done:                                      # stop() 의 _end 를 방금 지웠을 수 있음 → 기다리지 않고 끝
             return
+        if self._next is not None:                         # 다음 곡 확인은 곡마다 새로 (그 사이 대기열이 바뀌었을 수 있음)
+            self._next["checked"] = self._next["checking"] = False
         try:
             row = dict(row)
-            if row["path"] and Path(row["path"]).exists():
+            ready = self._take_ready(row)
+            if ready:                                      # 미리 풀어 둔 곡 / 겹쳐 넘어가 이미 트는 곡 → 열기 생략 (빈틈 없음)
+                if ready["path"] != row["path"]:
+                    await musicq.set_path(self.db, row["id"], ready["path"])
+                row["path"] = ready["path"]
+                self.row = row
+            elif row["path"] and Path(row["path"]).exists():
                 path = row["path"]
             else:
                 try:
@@ -957,11 +1007,13 @@ class Player:
                     path = await asyncio.to_thread(self.source.fetch, alt["vid"])
                     await musicq.set_track(self.db, row["id"], alt["title"], alt["url"], alt["vid"], alt["duration"])
                     row.update(title=alt["title"], url=alt["url"], vid=alt["vid"], duration=alt["duration"])
-            if path != row["path"]:
-                await musicq.set_path(self.db, row["id"], path)
-            row["path"] = path
-            self.row = row
-            await self._open(path, int(row["pos_ms"] or 0))
+            if not ready:
+                if path != row["path"]:
+                    await musicq.set_path(self.db, row["id"], path)
+                row["path"] = path
+                self.row = row
+                await self._open(path, int(row["pos_ms"] or 0))
+                self._measure_later(self.dec)
         except MusicError as e:
             self.row = None
             await musicq.finish(self.db, row["id"], "failed")
@@ -983,13 +1035,15 @@ class Player:
         self._lyrics_later(row)
         await self._end.wait()
         state = self._end_state
+        # 겹쳐 넘어갔으면 self.dec 는 이미 다음 곡 → 이 곡의 풀기는 _prev_dec
+        mine = self._prev_dec if (self._carry is not None and self.dec is self._carry["dec"]) else self.dec
         if self.done and self.reason == "restart":
-            return                                   # 곡은 playing 그대로 (재시작 뒤 이어서)
+            return                                   # 곡은 playing 그대로 (재시작 뒤 이어서) — 풀기는 run() 이 닫음
         if state == "done" and self.loop > 0 and not self.done:
             self.loop -= 1
             await musicq.requeue_front(self.db, row["id"])   # playing 그대로 두면 start_next 가 같은 곡을 다시
         else:
-            if self.dec and self.dec.failed and state == "done":
+            if mine and mine.failed and state == "done":
                 state = "failed"
                 await self._say("failed", row, "노래를 푸는 중 오류가 났어요.")
             await musicq.finish(self.db, row["id"], "removed" if self.done else state)
@@ -997,23 +1051,181 @@ class Player:
                 await musicq.requeue_end(self.db, row)     # 대기열 전체 반복: 다 튼 곡을 맨 뒤로
         self.row = None
         self._quiet_since = self.clock()
-        if self.dec:
-            await self.dec.close()
-            self.dec = None
+        self._prev_dec = None
+        if mine:
+            if self.dec is mine:
+                self.dec = None
+            await mine.close()
+
+    # ── 다음 곡 미리 풀기 · 크기 맞추기 · 겹쳐 넘어가기 ──
+    def _spawn(self, coro) -> None:
+        t = asyncio.create_task(coro)
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+
+    def _close_later(self, dec) -> None:
+        if dec is not None:
+            self._spawn(dec.close())
+
+    def _drop_next(self) -> None:
+        """미리 풀어 둔 다음 곡을 버림 (대기열이 바뀜·반복·이동). 겹치는 중이었으면 겹치기도."""
+        nxt, self._next, self._xf = self._next, None, None
+        if nxt:
+            self._close_later(nxt["dec"])
+
+    def _take_ready(self, row: dict) -> dict | None:
+        """이 곡을 이미 풀고 있으면 그걸 씀: 겹쳐 넘어가 트는 중(carry) 또는 미리 풀어 둔 것(next). id·시작 위치가 맞을 때만."""
+        carry, self._carry = self._carry, None
+        if carry is not None:
+            if carry["id"] == row["id"]:
+                return carry                               # self.dec·pos_ms 는 넘어갈 때 이미 바꿈
+            if self.dec is carry["dec"]:                   # 그 사이 대기열이 바뀜 → 그 곡은 버리고 정상으로
+                self.dec = None
+            self._close_later(carry["dec"])
+        nxt = self._next
+        if nxt is not None and self._xf is None and nxt["id"] == row["id"] and nxt["pos"] == int(row["pos_ms"] or 0):
+            self._next = None
+            self.dec, self.pos_ms = nxt["dec"], nxt["pos"]
+            self._ncur = getattr(nxt["dec"], "norm", 1.0)
+            self.stats["gapless"] += 1
+            return nxt
+        return None
+
+    async def _norm(self, path: str) -> float:
+        if not NORMALIZE or not hasattr(self.source, "loudness"):
+            return 1.0
+        try:
+            return norm_gain(await asyncio.to_thread(self.source.loudness, path))
+        except Exception as e:
+            log.info("소리 크기 재기 실패 %s: %r", self.chat_id, e)
+            return 1.0
+
+    def _measure_later(self, dec) -> None:
+        """미리 못 잰 곡 (첫 곡·바로 넘긴 곡): 틀면서 뒤에서 재고, 끝나면 조금씩 그 크기로."""
+        if dec is None or not NORMALIZE or not hasattr(self.source, "loudness"):
+            return
+
+        async def run():
+            n = await self._norm(dec.path)
+            if self.dec is dec:
+                dec.norm = n
+        self._spawn(run())
 
     def _prefetch(self) -> None:
-        """다음 곡을 미리 받아 둠 (곡 사이 빈틈 줄이기). 실패는 그 곡 차례에 다시."""
+        """다음 곡을 미리 받고 · 크기 재고 · 풀어 둠 (곡 사이 빈틈 없이 + 겹쳐 넘어가기). 실패는 그 곡 차례에 다시."""
         async def run():
-            rows = await musicq.waiting(self.db, self.chat_id, 1)
-            if rows and rows[0]["vid"] and not rows[0]["path"]:
+            async with self._arm_lock:
+                if self.done or self._next is not None:
+                    return
+                rows = await musicq.waiting(self.db, self.chat_id, 1)
+                if not rows:
+                    return
+                r = dict(rows[0])
+                pos = int(r["pos_ms"] or 0)
+                dec = None
                 try:
-                    path = await asyncio.to_thread(self.source.fetch, rows[0]["vid"])
-                    await musicq.set_path(self.db, rows[0]["id"], path)
+                    path = r["path"] if r["path"] and Path(r["path"]).exists() else None
+                    if not path and r["vid"]:
+                        path = await asyncio.to_thread(self.source.fetch, r["vid"])
+                        await musicq.set_path(self.db, r["id"], path)
+                    if not path:
+                        return
+                    norm = await self._norm(path)
+                    if self.done or self.row is None or self.loop > 0:     # 반복 중이면 다음 곡은 나중에
+                        return
+                    dec = self._decoder(path, pos)
+                    dec.norm = norm
+                    await dec.start()
+                except asyncio.CancelledError:
+                    if dec is not None:
+                        await dec.close()
+                    raise
                 except Exception as e:
                     log.info("다음 곡 미리 받기 실패 %s: %r", self.chat_id, e)
-        t = asyncio.create_task(run())
-        self.__dict__.setdefault("_bg", set()).add(t)
-        t.add_done_callback(self.__dict__["_bg"].discard)
+                    if dec is not None:
+                        await dec.close()
+                    return
+                if self.done or self._next is not None or self.row is None:
+                    await dec.close()
+                    return
+                self._next = {"id": r["id"], "path": path, "pos": pos, "dec": dec, "checked": False, "checking": False}
+        self._spawn(run())
+
+    def _check_next(self, nxt: dict) -> None:
+        """곡 끝이 보이면 미리 풀어 둔 곡이 아직 대기열 맨 앞인지 확인 (섞기·빼기·비우기는 봇이 기록만 바꿈)."""
+        nxt["checking"] = True
+
+        async def run():
+            try:
+                rows = await musicq.waiting(self.db, self.chat_id, 1)
+                ok = bool(rows) and rows[0]["id"] == nxt["id"]
+            except Exception:
+                ok = False
+            if nxt is not self._next:
+                return
+            if ok:
+                nxt["checked"] = True
+            else:                                          # 바뀌었으면 버리고 새 맨 앞 곡으로 (겹치기엔 늦어도 바로 이어 붙이기는)
+                self._drop_next()
+                self._prefetch()
+        self._spawn(run())
+
+    def _maybe_xfade(self, dec) -> None:
+        nxt = self._next
+        n_xf = int(XFADE * 1000 / audio.FRAME_MS)
+        if (n_xf <= 0 or nxt is None or self._xf is not None or self._carry is not None or self.row is None or self.loop > 0
+                or self._end.is_set() or not callable(getattr(dec, "frames_left", None))):
+            return
+        left = dec.frames_left()
+        if left is None:                                   # 아직 다 안 풀림 = 끝까지 3초 넘게 남음
+            return
+        if not nxt["checked"]:
+            if not nxt["checking"]:
+                self._check_next(nxt)
+            return
+        ready = getattr(nxt["dec"], "ready", None)
+        if left <= n_xf and (ready is None or ready()):
+            self._xf = {"n": max(1, left), "i": 0, "got": 0}
+
+    def _promote(self, dec) -> None:
+        """앞 곡 끝 → 겹쳐 들어오던 다음 곡이 지금 곡. 앞 곡 _play 는 _end 로 정리, 다음 _play 는 _carry 를 이어받음."""
+        nxt, xf = self._next, self._xf or {"got": 0}
+        self._prev_dec, self._carry, self._next, self._xf = dec, nxt, None, None
+        self.dec = nxt["dec"]
+        self._ncur = getattr(self.dec, "norm", 1.0)
+        self.pos_ms = nxt["pos"] + xf["got"] * audio.FRAME_MS
+        self.stats["xfade"] += 1
+        self._end.set()
+
+    def _xf_frame(self, dec):
+        """겹치는 조각: 앞 곡은 cos, 다음 곡은 sin 으로 (합친 크기가 일정하게). 앞 곡이 다 끝나면 넘겨줌."""
+        nxt, xf = self._next, self._xf
+        a, b = dec.frame(), nxt["dec"].frame()
+        n, i = xf["n"], xf["i"]
+        xf["i"] = i + 1
+        k0, k1 = min(1.0, i / n) * math.pi / 2, min(1.0, (i + 1) / n) * math.pi / 2
+        size = audio.FRAME_BYTES // 2
+        out = None
+        if a is not None:
+            out = pcm(a) * ramp(self._ncur * math.cos(k0), self._ncur * math.cos(k1), size)
+        if b is not None:
+            xf["got"] += 1
+            nb = getattr(nxt["dec"], "norm", 1.0)
+            t = pcm(b) * ramp(nb * math.sin(k0), nb * math.sin(k1), size)
+            out = t if out is None else out + t
+        if a is None and dec.finished:
+            self._promote(dec)
+        return out
+
+    def _scaled(self, raw: bytes, dec):
+        """크기 맞춤 배수를 곱한 조각 (배수가 늦게 바뀌면 조각마다 조금씩)."""
+        target = getattr(dec, "norm", 1.0)
+        n0 = self._ncur
+        if n0 != target:
+            self._ncur = min(target, n0 + NORM_STEP) if target > n0 else max(target, n0 - NORM_STEP)
+        if n0 == 1.0 and self._ncur == 1.0:
+            return raw
+        return pcm(raw) * ramp(n0, self._ncur, audio.FRAME_BYTES // 2)
 
     def _quiet_for(self) -> float:
         return self.clock() - self._quiet_since
@@ -1032,12 +1244,24 @@ class Player:
         while not self.done:
             music = fade = None
             dec = self.dec
-            if dec and self.row and not self.paused:
-                music = dec.frame()
+            live = dec is not None and not self.paused and (
+                self.row is not None or (self._carry is not None and self._carry["dec"] is dec))
+            if live:
+                if self._xf is not None and self.loop > 0:    # 겹치는 중에 '반복' → 겹치기 취소 (이 곡을 다시)
+                    self._drop_next()
+                self._maybe_xfade(dec)
+                if self._xf is not None:
+                    music = self._xf_frame(dec)
+                else:
+                    raw = dec.frame()
+                    music = self._scaled(raw, dec) if raw is not None else None
                 if music is not None:
                     self._last = music
-                    self.pos_ms += audio.FRAME_MS
+                    if self.dec is dec:                     # 넘겨준 조각이면 pos 는 _promote 가 맞춤
+                        self.pos_ms += audio.FRAME_MS
                     self._quiet_since = self.clock()
+                elif self.dec is not dec:
+                    pass
                 elif dec.finished:
                     self._end.set()
                 else:
@@ -1089,6 +1313,7 @@ class Player:
                 if late > 30:                   # 30ms 넘게 밀림 = 받는 쪽 버퍼가 비어 '튐' 가능
                     self.stats["jitter"] += 1
                 self.stats["max_late_ms"] = max(self.stats["max_late_ms"], int(late))
+                self.win_max_late = max(self.win_max_late, int(late))
                 if wait < -RESYNC:              # 밀렸으면 몰아서 보내지 말고 지금 박자로 다시 — ntgcalls 는 받아 둘 통이 없어서
                     self.stats["late"] += 1     # 몰아 보낸 만큼 듣는 쪽이 빨리 감아 틂 ('멈췄다가 2배속', 2026-10-09)
                     nxt = self.clock()

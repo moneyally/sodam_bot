@@ -4,6 +4,7 @@
 'Sign in to confirm you're not a bot' (Hetzner IP) → 쿠키 넣는 길. 네트워크·py-tgcalls·yt-dlp 없이 가짜로 (ffmpeg 풀기만 진짜).
 """
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -413,9 +414,10 @@ async def restart_saves_position_and_resumes_from_there():
         from sodam import mtproto
         from sodam.voice.worker import session_path
         mtproto.write_session(session_path(w.cfg), "SESSION")
+        n0 = len(FakeDecoder.opened)                    # 다음 곡을 미리 풀어 두므로 마지막 줄이 아닐 수 있음
         t = asyncio.create_task(w2.run())
         await until(lambda: CHAT in w2.players)
-        await until(lambda: FakeDecoder.opened[-1][0].startswith("이어틀기") and FakeDecoder.opened[-1][1] >= 200)
+        await until(lambda: any(o[0].startswith("이어틀기") and o[1] >= 200 for o in FakeDecoder.opened[n0:]))
         s = await db._all("SELECT reason FROM music_sessions ORDER BY id")
         assert s[0]["reason"] == "restart"
         t.cancel()
@@ -1444,6 +1446,47 @@ async def blocked_song_tells_only_the_owner_once():
     assert "운영자" not in str(music.MusicError("blocked", "")) and all(c == 777 for c, _ in sent)
     await stop_all(w)
 
+
+
+@test
+async def stutter_watch_tells_the_owner_once_an_hour_with_numbers():
+    """사람이 '끊겨요' 하기 전에: 1분마다 숫자를 찍고 최근 5분에 기준을 넘으면 오너 1:1 (방마다 1시간에 1번)."""
+    from sodam.voice import worker as W
+    bot = FakeBot()
+    db, w, _, _ = await make_worker(bot)
+    w.cfg.owner_ids = [777]
+    sent = []
+    real = bot.send_message
+
+    async def send(chat_id, text, **k):
+        sent.append((chat_id, text))
+        return await real(chat_id, text, **k)
+    bot.send_message = send
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "끊기는곡")
+        await until(lambda: CHAT in w.players)
+        pl = w.players[CHAT]
+        await w._music_watch(0)
+        pl.stats["jitter"] += W.STUTTER_LIMITS["jitter"] - 1           # 기준 바로 아래 → 조용
+        await w._music_watch(60)
+        assert not [t for c, t in sent if c == 777], sent
+        pl.stats["jitter"] += 1
+        pl.win_max_late = 230
+        await w._music_watch(120)
+        owner = [t for c, t in sent if c == 777]
+        assert len(owner) == 1 and "끊김" in owner[0] and "30ms 넘게 밀림 15번" in owner[0] and "230ms" in owner[0], owner
+        pl.stats["late"] += 50
+        await w._music_watch(180)
+        assert len([t for c, t in sent if c == 777]) == 1, "같은 방은 1시간에 한 번"
+        pl.stats["underrun"] += 0
+        await w._music_watch(181 + W.STUTTER_WIN + 60)                   # 5분 넘게 늘지 않음 → 옛 숫자는 창 밖
+        assert len(w._swin[CHAT]) <= 2
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+    rows = await db._all("SELECT stats FROM music_sessions WHERE stats IS NOT NULL")
+    assert rows and json.loads(rows[-1]["stats"])["jitter"] >= 15, "세션 끝에 끊김 숫자를 남김 (원격 점검으로 봄)"
 
 
 @test

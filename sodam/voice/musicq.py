@@ -10,6 +10,7 @@ chat_state(0, music_health) = 음성 담당이 마지막으로 본 음원 상태
 """
 from __future__ import annotations
 
+import json
 import time
 
 from .. import db as dbm
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS music_queue (
 CREATE INDEX IF NOT EXISTS music_queue_chat ON music_queue(chat_id, state, id);
 CREATE TABLE IF NOT EXISTS music_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, start_ts INTEGER NOT NULL,
-    end_ts INTEGER, reason TEXT, tracks INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0);
+    end_ts INTEGER, reason TEXT, tracks INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, stats TEXT);
 CREATE INDEX IF NOT EXISTS music_sessions_chat ON music_sessions(chat_id, start_ts);
 CREATE TABLE IF NOT EXISTS music_choices (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, by_id INTEGER, by_name TEXT, query TEXT,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS music_lyrics (
 """, migrate={"music_queue": "plain", "music_sessions": "plain", "music_choices": "plain"})
 # sort = 섞기 순서 (없으면 id) · auto = 자동 재생으로 들어온 곡 · orig_vid = 대체 음원으로 바뀌기 전 기본 음원 ID (자동 재생 기준·통계)
 dbm.register_columns("music_queue", {"sort": "REAL", "auto": "INTEGER NOT NULL DEFAULT 0", "orig_vid": "TEXT"})
+dbm.register_columns("music_sessions", {"stats": "TEXT"})   # 끊김 숫자 (JSON) — 원격 점검으로 세션마다 봄
 
 HEALTH_KEY = "music_health"
 QUEUE_MAX = 30               # 방마다 기다리는 곡
@@ -284,9 +286,9 @@ async def session_start(db, chat_id: int, by: int | None) -> int:
     return await db._write("INSERT INTO music_sessions(chat_id, by_id, start_ts) VALUES(?,?,?)", (chat_id, by, _now()))
 
 
-async def session_end(db, sid: int, reason: str, tracks: int) -> None:
-    await db._write("UPDATE music_sessions SET end_ts=?, reason=?, tracks=? WHERE id=? AND end_ts IS NULL",
-                    (_now(), reason[:40], tracks, sid))
+async def session_end(db, sid: int, reason: str, tracks: int, stats: dict | None = None) -> None:
+    await db._write("UPDATE music_sessions SET end_ts=?, reason=?, tracks=?, stats=? WHERE id=? AND end_ts IS NULL",
+                    (_now(), reason[:40], tracks, json.dumps(stats) if stats else None, sid))
 
 
 async def active_session(db, chat_id: int):
