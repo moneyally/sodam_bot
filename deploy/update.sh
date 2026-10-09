@@ -418,8 +418,15 @@ if ! g merge-base --is-ancestor "$PREV" "$NEW"; then
 fi
 log "$(g rev-parse --short "$PREV") → $(g rev-parse --short "$NEW") ($BRANCH)"
 
+# 설명 글만 바뀐 커밋(docs/·.claude/·.github/·맨 위 *.md — sodam/guide 는 코드라 아님)은 시험(약 20분)을 건너뜀
+ONLY_DOCS=0
+CHANGED=$(g diff --name-only "$PREV" "$NEW" || true)
+if [ -n "$CHANGED" ] && ! printf '%s\n' "$CHANGED" | grep -qvE '^(docs/|\.claude/|\.github/)|^[^/]+\.md$'; then
+    ONLY_DOCS=1
+fi
+
 # 0) 음성 통화 중이면 무거운 테스트(약 10분·1.5코어)를 다음 타이머(2분 뒤 다시 확인)로 — 통화 소리가 끊기지 않게 (최대 60분, --force 는 바로)
-if postpone_for_call; then
+if [ "$ONLY_DOCS" -eq 0 ] && postpone_for_call; then
     log "voice: 통화 중 → 테스트·재시작을 다음 타이머로 미룸 (바로 하려면 sodam-update --force)"
     exit 0
 fi
@@ -437,6 +444,9 @@ if [ "$(cat "$REQ_STAMP" 2>/dev/null)" != "$REQ_SUM" ]; then
 fi
 as_user=()
 if [ -n "$RUN_AS" ]; then chown -R "$RUN_AS:" "$TMP"; as_user=(runuser -u "$RUN_AS" --); fi
+if [ "$ONLY_DOCS" -eq 1 ]; then
+    log "설명 글만 바뀜 → 시험 건너뜀"
+else
 log "tests…"
 # 시험(약 20분) 도중 노래가 시작되면 시험 힘을 확 낮춤 — 노래 조각이 제때 못 나가 0.01초씩 끊기던 것 (2026-10-09 실제 신고)
 MUSIC_TEST_QUOTA=${MUSIC_TEST_QUOTA:-60%}   # 30% 는 스티커 그리기 시험이 시간 초과로 실패 (2026-10-09)
@@ -466,10 +476,15 @@ if [ "$tests_rc" -ne 0 ]; then
     log "!! 테스트 실패 → 적용 안 함. 봇은 이전 코드($(g rev-parse --short "$PREV"))로 계속 돔"
     exit 1
 fi
-log "tests ok"
+log "tests ok ($(sed -n 's/^느린 모듈: //p' "$TMP/tests.log" | tail -1 || true))"
+fi
 
 # 2) 적용 + 재시작 + 시작 확인
-g merge -q --ff-only "$NEW"
+# 손으로 급히 넣은 파일이 있으면 merge --ff-only 가 아무 말 없이 멈춰(set -e) 시험 통과한 버전이 안 들어갔음 (2026-10-09 dae7a10)
+# → 시험한 그 커밋으로 정확히 맞춤 (data·.env 는 git 이 안 다루는 파일이라 그대로)
+DIRTY=$(g status --porcelain --untracked-files=no | head -5 | tr '\n' ' ' || true)
+[ -z "$DIRTY" ] || log "손으로 바꾼 파일을 시험한 버전으로 덮음: $DIRTY"
+g reset -q --hard "$NEW"
 VER=$(g rev-parse --short HEAD)
 echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then

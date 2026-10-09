@@ -55,6 +55,19 @@ def failed_modules(out: str) -> list[str]:
     return bad
 
 
+def slowest(out: str, n: int = 6) -> str:
+    """'----- test_x 12.3초' 줄에서 가장 오래 걸린 모듈 n개 (서버 로그에 남겨 HEAVY·시험 시간 다듬기용)."""
+    got = []
+    for line in out.splitlines():
+        if line.startswith("----- test_") and line.endswith("초"):
+            name, _, sec = line[6:-1].rpartition(" ")
+            try:
+                got.append((float(sec), name))
+            except ValueError:
+                pass
+    return ", ".join(f"{n.removeprefix('test_')} {s:.0f}초" for s, n in sorted(got, reverse=True)[:n])
+
+
 def run_one(modules: list[str]) -> tuple[int, str]:
     p = subprocess.run([*CMD, *modules], capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
@@ -65,8 +78,10 @@ def parallel(names: list[str], jobs: int) -> int:
     procs = [(g, subprocess.Popen([*CMD, *g], stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True)) for g in split(names, jobs)]
     suspect: list[str] = []
+    allout = ""
     for g, p in procs:
         out, _ = p.communicate()
+        allout += out
         print(out, end="")
         bad = failed_modules(out)
         if p.returncode and not bad:          # 모듈 import 실패·충돌 등 FAIL 줄 없이 죽음 → 묶음 전체를 다시
@@ -80,6 +95,7 @@ def parallel(names: list[str], jobs: int) -> int:
             print(out, end="")
             final.append(m)
     print(f"\n동시 {jobs}개 · {time.monotonic() - t0:.0f}초 · 다시 돌린 모듈 {len(suspect)}개")
+    print(f"느린 모듈: {slowest(allout)}")
     for m in final:
         print(f"FAIL {m} (혼자 다시 돌려도 실패)")
     print(f"\n전체 결과: {'실패 ' + str(len(final)) + '개 모듈' if final else '모두 통과'}")
@@ -89,9 +105,11 @@ def parallel(names: list[str], jobs: int) -> int:
 async def main(only: list[str]) -> int:
     failed = 0
     for name in discover(only):
+        t0 = time.monotonic()
         suite = importlib.import_module(name)
         print(f"\n===== {name} =====")
         failed += await suite.run_all()
+        print(f"----- {name} {time.monotonic() - t0:.1f}초")
     print(f"\n전체 결과: {'실패 ' + str(failed) + '개' if failed else '모두 통과'}")
     return failed
 

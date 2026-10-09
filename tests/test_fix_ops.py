@@ -197,6 +197,48 @@ def _head(clone: Path) -> str:
 
 
 @test
+def update_sh_applies_the_tested_commit_even_if_files_were_changed_by_hand():
+    """2026-10-09 dae7a10: 서버에 급히 손으로 넣은 파일 때문에 merge --ff-only 가 말없이 멈춤(set -e) → 시험 통과한 버전이 안 들어감."""
+    clone, log = _fake_repo(tests_pass=True)
+    (log.parent / "start_ok").write_text("")
+    (clone / "tests" / "run_all.py").write_text("# 손으로 넣은 파일\n")
+    origin_head = subprocess.run(_GIT + ["-C", str(clone.parent / "origin"), "rev-parse", "HEAD"],
+                                 capture_output=True, text=True).stdout
+    r = _run_update(clone, log)
+    assert r.returncode == 0 and _head(clone) == origin_head, r.stdout + r.stderr
+    assert "손으로 바꾼 파일" in r.stdout and "restart sodam" in log.read_text()
+    assert "sys.exit(0)" in (clone / "tests" / "run_all.py").read_text(), "시험한 버전으로 덮음"
+
+
+@test
+def update_sh_skips_tests_when_only_docs_changed():
+    clone, log = _fake_repo(tests_pass=True, new_commit=False)
+    (log.parent / "start_ok").write_text("")
+    origin = clone.parent / "origin"
+    mark = log.parent / "tests_ran"
+    (origin / "tests" / "run_all.py").write_text(f"open({str(mark)!r}, 'w').write('x')\n")
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "code"], check=True)
+    r = _run_update(clone, log)
+    assert r.returncode == 0 and mark.exists(), ("코드가 바뀌면 시험", r.stdout + r.stderr)
+    mark.unlink()
+    for path in ("docs/HANDOFF.md", "CLAUDE.md", ".claude/skills/x/SKILL.md"):
+        (origin / path).parent.mkdir(parents=True, exist_ok=True)
+        (origin / path).write_text("글\n")
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "docs"], check=True)
+    r = _run_update(clone, log)
+    assert r.returncode == 0 and not mark.exists() and "시험 건너뜀" in r.stdout, r.stdout + r.stderr
+    assert (clone / "docs" / "HANDOFF.md").exists()
+    (origin / "sodam" / "guide").mkdir(parents=True)
+    (origin / "sodam" / "guide" / "x.md").write_text("안내서 = 코드\n")
+    subprocess.run(_GIT + ["-C", str(origin), "add", "-A"], check=True)
+    subprocess.run(_GIT + ["-C", str(origin), "commit", "-qm", "guide"], check=True)
+    r = _run_update(clone, log)
+    assert r.returncode == 0 and mark.exists(), ("sodam 안 .md 는 시험함", r.stdout + r.stderr)
+
+
+@test
 def update_sh_stops_when_tests_fail():
     clone, log = _fake_repo(tests_pass=False)
     before = _head(clone)

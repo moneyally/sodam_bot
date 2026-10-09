@@ -769,6 +769,15 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   blocked_at 은 오갈 때마다 같이 → primary_ok 는 부모에서 바로, 300초 넘으면 자식 죽이고 새로. 끄기 MUSIC_PROC=0. 하네스: 가짜 노래 일꾼(10ms 박자 6,000조각)으로 조건 비교.
   ⑥ 우회 길 막힘은 잠깐씩 왔다 감 → 우회 길이 있으면 기본 음원 쉬는 시간 1시간 → 5분(PROXY_RETRY).
   ③ 소리 줄로 보내는 곳은 `Worker._mic` 하나, 1초 120조각↑ 이면 '소리 조각 너무 많음' 기록 · ④ 우회 길 IPv4 만(소리 받기 403) · stereo=1 은 끔(의심).
+- **3차 (2026-10-09, tests/test_music_xfade.py · test_music.py, 뮤테이션 30여 개)**: ① 다음 곡을 미리 받고·크기 재고·풀어 둠(`Player._prefetch` → `_next`)
+  → 넘어가거나 넘길 때 다시 안 엶(`_take_ready`) ② 곡마다 크기(LUFS, `Source.loudness` 가 fetcher 자식에서 ffmpeg ebur128, 메모 data/music/.loud/)
+  → -14 로 0.35~1.6배 ③ 곡 끝 3초(MUSIC_XFADE) 겹쳐 넘기기(cos/sin) — 다 풀린 뒤 대기열 맨 앞이 그 곡인지 다시 확인(`_check_next`, 섞기·빼기는 봇이
+  기록만 바꿈), 넘기기 = 들어오던 곡 이어받음, 반복·이동이면 취소, 넘어가는 순간 재시작이면 앞 곡 끝 처리. 멈출 때 뒤 일 끊음, 박자 담당이 죽으면 error:play
+  ④ 우회 길 두 개 (sodam-warp2 40001, MUSIC_PROXY 쉼표, 지난번에 된 길부터, 상태 파일에 두 길 IP) ⑤ 음성채팅이 닫혀도(chat_closed) 대기열·곡 위치 남김
+  → 15초마다 열렸나 확인(우리가 켜지 않음), 15분 안에 열리면 다시 들어가 이어서, 지나면 정리 (chat_state music_rejoin, 재시작해도 유지)
+  ⑥ 새벽 4시대 인기곡(사람이 2번↑ 튼 곡) 20개 미리 받기, 노래 시작하면 멈춤 ⑦ 1분마다 끊김 숫자 → 최근 5분 기준(밀림 15·박자 다시 5·빔 50·보내기 느림 30)
+  넘으면 오너 1:1 (방마다 1시간 1번), 세션 끝 숫자는 music_sessions.stats ⑨ update.sh: 시험한 커밋으로 reset --hard(손으로 넣은 파일 때문에 merge 가
+  말없이 멈추던 것), 설명 글만 바뀐 커밋은 시험 건너뜀, 시험 로그에 '느린 모듈'.
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
