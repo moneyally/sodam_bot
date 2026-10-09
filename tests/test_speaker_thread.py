@@ -112,5 +112,28 @@ async def last_exchange_skips_old_turns_and_replies():
     assert await memory.last_exchange(r.db, r.CHAT, ME.id, "", r.svc.cfg.tz) == ""
 
 
+@test
+async def room_memo_keeps_updating_in_busy_rooms():
+    """2026-10-09: 하루 6번 상한을 밤새 다 써서 백악관 방 메모가 07:47 뒤 3,221개 동안 멈춤 + 확인만 해도 횟수 +1('301번')."""
+    r = await Room().open(settings={"ai_memory": False})
+    await r.join(OTHER)
+    seen = []
+    r.llm.json_script = {"room_memory": [lambda user: seen.append(user) or {"summary": "블루보틀 3시 약속"}] * 3}
+    day = memory._day(r.svc)
+    await r.db._write("INSERT INTO counters(day, chat_id, key, n) VALUES(?,?,?,?)", (day, r.CHAT, "room_memory", memory.ROOM_DAILY - 1))
+    for i in range(300):
+        await r.db.log_message(r.CHAT, OTHER.id, 1000 + i, f"말 {i}", ts=int(time.time()) - 300 + i)
+    assert await memory.refresh_room(r.svc, r.CHAT), "상한 전이면 갱신"
+    assert seen[0].count("말 ") == memory.ROOM_LINES and "말 299" in seen[0], "최근 220줄을 읽음"
+    assert await r.db.counter(day, r.CHAT, "room_memory") == memory.ROOM_DAILY
+    await r.db._write("UPDATE room_memory SET updated_at=updated_at-99999 WHERE chat_id=?", (r.CHAT,))
+    for i in range(60):
+        await r.db.log_message(r.CHAT, OTHER.id, 2000 + i, f"새 말 {i}")
+    assert not await memory.refresh_room(r.svc, r.CHAT), "상한이면 안 함"
+    assert await r.db.counter(day, r.CHAT, "room_memory") == memory.ROOM_DAILY, "확인만 한 건 안 셈"
+    assert memory.ROOM_DAILY >= 16
+    assert "원문 그대로" in memory.ROOM_SYSTEM and "찾을 낱말" in memory.ROOM_SYSTEM
+
+
 if __name__ == "__main__":
     run_all()
