@@ -157,7 +157,7 @@ async def text_form_and_cancel_words():
     await say(ctx, OTHER, "입금")
     assert len(bot.named("send_message")) == n
     await say(ctx, ADMIN, ".리플 a 첫째")
-    out = await say(ctx, ADMIN, ".답글취소 a")
+    out = await say(ctx, ADMIN, ".unreply a")             # 다른 봇에서 쓰던 말 (얼라이드 실제 사례)
     assert "지웠" in out.replies[-1] and not await AR.rows(db, CHAT)
 
 

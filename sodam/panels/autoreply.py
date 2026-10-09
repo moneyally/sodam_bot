@@ -194,7 +194,7 @@ def register_commands() -> None:
     """handlers 가 부름 (commands → menu → panels 순환이라 이 파일을 읽을 땐 commands 가 아직 덜 읽힘)."""
     for cmd in (commands.Cmd(("reply", "답글", "리플", "자동답글"), c_reply, Role.ADMIN, usage="낱말 (글에 답장) | 취소 낱말 | 목록",
                              help="낱말을 치면 저장한 글로 답하게", group="관리자"),
-                commands.Cmd(("답글취소", "리플취소", "replydel"), c_reply_cancel, Role.ADMIN, usage="낱말",
+                commands.Cmd(("답글취소", "리플취소", "replydel", "unreply"), c_reply_cancel, Role.ADMIN, usage="낱말",
                              help="자동 답글 지우기", group="관리자")):
         if any(c.fn is cmd.fn for c in commands.COMMANDS):
             continue
