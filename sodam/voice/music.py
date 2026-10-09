@@ -47,6 +47,7 @@ XFADE = max(0.0, float(os.getenv("MUSIC_XFADE", "3")))     # 곡 사이 겹쳐 �
 NORMALIZE = os.getenv("MUSIC_NORMALIZE", "1") != "0"       # 곡마다 소리 크기 맞추기
 TARGET_LUFS = -14.0                                        # 맞출 크기 (음원 사이트들이 쓰는 기준)
 NORM_MIN, NORM_MAX = 0.35, 1.6                             # 크기 맞춤 배수 범위 (작은 곡을 너무 키우면 찌그러짐)
+RESUME_REASONS = ("restart", "chat_closed")               # 이렇게 끝나면 곡 위치를 남김 (재시작 / 음성채팅이 다시 열리면 이어서)
 NORM_STEP = 0.005                                          # 재는 게 늦게 끝나면 조각마다 이만큼씩 (1초에 0.5) 따라감
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
 SILENCE = bytes(audio.FRAME_BYTES)
@@ -887,7 +888,7 @@ class Player:
                 with contextlib.suppress(Exception):
                     await d.close()
             self.dec = self._prev_dec = self._next = self._carry = self._xf = None
-            if self.row and self.reason in ("restart",):           # 재시작: 곡 위치를 남겨 이어서
+            if self.row and self.reason in RESUME_REASONS:         # 재시작·음성채팅 닫힘: 곡 위치를 남겨 이어서
                 with contextlib.suppress(Exception):
                     if carried:                                    # 앞 곡은 다 틀고 다음 곡으로 넘어가던 중 → 앞 곡은 끝, 다음 곡은 처음부터
                         await musicq.finish(self.db, self.row["id"], "done")
@@ -1037,7 +1038,7 @@ class Player:
         state = self._end_state
         # 겹쳐 넘어갔으면 self.dec 는 이미 다음 곡 → 이 곡의 풀기는 _prev_dec
         mine = self._prev_dec if (self._carry is not None and self.dec is self._carry["dec"]) else self.dec
-        if self.done and self.reason == "restart":
+        if self.done and self.reason in RESUME_REASONS:
             return                                   # 곡은 playing 그대로 (재시작 뒤 이어서) — 풀기는 run() 이 닫음
         if state == "done" and self.loop > 0 and not self.done:
             self.loop -= 1

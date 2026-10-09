@@ -93,6 +93,7 @@ STUTTER_ALERT_SEC = 3600
 STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
 STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
 STUTTER_KEY = "music_stutter_alert"
+REJOIN_EVERY = 15                # 🎵 음성채팅이 닫혀 멈춘 방: 다시 열렸는지 확인 간격
 
 
 class Worker:
@@ -141,6 +142,7 @@ class Worker:
         self._mic_warned: dict[int, float] = {}
         self._swin: dict[int, deque] = {}           # 끊김 감시: 방마다 [(시각, 숫자, 어느 DJ)]
         self._watch_at = 0.0
+        self._rejoin_at = 0.0
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -554,6 +556,12 @@ class Worker:
                 await self._music_watch()
             except Exception as e:
                 log.warning("끊김 감시 실패: %s", e)
+        if self.client and time.monotonic() - self._rejoin_at >= REJOIN_EVERY:
+            self._rejoin_at = time.monotonic()
+            try:
+                await self._music_rejoin()
+            except Exception as e:
+                log.warning("노래 다시 들어가기 확인 실패: %s", e)
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
             try:
@@ -659,8 +667,12 @@ class Worker:
             if mine:
                 self.players.pop(chat_id, None)
                 self.ptasks.pop(chat_id, None)
-            if reason != "restart" and mine and chat_id not in self.players:   # 재시작이 아니면 남은 곡은 정리
+            if reason not in music.RESUME_REASONS and mine and chat_id not in self.players:   # 재시작·닫힘이 아니면 남은 곡은 정리
                 await musicq.clear(self.db, chat_id, "removed")
+            if reason == "chat_closed" and mine and chat_id not in self.players and await musicq.has_queue(self.db, chat_id):
+                st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}      # 다시 열리면 이어서 (15분 안)
+                st[str(chat_id)] = int(time.time()) + musicq.REJOIN_SEC
+                await self.db.set_state(0, musicq.REJOIN_KEY, st)
             await musicq.session_end(self.db, sid, reason, pl.tracks, dict(pl.stats))
             if mine:
                 self._swin.pop(chat_id, None)
@@ -849,8 +861,10 @@ class Worker:
 
     async def music_resume(self, chats: list[int]) -> None:
         """재시작으로 끊긴 방(세션이 열려 있던 방)은 남은 곡을 이어서, 나머지 방의 묵은 대기열은 정리.
-        (예전: 신청 시각 30분 기준이라 긴 대기열 앞쪽 곡이 지워졌음)"""
-        await musicq.drop_except(self.db, chats)
+        (예전: 신청 시각 30분 기준이라 긴 대기열 앞쪽 곡이 지워졌음) 음성채팅이 닫혀 기다리는 방의 곡도 남김."""
+        waiting = await self.db.get_state(0, musicq.REJOIN_KEY) or {}
+        now = int(time.time())
+        await musicq.drop_except(self.db, list(chats) + [int(k) for k, dl in waiting.items() if int(dl or 0) > now])
         if not self.client or not self.calls:
             for chat_id in chats:
                 await musicq.clear(self.db, chat_id, "removed")
@@ -864,6 +878,50 @@ class Worker:
             else:
                 pl.wake()
                 log.info("노래 이어 틀기 %s", chat_id)
+
+    async def _call_open(self, chat_id: int) -> bool:
+        """그 방에 음성채팅이 열려 있나 (우리가 켜지 않고 보기만 — 관리자가 닫은 걸 다시 켜면 안 됨)."""
+        try:
+            from telethon.tl.functions.channels import GetFullChannelRequest
+            full = await self.client(GetFullChannelRequest(await self.client.get_input_entity(chat_id)))
+            return bool(full.full_chat.call)
+        except Exception as e:
+            log.info("음성채팅 열림 확인 실패 %s: %r", chat_id, e)
+            return False
+
+    async def _music_rejoin(self, now: int | None = None) -> None:
+        """음성채팅이 닫혀 멈춘 방: 15분 안에 다시 열리면 들어가서 남은 곡을 이어서. 지나면 대기열 정리.
+        (예전: 닫히는 순간 대기열을 지워서 관리자가 실수로 닫았다 열어도 처음부터 다시 신청해야 했음)"""
+        st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}
+        if not st:
+            return
+        now = int(time.time()) if now is None else now
+        keep = {}
+        for key, deadline in st.items():
+            chat_id = int(key)
+            pl = self.players.get(chat_id)
+            if pl is not None and not pl.done:          # 그 사이 새 신청으로 이미 다시 틂
+                continue
+            if now > int(deadline or 0):
+                log.info("노래 다시 들어가기 포기 %s (음성채팅이 %s분 안 열림)", chat_id, musicq.REJOIN_SEC // 60)
+                await musicq.clear(self.db, chat_id, "removed")
+                continue
+            if not await musicq.has_queue(self.db, chat_id):
+                continue
+            if not await self._call_open(chat_id):
+                keep[key] = deadline
+                continue
+            pl, res = await self._get_player(chat_id, {}, None)
+            if pl is None:
+                log.info("노래 다시 들어가기 못 함 %s: %s", chat_id, res)
+                keep[key] = deadline
+                continue
+            pl.wake()
+            log.info("노래 다시 들어가기 %s", chat_id)
+            if self.bot:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_message(chat_id, "🎵 음성채팅이 다시 열려서 남은 곡을 이어서 틀어요.")
+        await self.db.set_state(0, musicq.REJOIN_KEY, keep or None)
 
     async def _music_health(self, err: str | None) -> None:
         cur = await self.db.get_state(0, musicq.HEALTH_KEY) or {}

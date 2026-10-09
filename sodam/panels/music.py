@@ -548,8 +548,11 @@ async def tick(svc, bot) -> None:
         why = END_REASON.get(row["reason"] or "")
         if not why:                                       # end(누가 끝냄 — 이미 답함)·restart(이어서 틂)
             continue
+        tail = ""
+        if row["reason"] == "chat_closed" and await musicq.has_queue(svc.db, row["chat_id"]):
+            tail = f"\n{musicq.REJOIN_SEC // 60}분 안에 음성채팅을 다시 열면 남은 곡을 이어서 틀어요."
         try:
-            await bot.send_message(row["chat_id"], f"🎵 노래 도우미가 음성채팅에서 나왔어요 ({why}, {row['tracks']}곡).")
+            await bot.send_message(row["chat_id"], f"🎵 노래 도우미가 음성채팅에서 나왔어요 ({why}, {row['tracks']}곡).{tail}")
         except TelegramError:
             pass
 

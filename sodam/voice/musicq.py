@@ -282,6 +282,15 @@ async def drop_except(db, keep: list[int]) -> int:
 
 
 # ── 세션 ──────────────────────────────────────────────
+REJOIN_SEC = 900                  # 음성채팅이 닫혀 멈춘 노래: 이 안에 다시 열리면 이어서 (음성 담당이 15초마다 확인)
+REJOIN_KEY = "music_rejoin"       # chat_state(0): {방: 기다림 끝 시각}
+
+
+async def has_queue(db, chat_id: int) -> bool:
+    return bool(await db._one("SELECT 1 FROM music_queue WHERE chat_id=? AND state IN ('queued','playing') LIMIT 1",
+                              (chat_id,)))
+
+
 async def session_start(db, chat_id: int, by: int | None) -> int:
     return await db._write("INSERT INTO music_sessions(chat_id, by_id, start_ts) VALUES(?,?,?)", (chat_id, by, _now()))
 

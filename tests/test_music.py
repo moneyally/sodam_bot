@@ -1448,6 +1448,81 @@ async def blocked_song_tells_only_the_owner_once():
 
 
 
+class CallClient(Client):
+    """GetFullChannel 에 음성채팅이 열려 있는지(call)만 답함."""
+    open = False
+
+    async def get_input_entity(self, chat_id):
+        return chat_id
+
+    async def __call__(self, req):
+        if type(req).__name__ == "GetFullChannelRequest":
+            return SimpleNamespace(full_chat=SimpleNamespace(call="CALL" if self.open else None))
+        return None
+
+
+@test
+async def closed_voice_chat_keeps_the_queue_and_rejoins_when_reopened():
+    """예전: 음성채팅이 닫히면 대기열을 바로 지움 → 관리자가 실수로 닫았다 열어도 처음부터 다시 신청."""
+    bot = FakeBot()
+    db, w, _, _ = await make_worker(bot)
+    sent = []
+    real = bot.send_message
+
+    async def send(chat_id, text, **k):
+        sent.append((chat_id, text))
+        return await real(chat_id, text, **k)
+    bot.send_message = send
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "닫힘곡")
+        await until(lambda: CHAT in w.players and w.players[CHAT].pos_ms >= 300)
+        await play(db, w, "다음곡")
+        w.players[CHAT].stop("chat_closed")             # 관리자가 음성채팅을 닫음 (LEFT_CALL)
+        await until(lambda: CHAT not in w.players)
+        cur = await musicq.current(db, CHAT)
+        assert cur and cur["title"].startswith("닫힘곡") and cur["pos_ms"] >= 300, "지금 곡은 위치까지 남김"
+        assert len(await musicq.waiting(db, CHAT)) == 1, "남은 곡 그대로"
+        st = await db.get_state(0, musicq.REJOIN_KEY)
+        assert str(CHAT) in st, st
+        svc = SimpleNamespace(db=db)
+        await M.tick(svc, bot)
+        assert any("다시 열면 남은 곡을 이어서" in t for c, t in sent if c == CHAT), sent
+
+        w.client = CallClient()
+        await w._music_rejoin()
+        assert CHAT not in w.players and str(CHAT) in (await db.get_state(0, musicq.REJOIN_KEY)), "닫혀 있는 동안은 기다림 (우리가 켜지 않음)"
+        n0 = len(FakeDecoder.opened)
+        w.client.open = True
+        await w._music_rejoin()
+        await until(lambda: CHAT in w.players)
+        await until(lambda: any(o[0].startswith("닫힘곡") and o[1] >= 300 for o in FakeDecoder.opened[n0:]))
+        assert any("다시 열려서" in t for c, t in sent if c == CHAT), sent
+        assert not await db.get_state(0, musicq.REJOIN_KEY)
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+
+
+@test
+async def closed_voice_chat_gives_up_after_the_wait_and_survives_a_restart():
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "닫힘곡")
+        await until(lambda: CHAT in w.players)
+        w.players[CHAT].stop("chat_closed")
+        await until(lambda: CHAT not in w.players)
+    finally:
+        FakeDecoder.LEN = 40
+    await w.music_resume([])                            # 음성 담당이 그 사이 재시작돼도 기다리는 방 곡은 안 지움
+    assert await musicq.has_queue(db, CHAT)
+    w.client = CallClient()
+    await w._music_rejoin(int(time.time()) + musicq.REJOIN_SEC + 5)
+    assert not await musicq.has_queue(db, CHAT) and not await db.get_state(0, musicq.REJOIN_KEY), "15분 지나면 정리"
+    await stop_all(w)
+
+
 @test
 async def stutter_watch_tells_the_owner_once_an_hour_with_numbers():
     """사람이 '끊겨요' 하기 전에: 1분마다 숫자를 찍고 최근 5분에 기준을 넘으면 오너 1:1 (방마다 1시간에 1번)."""
