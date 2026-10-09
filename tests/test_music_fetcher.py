@@ -60,6 +60,7 @@ def blocked_state_comes_back_so_primary_ok_works_in_the_parent():
 def a_stuck_job_is_killed_and_the_next_one_still_works():
     s = src(timeout=1.0)
     try:
+        s.resolve("미리 띄우기")                          # 켜지는 시간은 일 시간(1초)에 안 들어감 — 서버가 느려도
         t = time.monotonic()
         try:
             s.resolve("느림")
@@ -67,6 +68,16 @@ def a_stuck_job_is_killed_and_the_next_one_still_works():
         except music.MusicError as e:
             assert e.code == "download" and time.monotonic() - t < 3
         assert s.resolve("다음")["title"] == "다음", "죽인 자식 대신 새로 띄움"
+    finally:
+        s.close()
+
+
+@test
+def slow_start_does_not_count_against_the_job_time():
+    """2026-10-10 서버 시험(힘 60%): 자식이 켜지는 데 1초↑ → 1초 일 제한에 걸려 실패하던 것. 켜짐은 START_TIMEOUT 으로 따로."""
+    s = fetcher.ProcSource(Path(tempfile.mkdtemp()), factory="fetcher_fake:SlowStart", env=ENV, timeout=1.0)
+    try:
+        assert s.resolve("다음")["title"] == "다음"
     finally:
         s.close()
 

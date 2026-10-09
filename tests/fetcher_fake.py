@@ -26,3 +26,11 @@ class Fake:
     def fetch(self, vid):
         time.sleep(0.5)
         return f"/tmp/{vid}.webm"
+
+
+class SlowStart(Fake):
+    """켜지는 데 오래 걸리는 자식 (서버가 바쁠 때 import 가 느린 것 흉내)."""
+
+    def __init__(self, data_dir):
+        time.sleep(1.5)
+        super().__init__(data_dir)
