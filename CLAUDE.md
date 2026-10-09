@@ -762,6 +762,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   send_frame 은 코어 수만큼 스레드풀(서버 2개), 에코·자동 음량은 꺼져 있음, Opus 모노·음성 모드·ptime 60. 우리 쪽 고침: 크기 바뀜은 조각마다 조금씩(`glide`
   줄임 50ms·키움 250ms, 말 사이 0.3초 틈엔 안 키움), 한계 넘는 소리 `soft_limit`(딱딱 잘림 X), 조각 비면 마지막 조각을 줄이며 끝·다시 0 에서, 곡 시작 전 0.5초 미리 풀기.
   끝 로그 '흔들림(30ms↑)·보내기 느림(20ms↑)' 으로 원인 확인 → 그래도 튀면 FIFO 파이프 소스(ntgcalls C++ 시계) 검토.
+  **2026-10-09 끊김·2배속 실제 원인들**: ① 동시 신청이 DJ 둘을 만듦 → 같은 줄에 번갈아 보냄(방마다 `_plocks` 잠금, 끝나는 DJ 기다림, `_ptasks_all` 손잡이) ·
+  ② 밀리면(보내기 0.2초 걸림) 몰아서 따라잡음 → 받아 둘 통이 없어 듣는 쪽이 빨리 감음 = '멈췄다가 2배속' → `RESYNC` 0.03초 넘게 밀리면 박자만 다시 ·
+  ③ 소리 줄로 보내는 곳은 `Worker._mic` 하나, 1초 120조각↑ 이면 '소리 조각 너무 많음' 기록 · ④ 우회 길 IPv4 만(소리 받기 403) · stereo=1 은 끔(의심).
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·

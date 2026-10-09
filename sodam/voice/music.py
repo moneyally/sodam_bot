@@ -37,6 +37,7 @@ PAUSE_MAX = float(os.getenv("MUSIC_PAUSE_MAX", "900"))     # 일시정지는 15�
 STALL_FRAMES = 1500                                        # 15초 동안 풀린 조각이 없으면 곡을 끝냄
 DUCK = 0.25                                                # 소담이 말하는 동안 노래 크기
 VOICE_HOLD = 30                                            # 목소리 조각이 끊겨도 0.3초는 줄인 채 (말 사이마다 노래가 '쿵' 커지지 않게)
+RESYNC = 0.03                                              # 이만큼(3조각) 넘게 밀리면 따라잡지 않고 박자 다시 맞춤
 PREBUFFER = 50                                             # 곡 시작 전 미리 풀어 둘 조각 (0.5초)
 AHEAD = 300                                                # 미리 풀어 두는 조각 (3초) — 디스크·CPU 가 잠깐 늦어도 안 끊김
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
@@ -1013,6 +1014,6 @@ class Player:
                 if late > 30:                   # 30ms 넘게 밀림 = 받는 쪽 버퍼가 비어 '튐' 가능
                     self.stats["jitter"] += 1
                 self.stats["max_late_ms"] = max(self.stats["max_late_ms"], int(late))
-                if wait < -0.2:
-                    self.stats["late"] += 1
+                if wait < -RESYNC:              # 밀렸으면 몰아서 보내지 말고 지금 박자로 다시 — ntgcalls 는 받아 둘 통이 없어서
+                    self.stats["late"] += 1     # 몰아 보낸 만큼 듣는 쪽이 빨리 감아 틂 ('멈췄다가 2배속', 2026-10-09)
                     nxt = self.clock()
