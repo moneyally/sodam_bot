@@ -94,6 +94,11 @@ STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
 STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
 STUTTER_KEY = "music_stutter_alert"
 REJOIN_EVERY = 15                # 🎵 음성채팅이 닫혀 멈춘 방: 다시 열렸는지 확인 간격
+# 🎵 새벽에 인기곡 미리 받기: 한국시각 4시대, 노래 트는 방이 없을 때만, 하루 한 번, 곡 사이 쉬면서
+PREFETCH_HOUR = 4
+PREFETCH_MAX = 20
+PREFETCH_GAP = 20
+PREFETCH_KEY = "music_prefetch_day"
 
 
 class Worker:
@@ -143,6 +148,7 @@ class Worker:
         self._swin: dict[int, deque] = {}           # 끊김 감시: 방마다 [(시각, 숫자, 어느 DJ)]
         self._watch_at = 0.0
         self._rejoin_at = 0.0
+        self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -562,6 +568,7 @@ class Worker:
                 await self._music_rejoin()
             except Exception as e:
                 log.warning("노래 다시 들어가기 확인 실패: %s", e)
+        self._maybe_night_prefetch()
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
             try:
@@ -600,6 +607,10 @@ class Worker:
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "restart")
         await self._stop_music("restart")
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._prefetch_task
         if hasattr(self.music_source, "close"):     # 받기 담당 자식 프로그램도 끝냄
             self.music_source.close()
 
@@ -878,6 +889,48 @@ class Worker:
             else:
                 pl.wake()
                 log.info("노래 이어 틀기 %s", chat_id)
+
+    def _maybe_night_prefetch(self, now: float | None = None) -> None:
+        kst = time.gmtime((time.time() if now is None else now) + 9 * 3600)
+        if kst.tm_hour != PREFETCH_HOUR or self.players or (self._prefetch_task and not self._prefetch_task.done()):
+            return
+        day = time.strftime("%Y-%m-%d", kst)
+        if self.__dict__.get("_prefetch_day") == day:
+            return
+        self._prefetch_day = day
+        self._prefetch_task = asyncio.create_task(self._night_prefetch(day))
+
+    async def _night_prefetch(self, day: str, gap: float = PREFETCH_GAP) -> int:
+        """많이 튼 곡을 미리 받고 크기도 재 둠 → 신청하면 바로 (받기 기다림·음원 막힘 영향 없음). 노래가 시작되면 멈춤.
+        받기는 다른 프로그램(fetcher, 낮은 우선순위)이 해서 소리 박자에는 안 닿음."""
+        if await self.db.get_state(0, PREFETCH_KEY) == day:
+            return 0
+        await self.db.set_state(0, PREFETCH_KEY, day)
+        src, got = self.music_source, 0
+        for vid in await musicq.popular_vids(self.db, limit=PREFETCH_MAX):
+            if self.players:
+                log.info("인기곡 미리 받기 멈춤 (노래 시작)")
+                break
+            cached = getattr(src, "_cached", None)
+            if cached and cached(vid):
+                continue
+            try:
+                path = await asyncio.to_thread(src.fetch, vid)
+                if hasattr(src, "loudness"):
+                    await asyncio.to_thread(src.loudness, path)
+                got += 1
+            except music.MusicError as e:
+                log.info("인기곡 미리 받기 %s: %s", vid, e)
+                if e.code == "blocked":
+                    break
+                continue
+            except Exception as e:
+                log.info("인기곡 미리 받기 %s: %r", vid, e)
+                continue
+            if gap:
+                await asyncio.sleep(gap)
+        log.info("인기곡 미리 받기: %s곡", got)
+        return got
 
     async def _call_open(self, chat_id: int) -> bool:
         """그 방에 음성채팅이 열려 있나 (우리가 켜지 않고 보기만 — 관리자가 닫은 걸 다시 켜면 안 됨)."""

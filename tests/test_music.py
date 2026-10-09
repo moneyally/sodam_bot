@@ -745,6 +745,18 @@ def youtube_retries_next_cookie_only_when_blocked():
                     raise DownloadError("ERROR: Unable to connect to proxy")
                 return "ok"
             assert y._run(dead_proxy) == "ok" and seen[0][0] and not seen[1][0] and seen[1][1], ("길이 죽으면 쿠키로", seen)
+            seen.clear()
+            os.environ["MUSIC_PROXY"] = "socks5://127.0.0.1:40000, socks5://127.0.0.1:40001"   # 길 두 개
+
+            def first_dead(ydl):
+                seen.append((ydl.opts.get("proxy"), ydl.opts.get("cookiefile")))
+                if ydl.opts.get("proxy") != "socks5://127.0.0.1:40001":
+                    raise DownloadError("ERROR: Unable to connect to proxy")
+                return "ok"
+            assert y._run(first_dead) == "ok" and seen == [("socks5://127.0.0.1:40000", None), ("socks5://127.0.0.1:40001", None)], \
+                ("첫 길이 죽으면 쿠키보다 둘째 길 먼저", seen)
+            seen.clear()
+            assert y._run(first_dead) == "ok" and seen == [("socks5://127.0.0.1:40001", None)], ("다음엔 된 길부터", seen)
         finally:
             os.environ.pop("MUSIC_PROXY", None)
 
@@ -1520,6 +1532,34 @@ async def closed_voice_chat_gives_up_after_the_wait_and_survives_a_restart():
     w.client = CallClient()
     await w._music_rejoin(int(time.time()) + musicq.REJOIN_SEC + 5)
     assert not await musicq.has_queue(db, CHAT) and not await db.get_state(0, musicq.REJOIN_KEY), "15분 지나면 정리"
+    await stop_all(w)
+
+
+@test
+async def popular_songs_are_fetched_at_night_once_and_stop_when_music_starts():
+    from sodam.voice import worker as W
+    db, w, src, _ = await make_worker()
+    now = int(time.time())
+    for vid, n in (("hotAAAAAAAA", 3), ("twoAAAAAAAA", 2), ("oneAAAAAAAA", 1), ("autAAAAAAAA", 5)):
+        for _ in range(n):
+            rid, _, _ = await musicq.add(db, -1000 - len(vid) - n, title=vid, url="u", vid=vid, duration=100, by_id=1, by_name="x",
+                                         per_user=0, auto=vid.startswith("aut"))
+            await db._write("UPDATE music_queue SET started_ts=?, state='done' WHERE id=?", (now, rid))
+    assert await musicq.popular_vids(db) == ["hotAAAAAAAA", "twoAAAAAAAA"], "두 번 넘게 사람이 튼 곡만 (자동 재생 빼고)"
+    src.fetched.clear()
+    assert await w._night_prefetch("2026-10-09", gap=0) == 2 and src.fetched == ["hotAAAAAAAA", "twoAAAAAAAA"]
+    assert await w._night_prefetch("2026-10-09", gap=0) == 0, "하루 한 번"
+    src.fetched.clear()
+    w.players[CHAT] = SimpleNamespace(done=False)        # 노래가 시작됨 → 받지 않음
+    assert await w._night_prefetch("2026-10-10", gap=0) == 0 and not src.fetched
+    w.players.pop(CHAT)
+    import calendar
+    kst4 = calendar.timegm((2026, 10, 10, W.PREFETCH_HOUR, 30, 0, 0, 0, 0)) - 9 * 3600   # 한국시각 4시 30분
+    w._maybe_night_prefetch(kst4 - 3600)                # 3시 → 안 함
+    assert w._prefetch_task is None
+    w._maybe_night_prefetch(kst4)
+    assert w._prefetch_task is not None
+    w._prefetch_task.cancel()
     await stop_all(w)
 
 

@@ -167,6 +167,7 @@ class Source:
         self.cache_dir = Path(data_dir) / "cache"
         self.max_sec, self.cache_mb = max_sec, cache_mb
         self.blocked_at = 0.0           # 기본 음원이 마지막으로 막은 시각
+        self._way = 0                   # 여러 우회 길 중 지난번에 된 길 (거기부터)
         self._locks: dict[str, threading.Lock] = {}   # 같은 곡을 두 곳(미리 받기·두 방)에서 동시에 받지 않게
         self._locks_guard = threading.Lock()
         self._sig: tuple = ()           # 쿠키 파일 모양 (바뀌면 기본 음원 다시 시도)
@@ -191,7 +192,7 @@ class Source:
         if sig != self._sig:
             self._sig, self.blocked_at = sig, 0.0
         wait = PRIMARY_RETRY
-        if os.getenv("MUSIC_PROXY", "").strip():   # 우회 길(WARP) 막힘은 잠깐씩 왔다 감 (서버 실측 2026-10-09) → 1시간 대신 5분
+        if proxies():                              # 우회 길(WARP) 막힘은 잠깐씩 왔다 감 (서버 실측 2026-10-09) → 1시간 대신 5분
             wait = min(wait, PROXY_RETRY)
         return time.time() - self.blocked_at >= wait
 
@@ -217,16 +218,21 @@ class Source:
         import yt_dlp
         self._env()
         jar = self.cookies() if cookies else []
-        proxy = os.getenv("MUSIC_PROXY", "").strip()
-        # 나가는 길(MUSIC_PROXY, 예: WARP socks5://127.0.0.1:40000)이 있으면 쿠키 없이 그 길로 먼저 — 서버 IP 는 '봇이냐?'로 막혀도
-        # 그 길은 됨 (서버 실측 2026-10-08: 쿠키 없이 3곡 다 받음). 그 길이 죽었거나 막히면 예전처럼 쿠키 → 쿠키 없이.
-        tries: list[tuple[str | None, str | None]] = ([(None, proxy)] if proxy else []) + \
+        ways = proxies()
+        # 나가는 길(MUSIC_PROXY, 예: WARP socks5://127.0.0.1:40000 — 쉼표로 여러 개)이 있으면 쿠키 없이 그 길로 먼저 — 서버 IP 는
+        # '봇이냐?'로 막혀도 그 길은 됨 (서버 실측 2026-10-08: 쿠키 없이 3곡 다 받음). 여러 길이면 지난번에 된 길부터, 안 되면 다음 길.
+        # 길이 다 죽었거나 막히면 예전처럼 쿠키 → 쿠키 없이.
+        start = self._way if self._way < len(ways) else 0
+        tries: list[tuple[str | None, str | None]] = [(None, ways[(start + i) % len(ways)]) for i in range(len(ways))] + \
             [(c, None) for c in random.sample(jar, len(jar))] + [(None, None)]
         last = ""
         for cookie, via in tries:
             try:
                 with yt_dlp.YoutubeDL(self._opts(cookie, via, **extra)) as ydl:
-                    return fn(ydl)
+                    got = fn(ydl)
+                if via:
+                    self._way = ways.index(via)
+                return got
             except yt_dlp.utils.DownloadError as e:
                 last = str(e)
                 if via:
@@ -619,6 +625,11 @@ def _hide_src(msg: str) -> str:
     msg = re.sub(r"^[\w-]+:\s+", "", msg)                     # 'abc123def45: ' 곡 ID
     msg = re.sub(r"(?i)\b(?:youtube|you\s*tube|soundcloud|yt-dlp)\b(?:\s+said)?:?", "", msg)   # 'YouTube said: …' (실측)
     return URL.sub("", msg).strip()
+
+
+def proxies() -> list[str]:
+    """노래 받기 우회 길 (MUSIC_PROXY, 쉼표로 여러 개 — 서버는 WARP 두 개)."""
+    return [p.strip() for p in os.getenv("MUSIC_PROXY", "").split(",") if p.strip()]
 
 
 def _short(s: str, n: int = 120) -> str:

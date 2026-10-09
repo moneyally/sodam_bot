@@ -243,6 +243,15 @@ async def top_tracks(db, chat_id: int, days: int = 30, limit: int = 10) -> list[
     return out
 
 
+async def popular_vids(db, days: int = 30, limit: int = 20, min_n: int = 2) -> list[str]:
+    """모든 방에서 사람이 신청해 실제로 튼 곡 중 많이 튼 것 (새벽에 미리 받아 둘 곡) — 실제로 받은 ID 기준."""
+    since = _now() - max(1, min(KEEP_DAYS, int(days))) * 86400
+    rows = await db._all("SELECT vid, COUNT(*) n FROM music_queue WHERE auto=0 AND started_ts IS NOT NULL AND ts>=? "
+                         "AND vid IS NOT NULL AND vid<>'' GROUP BY vid HAVING n>=? ORDER BY n DESC, MAX(id) DESC LIMIT ?",
+                         (since, min_n, limit))
+    return [r["vid"] for r in rows]
+
+
 async def top_requesters(db, chat_id: int, days: int = 30, limit: int = 5) -> list[dict]:
     since = _now() - max(1, min(KEEP_DAYS, int(days))) * 86400
     rows = await db._all("SELECT by_id, MAX(by_name) name, COUNT(*) n FROM music_queue WHERE chat_id=? AND auto=0 AND by_id IS NOT NULL "
