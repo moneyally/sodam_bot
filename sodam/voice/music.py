@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import random
 import re
+import subprocess
 import threading
 import time
 from collections import deque
@@ -40,6 +42,11 @@ VOICE_HOLD = 30                                            # 목소리 조각이
 RESYNC = 0.03                                              # 이만큼(3조각) 넘게 밀리면 따라잡지 않고 박자 다시 맞춤
 PREBUFFER = 50                                             # 곡 시작 전 미리 풀어 둘 조각 (0.5초)
 AHEAD = 300                                                # 미리 풀어 두는 조각 (3초) — 디스크·CPU 가 잠깐 늦어도 안 끊김
+XFADE = max(0.0, float(os.getenv("MUSIC_XFADE", "3")))     # 곡 사이 겹쳐 넘어가는 초 (0 = 겹치지 않고 바로 이어 붙이기만)
+NORMALIZE = os.getenv("MUSIC_NORMALIZE", "1") != "0"       # 곡마다 소리 크기 맞추기
+TARGET_LUFS = -14.0                                        # 맞출 크기 (음원 사이트들이 쓰는 기준)
+NORM_MIN, NORM_MAX = 0.35, 1.6                             # 크기 맞춤 배수 범위 (작은 곡을 너무 키우면 찌그러짐)
+NORM_STEP = 0.005                                          # 재는 게 늦게 끝나면 조각마다 이만큼씩 (1초에 0.5) 따라감
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
 SILENCE = bytes(audio.FRAME_BYTES)
 LINK_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#\s]*&)?v=|shorts/|live/|embed/)|youtu\.be/|music\.youtube\.com/watch\?(?:[^#\s]*&)?v=)"
@@ -535,6 +542,32 @@ class Source:
                 return str(p)
         return None
 
+    def loudness(self, path: str) -> float | None:
+        """곡 전체 소리 크기(LUFS, ebur128) — 한 번 재서 .loud/<파일>.json 에 남김 (곡마다 크기를 맞춰 틀려고).
+        무거운 일(곡 전체 풀기 ~1~2초)이라 fetcher 자식 프로그램이 함. 못 재면 None (그 곡은 크기 그대로)."""
+        p = Path(path)
+        note = p.parent / ".loud" / (p.name + ".json")
+        try:
+            return float(json.loads(note.read_text())["lufs"])
+        except Exception:
+            pass
+        try:
+            r = subprocess.run([ffmpeg_bin(), "-nostdin", "-hide_banner", "-i", str(p), "-vn", "-af", "ebur128=framelog=quiet",
+                                "-f", "null", "-"], capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            log.info("소리 크기 못 잼 %s: %r", p.name, e)
+            return None
+        m = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?)\s*LUFS", r.stderr or "")
+        if not m:
+            return None
+        lufs = float(m[-1])
+        if not -70 < lufs < 5:                              # 무음·이상한 값은 안 맞춤
+            return None
+        with contextlib.suppress(OSError):
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(json.dumps({"lufs": lufs}))
+        return lufs
+
     def trim(self) -> None:
         """오래 안 쓴 것부터 지움. 받는 중(.part)은 건드리지 않고, 그 사이 사라진 파일은 건너뜀."""
         files = []
@@ -554,6 +587,10 @@ class Source:
             total -= size
             with contextlib.suppress(OSError):
                 p.unlink()
+        for note in (self.dir / ".loud").glob("*.json"):   # 지워진 곡의 소리 크기 메모도
+            if not (self.dir / note.name[:-5]).exists():
+                with contextlib.suppress(OSError):
+                    note.unlink()
 
 
 def glob_escape(s: str) -> str:
@@ -641,6 +678,13 @@ class Decoder:
     def frame(self) -> bytes | None:
         return self.buf.popleft() if self.buf else None
 
+    def left(self) -> int | None:
+        """끝까지 남은 조각 수 — 다 풀었을 때만 (그 전엔 None). 곡 끝 겹쳐 넘어가기 시점을 잴 때."""
+        return len(self.buf) if self.eof else None
+
+    def ready(self) -> bool:
+        return len(self.buf) >= PREBUFFER or self.eof
+
     @property
     def finished(self) -> bool:
         return self.eof and not self.buf
@@ -679,13 +723,34 @@ def glide(cur: float, target: float) -> float:
     return min(target, cur + DUCK_UP)
 
 
-def mix(music: bytes | None, voice: bytes | None, gain: float, start: float | None = None) -> bytes:
-    """노래(gain 배, start 가 있으면 조각 안에서 start→gain 으로 매끄럽게) + 소담 목소리. 둘 다 없으면 무음."""
-    if not music and not voice:
+def pcm(b: bytes) -> np.ndarray:
+    return np.frombuffer(b[: audio.FRAME_BYTES], dtype="<i2").astype(np.float32)
+
+
+def ramp(g0: float, g1: float, n: int):
+    """조각 안에서 g0 → g1 (같으면 숫자 하나)."""
+    return g1 if g0 == g1 else np.linspace(g0, g1, n, dtype=np.float32)
+
+
+def norm_gain(lufs: float | None) -> float:
+    """곡 크기(LUFS) → 맞춤 배수. 못 쟀으면 1."""
+    if lufs is None:
+        return 1.0
+    return max(NORM_MIN, min(NORM_MAX, 10 ** ((TARGET_LUFS - float(lufs)) / 20)))
+
+
+def _has(m) -> bool:
+    return m is not None and (len(m) > 0 if isinstance(m, np.ndarray) else bool(m))
+
+
+def mix(music, voice: bytes | None, gain: float, start: float | None = None) -> bytes:
+    """노래(gain 배, start 가 있으면 조각 안에서 start→gain 으로 매끄럽게) + 소담 목소리. 둘 다 없으면 무음.
+    노래는 조각(bytes) 또는 크기 맞춤·겹치기를 이미 한 실수 배열 (잘리지 않게 끝에서 한 번만 누름)."""
+    if not _has(music) and not voice:
         return SILENCE
     out = np.zeros(audio.FRAME_BYTES // 2, dtype=np.float32)
-    if music and (gain > 0 or (start or 0) > 0):
-        m = np.frombuffer(music[: audio.FRAME_BYTES], dtype="<i2").astype(np.float32)
+    if _has(music) and (gain > 0 or (start or 0) > 0):
+        m = music[: len(out)] if isinstance(music, np.ndarray) else pcm(music)
         g = gain if start is None or start == gain else np.linspace(start, gain, len(m), dtype=np.float32)
         out[: len(m)] += m * g
     if voice:
