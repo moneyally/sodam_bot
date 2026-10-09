@@ -27,7 +27,8 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import leavelock, mediastore, medialog, modactions
+from . import autoreply, leavelock, mediastore, medialog, modactions
+
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -40,6 +41,7 @@ from .tools import ToolCtx
 from .util import RateLimiter, day_start, send_retry, surely_unsent, esc, human_minutes, is_stale, iyeyo, mention, sent_at, to_int, user_name  # noqa: F401 (RateLimiter: __main__ 에서 씀)
 
 log = logging.getLogger(__name__)
+autoreply.register_commands()   # .reply 명령 (commands → menu → panels 순환이라 여기서 등록)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다
@@ -608,6 +610,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await ai_reply(context, msg, role, f"말투 변경 부탁: {argstr}", scan)
             return
         await commands.dispatch(CmdCtx(svc, bot, msg, chat_id, user, role, args, argstr), cmd)
+        return
+    if await autoreply.maybe_reply(svc, bot, msg, text):   # 💬 등록한 낱말만 친 글 → 저장한 글로 답장 (게임·AI 안 탐)
         return
     if await _prefix_hint(context, chat_id, text):
         return

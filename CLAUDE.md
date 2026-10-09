@@ -113,6 +113,11 @@
   leave_lock on + leave_lock_hours(기본 168, 0=영구, 프리셋 1시간·1일·7일·30일·영구 + ✏️ '3일·12시간·영구' 입력) → **스스로 나간 사람만**
   (by == 본인, kicked 아님) 나간 순간 ban_chat_member(until_date) — 기간 끝나면 텔레그램이 풂, 중간엔 `.밴해제`. 자유 멤버·오너 제외,
   두 길(서비스 메시지·chat_member) 60초 claim 으로 한 번, mod_log leave_lock. 권한 없어 실패하면 chat_state leave_lock_fail → 🚪 화면 경고.
+- **💬 자동 답글**(`autoreply.py`, `panels/autoreply.py` 허브 m:ar, 안내서 guide/autoreply.md, tests/test_autoreply.py · 뮤테이션 8개, 2026-10-09 NASA 방 '.reply 공지'):
+  관리자가 글에 답장으로 `.reply 낱말`(별칭 .답글·.리플·.자동답글, 쉼표로 5개) 또는 `.reply 낱말 바로 쓸 글` → 누가 **그 낱말만** 치면(NFKC·대소문자·끝 ?! 무시)
+  그 사람 글에 답장으로 copy_message(원본 그대로: 서식·움직이는 이모지·사진·스티커·음성) → 원본 없으면 사본(rich_html + file_id, KINDS 는 mediastore).
+  지우기 `.reply 취소 낱말`·`.답글취소`·메뉴 🗑·AI 도구 auto_reply(add = 요청이 답장한 글 또는 text). 같은 낱말 autoreply_gap 초(기본 30, DB 한 문장 차지)·
+  한 사람 10초·방 하루 200·방 50개. 명령어·! 게임과 같은 낱말 거절. handlers 에서 명령 다음·게임/AI 앞. 명령 등록은 handlers 가 import 뒤 register_commands(순환 import).
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
   입장 검사 훅 `hooks.add_member_join_hook`.
 - 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).
