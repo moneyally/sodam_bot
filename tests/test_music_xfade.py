@@ -267,6 +267,30 @@ async def restart_right_after_handing_over_finishes_the_old_song():
 
 
 @test
+async def stop_while_a_slow_download_is_running_ends_right_away():
+    """2026-10-09 18:18: 음성채팅이 닫혔는데 막힌 음원을 받느라 몇 분 동안 끝을 못 냄 → 서버는 '노래 중'으로 알고 새 버전을 미룸."""
+    import threading
+    gate = threading.Event()
+
+    class Slow(Src):
+        def fetch(self, vid):
+            gate.wait(5)
+            return super().fetch(vid)
+    db, pl, sent = await setup("a", src=Slow())
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.2, pl.stop, "chat_closed")
+    t0 = time.monotonic()
+    try:
+        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        took = time.monotonic() - t0
+    finally:
+        gate.set()
+    assert took < 1.5, f"받기를 기다리지 않고 바로 끝 ({took:.1f}초)"
+    row = await db._one("SELECT state FROM music_queue")
+    assert row["state"] == "playing", "곡은 그대로 (다시 열리면 이어서)"
+
+
+@test
 async def a_crashing_pacer_ends_the_session_instead_of_hanging():
     class Boom(XDec):
         def frame(self):

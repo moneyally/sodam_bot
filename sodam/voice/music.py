@@ -772,6 +772,15 @@ def mix(music, voice: bytes | None, gain: float, start: float | None = None) -> 
     return np.clip(soft_limit(out), -32768, 32767).astype("<i2").tobytes()
 
 
+class _Stopped(Exception):
+    """받는 중에 DJ 가 멈춤."""
+
+
+def _ignore(t: asyncio.Future) -> None:
+    if not t.cancelled():
+        t.exception()                                      # 뒤에서 끝난 일의 오류는 버림 ('never retrieved' 경고 없이)
+
+
 # ── 틀기 ─────────────────────────────────────────────────
 class Player:
     """방 하나의 DJ. worker 가 만들고 run() 을 task 로. 곡 순서는 DB(musicq) — 재시작해도 이어서."""
@@ -1011,12 +1020,12 @@ class Player:
                 path = row["path"]
             else:
                 try:
-                    path = await asyncio.to_thread(self.source.fetch, row["vid"])
+                    path = await self._or_stop(asyncio.to_thread(self.source.fetch, row["vid"]))
                 except MusicError as e:          # 기본 음원이 막음 → 같은 노래를 대체 음원에서 (쿠키 없을 때 실측 전부 막힘)
                     if e.code != "blocked" or not hasattr(self.source, "fallback"):
                         raise
-                    alt = await asyncio.to_thread(self.source.fallback, row["title"], int(row["duration"] or 0))
-                    path = await asyncio.to_thread(self.source.fetch, alt["vid"])
+                    alt = await self._or_stop(asyncio.to_thread(self.source.fallback, row["title"], int(row["duration"] or 0)))
+                    path = await self._or_stop(asyncio.to_thread(self.source.fetch, alt["vid"]))
                     await musicq.set_track(self.db, row["id"], alt["title"], alt["url"], alt["vid"], alt["duration"])
                     row.update(title=alt["title"], url=alt["url"], vid=alt["vid"], duration=alt["duration"])
             if not ready:
@@ -1026,6 +1035,9 @@ class Player:
                 self.row = row
                 await self._open(path, int(row["pos_ms"] or 0))
                 self._measure_later(self.dec)
+        except _Stopped:                                   # 받는 중에 멈춤 → 곡은 그대로 (재시작·닫힘이면 이어서, 끝이면 worker 가 정리)
+            self.row = None
+            return
         except MusicError as e:
             self.row = None
             await musicq.finish(self.db, row["id"], "failed")
@@ -1068,6 +1080,23 @@ class Player:
             if self.dec is mine:
                 self.dec = None
             await mine.close()
+
+    async def _or_stop(self, aw):
+        """받기처럼 오래 걸릴 수 있는 일을 기다리다가 멈춤(끝·닫힘·재시작)이 오면 바로 빠져나옴 — 일은 뒤에서 끝나게 둠.
+        (2026-10-09 18:18: 음성채팅이 닫혔는데 막힌 음원을 받느라 몇 분 동안 끝을 못 내서 '노래 중'으로 남음)"""
+        job = asyncio.ensure_future(aw)
+        if self.done:
+            job.add_done_callback(_ignore)
+            raise _Stopped
+        stop = asyncio.ensure_future(self._done.wait())
+        try:
+            await asyncio.wait({job, stop}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop.cancel()
+        if job.done():
+            return job.result()
+        job.add_done_callback(_ignore)
+        raise _Stopped
 
     # ── 다음 곡 미리 풀기 · 크기 맞추기 · 겹쳐 넘어가기 ──
     def _spawn(self, coro) -> None:
