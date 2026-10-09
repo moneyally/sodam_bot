@@ -1010,6 +1010,9 @@ class Worker:
             snap = {k: int(pl.stats.get(k, 0)) for k in STUTTER_LIMITS}
             snap["max_late"], pl.win_max_late = int(getattr(pl, "win_max_late", 0)), 0
             hist = self._swin.setdefault(chat_id, deque())
+            if not hist or hist[-1][2] != id(pl):     # 처음 보는 DJ → 시작 때 0 에서 셈 (예전: 첫 1분 사이 끊김은 기준점에 묻혀 못 셈)
+                hist.clear()
+                hist.append((now - STUTTER_EVERY, {k: 0 for k in snap}, id(pl)))
             hist.append((now, snap, id(pl)))
             while hist and (now - hist[0][0] > STUTTER_WIN + 1 or hist[0][2] != id(pl)):
                 hist.popleft()
