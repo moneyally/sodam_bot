@@ -1487,3 +1487,58 @@ async def two_requests_at_once_make_only_one_dj():
     assert a is b, "한 방에 DJ 는 한 명"
     assert len([t for t in w._ptasks_all if not t.done()]) == 1
     await stop_all(w)
+
+
+@test
+async def after_a_stall_the_dj_does_not_burst_frames_to_catch_up():
+    """실제 2026-10-09 '멈췄다가 다시 나오니 2배속': 0.2초 밀리면 그만큼 한꺼번에 보냄 → 받아 둘 통이 없어 듣는 쪽이 빨리 감아 틂.
+    밀리면 지금 박자로 다시 맞추고 몰아 보내지 않음."""
+    db = await make_db()
+    clock = Clock()
+    sent_at = []
+    stall = {"on": False}
+
+    async def send(f):
+        sent_at.append(clock.t)
+        if stall["on"]:                              # 보내기가 0.15초 걸림 (스레드풀이 바쁨)
+            stall["on"] = False
+            clock.t += 0.15
+
+    async def sleep(s):
+        clock.t += s
+        await asyncio.sleep(0.001)
+    Const.LEN = 100000
+    pl = music.Player(db, CHAT, send, source=FakeSource(tempfile.mkdtemp()), decoder=Const, clock=clock, sleep=sleep, poll=0.02)
+    await musicq.add(db, CHAT, title="t", url="u", vid="vvvvvvvvvvv", duration=999, by_id=1, by_name="a")
+    task = asyncio.create_task(pl.run())
+    await until(lambda: len(sent_at) > 50)
+    stall["on"] = True
+    n = len(sent_at)
+    await until(lambda: len(sent_at) > n + 30)
+    pl.stop("end")
+    await task
+    after = sent_at[n:n + 30]
+    burst = sum(1 for a, b in zip(after, after[1:]) if b - a < 0.005)
+    assert burst <= 3, ("밀린 뒤 몰아 보냄 (빨리 감기)", burst, [round(b - a, 3) for a, b in zip(after, after[1:])][:15])
+
+
+@test
+async def two_senders_on_one_call_are_logged():
+    db, w, _, _ = await make_worker()
+    import logging
+    seen = []
+
+    class H(logging.Handler):
+        def emit(self, r):
+            seen.append(r.getMessage())
+    h = H()
+    logging.getLogger("sodam.voice").addHandler(h)
+    try:
+        for _ in range(130):                         # 1초 안에 130조각 (DJ + 목소리 따로)
+            await w._mic(CHAT, music.SILENCE, "dj" if _ % 2 else "voice")
+        w._mic_win[CHAT][0] -= 1.1                    # 1초 지남
+        await w._mic(CHAT, music.SILENCE, "dj")
+    finally:
+        logging.getLogger("sodam.voice").removeHandler(h)
+    assert any("너무 많음" in m and "dj,voice" in m for m in seen), seen
+    await stop_all(w)

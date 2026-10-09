@@ -83,6 +83,7 @@ def user_client(session: str, api_id: int, api_hash: str):
                           flood_sleep_threshold=10)   # 긴 FloodWait 동안 조용히 멈추지 않고 오류로 (다른 방 일이 안 막히게)
 
 
+MIC_OVER = 120                  # 1초에 이보다 많이 보내면 두 군데서 보내는 것 (정상 100)
 OWNER_ALERT_SEC = 6 * 3600       # 🎵 음원 막힘 오너 알림 간격
 
 
@@ -121,6 +122,8 @@ class Worker:
         self.ptasks: dict[int, asyncio.Task] = {}
         self._ptasks_all: set[asyncio.Task] = set()
         self._plocks: dict[int, asyncio.Lock] = {}
+        self._mic_win: dict[int, list] = {}         # 방마다 [1초 창 시작, 조각 수, 보낸 곳]
+        self._mic_warned: dict[int, float] = {}
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -416,6 +419,21 @@ class Worker:
         if pl is not None and not pl.done:
             pl.voice_frame(frame)
             return
+        await self._mic(chat_id, frame, "voice")
+
+    async def _mic(self, chat_id: int, frame: bytes, who: str) -> None:
+        """소리 줄로 보내는 곳은 여기 하나. 1초에 조각이 MIC_OVER(정상 100)보다 많으면 두 군데서 보내는 것 → 기록
+        (2026-10-09 '다시 켜니 2배속' — 노래 DJ·AI 목소리가 따로 보내면 정확히 2배)."""
+        now = time.monotonic()
+        w = self._mic_win.get(chat_id)
+        if w is None or now - w[0] >= 1.0:
+            if w is not None and w[1] > MIC_OVER and now - self._mic_warned.get(chat_id, 0) > 60:
+                self._mic_warned[chat_id] = now
+                log.warning("소리 조각 너무 많음 %s: 1초에 %d개 (%s) · DJ=%s 대화=%s", chat_id, w[1], ",".join(sorted(w[2])),
+                            chat_id in self.players, chat_id in self.bridges)
+            w = self._mic_win[chat_id] = [now, 0, set()]
+        w[1] += 1
+        w[2].add(who)
         await self.calls.send_frame(chat_id, self.media.Device.MICROPHONE, frame)
 
     async def _stop(self, chat_id: int, reason: str = "admin") -> tuple[bool, str]:
@@ -593,7 +611,7 @@ class Worker:
         ok, res = await self._ensure_call(chat_id, p)
         if not ok:
             return None, res
-        pl = music.Player(self.db, chat_id, lambda f: self.calls.send_frame(chat_id, self.media.Device.MICROPHONE, f),
+        pl = music.Player(self.db, chat_id, lambda f: self._mic(chat_id, f, "dj"),
                           source=self.music_source, announce=self._music_say, decoder=self.music_decoder,
                           has_voice=lambda: chat_id in self.bridges, **self.music_opts)
         sid = await musicq.session_start(self.db, chat_id, by)
