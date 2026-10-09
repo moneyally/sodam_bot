@@ -1470,3 +1470,20 @@ async def new_request_while_old_dj_is_closing_waits_and_keeps_the_task():
     finally:
         musicq.session_end = real_end
     await stop_all(w)
+
+
+
+@test
+async def two_requests_at_once_make_only_one_dj():
+    """실제 2026-10-09 09:55: 재생목록 12곡 + 다른 신청이 동시에 → DJ 둘 → 번갈아 소리 보내 끊김 · 하나는 정리 도중 지워짐."""
+    db, w, _, _ = await make_worker()
+    real = w._ensure_call
+
+    async def slow_call(*a, **k):                    # 통화 들어가기에 시간이 걸리는 사이 두 번째 신청
+        await asyncio.sleep(0.05)
+        return await real(*a, **k)
+    w._ensure_call = slow_call
+    (a, _), (b, _) = await asyncio.gather(w._get_player(CHAT, {}, None), w._get_player(CHAT, {}, None))
+    assert a is b, "한 방에 DJ 는 한 명"
+    assert len([t for t in w._ptasks_all if not t.done()]) == 1
+    await stop_all(w)

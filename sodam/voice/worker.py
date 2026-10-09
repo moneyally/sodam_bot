@@ -120,6 +120,7 @@ class Worker:
         self.players: dict[int, music.Player] = {}
         self.ptasks: dict[int, asyncio.Task] = {}
         self._ptasks_all: set[asyncio.Task] = set()
+        self._plocks: dict[int, asyncio.Lock] = {}
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -575,6 +576,13 @@ class Worker:
             return True, "joined"
 
     async def _get_player(self, chat_id: int, p: dict, by: int | None) -> tuple[Any, str]:
+        """방마다 DJ 는 한 명. 동시에 두 신청이 오면(재생목록 + 다른 신청) 둘 다 '없네' 하고 DJ 를 둘 만들던 것 — 2026-10-09 실제:
+        두 DJ 가 같은 소리 줄에 번갈아 보내 0.01초씩 끊기고, 덮인 쪽은 손잡이를 잃고 정리 도중 지워짐. 그래서 방마다 잠금."""
+        lock = self._plocks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            return await self._get_player_locked(chat_id, p, by)
+
+    async def _get_player_locked(self, chat_id: int, p: dict, by: int | None) -> tuple[Any, str]:
         pl = self.players.get(chat_id)
         if pl is not None and not pl.done:
             return pl, "ok"
