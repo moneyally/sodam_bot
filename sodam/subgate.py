@@ -120,12 +120,22 @@ async def _prompt(svc: Services, bot, chat_id: int, user, channel: str) -> None:
         log.warning("subgate prompt failed %s: %s", chat_id, e)
 
 
-async def _block(svc: Services, bot, chat_id: int, user, channel: str) -> None:
+async def _block(svc: Services, bot, chat_id: int, user, channel: str, after_greet: bool = False) -> None:
     try:
         await bot.restrict_chat_member(chat_id, user.id, ChatPermissions.no_permissions())
         await svc.db.log_mod(chat_id, None, user.id, "subgate", f"채널 {channel} 구독 전 채팅 금지")
     except TelegramError as e:
         log.warning("subgate restrict failed %s/%s: %s", chat_id, user.id, e)
+    greeter = getattr(svc, "greeter", None)
+    busy = getattr(greeter, "busy", None)
+    if after_greet and busy is not None and busy(chat_id):
+        persist.spawn(_prompt_after_greet(svc, bot, chat_id, user, channel))   # 입장 인사 → 그 아래에 구독 안내
+        return
+    await _prompt(svc, bot, chat_id, user, channel)
+
+
+async def _prompt_after_greet(svc: Services, bot, chat_id: int, user, channel: str) -> None:
+    await svc.greeter.wait_sent(chat_id)
     await _prompt(svc, bot, chat_id, user, channel)
 
 
@@ -148,7 +158,7 @@ async def on_join(svc: Services, bot, chat_id: int, user, s: dict) -> None:
         return
     got = await check(svc, bot, chat_id, user, s)
     if got is False:
-        await _block(svc, bot, chat_id, user, s["subgate_channel"])
+        await _block(svc, bot, chat_id, user, s["subgate_channel"], after_greet=True)
     else:   # 입장 때 구독 여부도 기록 (막은 건 _block 이 'subgate' 로)
         await svc.db.log_mod(chat_id, None, user.id, "subgate_pass" if got else "subgate_unknown",
                              "입장 때 이미 구독" if got else "구독 여부 확인 못 함 (소담이 채널 관리자 아님?)")

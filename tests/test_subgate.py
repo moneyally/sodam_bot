@@ -118,6 +118,31 @@ async def blind_when_bot_not_channel_admin_does_not_block():
 
 
 @test
+async def prompt_comes_after_the_join_greeting():
+    """2026-10-10 뉴월드: 인사는 5초 모아서 나가는데 구독 안내가 바로 떠서 안내가 인사 위에 깔렸음 → 인사 먼저."""
+    from sodam import greet
+    SUBS["@wh_channel"] = set()
+    r = await room(greet_enabled=True, greet_template="환영합니다 {names}")
+    r.svc.greeter = greet.Greeter(r.svc)                       # 진짜 인사기 (5초 모아서 보냄)
+    old_wait = greet.WAIT_SECONDS
+    greet.WAIT_SECONDS = 0.05
+    try:
+        await join(r, NEW)
+        assert any(c[0] == "restrict" and c[2] == NEW.id for c in r.bot.calls), "채팅 금지는 바로"
+        assert not any("채널 구독" in c[2] for c in r.bot.named("send_message")), "안내는 인사 뒤에"
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if any("채널 구독" in c[2] for c in r.bot.named("send_message")):
+                break
+    finally:
+        greet.WAIT_SECONDS = old_wait
+    texts = [c[2] for c in r.bot.named("send_message") if c[1] == r.CHAT]
+    gi = next(i for i, t in enumerate(texts) if "환영합니다" in t)
+    pi = next(i for i, t in enumerate(texts) if "채널 구독" in t)
+    assert gi < pi, texts
+
+
+@test
 def channel_value_validated():
     assert subgate._channel("https://t.me/abcd_ch") == "@abcd_ch" and subgate._channel("abcd_ch") == "@abcd_ch"
     assert subgate._channel("-1001234567890") == "-1001234567890"

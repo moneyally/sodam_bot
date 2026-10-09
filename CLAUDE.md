@@ -109,6 +109,7 @@
 - **📢 채널 구독 필수**(`subgate.py`, `panels/subgate.py` 허브 m:sgt, tests/test_subgate.py, 2026-10-07 백악관 요청, 기본 꺼짐): subgate_mode on +
   subgate_channel(@아이디·t.me·-100ID) → 구독 안 한 사람은 입장 때(캡차 없을 때)·말할 때(글 지움) 채팅 금지 + [📢 채널 들어가기][✅ 구독 확인](sg:, 본인만,
   getChatMember 로 실제 확인 후 풂). 구독자 30분 캐시, 안내 60초 1번. 소담이 채널 관리자가 아니면 막지 않고 관리자 알림 하루 1번.
+  입장 때 안내는 **입장 인사가 나간 뒤**(Greeter.wait_sent — 인사는 5초 모아서 나가 순서가 거꾸로였음, 2026-10-10 뉴월드), 채팅 금지는 바로.
 - **🚪 나간 사람 재입장 막기**(`leavelock.py`, `panels/leavelock.py` 허브 m:llk, tests/test_leavelock.py · 뮤테이션 6개, 2026-10-09 뉴월드 요청, 기본 꺼짐):
   leave_lock on + leave_lock_hours(기본 168, 0=영구, 프리셋 1시간·1일·7일·30일·영구 + ✏️ '3일·12시간·영구' 입력) → **스스로 나간 사람만**
   (by == 본인, kicked 아님) 나간 순간 ban_chat_member(until_date) — 기간 끝나면 텔레그램이 풂, 중간엔 `.밴해제`. 자유 멤버·오너 제외,
