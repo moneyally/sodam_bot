@@ -279,11 +279,24 @@ async def t_my_requests(ctx: ToolCtx, a: dict) -> str:
     return "\n".join(lines)
 
 
+ME_WORDS = {"나", "내", "저", "제", "본인", "me", "나는", "내꺼", "제꺼"}
+
+
 async def t_chat_stats(ctx: ToolCtx, a: dict) -> str:
     period = a.get("period", "오늘")
+    who = str(a.get("name") or "").strip()
+    if who:                                              # 한 사람: 그 기간 수·순위 (랭킹 밖이어도 정확히)
+        if who.lower() in ME_WORDS:
+            uid, label = ctx.caller.id, display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)
+        else:
+            row, err = await _resolve(ctx, who)
+            if err:
+                return err
+            uid, label = row["user_id"], _row_name(row)
+        return _plain(await stats.member_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, uid, label))
     summary = await stats.summary_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period)
     ranking = await stats.ranking_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, 5)
-    return _plain(summary + "\n" + ranking)
+    return _plain(summary + "\n" + ranking + "\n(한 사람 수·순위는 name 으로 다시 — 위 랭킹에 없다고 0개가 아님)")
 
 
 async def t_search_chat(ctx: ToolCtx, a: dict) -> str:
@@ -1160,7 +1173,9 @@ WHO_HINT = ("누구인지 이름이 없으면('싸운 두 명') read_chat 으로
 TOOLS: list[Tool] = [
     Tool("get_my_requests", "지금 말한 사람이 봇에게 요청했던 기록을 조회한다. '내가 뭐 요청했지' 같은 질문에 반드시 사용.",
          {"period": PERIOD}, [], t_my_requests),
-    Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다 ('어제' = 어제 하루만).", {"period": PERIOD, **ROOM_PARAM}, [],
+    Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다 ('어제' = 어제 하루만). 한 사람의 수·순위('나 몇 개야'·'이분 채팅집계')는 "
+         "name 에 그 사람 (말한 본인은 '나', '이분'·'걔'는 답장 대상이나 방금 말한 사람 이름).",
+         {"period": PERIOD, "name": {"type": "string", "description": "한 사람만: 이름·@아이디·ID 또는 '나'"}, **ROOM_PARAM}, [],
          room_scoped(t_chat_stats)),
     Tool("search_chat", "방 대화 기록에서 키워드를 검색한다 (2글자 이상 부분 일치). 여러 낱말은 띄어 쓰면 하나라도 들어간 "
          "메시지를 많이 맞는 순으로 찾고, 뜻이 비슷한 글(≈ 표시, 예: '먹튀' → '입금했는데 잠수')도 같이 찾는다.",

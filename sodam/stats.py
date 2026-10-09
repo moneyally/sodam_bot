@@ -23,6 +23,22 @@ async def ranking_text(db: DB, chat_id: int, tz, period: str = "오늘", limit: 
     return "\n".join(lines)
 
 
+async def member_text(db: DB, chat_id: int, tz, period: str, user_id: int, name: str) -> str:
+    """한 사람의 그 기간 채팅 수와 순위 — 랭킹(상위 몇 명)에 없다고 0개가 아님 (2026-10-09 '이분 채팅집계' → 소담이 '0개'로 지어냄)."""
+    since, until, label = period_range(period, tz)
+    end = until if until is not None else 1 << 62
+    mine = await db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0",
+                         (chat_id, user_id, since, end))
+    n = int(mine["n"] if mine else 0)
+    people = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0",
+                           (chat_id, since, end))
+    if not n:
+        return f"📊 {esc(name)} — {label} 채팅 0개 (기록 기준, 참여 {people['n'] if people else 0}명)"
+    above = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? AND ts<? "
+                          "AND is_bot=0 GROUP BY user_id) WHERE c>?", (chat_id, since, end, n))
+    return f"📊 {esc(name)} — {label} 채팅 {n}개 · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
+
+
 async def summary_text(db: DB, chat_id: int, tz, period: str = "오늘") -> str:
     since, until, label = period_range(period, tz)   # '어제' = 어제 하루만 (오늘 것 안 섞임)
     totals = await db.chat_totals(chat_id, since, until)

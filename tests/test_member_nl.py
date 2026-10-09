@@ -128,6 +128,28 @@ async def set_my_style_default_resets_to_room_style():
     assert (await db.get_member(A, ME))["style"] is None and "방 기본" in out and "없는 말투" not in out, out
 
 
+@test
+async def one_members_count_and_rank_even_outside_the_top_five():
+    """2026-10-09 18:57 실제: '소담아 이분 채팅집계' → 도구가 상위 5명만 줘서 소담이 'IDK님 0개'로 지어냄 (실제론 수십 개)."""
+    db, svc, bot = await world()
+    t0 = day_start(svc.cfg.tz) + 10
+    n = 0
+    for i, cnt in enumerate((9, 8, 7, 6, 5, 4)):                    # 6명 — 마지막(4개)은 상위 5 밖
+        uid = 900 + i
+        await add_member(db, A, fake_user(uid, f"사람{i}"))
+        for _ in range(cnt):
+            n += 1
+            await db._write("INSERT INTO messages(chat_id,user_id,msg_id,text,ts) VALUES(?,?,?,?,?)", (A, uid, n, "말", t0 + n))
+    out = await run(ctx(svc, bot, A), "chat_stats", {"period": "오늘"})
+    assert "사람5" not in out and "0개가 아님" in out, out
+    out = await run(ctx(svc, bot, A), "chat_stats", {"period": "오늘", "name": "사람5"})
+    assert "사람5" in out and "4개" in out and "6위" in out and "6명" in out, out
+    out = await run(ctx(svc, bot, A, uid=903, name="사람3"), "chat_stats", {"name": "나"})
+    assert "6개" in out and "4위" in out, out
+    out = await run(ctx(svc, bot, A), "chat_stats", {"name": "영희"})
+    assert "0개" in out, out                                       # 진짜 0 은 0 (기록 기준)
+
+
 # ── 3. '어제' = 어제 하루만 ───────────────────────────────
 @test
 async def yesterday_counts_only_yesterday():
