@@ -17,8 +17,8 @@ Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 # 노래 받기는 WARP 우회 길로 먼저 (sodam-warp.service). 길이 죽어 있으면 코드가 바로 예전 방식(쿠키)으로 넘어감
 Environment=MUSIC_PROXY=socks5://127.0.0.1:40000
 # 🎧 음질 (오디오 실험실, docs/AUDIO_LAB.md): 고친 ntgcalls(/opt/sodam-hq, update.sh 가 설치)가 읽음 — 원래 부품이면 무시됨.
-# 128kbps + 음악 모드(stereo=1). 원래 = 32kbps 모노 통화 모드. 되돌리려면 이 줄을 지우면 됨.
-Environment=NTG_OPUS_BITRATE=128000 NTG_OPUS_STEREO=1
+# 128kbps (모노). stereo=1 은 끔 — 2026-10-09 "다시 켰더니 2배속" 의심 (모노 조각을 두 귀로 읽으면 딱 2배). 원래 = 32kbps 모노 통화 모드.
+Environment=NTG_OPUS_BITRATE=128000
 Restart=always
 RestartSec=10
 KillSignal=SIGTERM
