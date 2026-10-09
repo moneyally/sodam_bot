@@ -1,6 +1,6 @@
 # 🤝 인수인계 (HANDOFF) — 새 세션은 CLAUDE.md 다음에 이것부터
 
-마지막 갱신: 2026-10-06 23:50 KST (스티커 팩·정지 스티커·글자만 바꾸기·채굴 간격 설정).
+마지막 갱신: 2026-10-09 18:40 KST (뮤직봇 3차: 겹쳐 넘기기·크기 맞추기·다시 열리면 이어 틀기·우회 길 2개·끊김 감시).
 **규칙: 큰 작업이 끝날 때마다 이 파일 맨 위 '지금 상태'와 '할 일'을 고친다.** 끝난 일은 '최근 한 일'로 내리고, 1주 넘은 건 지운다
 (자세한 설계는 CLAUDE.md 각 단락에 이미 있음 — 여기엔 '어디까지 했고 다음에 뭘 할지'만).
 
@@ -13,6 +13,15 @@
    또는 `python3 tools/ssh_ws.py 'cat /opt/sodam/VERSION; cat /opt/sodam/data/update.status'`.
 4. 작업 브랜치: `claude/button-panels` (머지 끝나면 `git fetch origin main && git checkout -B claude/button-panels origin/main && git push -f -u origin claude/button-panels`).
 5. 테스트 환경: `python3 -m venv ~/venv && ~/venv/bin/pip install -r requirements.txt` (컨테이너 새로 뜨면). 전체 테스트 `~/venv/bin/python tests/run_all.py --jobs 2` (~6분).
+
+## 1-0. 뮤직봇 (2026-10-09 저녁)
+- 3차 9개 중 8개 구현 (CLAUDE.md 🎵 '3차' 단락). 0691204 를 18:26 에 `sodam-update --force` 로 반영 시작 (음성채팅이 닫혔는데 옛 DJ 가
+  막힌 음원을 받느라 '노래 중'으로 남아 미뤄졌음 — 그 버그도 이번에 고침, `Player._or_stop`).
+- **확인할 것**: ① 실제 노래 틀 때 `노래 끝 … 겹쳐 넘김 N · 바로 이어 붙임 N` 로그, music_sessions.stats 의 jitter·late ② 끊김 감시 오너 알림이
+  너무 잦지 않은지 ③ data/warp_setup.status 의 두 길 IP 가 다른지 (같으면 둘째 길은 '프로그램이 죽었을 때 대비'일 뿐)
+  ④ 받기 자식 기록 '[받기]' 로 우회 길이 왜 막히는지 (17:35~18:09 미리 받기가 계속 '막힘' — 그때 WARP IP 104.28.193.116)
+- 서버 시험 시간: 코드가 바뀌면 여전히 ~20분 (로컬 9분). 느린 모듈: voice 180초·fix_ops 127초(update.sh 를 진짜로 돌리는 시험들)·sticker_parts 108초.
+  서버 로그 'tests ok (느린 것 …)' 로 다음에 다듬기. 8번 서버 키우기는 오너 결정 (설명만 함).
 
 ## 1. 지금 상태 (2026-10-06 16:00)
 - **#100 반영 확인 (5dc7023, 14:30)**: 테스트 2개 동시 첫 배포 = 서버 테스트 **16분** (14:14:13 → 14:30:20, 예전 25분). 목표 10분은 아직.
