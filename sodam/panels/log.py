@@ -19,6 +19,7 @@ ACTIONS = {
     "schedule": "🗓️ 예약공지 등록", "schedule_del": "🗓️ 예약공지 삭제",
     "knowledge_add": "📚 자료 추가", "knowledge_del": "📚 자료 삭제",
     "sub_grant": "📅 이용 기간 부여", "rules": "📜 규칙", "bot_admin": "🛠️ 봇 관리자", "free": "🕊️ 자유 멤버", "join_pass": "🚪 가입 확인 통과", "join_decline": "🚪 가입 신청 거절",
+    "leave_lock": "🚪 나가서 재입장 막음",
 }
 
 

@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import mediastore, medialog, modactions
+from . import leavelock, mediastore, medialog, modactions
 from .agent import run_agent
 from .db import disk_full
 from .moderation import owner_kb
@@ -418,6 +418,7 @@ async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await members_panel.mark(svc.db, msg.chat_id, msg.left_chat_member.id, left=True)
         if not by_job:
             await farewell.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)   # 👋 스스로 나간 사람만
+            await leavelock.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)  # 🚪 재입장 막기 (켠 방만)
 
 
 async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -457,6 +458,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not await cleanup.job_leave(svc, cmu.chat.id, new.user.id, getattr(by, "id", None), context.bot.id):
             await farewell.on_leave(context, cmu.chat.id, new.user, by,  # cancel 전에 (캡차 대기 확인)
                                     kicked=new.status == ChatMemberStatus.BANNED)
+            await leavelock.on_leave(context, cmu.chat.id, new.user, by, kicked=new.status == ChatMemberStatus.BANNED)
         await svc.captcha.cancel(context.bot, cmu.chat.id, new.user.id)
 
 
