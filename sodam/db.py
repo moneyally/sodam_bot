@@ -206,6 +206,10 @@ def now() -> int:
     return int(time.time())
 
 
+# 채팅 집계 최소 글자 수 (방 설정 chat_min_chars, 0 = 전부). 띄어쓰기·줄바꿈은 글자로 안 셈. 매개변수 2개(같은 값)
+MIN_CHARS = "AND (?<=0 OR length(replace(replace(text,' ',''),char(10),''))>=?)"
+
+
 def _until(until: int | None) -> int:
     """집계 끝(미포함). 없으면 끝 없음 (util.period_range: '어제' = 오늘 0시까지)."""
     return until if until is not None else 1 << 62
@@ -567,23 +571,26 @@ class DB:
             rows = sorted(rows, key=lambda r: -sum(w in index_text(r["text"]) for w in words))[:limit]  # 안정 정렬
         return rows
 
-    async def top_chatters(self, chat_id: int, since: int, limit: int = 10, until: int | None = None) -> list[aiosqlite.Row]:
+    async def top_chatters(self, chat_id: int, since: int, limit: int = 10, until: int | None = None,
+                           min_chars: int = 0) -> list[aiosqlite.Row]:
         return await self._all(
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
             "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 "
-            "GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, _until(until), limit))
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + MIN_CHARS.replace("text", "msg.text") +
+            " GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, _until(until), min_chars, min_chars, limit))
 
-    async def chat_totals(self, chat_id: int, since: int, until: int | None = None) -> aiosqlite.Row:
+    async def chat_totals(self, chat_id: int, since: int, until: int | None = None, min_chars: int = 0) -> aiosqlite.Row:
         return await self._one(
             "SELECT COUNT(*) AS messages, COUNT(DISTINCT user_id) AS users FROM messages "
-            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0", (chat_id, since, _until(until)))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + MIN_CHARS,
+            (chat_id, since, _until(until), min_chars, min_chars))
 
-    async def hourly_counts(self, chat_id: int, since: int, tz_offset_sec: int, until: int | None = None) -> list[aiosqlite.Row]:
+    async def hourly_counts(self, chat_id: int, since: int, tz_offset_sec: int, until: int | None = None,
+                            min_chars: int = 0) -> list[aiosqlite.Row]:
         return await self._all(
             "SELECT ((ts + ?) / 3600) % 24 AS hour, COUNT(*) AS n FROM messages "
-            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 GROUP BY hour ORDER BY hour",
-            (tz_offset_sec, chat_id, since, _until(until)))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + MIN_CHARS + " GROUP BY hour ORDER BY hour",
+            (tz_offset_sec, chat_id, since, _until(until), min_chars, min_chars))
 
     async def user_message_count(self, chat_id: int, user_id: int, since: int = 0) -> int:
         row = await self._one(

@@ -118,7 +118,7 @@
   관리자가 글에 답장으로 `.reply 낱말`(별칭 .답글·.리플·.자동답글, 쉼표로 5개) 또는 `.reply 낱말 바로 쓸 글` → 누가 **그 낱말만** 치면(NFKC·대소문자·끝 ?! 무시)
   그 사람 글에 답장으로 copy_message(원본 그대로: 서식·움직이는 이모지·사진·스티커·음성) → 원본 없으면 사본(rich_html + file_id, KINDS 는 mediastore).
   지우기 `.reply 취소 낱말`·`.답글취소`·메뉴 🗑·AI 도구 auto_reply(add = 요청이 답장한 글 또는 text). 같은 낱말 autoreply_gap 초(기본 30, DB 한 문장 차지)·
-  한 사람 10초·방 하루 200·방 50개. 명령어·! 게임과 같은 낱말 거절. handlers 에서 명령 다음·게임/AI 앞. 명령 등록은 handlers 가 import 뒤 register_commands(순환 import).
+  한 사람 1분 5번(다른 낱말은 바로 — 10초 1번일 땐 '인사'→'공지' 연달아 친 게 씹혔음, 2026-10-10 뉴월드)·방 하루 200·방 50개. 명령어·! 게임과 같은 낱말 거절. handlers 에서 명령 다음·게임/AI 앞. 명령 등록은 handlers 가 import 뒤 register_commands(순환 import).
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
   입장 검사 훅 `hooks.add_member_join_hook`.
 - 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).
@@ -508,6 +508,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   AI 질문 다시 쓰기는 안 함 (느리고 비쌈).
 - 방 흐름 메모: 하루 6번 상한을 밤새 다 써서 바쁜 방은 하루 종일 멈춤(백악관 07:47 뒤 3,221개) + 확인만 해도 +1 → ROOM_DAILY 16·진짜 갱신만 셈·220줄,
   숫자·시각·@아이디 원문 그대로 + '찾을 낱말'.
+- **📏 채팅 집계 최소 글자 수** 방 설정 chat_min_chars(0=전부, 📊 화면 프리셋 2·3·5·10, 2026-10-10 뉴월드 '5글자부터'): 띄어쓰기·줄바꿈 빼고 셈, db.MIN_CHARS 를
+  top_chatters·chat_totals·hourly_counts·stats.member_text 가 같이 씀 (.랭킹·.통계·하루 리포트·chat_stats). tests/test_chat_min_chars.py.
 - 채팅 집계 chat_stats name('나'·이름) = 그 기간 수·순위 (상위 5명만 줘서 랭킹 밖 사람을 0개로 지어내던 것).
 - 재시작: 실행 중 이어 보낸 말도 ai_queue 줄에 덧붙임(aiqueue.append) · 다시 보낸 답은 실제 글로 기록 + ai_turns. 1.5초 몰아 받기·사진 3분 기억·끝난 게임 10분은
   메모리 그대로 (실측상 재시작 5초라 영향 거의 없음).

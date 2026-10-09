@@ -1,10 +1,25 @@
 """채팅 집계 문구. 명령어·AI 도구·일일 리포트가 같이 쓴다."""
 from datetime import datetime
 
-from .db import DB
+from .db import DB, MIN_CHARS
+from .settings import register_setting
 from .util import display_name, esc, fmt_time, period_range
 
 MEDALS = ["🥇", "🥈", "🥉"]
+
+# 2026-10-10 뉴월드 '채팅 집계 5글자부터만' — 'ㅋㅋ'·'ㅇㅇ' 로 순위 올리기 막기. 띄어쓰기 빼고 셈, 0 = 전부.
+register_setting("chat_min_chars", 0, "채팅 집계 최소 글자 수 (0=전부)", range_=(0, 50))
+
+
+async def min_chars(db: DB, chat_id: int) -> int:
+    try:
+        return max(0, int((await db.get_settings(chat_id)).get("chat_min_chars") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rule(n: int) -> str:
+    return f" ({n}글자 이상만)" if n > 0 else ""
 
 
 def _name(row) -> str:
@@ -13,10 +28,11 @@ def _name(row) -> str:
 
 async def ranking_text(db: DB, chat_id: int, tz, period: str = "오늘", limit: int = 10) -> str:
     since, until, label = period_range(period, tz)
-    rows = await db.top_chatters(chat_id, since, limit, until)
+    n_min = await min_chars(db, chat_id)
+    rows = await db.top_chatters(chat_id, since, limit, until, n_min)
     if not rows:
-        return f"📊 {label} 채팅 기록이 아직 없어요."
-    lines = [f"📊 {label} 채팅 랭킹"]
+        return f"📊 {label} 채팅 기록이 아직 없어요." + _rule(n_min)
+    lines = [f"📊 {label} 채팅 랭킹" + _rule(n_min)]
     for i, r in enumerate(rows):
         badge = MEDALS[i] if i < 3 else f"{i + 1}."
         lines.append(f"{badge} {esc(_name(r))} — {r['n']}개")
@@ -27,26 +43,28 @@ async def member_text(db: DB, chat_id: int, tz, period: str, user_id: int, name:
     """한 사람의 그 기간 채팅 수와 순위 — 랭킹(상위 몇 명)에 없다고 0개가 아님 (2026-10-09 '이분 채팅집계' → 소담이 '0개'로 지어냄)."""
     since, until, label = period_range(period, tz)
     end = until if until is not None else 1 << 62
-    mine = await db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0",
-                         (chat_id, user_id, since, end))
+    m = await min_chars(db, chat_id)
+    mine = await db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
+                         + MIN_CHARS, (chat_id, user_id, since, end, m, m))
     n = int(mine["n"] if mine else 0)
-    people = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0",
-                           (chat_id, since, end))
+    people = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 "
+                           + MIN_CHARS, (chat_id, since, end, m, m))
     if not n:
-        return f"📊 {esc(name)} — {label} 채팅 0개 (기록 기준, 참여 {people['n'] if people else 0}명)"
+        return f"📊 {esc(name)} — {label} 채팅 0개{_rule(m)} (기록 기준, 참여 {people['n'] if people else 0}명)"
     above = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? AND ts<? "
-                          "AND is_bot=0 GROUP BY user_id) WHERE c>?", (chat_id, since, end, n))
-    return f"📊 {esc(name)} — {label} 채팅 {n}개 · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
+                          "AND is_bot=0 " + MIN_CHARS + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, m, m, n))
+    return f"📊 {esc(name)} — {label} 채팅 {n}개{_rule(m)} · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
 
 
 async def summary_text(db: DB, chat_id: int, tz, period: str = "오늘") -> str:
     since, until, label = period_range(period, tz)   # '어제' = 어제 하루만 (오늘 것 안 섞임)
-    totals = await db.chat_totals(chat_id, since, until)
+    m = await min_chars(db, chat_id)
+    totals = await db.chat_totals(chat_id, since, until, m)
     offset = int(datetime.now(tz).utcoffset().total_seconds())
-    hours = await db.hourly_counts(chat_id, since, offset, until)
-    top = await db.top_chatters(chat_id, since, 3, until)
+    hours = await db.hourly_counts(chat_id, since, offset, until, m)
+    top = await db.top_chatters(chat_id, since, 3, until, m)
     lines = [
-        f"📈 {label} 방 통계",
+        f"📈 {label} 방 통계" + _rule(m),
         f"메시지 {totals['messages']}개 · 참여 {totals['users']}명",
     ]
     if hours:

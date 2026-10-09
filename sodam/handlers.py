@@ -1389,7 +1389,7 @@ async def job_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
         s = await svc.db.get_settings(chat_id)
         if not s["daily_report"] or chat_id > 0 or not await svc.paid_features(chat_id):
             continue
-        totals = await svc.db.chat_totals(chat_id, day_start(svc.cfg.tz))
+        totals = await svc.db.chat_totals(chat_id, day_start(svc.cfg.tz), None, await stats.min_chars(svc.db, chat_id))
         if not totals or totals["messages"] < 10:
             continue
         text = ("🌙 <b>오늘의 소통방 리포트</b>\n" +
