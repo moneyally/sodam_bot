@@ -419,6 +419,19 @@ class _Escalate(Exception):
 # 결과를 도구가 방에 직접 올리는 도구 (ctx.quiet = AI 답은 안 보냄). 한 라운드가 이것들뿐이면 다음 AI 호출은 버려질 답만 쓰니
 # 부르지 않음 (서버 14일: 끝말잇기 24·음성방 20·영상 34·선택지 16·포인트 9번 — 매번 1번씩 헛호출).
 TERMINAL = frozenset({"start_game", "game_control", "point_game", "voice_call", "make_video", "ask_choice", "copy_sticker"})
+SHOW_TERMINAL = frozenset({"chat_stats"})   # show=true(표를 방에 그대로 올림)일 때만 끝 도구
+
+
+def _terminal(c) -> bool:
+    name = c.function.name
+    if name in TERMINAL:
+        return True
+    if name in SHOW_TERMINAL:
+        try:
+            return bool(json.loads(c.function.arguments or "{}").get("show"))
+        except (ValueError, AttributeError):
+            return False
+    return False
 LIGHT_MAX_STEPS = 3    # 작은 모델은 도구 라운드 3번까지 (길게 찾으면 올려 보낸 큰 모델의 시간·요금을 먹음)
 DONE_NOTE = ("(이미 한 일) 이 요청에서 방금 이미 실행한 도구: {tools}. 같은 일을 다시 하지 말고 남은 일만 한다.")
 
@@ -570,7 +583,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 log.exception("agent log step failed")
             messages.append({"role": "tool", "tool_call_id": c.id,
                              "content": wrap("tool_result", clip_mid(result, TOOL_RESULT_CHARS), nonce())})
-        if ctx.quiet and {c.function.name for c in calls} <= TERMINAL and not _CHAIN.search(request or "") \
+        if ctx.quiet and all(_terminal(c) for c in calls) and not _CHAIN.search(request or "") \
                 and not (steer is not None and steer.pending):
             run.event("terminal", tools=", ".join(c.function.name for c in calls))
             return ""   # 결과는 도구가 이미 방에 올림 — 버려질 답을 쓰려고 또 부르지 않음

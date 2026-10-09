@@ -150,6 +150,23 @@ async def one_members_count_and_rank_even_outside_the_top_five():
     assert "0개" in out, out                                       # 진짜 0 은 0 (기록 기준)
 
 
+@test
+async def stats_table_is_posted_as_is_when_asked_for_a_table():
+    """2026-10-09 얼라이드 '소담아 방 통계표좀 보여줘' → 도구는 표를 받았는데 AI 가 한 문장으로 줄여 답 ('통계표 왜 안 떠')."""
+    db, svc, bot = await world()
+    t0 = day_start(svc.cfg.tz) + 10
+    for i in range(3):
+        await db._write("INSERT INTO messages(chat_id,user_id,msg_id,text,ts) VALUES(?,?,?,?,?)", (A, ME, i + 1, "말", t0 + i))
+    req = FakeMsg(A, fake_user(ME, "영희"), "소담아 방 통계표좀 보여줘", message_id=77)
+    c = ctx(svc, bot, A, msg=req)
+    out = await run(c, "chat_stats", {"period": "오늘", "show": True})
+    sent = [x for x in bot.calls if x[0] == "send_message" and x[1] == A]
+    assert sent and "방 통계" in sent[-1][2] and "채팅 랭킹" in sent[-1][2] and "영희" in sent[-1][2], bot.calls
+    assert c.quiet and "올렸음" in out, out
+    out = await run(ctx(svc, bot, A), "chat_stats", {"period": "오늘"})
+    assert "방 통계" in out, "show 없으면 예전처럼 AI 가 답"
+
+
 # ── 3. '어제' = 어제 하루만 ───────────────────────────────
 @test
 async def yesterday_counts_only_yesterday():

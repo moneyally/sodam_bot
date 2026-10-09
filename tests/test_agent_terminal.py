@@ -100,7 +100,7 @@ class Quiet:
 
     async def __call__(self, name, args, ctx):
         self.ran.append(name)
-        if name in agent.TERMINAL:
+        if name in agent.TERMINAL or (name in agent.SHOW_TERMINAL and '"show": true' in str(args)):
             ctx.quiet = True
         return f"결과:{name}"
 
@@ -121,6 +121,24 @@ async def terminal_round_skips_next_call():
         assert len(r.llm.of("chat")) == 1 and not r.llm.script                 # 대본이 남지 않음 = 두 번째 호출 없음
         row = await last_run(r)
         assert '"e": "terminal"' in row["events"]
+    finally:
+        agent.execute = real
+        restore_timers(old)
+
+
+@test
+async def stats_table_round_ends_but_plain_stats_does_not():
+    """'통계표 보여줘' = chat_stats(show) 가 표를 올리면 다음 호출 없음. show 없는 통계는 AI 가 답해야 함."""
+    old, real = fast_timers(), agent.execute
+    agent.execute = Quiet()
+    try:
+        r = await room([tool_call("chat_stats", {"show": True})], light="")
+        await r.say(BOSS, "소담아 통계표 보여줘")
+        assert len(r.llm.of("chat")) == 1 and not r.llm.script
+        agent.execute = Quiet()
+        r = await room([tool_call("chat_stats", {"period": "오늘"}), reply("오늘 꽤 쳤어")], light="")
+        await r.say(BOSS, "소담아 오늘 몇 개야")
+        assert len(r.llm.of("chat")) == 2
     finally:
         agent.execute = real
         restore_timers(old)

@@ -89,7 +89,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 노래 틀어·다음 곡·노래 꺼·섞어·자동재생·가사·인기곡 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results
 - 경기 일정·결과·순위 → sports · 뉴스 → news_headlines · 날씨·시세·환율·최신 정보 → web_search
 - 계산·차트·표·엑셀·CSV·PDF·이 방 데이터 자유 분석 → run_code
-- 채팅 순위·집계 → chat_stats · 입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
+- 채팅 순위·집계 → chat_stats (통계표·순위표 = show, 한 사람 = name) · 입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
 - 이 사람 누구·아이디/고유번호·이름 바꾼 기록(allhistory)·사칭 → lookup_user · member_info · member_timeline · 멤버 찾아 → room_members
 - 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 내보내/강퇴 → kick_member · 밴 해제·스팸 명단 해제·free → member_action
 - 기능 켜/꺼·설정 바꿔·한도 → change_setting · 금지어·허용 도메인 → edit_list · 고정·잠금·청소·공지 → room_control
