@@ -115,7 +115,14 @@ class Worker:
         self.locks: dict[int, asyncio.Lock] = {}
         self._health_at = 0.0
         # 🎵 뮤직봇 (voice/music.py): 방마다 Player 하나. 통화(소리 줄)는 AI 대화·노래가 같이 씀 → in_call
-        self.music_source = music_source or music.Source(Path(getattr(cfg, "db_path", "data/sodam.db")).parent)
+        if music_source is None:                    # 찾기·받기는 다른 프로그램에서 (소리 박자가 안 막히게 — voice/fetcher.py 머리말)
+            data_dir = Path(getattr(cfg, "db_path", "data/sodam.db")).parent
+            if os.getenv("MUSIC_PROC", "1") != "0":
+                from .fetcher import ProcSource
+                music_source = ProcSource(data_dir)
+            else:
+                music_source = music.Source(data_dir)
+        self.music_source = music_source
         self.music_decoder = music_decoder or music.Decoder
         self.music_opts = music_opts or {}          # 테스트: 가짜 시계·짧은 대기
         self.players: dict[int, music.Player] = {}
@@ -569,6 +576,8 @@ class Worker:
         for chat_id in list(self.bridges):
             await self._stop(chat_id, "restart")
         await self._stop_music("restart")
+        if hasattr(self.music_source, "close"):     # 받기 담당 자식 프로그램도 끝냄
+            self.music_source.close()
 
     # ── 🎵 뮤직봇 ──────────────────────────────────────────
     async def _ensure_call(self, chat_id: int, p: dict) -> tuple[bool, str]:

@@ -764,6 +764,10 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   끝 로그 '흔들림(30ms↑)·보내기 느림(20ms↑)' 으로 원인 확인 → 그래도 튀면 FIFO 파이프 소스(ntgcalls C++ 시계) 검토.
   **2026-10-09 끊김·2배속 실제 원인들**: ① 동시 신청이 DJ 둘을 만듦 → 같은 줄에 번갈아 보냄(방마다 `_plocks` 잠금, 끝나는 DJ 기다림, `_ptasks_all` 손잡이) ·
   ② 밀리면(보내기 0.2초 걸림) 몰아서 따라잡음 → 받아 둘 통이 없어 듣는 쪽이 빨리 감음 = '멈췄다가 2배속' → `RESYNC` 0.03초 넘게 밀리면 박자만 다시 ·
+  ⑤ **진짜 범인 = 찾기·받기를 같은 프로그램 스레드에서** (서버 하네스 실측: 서버 시험만 → 박자 밀림 0번 / 같은 프로그램에서 받기 → 90초 79번·최대 0.11초 /
+  다른 프로그램 → 0번) → `voice/fetcher.py` ProcSource: Source 의 무거운 일은 자식 `python -m sodam.voice.fetcher` 2개(nice 5)가, 길이+pickle 로 주고받음,
+  blocked_at 은 오갈 때마다 같이 → primary_ok 는 부모에서 바로, 300초 넘으면 자식 죽이고 새로. 끄기 MUSIC_PROC=0. 하네스: 가짜 노래 일꾼(10ms 박자 6,000조각)으로 조건 비교.
+  ⑥ 우회 길 막힘은 잠깐씩 왔다 감 → 우회 길이 있으면 기본 음원 쉬는 시간 1시간 → 5분(PROXY_RETRY).
   ③ 소리 줄로 보내는 곳은 `Worker._mic` 하나, 1초 120조각↑ 이면 '소리 조각 너무 많음' 기록 · ④ 우회 길 IPv4 만(소리 받기 403) · stereo=1 은 끔(의심).
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
