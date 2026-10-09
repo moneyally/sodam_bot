@@ -78,5 +78,39 @@ async def quiet_room_or_dm_adds_nothing_and_past_turns_are_not_doubled():
     assert "speaker_thread" not in out, "1:1 은 대화 자체가 그 사람 것"
 
 
+@test
+async def short_follow_up_gets_the_last_exchange():
+    """'왜?'·'그거' 같은 짧은 말 → 이 사람과 10분 안 마지막 주고받음을 <last_exchange> 로 (서버: 짧은 말 실패 963번 중 15번)."""
+    r = await Room().open(settings={"ai_memory": False})
+    await r.join(ME)
+    now = int(time.time())
+
+    async def turn(ago, req, ans):
+        await r.db._write("INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id) VALUES(?,?,?,?,?,?,?)",
+                          (r.CHAT, ME.id, now - ago, "call", req, ans, None))
+    await turn(1200, "옛날 질문", "옛날 답")
+    await turn(120, "비트코인 지금 얼마야", "지금 1억 2천쯤이야")
+    r.llm.script = ["어제보다 올라서 그래!", "응!", "맑아"]
+    await r.say(ME, "소담아 왜?")
+    le = block(user_text(r.llm), "last_exchange")
+    assert "1억 2천" in le and "비트코인" in le and "옛날" not in le, le
+    await r.say(ME, "소담아 그거 더 알려줘 자세히 차트랑 같이 좀 보여줄래 부탁해")      # 길어도 '그거'로 시작하면
+    assert "어제보다 올라서" in block(user_text(r.llm), "last_exchange"), "바로 앞 = 방금 '왜?'에 한 답"
+    await r.say(ME, "소담아 오늘 서울 날씨 어때 비 온다던데 우산 챙겨야 할까?")          # 길고 새 얘기 → 안 붙임
+    assert "<last_exchange" not in user_text(r.llm)
+
+
+@test
+async def last_exchange_skips_old_turns_and_replies():
+    r = await Room().open(settings={"ai_memory": False})
+    await r.join(ME)
+    await r.db._write("INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id) VALUES(?,?,?,?,?,?,?)",
+                      (r.CHAT, ME.id, int(time.time()) - 900, "call", "질문", "15분 전 답", None))
+    r.llm.script = ["응?"]
+    await r.say(ME, "소담아 왜?")
+    assert "<last_exchange" not in user_text(r.llm), "10분 넘은 건 안 붙임"
+    assert await memory.last_exchange(r.db, r.CHAT, ME.id, "", r.svc.cfg.tz) == ""
+
+
 if __name__ == "__main__":
     run_all()

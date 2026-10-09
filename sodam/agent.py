@@ -244,7 +244,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     role_label = {0: "member", 1: "admin", 2: "owner"}[int(ctx.role)]
     if extras is None:
         try:
-            extras = await memory.context_for(svc, ctx.chat_id, ctx.caller.id, ctx.settings, history)
+            extras = await memory.context_for(svc, ctx.chat_id, ctx.caller.id, ctx.settings, history, request)
         except Exception:
             log.exception("memory context failed")
             extras = {}

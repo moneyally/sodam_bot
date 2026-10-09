@@ -689,7 +689,26 @@ async def recent_actions(db, chat_id: int, user_id: int, tz) -> list[str]:
 
 
 # ── 프롬프트에 넣을 기억 묶음 ─────────────────────────────
-async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict, history: list) -> dict:
+LAST_EXCHANGE_SEC = 10 * 60
+# 짧거나 앞을 가리키는 말 ('왜?'·'그거'·'그럼 몇 시?') — 바로 앞 소담과 주고받은 말에 이어지는 말일 가능성이 높음
+FOLLOW_WORDS = re.compile(r"^(왜|그거|그것|이거|저거|그럼|그러면|그래서|근데|아니|뭐가|어디|언제|누구|어떻게|진짜|정말|ㄹㅇ|그건|그게|더|또|다시|아까)")
+
+
+async def last_exchange(db, chat_id: int, user_id: int, request: str, tz) -> str:
+    """짧은 이어 말이면 이 사람과 10분 안 마지막 주고받음 한 줄 (yua-backend context-runtime 의 '짧은 후속 말 = 앞말에 강하게',
+    단 점수 대신 코드 단서만 — AI 질문 다시 쓰기는 느리고 비쌈, 조사 2026-10-09)."""
+    req = (request or "").strip()
+    if not req or (len(req) > 20 and not FOLLOW_WORDS.match(req)):
+        return ""
+    row = await db._one("SELECT ts, request, answer FROM ai_turns WHERE chat_id=? AND user_id=? AND ts>=? ORDER BY id DESC LIMIT 1",
+                        (chat_id, user_id, _now() - LAST_EXCHANGE_SEC))
+    if not row or not (row["answer"] or "").strip():
+        return ""
+    when = datetime.fromtimestamp(row["ts"], tz).strftime("%H:%M")
+    return f"[{when}] 상대: {(row['request'] or '')[:200]} → 너: {row['answer'][:300]}".replace("\n", " ")
+
+
+async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict, history: list, request: str = "") -> dict:
     """build_messages 에 넘길 user_memory / room_memory / past_turns. 실패해도 빈 값."""
     tz = svc.cfg.tz
     out: dict = {"user_memory": [], "room_memory": "", "past_turns": [], "card_results": [], "recent_actions": []}
@@ -715,6 +734,10 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
     if chat_id < 0:   # 🎙 최근 음성채팅에서 이 사람과 한 대화 ('아까 통화에서 한 얘기')
         from .voice import context as voice_context   # 늦게 import (voice → memory)
         out["past_turns"] += await voice_context.voice_turns(svc.db, chat_id, user_id, tz)
+    try:
+        out["last_exchange"] = await last_exchange(svc.db, chat_id, user_id, request, tz)
+    except Exception as e:
+        log.debug("last exchange failed: %r", e)
     try:
         out["recent_actions"] = await recent_actions(svc.db, chat_id, user_id, tz)
     except Exception as e:   # 기록 표가 없거나 깨져도 답은 한다
