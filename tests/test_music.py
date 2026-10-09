@@ -409,7 +409,7 @@ async def restart_saves_position_and_resumes_from_there():
         cur = await musicq.current(db, CHAT)
         assert cur["title"].startswith("이어틀기") and cur["pos_ms"] >= 200, "재시작: 곡은 playing 그대로 + 위치"
         assert len(await musicq.waiting(db, CHAT)) == 1
-        w2 = Worker(w.cfg, db, client_factory=lambda *a: Client(), calls_factory=FakeCalls, realtime_connect=None,
+        w2 = Worker(w.cfg, db, client_factory=lambda *a: OpenCallClient(), calls_factory=FakeCalls, realtime_connect=None,
                     media=MEDIA, bot=w.bot, music_source=w.music_source, music_decoder=FakeDecoder, music_opts=w.music_opts)
         from sodam import mtproto
         from sodam.voice.worker import session_path
@@ -1471,6 +1471,31 @@ class CallClient(Client):
         if type(req).__name__ == "GetFullChannelRequest":
             return SimpleNamespace(full_chat=SimpleNamespace(call="CALL" if self.open else None))
         return None
+
+
+class OpenCallClient(CallClient):
+    open = True
+
+
+@test
+async def restart_resume_waits_instead_of_reopening_a_closed_voice_chat():
+    """2026-10-09 18:44: 재시작 뒤 이어 틀기가 음성채팅이 열렸는지 안 보고 들어감 → 관리자가 닫은 음성채팅을 다시 켤 수 있음."""
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "닫힌방곡")
+        await until(lambda: CHAT in w.players and w.players[CHAT].pos_ms >= 100)
+        await w.shutdown()
+    finally:
+        FakeDecoder.LEN = 40
+    w.client = CallClient()                              # 닫혀 있음
+    await w.music_resume([CHAT])
+    assert CHAT not in w.players, "닫힌 음성채팅은 안 켬"
+    assert str(CHAT) in (await db.get_state(0, musicq.REJOIN_KEY)) and await musicq.has_queue(db, CHAT), "다시 열리면 이어서"
+    w.client.open = True
+    await w._music_rejoin()
+    await until(lambda: CHAT in w.players)
+    await stop_all(w)
 
 
 @test

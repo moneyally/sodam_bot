@@ -882,6 +882,12 @@ class Worker:
             return
         live = set(await musicq.chats_with_queue(self.db, 0))
         for chat_id in [c for c in chats if c in live]:
+            if not await self._call_open(chat_id):      # 그 사이 음성채팅이 닫힘 → 우리가 다시 켜지 않고 '다시 열리면 이어서'로
+                st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}   # (2026-10-09 18:44: 닫힌 방에 재시작 뒤 이어 틀기를 시도)
+                st[str(chat_id)] = now + musicq.REJOIN_SEC
+                await self.db.set_state(0, musicq.REJOIN_KEY, st)
+                log.info("노래 이어 틀기 대기 %s (음성채팅이 닫혀 있음)", chat_id)
+                continue
             pl, res = await self._get_player(chat_id, {}, None)
             if pl is None:
                 log.info("노래 이어 틀기 못 함 %s: %s", chat_id, res)
