@@ -287,6 +287,28 @@ async def bot_added_starts_trial_without_showing_price():
     assert group_msg[3]["reply_markup"].inline_keyboard[0][0].text == "⚙️ 봇 설정 (관리자)"
     dm = [c for c in bot.named("send_message") if c[1] == 1]
     assert dm and "USDT" in dm[0][2]                                # 가격은 초대한 관리자 1:1 로만
+    # 처음 설정하는 법 3단계 (2026-10-10 '설정을 어떻게 하는지' 를 사람이 말로 알려 주던 것)
+    assert "처음 설정하는 법" in group_msg[2] and "시작" in group_msg[2] and ".설정" in group_msg[2]
+
+    # 관리자로 지정되면 다음 할 일 + [⚙️ 봇 설정] 버튼을 남김 (지우지 않음, 방마다 한 번)
+    def admin(**rights):
+        return SimpleNamespace(status="administrator", is_member=None, user=SimpleNamespace(id=bot.id), **rights)
+    full = dict(can_delete_messages=True, can_restrict_members=True)
+    upd2 = SimpleNamespace(my_chat_member=SimpleNamespace(
+        chat=SimpleNamespace(id=CHAT, type="supergroup", title="새 방"), from_user=adder,
+        old_chat_member=m("member"), new_chat_member=admin(**full)))
+    await handlers.on_my_chat_member(upd2, ctx)
+    hint = [c for c in bot.named("send_message") if c[1] == CHAT][-1]
+    assert "관리자 권한 확인" in hint[2] and "시작" in hint[2], hint
+    assert hint[3]["reply_markup"].inline_keyboard[0][0].text == "⚙️ 봇 설정 (관리자)"
+    assert not ctx.job_queue.once, "설정 안내는 지우지 않음"
+    n = len(bot.named("send_message"))
+    upd3 = SimpleNamespace(my_chat_member=SimpleNamespace(
+        chat=SimpleNamespace(id=CHAT, type="supergroup", title="새 방"), from_user=adder,
+        old_chat_member=admin(can_delete_messages=True), new_chat_member=admin(**full)))
+    await handlers.on_my_chat_member(upd3, ctx)
+    again = bot.named("send_message")[n:]
+    assert again and "시작" not in again[-1][2] and ctx.job_queue.once, "두 번째부터는 예전처럼 짧게·자동 삭제"
 
 
 @test

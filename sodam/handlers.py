@@ -328,6 +328,15 @@ async def _is_admin_safe(svc: Services, bot, chat_id: int, user_id: int, *, fres
         return False
 
 
+# 처음 설정하는 법 (2026-10-10 '무료버전 켰는데 설정을 어떻게 하는지' — 1:1 /start → 그룹방 관리 → 방 설정을 사람이 말로 알려 주던 것)
+SETUP_STEPS = ("🛠 <b>처음 설정하는 법 (관리자)</b>\n"
+               "1️⃣ 저를 <b>관리자</b>로 지정 (메시지 삭제·사용자 차단·고정 권한)\n"
+               "2️⃣ 아래 <b>[⚙️ 봇 설정 (관리자)]</b> 누르기\n"
+               "3️⃣ 저와 1:1 창이 열리면 <b>시작</b> 누르기 → 이 방 설정 화면이 바로 떠요\n"
+               "다시 열 땐 방에서 <code>.설정</code>")
+SETUP_HINT_KEEP = 30 * 86400     # 관리자 지정 뒤 '이제 설정 눌러 주세요' 는 방마다 한 번 (30일)
+
+
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """봇이 방에 초대됐을 때: 무료 체험 시작 + 방엔 짧은 인사와 '⚙️ 봇 설정' 버튼만, 결제 정보는 초대한 사람 1:1 로."""
     cmu = update.my_chat_member
@@ -354,8 +363,8 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # 다시 초대한 방엔 체험이 다시 생기지 않음 → 지금 막 시작한 체험일 때만 '3일 무료' (끝난 방에 약속하던 것)
     st = await svc.billing.status(chat.id) if svc.billing and svc.billing.enabled else None
     in_trial = bool(st and st.state == "trial" and st.until and st.until - time.time() > (days - 1) * 86400)
-    intro = (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n"
-             "원활한 동작을 위해 저를 <b>관리자</b>로 지정해주세요 (메시지 삭제·사용자 차단·고정 권한).\n"
+    intro = (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n\n"
+             + SETUP_STEPS + "\n\n"
              "🕵️ 이제 멤버가 이름·@아이디를 바꾸면 알려드려요. 누구든 <code>.기록</code> 으로 변경 기록을 볼 수 있어요.\n"
              + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if in_trial and days else "")
              + "명령어는 <code>.도움말</code>")
@@ -388,6 +397,17 @@ async def _bot_rights_changed(context: ContextTypes.DEFAULT_TYPE, cmu) -> None:
                 "관리자 설정에서 켜주세요.")
     else:
         text = "✅ 관리자 권한 확인! 이제 도배·링크 정리, 캡차, 경고·뮤트 같은 방 관리를 할게요."
+    svc, bot = _svc(context), context.bot
+    # 처음 관리자가 된 방: 다음 할 일(설정 열기)을 버튼과 함께 남겨 둠 (지우지 않음, 방마다 한 번)
+    if not missing and svc.billing and svc.billing.enabled and \
+            await persist.claim(svc.db, f"setup_hint:{cmu.chat.id}", SETUP_HINT_KEEP):
+        try:
+            await bot.send_message(cmu.chat.id, text + "\n\n👉 이제 아래 <b>[⚙️ 봇 설정 (관리자)]</b> → 1:1 창에서 <b>시작</b> "
+                                   "→ 이 방 설정 화면이 떠요. (다시 열 땐 <code>.설정</code>)", parse_mode="HTML",
+                                   reply_markup=subscription.setup_button(bot.username, cmu.chat.id))
+            return
+        except TelegramError as e:
+            log.info("setup hint send failed: %s", e)
     await send_temp(context, cmu.chat.id, text, 120)
 
 
