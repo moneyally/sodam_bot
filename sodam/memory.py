@@ -661,6 +661,9 @@ async def last_made_image(db, chat_id: int, user_id: int) -> str | None:
     return row["media"] if row else None
 
 
+THREAD_SEC = 2 * 3600     # 이 사람 쪽 대화를 chat_log 앞으로 얼마나 더 (speaker_thread)
+THREAD_LINES = 12
+
 ACTIONS_SEC = 30 * 60
 ACTIONS_RUNS = 3
 
@@ -697,6 +700,13 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
         out["room_memory"] = await get_room(svc.db, chat_id)
     # chat_log 에 이미 보이는 시점 이전의, 이 사람과의 대화만 (중복 방지)
     oldest = min((h["ts"] for h in history), default=_now())
+    if chat_id < 0:   # 30줄보다 앞(2시간 안)의 이 사람 쪽 대화 — 바쁜 방에서 '아까 걔가 한 말'을 놓치던 것
+        try:
+            out["speaker_thread"] = await svc.db.speaker_thread(chat_id, user_id, _now() - THREAD_SEC, oldest, THREAD_LINES)
+        except Exception as e:
+            log.debug("speaker thread failed: %r", e)
+    if out.get("speaker_thread"):   # 그 안에 보이는 소담 답은 past_turns 에서 빼고 (같은 말 두 번)
+        oldest = min(oldest, out["speaker_thread"][0]["ts"])
     turns = await recent_turns(svc.db, chat_id, user_id, _now() - TURN_WINDOW)
     out["past_turns"] = [
         f"[{datetime.fromtimestamp(t['ts'], tz).strftime('%m/%d %H:%M')}] 상대: {t['request'][:200]} → "
