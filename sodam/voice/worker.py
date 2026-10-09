@@ -119,6 +119,7 @@ class Worker:
         self.music_opts = music_opts or {}          # 테스트: 가짜 시계·짧은 대기
         self.players: dict[int, music.Player] = {}
         self.ptasks: dict[int, asyncio.Task] = {}
+        self._ptasks_all: set[asyncio.Task] = set()
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
 
@@ -577,6 +578,10 @@ class Worker:
         pl = self.players.get(chat_id)
         if pl is not None and not pl.done:
             return pl, "ok"
+        old = self.ptasks.get(chat_id)
+        if old is not None and not old.done():      # 앞 DJ 가 끝나는 중 (멈췄지만 정리 중) → 정리 끝날 때까지 기다림.
+            with contextlib.suppress(Exception):    # 안 기다리고 새 DJ 로 덮으면 옛 작업의 손잡이가 사라져 정리 도중 지워짐 (2026-10-09 실제)
+                await asyncio.wait({old}, timeout=10)
         ok, res = await self._ensure_call(chat_id, p)
         if not ok:
             return None, res
@@ -585,7 +590,10 @@ class Worker:
                           has_voice=lambda: chat_id in self.bridges, **self.music_opts)
         sid = await musicq.session_start(self.db, chat_id, by)
         self.players[chat_id] = pl
-        self.ptasks[chat_id] = asyncio.create_task(self._run_player(chat_id, pl, sid))
+        t = asyncio.create_task(self._run_player(chat_id, pl, sid))
+        self.ptasks[chat_id] = t
+        self._ptasks_all.add(t)                     # 손잡이를 꼭 쥐고 있음 (ptasks 가 덮여도 끝날 때까지)
+        t.add_done_callback(self._ptasks_all.discard)
         return pl, "ok"
 
     async def _run_player(self, chat_id: int, pl: Any, sid: int) -> None:
