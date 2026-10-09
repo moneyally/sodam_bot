@@ -185,6 +185,9 @@ class Source:
             opts["cookiefile"] = cookie
         if proxy:
             opts["proxy"] = proxy
+            # 우회 길(WARP)은 IPv4·IPv6 둘 다 나가서, 곡 정보는 한쪽·소리 받기는 다른 쪽이면 403 (소리 주소가 IP 에 묶임 — 서버 실측 2026-10-09).
+            # IPv4 로만 → 5곡 다 받아짐.
+            opts["source_address"] = "0.0.0.0"
         opts.update(extra)
         return opts
 

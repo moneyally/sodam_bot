@@ -733,6 +733,8 @@ def youtube_retries_next_cookie_only_when_blocked():
         try:
             assert y._run(lambda ydl: seen.append((ydl.opts.get("proxy"), ydl.opts.get("cookiefile"))) or "ok") == "ok"
             assert seen == [("socks5://127.0.0.1:40000", None)], ("쿠키 안 쓰고 우회 길로", seen)
+            y._run(lambda ydl: seen.append(ydl.opts.get("source_address")))
+            assert seen[-1] == "0.0.0.0", "우회 길은 IPv4 로만 (정보·소리 받기 주소가 갈리면 403)"
             seen.clear()
 
             def dead_proxy(ydl):
@@ -1440,4 +1442,48 @@ async def blocked_song_tells_only_the_owner_once():
     owner = [t for c, t in sent if c == 777]
     assert len(owner) == 1 and "막혀" in owner[0], ("오너에게 한 번만", sent)
     assert "운영자" not in str(music.MusicError("blocked", "")) and all(c == 777 for c, _ in sent)
+    await stop_all(w)
+
+
+
+@test
+async def new_request_while_old_dj_is_closing_waits_and_keeps_the_task():
+    """실제 2026-10-09 09:59 'Task was destroyed but it is pending': 끝나는 중인 DJ 를 새 DJ 가 덮어 옛 작업이 정리 도중 지워짐."""
+    db, w, _, _ = await make_worker()
+    await play(db, w, "첫곡")
+    await until(lambda: CHAT in w.players)
+    old_pl, old_t = w.players[CHAT], w.ptasks[CHAT]
+    gate = asyncio.Event()
+    real_end = musicq.session_end
+
+    async def slow_end(*a, **k):                     # 끝 정리가 오래 걸림
+        await gate.wait()
+        return await real_end(*a, **k)
+    musicq.session_end = slow_end
+    try:
+        old_pl.stop("end")
+        await until(lambda: old_pl.done)
+        asyncio.get_running_loop().call_later(0.2, gate.set)
+        new_pl, _ = await w._get_player(CHAT, {}, None)
+        assert old_t.done(), "새 DJ 는 옛 DJ 정리가 끝난 뒤에"
+        assert new_pl is not old_pl and w.ptasks[CHAT] in w._ptasks_all
+    finally:
+        musicq.session_end = real_end
+    await stop_all(w)
+
+
+
+@test
+async def two_requests_at_once_make_only_one_dj():
+    """실제 2026-10-09 09:55: 재생목록 12곡 + 다른 신청이 동시에 → DJ 둘 → 번갈아 소리 보내 끊김 · 하나는 정리 도중 지워짐."""
+    db, w, _, _ = await make_worker()
+    real = w._ensure_call
+
+    async def slow_call(*a, **k):                    # 통화 들어가기에 시간이 걸리는 사이 두 번째 신청
+        await asyncio.sleep(0.05)
+        return await real(*a, **k)
+    w._ensure_call = slow_call
+    (a, _), (b, _) = await asyncio.gather(w._get_player(CHAT, {}, None), w._get_player(CHAT, {}, None))
+    assert a is b, "한 방에 DJ 는 한 명"
+    assert len([t for t in w._ptasks_all if not t.done()]) == 1
     await stop_all(w)
