@@ -278,6 +278,7 @@ class Greeter:
         self._tasks: dict[int, asyncio.Task] = {}
         self._greeted: dict[tuple[int, int], float] = {}   # 자동 인사를 했거나 곧 할 사람 → 시각 (AI 인사 중복 방지)
         self._since: dict[int, float] = {}                 # 방 → 이번 묶음 첫 입장 시각 (greet_reply_bot)
+        self._flushed: dict[int, asyncio.Event] = {}       # 방 → 인사가 나가면 set (채널 구독 안내가 인사 뒤에 오게)
 
     def auto_greeted(self, chat_id: int, user_id: int, within: int = AUTO_GREET_WINDOW) -> bool:
         return time.time() - self._greeted.get((chat_id, user_id), 0) < within
@@ -292,9 +293,30 @@ class Greeter:
         if chat_id not in self._tasks or self._tasks[chat_id].done():
             self._tasks[chat_id] = asyncio.create_task(self._flush_later(bot, chat_id))
 
+    def busy(self, chat_id: int) -> bool:
+        """이 방에 곧 나갈 입장 인사가 있음."""
+        task = self._tasks.get(chat_id)
+        return bool(self._pending.get(chat_id)) or (task is not None and not task.done())
+
+    async def wait_sent(self, chat_id: int, timeout: float = WAIT_SECONDS + BOT_WAIT + 15) -> None:
+        """곧 나갈 인사가 있으면 나갈 때까지 (실패해도·timeout 이면 그냥) 기다림 — 📢 구독 안내가 인사 아래에 오게
+        (2026-10-10 뉴월드: 인사는 5초 모아서 나가는데 구독 안내가 바로 떠서 순서가 거꾸로였음)."""
+        if not self.busy(chat_id):
+            return
+        ev = self._flushed.setdefault(chat_id, asyncio.Event())
+        try:
+            await asyncio.wait_for(ev.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
+
     async def _flush_later(self, bot: Bot, chat_id: int) -> None:
-        await asyncio.sleep(WAIT_SECONDS)
-        await self.flush(bot, chat_id)
+        try:
+            await asyncio.sleep(WAIT_SECONDS)
+            await self.flush(bot, chat_id)
+        finally:
+            ev = self._flushed.pop(chat_id, None)
+            if ev is not None:
+                ev.set()
 
     async def flush(self, bot: Bot, chat_id: int) -> None:
         people = self._pending.pop(chat_id, [])
