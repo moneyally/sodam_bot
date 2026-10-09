@@ -65,6 +65,15 @@ async def put(db, bot, msg, role: int, via: str, request: str) -> None:
                                                   via, request[:4000], _dump(msg), sent_at(msg) or time.time()))
 
 
+async def append(db, bot, chat_id: int, msg_id: int, text: str) -> None:
+    """실행 중인 요청에 이어 보낸 말을 그 줄에도 덧붙임 — 그 실행이 재시작으로 끊기면 다시 돌 때 이어 보낸 말까지
+    (예전: 이어 보낸 말은 메모리(Steer)에만 있어서 다시 돌면 처음 말만 처리, 조사 2026-10-09)."""
+    if not text:
+        return
+    await db._write("UPDATE ai_queue SET request=substr(request || char(10) || ?, 1, 4000) "
+                    "WHERE bot_id=? AND chat_id=? AND msg_id=? AND answer IS NULL", (text, int(bot.id), chat_id, msg_id))
+
+
 async def done(db, bot, chat_id: int, msg_id: int) -> None:
     RUNNING.discard(_key(bot, chat_id, msg_id))
     await db._write("DELETE FROM ai_queue WHERE bot_id=? AND chat_id=? AND msg_id=? AND answer IS NULL",
@@ -110,10 +119,17 @@ async def sweep(context, now: float | None = None) -> int:
                     continue          # 아직 끊김 → 다음 sweep (tries 까지)
             except (BadRequest, Forbidden):
                 pass
-            else:
-                await db.log_message(r["chat_id"], bot.id, sent.message_id, "(다시 보낸 답)", is_bot=True,
+            else:   # 실제 답 글로 기록 + 대화 기록 (예전: '(다시 보낸 답)' 글자만 → 그 답에 이어 말하면 무슨 말 했는지 몰랐음)
+                from . import memory
+                from .util import html_plain
+                plain = html_plain(r["answer"])
+                await db.log_message(r["chat_id"], bot.id, sent.message_id, plain, is_bot=True,
                                      reply_to_msg_id=r["msg_id"] if group else None,
                                      reply_to_user=r["user_id"] if group else None)
+                try:
+                    await memory.record_turn(db, r["chat_id"], r["user_id"], r["via"], r["request"], plain, sent.message_id)
+                except Exception as e:
+                    log.debug("record turn failed: %r", e)
             await db._write("DELETE FROM ai_queue WHERE bot_id=? AND chat_id=? AND msg_id=?", key)
             continue
         msg = Message.de_json(json.loads(r["msg"]), bot)

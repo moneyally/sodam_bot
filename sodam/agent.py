@@ -138,6 +138,7 @@ class Steer:
     pending: list[tuple[str, object]] = field(default_factory=list)   # (글, 메시지) — 아직 모델이 못 본 것
     taken: list[str] = field(default_factory=list)                     # 모델에 넣은 것 (기록용)
     closed: bool = False
+    msg_id: int | None = None                                          # 이 실행의 요청 메시지 (ai_queue 줄 — 이어 보낸 말도 거기 적음)
 
     def offer(self, text: str, msg=None) -> bool:
         if self.closed:
@@ -169,10 +170,15 @@ def running(svc, chat_id: int, user_id: int) -> bool:
     return steer is not None and not steer.closed
 
 
-def open_steer(svc, chat_id: int, user_id: int) -> Steer:
+def open_steer(svc, chat_id: int, user_id: int, msg_id: int | None = None) -> Steer:
     """이 사람의 실행을 등록 (handlers.ai_reply 가 검사를 다 통과한 바로 뒤, await 없이). 끝나면 close_steer."""
-    steer = _ACTIVE[(id(svc), chat_id, user_id)] = Steer()
+    steer = _ACTIVE[(id(svc), chat_id, user_id)] = Steer(msg_id=msg_id)
     return steer
+
+
+def running_msg(svc, chat_id: int, user_id: int) -> int | None:
+    steer = _ACTIVE.get((id(svc), chat_id, user_id))
+    return steer.msg_id if steer is not None and not steer.closed else None
 
 
 def close_steer(svc, chat_id: int, user_id: int, steer: Steer) -> list[tuple[str, object]]:

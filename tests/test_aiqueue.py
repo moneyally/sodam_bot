@@ -109,10 +109,36 @@ async def answer_made_but_connection_down_is_kept_and_resent_without_new_ai_call
         assert len(rows) == 1 and rows[0]["answer"] == "규칙은 광고 금지예요." and not aiqueue.RUNNING, rows
         assert await aiqueue.sweep(r.ctx) == 1                             # 대본이 비어 있음 = AI 다시 안 부름
         assert len(_answers(r, "규칙은 광고 금지예요.")) == 1 and not await _rows(r)
-        got = await r.db._one("SELECT 1 FROM messages WHERE reply_to_msg_id=? AND is_bot=1", (rows[0]["msg_id"],))
-        assert got
+        got = await r.db._one("SELECT text FROM messages WHERE reply_to_msg_id=? AND is_bot=1", (rows[0]["msg_id"],))
+        assert got and got["text"] == "규칙은 광고 금지예요.", ("다시 보낸 답은 실제 글로 기록 (예전 '(다시 보낸 답)')", got)
+        turn = await r.db._one("SELECT answer FROM ai_turns WHERE user_id=?", (JUNHO.id,))
+        assert turn and turn["answer"] == "규칙은 광고 금지예요.", "이어 말하기·답장 판단에 쓰이게 대화 기록에도"
     finally:
         FakeMsg.reply_text = orig
+        restore_timers(old)
+
+
+@test
+async def follow_up_said_while_running_survives_a_restart():
+    """답을 만드는 동안 이어 보낸 말은 그 실행에 들어감(메모리) → 그 실행이 재시작으로 끊기면 다시 돌 때 처음 말만 처리하던 것."""
+    old = fast_timers()
+    try:
+        r = await _room(HangLLM())
+        t = asyncio.create_task(r.say(JUNHO, "소담아 오늘 공지 뭐였지", settle=False))
+        await asyncio.wait_for(r.llm.entered.wait(), 60)
+        await r.say(JUNHO, "소담아 그리고 이벤트 시간도", settle=False)        # 실행 중에 이어 보냄
+        rows = await _rows(r)
+        assert len(rows) == 1 and "그리고 이벤트 시간도" in rows[0]["request"] and "오늘 공지" in rows[0]["request"], rows
+        t.cancel()
+        await asyncio.gather(t, return_exceptions=True)
+        aiqueue.RUNNING.clear()
+        seen = []
+        r.llm = r.svc.llm = ScriptedLLM([lambda m: seen.append(str(m[-1]["content"])) or "공지는 8시, 이벤트도 8시예요."])
+        assert await aiqueue.sweep(r.ctx) == 1
+        await r.settle()
+        assert seen and "오늘 공지" in seen[0] and "이벤트 시간도" in seen[0], "다시 돌 때 이어 보낸 말까지"
+        await aiqueue.append(r.db, r.bot, r.CHAT, 999999, "없는 줄")       # 없는 줄은 조용히 넘어감
+    finally:
         restore_timers(old)
 
 

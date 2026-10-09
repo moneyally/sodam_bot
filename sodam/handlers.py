@@ -783,7 +783,13 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
             if await _injection_blocked(context, msg, role, request, scan, s):
                 return
             await svc.db.log_request(chat_id, user.id, request)
+            target = agent.running_msg(svc, chat_id, user.id)
             if agent.steer_into(svc, chat_id, user.id, _steer_text(svc, bot, msg, request), msg):
+                if target is not None:   # 재시작으로 그 실행이 끊겨도 다시 돌 때 이 말까지 (DB 줄에 덧붙임)
+                    try:
+                        await aiqueue.append(svc.db, bot, chat_id, target, request)
+                    except Exception as e:
+                        log.debug("ai queue append failed: %r", e)
                 return
             checked = True   # 검사하는 사이 그 실행이 끝남 → 말을 잃지 않게 보통 새 실행으로 (검사·기록은 이미 함)
 
@@ -796,7 +802,7 @@ async def ai_reply(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role,
         await svc.db.log_request(chat_id, user.id, request)
 
     await aiqueue.put(svc.db, bot, msg, role, via, request)   # 재시작·끊김에도 답이 사라지지 않게 (sweep 이 이어서)
-    steer = agent.open_steer(svc, chat_id, user.id)   # 여기부터 이 사람이 이어 보낸 말은 이 실행으로
+    steer = agent.open_steer(svc, chat_id, user.id, msg.message_id)   # 여기부터 이 사람이 이어 보낸 말은 이 실행으로
     try:
         await _answer(context, msg, role, request, s, via, steer)
     except asyncio.CancelledError:   # 종료(배포) 중 끊김 → 줄을 남겨 다시 켜진 봇이 답함
