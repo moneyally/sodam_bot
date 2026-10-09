@@ -489,6 +489,19 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   음성 no_voice_right 안내 = 할 일 두 가지, 'not in a call' = chat_closed · 제재 거절엔 tools.REFUSE_SAY · 영상 대기자 끝나면 태그(videogen.WAITING) ·
   whyfail 'redo' 는 잘 된 게임·그림 뒤 재요청(AGAIN_OK)·이름만 부름 제외.
 
+## 🧵 바쁜 방 '기억상실' 보강 (2026-10-09, tests/test_speaker_thread.py · test_aiqueue.py, 뮤테이션 15개)
+- 서버 실측: 재시작(7일 56번, 5~12초)은 원인 아님(앞뒤 부름 29번 중 1번). **바쁜 방 최근 30줄 = 중앙 5.5분 치**, 같은 사람 30분 안 재요청 13% 는
+  앞 대화가 창 밖. 조사(Codex·Anthropic·Letta·mem0·Zep·LangGraph·단톡방 논문, scratchpad context_research.md): 원문 DB + 요약 1개 + 최근 원문 — 우리 구조 맞음.
+- `<speaker_thread>` (db.speaker_thread, memory.THREAD_SEC 2시간·12줄): chat_log 보다 앞의 이 사람이 한 말·이 사람에게 답장한 말(소담 답 포함)·이 사람이 답장한 글.
+  그 안에 보이는 소담 답은 past_turns 에서 뺌. 남들끼리 잡담은 안 넣음.
+- `<last_exchange>` (memory.last_exchange): 20자 이하 또는 '왜·그거·그럼·아까…'로 시작하면 이 사람과 10분 안 마지막 주고받음 한 줄 (답장했으면 안 붙임).
+  AI 질문 다시 쓰기는 안 함 (느리고 비쌈).
+- 방 흐름 메모: 하루 6번 상한을 밤새 다 써서 바쁜 방은 하루 종일 멈춤(백악관 07:47 뒤 3,221개) + 확인만 해도 +1 → ROOM_DAILY 16·진짜 갱신만 셈·220줄,
+  숫자·시각·@아이디 원문 그대로 + '찾을 낱말'.
+- 채팅 집계 chat_stats name('나'·이름) = 그 기간 수·순위 (상위 5명만 줘서 랭킹 밖 사람을 0개로 지어내던 것).
+- 재시작: 실행 중 이어 보낸 말도 ai_queue 줄에 덧붙임(aiqueue.append) · 다시 보낸 답은 실제 글로 기록 + ai_turns. 1.5초 몰아 받기·사진 3분 기억·끝난 게임 10분은
+  메모리 그대로 (실측상 재시작 5초라 영향 거의 없음).
+
 ## 📮 AI 요청 대기열 (`aiqueue.py`, Codex ext/queue, tests/test_aiqueue.py · 뮤테이션 8개)
 - 검사 통과한 요청은 ai_queue(봇·방·메시지) 한 줄 → 답 보내면 지움. 종료(취소)로 끊기면 줄을 남김 → persist.job_sweep(30초)이 다시 실행.
   답은 만들었는데 연결 실패(surely_unsent)면 답을 저장 → sweep 이 AI 없이 다시 보냄. 응답만 끊긴 건 이미 갔을 수 있어 안 보냄.

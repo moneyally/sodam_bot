@@ -538,6 +538,18 @@ class DB:
             (chat_id, since, limit))
         return list(reversed(rows))
 
+    async def speaker_thread(self, chat_id: int, user_id: int, since: int, before: int, limit: int = 12) -> list[aiosqlite.Row]:
+        """[since, before) 사이 이 사람 쪽 대화: 그 사람이 한 말 · 그 사람에게 답장한 말(봇 답 포함) · 그 사람이 답장한 글.
+        바쁜 방은 최근 30줄이 5분 치뿐이라 (서버 실측 2026-10-09, 중앙 5.5분) 그 앞 대화를 이 사람 기준으로만 더 보여 줌."""
+        rows = await self._all(
+            "SELECT msg.*, u.username, u.first_name, " + REPLY_COLS + " FROM messages msg "
+            "LEFT JOIN users u ON u.user_id=msg.user_id " + REPLY_JOIN +
+            "WHERE msg.chat_id=? AND msg.flagged=0 AND msg.ts>=? AND msg.ts<? AND (msg.user_id=? OR msg.reply_to_user=? "
+            "OR msg.msg_id IN (SELECT reply_to_msg_id FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? "
+            "AND reply_to_msg_id IS NOT NULL)) ORDER BY msg.id DESC LIMIT ?",
+            (chat_id, since, before, user_id, user_id, chat_id, user_id, since, before, limit))
+        return list(reversed(rows))
+
     async def search_messages(self, chat_id: int, query: str, since: int, limit: int = 10) -> list[aiosqlite.Row]:
         """전문 검색 (sodam/search.py). 낱말 하나면 최신순. 여러 개면 맞는 낱말이 많은 순 → bm25 → 최신순
         (bm25 만으로는 기록이 적을 때 흔한 낱말 가중치가 0 에 가까워져 '둘 다 맞는 글 먼저'가 안 지켜짐)."""
