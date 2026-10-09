@@ -29,6 +29,9 @@ from . import music
 
 SLOTS = 2                    # 동시에 도는 자식 수 (미리 받기 + 다른 방 신청)
 TIMEOUT = 300.0              # 한 번 일의 상한 (분위기 신청 mix_for 가 가장 김 ~20초)
+START_TIMEOUT = 60.0         # 자식이 켜져 '준비됨' 을 보낼 때까지 — 일 시간(TIMEOUT)과 따로 셈
+                             # (2026-10-10 서버 시험: 힘 60% 일 때 켜지기만 1초↑ → 1초짜리 일 제한에 켜지는 시간까지 들어가 실패)
+READY = ("ready",)
 METHODS = ("resolve", "pick", "playlist", "mix_for", "related", "lyrics", "fetch", "fallback", "alt_for", "loudness")
 FACTORY = "sodam.voice.music:Source"
 
@@ -65,6 +68,25 @@ class _Slot:
         env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         self.proc = subprocess.Popen([sys.executable, "-m", "sodam.voice.fetcher", self.data_dir, self.factory],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, cwd=root)
+        got = self._read(self.proc, START_TIMEOUT)            # 불러오기(import)·Source 만들기가 끝날 때까지
+        if got != READY:
+            self.kill()
+            raise music.MusicError("download", "노래 받는 쪽이 켜지지 않았어요. 다시 신청해 주세요.")
+
+    @staticmethod
+    def _read(p, timeout: float):
+        """자식이 보낸 것 하나 (시간 넘거나 자식이 죽으면 None)."""
+        box: dict = {}
+
+        def read():
+            try:
+                box["r"] = _recv(p.stdout)
+            except Exception as e:
+                box["e"] = e
+        t = threading.Thread(target=read, daemon=True)
+        t.start()
+        t.join(timeout)
+        return None if t.is_alive() or "e" in box else box["r"]
 
     def kill(self) -> None:
         p, self.proc = self.proc, None
@@ -84,21 +106,11 @@ class _Slot:
         except (BrokenPipeError, OSError):
             self.kill()
             raise music.MusicError("download", "노래 받는 쪽이 잠깐 멈췄어요. 다시 신청해 주세요.")
-        box: dict = {}
-
-        def read():
-            try:
-                box["r"] = _recv(p.stdout)
-            except Exception as e:
-                box["e"] = e
-        t = threading.Thread(target=read, daemon=True)
-        t.start()
-        t.join(timeout)
-        if t.is_alive() or "e" in box:                         # 시간 초과·자식 죽음 → 죽이고 다음에 새로
+        got = self._read(p, timeout)
+        if got is None:                                        # 시간 초과·자식 죽음 → 죽이고 다음에 새로
             self.kill()
-            t.join(1)
             raise music.MusicError("download", "노래 받기가 너무 오래 걸렸어요. 다시 신청해 주세요.")
-        return box["r"]
+        return got
 
 
 class ProcSource:
@@ -160,6 +172,7 @@ def _child(data_dir: str, factory: str) -> None:
     mod, _, cls = factory.partition(":")
     __import__(mod)
     src = getattr(sys.modules[mod], cls)(Path(data_dir))
+    _send(proto_out, READY)                                    # 켜짐 — 부모는 여기부터 일 시간을 셈
     while True:
         try:
             method, args, kwargs, blocked_at = _recv(proto_in)
