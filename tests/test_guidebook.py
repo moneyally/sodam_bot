@@ -70,7 +70,8 @@ EVAL = [("소담아 근데 너 결제하면 얼마야?", {"pricing", "payment"})
         ("너 사람이야?", {"faq"}), ("소담아 오늘 세계 뉴스 뭐 있어?", {"news"}),
         ("뉴스 알림 켜는법", {"news"}), ("속보 알림 끄고 싶어", {"news"}), ("코인 뉴스도 받을 수 있어?", {"news"}), ("누가 만들었어", {"faq"}), ("modes", {"modes"}), ("ai-chat", {"ai-chat"})]
 # 관리자 말로 하는 관리 (tests/test_admin_nl.py, 2026-09-30)
-EVAL += [("패드립하면 자동으로 채금돼?", {"security"}), ("성희롱 하면 추방되게 할수있어", {"security"}),
+EVAL += [("승부예측 랭킹 같은거 있어?", {"sports-picks"}), ("경기 분석 해주는 기능 있어", {"sports-picks"}),
+         ("패드립하면 자동으로 채금돼?", {"security"}), ("성희롱 하면 추방되게 할수있어", {"security"}),
          ("밴해제 어떻게 해", {"security"}), ("경고 취소 어떻게 해", {"security"}), ("소담아 영희 밴 풀어줘", {"security"}),
          ("예약 끄는법", {"schedule"}), ("예약목록 보는법", {"schedule"})]
 # 🎵 뮤직봇 (tests/test_music.py, 2026-10-08)

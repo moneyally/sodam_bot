@@ -540,16 +540,17 @@ async def one_fetch_per_league_for_many_rooms_and_cadence():
     e.clock.t = KICK - 20 * 60         # 경기 20분 전: 아직 일정 모드
     await e.sp.run_alerts(e.bot)
     assert len(epl()) == 1, "경기 없는 시간엔 6시간마다만"
-    e.clock.t = KICK - 10 * 60         # 15분 전 창 → 60초 폴링
+    e.clock.t = KICK - 10 * 60         # 15분 전 창 → 8초 폴링 (LIVE_EVERY, 예전 60초 → 2026-10-10 '라이브스코어보다 빠르게')
     await e.sp.run_alerts(e.bot)
-    e.clock.t += 30
+    e.clock.t += 4
     await e.sp.run_alerts(e.bot)
-    e.clock.t += 31
+    assert len(epl()) == 2, "8초 안엔 다시 안 받음"
+    e.clock.t += 5
     await e.sp.run_alerts(e.bot)
     assert len(epl()) == 3, epl()
     assert epl()[-1][2] == frozenset({"20260929"}), "라이브 땐 경기가 있는 요청만"
     e.src.games["epl"] = [game("in", 0, 0, start=KICK)]
-    e.clock.t += 61
+    e.clock.t += 9
     await e.sp.run_alerts(e.bot)
     assert len(msgs(e, CHAT)) == 1 and len(msgs(e, CHAT2)) == 1, "방마다 한 통 (리그·팀 구독 겹쳐도)"
 

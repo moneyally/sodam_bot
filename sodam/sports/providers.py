@@ -184,6 +184,19 @@ def espn_detail(st: dict, sport: str) -> str:
     return short
 
 
+WORLD = "world"
+
+
+def league_title(slug: str) -> str:
+    """ESPN season.slug '2026-27-english-premier-league' → 'EPL'(아는 리그면 한국어 이름) / 'English Premier League'."""
+    from .leagues import find_league
+    words = re.sub(r"^\d{4}(-\d{2,4})?-", "", slug or "").replace("-", " ").strip()
+    if not words:
+        return ""
+    lg = find_league(words)
+    return lg.name if lg and lg.code != WORLD else words.title()
+
+
 class ESPN(Provider):
     name = "espn"
 
@@ -220,7 +233,8 @@ class ESPN(Provider):
                           who, tag))
         return Game(f"espn:{e.get('id')}", lg.code, start, (home.get("team") or {}).get("displayName") or "?",
                     (away.get("team") or {}).get("displayName") or "?", hs, as_, state,
-                    espn_detail(st, lg.sport), tuple(goals), src)
+                    espn_detail(st, lg.sport), tuple(goals), src,
+                    title=league_title((e.get("season") or {}).get("slug") or "") if lg.code == WORLD else "")
 
     async def day(self, lg: League, d: date, only: set[str] | None = None) -> list[Game]:
         # ESPN 의 dates 는 미국 동부 날짜 → 한국 하루(0~24시)는 동부 전날·그날 두 날에 걸침 (실측: MLB dates=0929 = 18:00Z~02:00Z)
@@ -229,7 +243,8 @@ class ESPN(Provider):
         for src in srcs:
             if only is not None and src not in only:
                 continue
-            data = await self.fetch(f"{ESPN_SITE}{lg.espn}/scoreboard", {"dates": src}, {})
+            params = {"dates": src, "limit": "1000"} if lg.code == WORLD else {"dates": src}   # 세계 축구: 기본 100경기에서 잘림
+            data = await self.fetch(f"{ESPN_SITE}{lg.espn}/scoreboard", params, {})
             for e in data.get("events") or []:
                 g = self.parse_event(lg, e, src)
                 if g and kst_day(g.start) == d:
