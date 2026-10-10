@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from datetime import date, datetime, timedelta
 
 from ..util import esc, html_plain
@@ -256,7 +257,7 @@ class UI:
         """'NHL 보스턴 필라델피아' · '토트넘 아스널' · '다저스' → 어제~내일 중 낱말이 다 맞는 경기 (진행 중 → 곧 시작 → 막 끝난 순)."""
         hint, toks = None, []
         for w in re.split(r"[\s,/\-]+|\bvs\b", (query or "").lower()):
-            w = norm(w)
+            w = _fold(w)
             if not w or w in _FILLER:
                 continue
             lg = find_league(w)
@@ -266,6 +267,10 @@ class UI:
                 toks.append(w)
         if not toks:
             return []
+        # 낱말 묶음: 전부 · 영어만 · 한글만 — 표에 없는 팀은 AI 가 '생테티엔 Saint-Etienne 로데즈 Rodez' 처럼 둘 다 줌 (2026-10-11 벳블리)
+        latin = [w for w in toks if re.search(r"[a-z]", w)]
+        hangul = [w for w in toks if re.search(r"[가-힣]", w)]
+        groups = [toks] + [gr for gr in (latin, hangul) if gr and gr != toks]
         if hint:
             leagues = [hint]
         else:
@@ -280,8 +285,8 @@ class UI:
         for d in (today - timedelta(days=1), today, today + timedelta(days=1)):
             for lg, games in await self._days(leagues, d):
                 for g in games or []:
-                    names = [norm(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league))]
-                    if all(any(w in n for n in names) for w in toks):
+                    names = [_fold(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league))]
+                    if any(all(any(w in n for n in names) for w in gr) for gr in groups):
                         found.append(g)
         now = self.feed.clock()
         order = {"in": 0, "pre": 1}
@@ -292,8 +297,9 @@ class UI:
         found = list(uniq.values())
         return sorted(found, key=lambda g: (order.get(g.state, 2), abs(g.start - now)))
 
-    async def watch(self, target: int, user_id: int, query: str, level: str = "goals") -> str:
-        """경기 하나(골·결과) 또는 팀·리그(계속)를 target(방 또는 그 사람 1:1)에 알림. 글은 HTML."""
+    async def watch(self, target: int, user_id: int, query: str, level: str = "goals", game_only: bool = False) -> str:
+        """경기 하나(골·결과) 또는 팀·리그(계속)를 target(방 또는 그 사람 1:1)에 알림. 글은 HTML.
+        game_only: 경기 하나만 (멤버가 방에 거는 경우 — 계속 받는 팀·리그 알림은 관리자만)."""
         from .alerts import MAX_WATCHES, WATCH_KEEP
         level = level if level in LEVELS else "goals"
         games = await self.find_games(query)
@@ -315,7 +321,10 @@ class UI:
             return f"그 경기는 이미 끝났어요: {fmt.tag(g)} {fmt.matchup(g)}"
         t = self._target(query)
         if isinstance(t, str):
-            return f"'{esc(query)}' 경기를 어제~내일 일정에서 못 찾았어요. 리그를 붙여 주세요 (예: <code>NHL 보스턴 필라델피아</code>)."
+            return (f"'{esc(query)}' 경기를 어제~내일 일정에서 못 찾았어요. 리그나 영어 팀 이름을 붙여 주세요 "
+                    "(예: <code>NHL 보스턴 필라델피아</code> · <code>Saint-Etienne Rodez</code>).")
+        if game_only:
+            return f"{esc(t[2])} 의 어제~내일 경기가 없어요. 팀을 계속 받는 방 알림은 관리자가 걸 수 있고, 본인 1:1 로는 누구나 돼요."
         code, team, label = t
         if not self.feed.available(LEAGUES[code]):
             return f"{esc(LEAGUES[code].name)} 알림은 아직 준비 중이에요."
@@ -333,6 +342,12 @@ class UI:
             kind = "경기 하나" if r["game"] else "계속"
             out.append(f"• {esc(r['label'])} — {LEVELS.get(r['level'], LEVELS['goals'])[0]} ({kind})")
         return "\n".join(out)
+
+
+def _fold(text: str) -> str:
+    """norm + 악센트 빼기 (Saint-Étienne = saintetienne)."""
+    bare = "".join(ch for ch in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(ch))
+    return norm(unicodedata.normalize("NFC", bare))          # 한글은 NFKD 로 자모가 갈라지니 다시 붙임
 
 
 _FILLER = {norm(w) for w in ("경기", "득점", "골", "하면", "알려", "알려줘", "말해", "말해줘", "줘", "오늘", "내일", "지금", "랑", "와", "과",

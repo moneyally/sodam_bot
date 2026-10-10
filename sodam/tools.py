@@ -544,7 +544,8 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
 async def _sports_alert(ctx: ToolCtx, ui, action: str, query: str, to: str, level: str) -> str:
     """콕 집은 경기·팀 알림. 방에 = 관리자만 (모두가 받음), 멤버·1:1 = 본인 1:1 로."""
     in_room = ctx.chat_id < 0
-    room = in_room and to != "me" and ctx.role >= Role.ADMIN
+    room = in_room and to != "me"          # 방에서 부탁 = 방에 (멤버는 경기 하나만, 2026-10-11 오너 '그룹방에서도 띄우게')
+    member_room = room and ctx.role < Role.ADMIN
     target = ctx.chat_id if room else ctx.caller.id
     if action == "my_alerts":
         return await ui.watches_text(target)
@@ -562,11 +563,8 @@ async def _sports_alert(ctx: ToolCtx, ui, action: str, query: str, to: str, leve
         except Exception:
             name = getattr(ctx.bot, "username", "") or ""
             return (f"1:1 알림은 소담과 1:1 대화를 한 번 열어야 받을 수 있음 → https://t.me/{name} "
-                    "에서 시작 누른 뒤 다시 부탁하라고 안내할 것." + (" (방 전체 알림은 관리자만)" if in_room else ""))
-    text = await ui.watch(target, ctx.caller.id, query, level)
-    if in_room and not room and to != "me":
-        text += " (방 전체 알림은 관리자만 걸 수 있어서 본인 1:1 로)"
-    return text
+                    "에서 시작 누른 뒤 다시 부탁하라고 안내할 것. 또는 방에 띄우기(to=room)는 바로 됨.")
+    return await ui.watch(target, ctx.caller.id, query, level, game_only=member_room)
 
 
 NOTE_KEYS = ["호칭", "업종", "관심사", "소개"]
@@ -1278,9 +1276,10 @@ TOOLS: list[Tool] = [
                      "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · "
                                     "follows=이 방 알림 구독 · alert=경기 하나(두 팀 이름)·팀·리그 골/결과 알림 걸기 · my_alerts=건 알림 목록 · unalert=끄기 · "
                                     "analysis=경기 분석(기록+AI, query=두 팀) · picks=승부 맞히기 내 기록·순위"},
-          "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그). alert 는 'NHL 보스턴 필라델피아'처럼 리그+두 팀"},
+          "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그). alert·analysis 는 'NHL 보스턴 필라델피아'처럼 리그+두 팀, "
+                                                    "덜 유명한 팀은 영어 이름도 같이 ('생테티엔 Saint-Etienne 로데즈 Rodez')"},
           "day": {"type": "string", "description": "today 일 때: 오늘/내일/어제 또는 MM-DD"},
-          "to": {"type": "string", "enum": ["room", "me"], "description": "alert: room=이 방 모두(관리자만, 기본) · me=말한 사람 1:1"},
+          "to": {"type": "string", "enum": ["room", "me"], "description": "alert: room=이 방에 띄움(기본, 멤버는 경기 하나만) · me=말한 사람 1:1"},
           "level": {"type": "string", "enum": ["final", "basic", "goals", "all"],
                     "description": "alert: final=결과만 · basic=시작·결과 · goals=골까지(기본) · all=점수 변화마다(야구·농구)"}},
          ["action"], t_sports, setting="sports_enabled"),
