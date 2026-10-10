@@ -1499,6 +1499,29 @@ async def restart_resume_waits_instead_of_reopening_a_closed_voice_chat():
 
 
 @test
+async def vc_title_gives_up_when_telegram_does_not_answer():
+    """2026-10-10 DC 4 내부 오류: 음성채팅 제목 요청이 답을 안 줘서 노래 끝 정리가 통째로 붙잡힘."""
+    from sodam.voice import worker as W
+    db, w, _, _ = await make_worker()
+
+    class Hang(CallClient):
+        open = True
+
+        async def __call__(self, req):
+            await asyncio.Event().wait()
+    w.client = Hang()
+    old = W.VC_TITLE_TIMEOUT
+    W.VC_TITLE_TIMEOUT = 0.2
+    try:
+        t0 = time.monotonic()
+        await asyncio.wait_for(w._vc_title(CHAT, "곡"), 5)
+        assert time.monotonic() - t0 < 2
+    finally:
+        W.VC_TITLE_TIMEOUT = old
+    await stop_all(w)
+
+
+@test
 async def closed_voice_chat_keeps_the_queue_and_rejoins_when_reopened():
     """예전: 음성채팅이 닫히면 대기열을 바로 지움 → 관리자가 실수로 닫았다 열어도 처음부터 다시 신청."""
     bot = FakeBot()

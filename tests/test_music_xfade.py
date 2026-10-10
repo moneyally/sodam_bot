@@ -291,6 +291,44 @@ async def stop_while_a_slow_download_is_running_ends_right_away():
 
 
 @test
+async def a_hanging_announce_does_not_keep_a_stopped_dj_alive():
+    """2026-10-10 파멸방: 텔레그램 DC 4 내부 오류로 재생 카드·음성채팅 제목 요청이 답을 안 줌 → 통화가 끊겨 멈췄는데
+    진행 담당이 그 답을 기다리느라 정리를 못 해 노래가 죽은 채로 남고, 새 신청도 막힘 (음성 담당 재시작으로 풂)."""
+    db, pl, sent = await setup("a")
+    forever = asyncio.Event()
+
+    async def announce(kind, chat_id, row, why):
+        await forever.wait()                              # 답 없음
+    pl.announce = announce
+    old = (music.ANNOUNCE_TIMEOUT, music.STOP_GRACE)
+    music.ANNOUNCE_TIMEOUT, music.STOP_GRACE = 60.0, 0.3   # 안내 시간 제한보다 멈춤 대기가 먼저 끝나는지
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.3, pl.stop, "chat_closed")
+    t0 = time.monotonic()
+    try:
+        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+    finally:
+        music.ANNOUNCE_TIMEOUT, music.STOP_GRACE = old
+    assert time.monotonic() - t0 < 3, "멈춤 뒤 붙잡히지 않음"
+
+
+@test
+async def a_hanging_announce_times_out_and_the_song_still_plays():
+    db, pl, sent = await setup("a")
+
+    async def announce(kind, chat_id, row, why):
+        await asyncio.Event().wait()
+    pl.announce = announce
+    old = music.ANNOUNCE_TIMEOUT
+    music.ANNOUNCE_TIMEOUT = 0.2
+    try:
+        assert await asyncio.wait_for(pl.run(), 10) == "idle"
+    finally:
+        music.ANNOUNCE_TIMEOUT = old
+    assert pl.tracks == 1 and len(sent) > 50, "안내가 막혀도 곡은 끝까지"
+
+
+@test
 async def a_crashing_pacer_ends_the_session_instead_of_hanging():
     class Boom(XDec):
         def frame(self):

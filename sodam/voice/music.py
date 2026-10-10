@@ -47,6 +47,8 @@ XFADE = max(0.0, float(os.getenv("MUSIC_XFADE", "3")))     # 곡 사이 겹쳐 �
 NORMALIZE = os.getenv("MUSIC_NORMALIZE", "1") != "0"       # 곡마다 소리 크기 맞추기
 TARGET_LUFS = -14.0                                        # 맞출 크기 (음원 사이트들이 쓰는 기준)
 NORM_MIN, NORM_MAX = 0.35, 1.6                             # 크기 맞춤 배수 범위 (작은 곡을 너무 키우면 찌그러짐)
+ANNOUNCE_TIMEOUT = 20.0     # 재생 카드·음성채팅 제목 — 텔레그램이 답을 안 줘도 이만큼만 기다림 (2026-10-10 DC 4 내부 오류 때 무한 대기)
+STOP_GRACE = 5.0            # 멈춘 뒤 진행 담당이 정리할 시간 — 넘으면 끊고 끝냄
 RESUME_REASONS = ("restart", "chat_closed")               # 이렇게 끝나면 곡 위치를 남김 (재시작 / 음성채팅이 다시 열리면 이어서)
 NORM_STEP = 0.005                                          # 재는 게 늦게 끝나면 조각마다 이만큼씩 (1초에 0.5) 따라감
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
@@ -891,9 +893,28 @@ class Player:
     async def run(self) -> str:
         pacer = asyncio.create_task(self._pacer())
         pacer.add_done_callback(self._pacer_died)
+        conductor = asyncio.create_task(self._conductor())
         try:
-            await self._conductor()
+            stopped = asyncio.create_task(self._done.wait())
+            try:
+                await asyncio.wait({conductor, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                stopped.cancel()
+            if not conductor.done():                       # 멈췄는데 진행 담당이 뭔가(텔레그램 답 등)를 기다리며 붙잡힘
+                try:                                       # → 잠깐만 기다리고 끊음 (2026-10-10 파멸방: 통화가 끊겼는데 정리를 못 해 노래가 죽은 채로 남음)
+                    await asyncio.wait_for(asyncio.shield(conductor), STOP_GRACE)
+                except asyncio.TimeoutError:
+                    log.warning("노래 진행 담당이 멈추지 않아 끊음 %s (%s)", self.chat_id, self.reason)
+                    conductor.cancel()
+                    with contextlib.suppress(BaseException):
+                        await conductor
+            else:
+                conductor.result()                         # 진행 담당의 오류는 그대로 (worker 가 기록)
         finally:
+            if not conductor.done():
+                conductor.cancel()
+                with contextlib.suppress(BaseException):
+                    await conductor
             pacer.cancel()
             with contextlib.suppress(BaseException):
                 await pacer
@@ -1274,8 +1295,8 @@ class Player:
     async def _say(self, kind: str, row, why: str = "") -> None:
         if self.announce:
             try:
-                await self.announce(kind, self.chat_id, row, why)
-            except Exception as e:
+                await asyncio.wait_for(self.announce(kind, self.chat_id, row, why), ANNOUNCE_TIMEOUT)
+            except Exception as e:                         # 시간 초과 포함 — 안내가 막혀도 노래·멈춤은 계속
                 log.info("뮤직 안내 실패 %s: %r", self.chat_id, e)
 
     async def _pacer(self) -> None:
