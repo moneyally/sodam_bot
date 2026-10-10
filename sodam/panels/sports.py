@@ -13,10 +13,12 @@ from telegram import Message
 from .. import menu
 from ..menu import B, HubItem, PanelCtx, Route, Screen
 from ..sports.alerts import LEVELS, MAX_FOLLOWS, QUIET
+from ..sports.cards import AUTO
 from ..sports.leagues import LEAGUES, SPORT_EMOJI, SPORT_KO, League
 from ..util import esc
 
 menu.register_preset("sports_alerts", [(k, v[0]) for k, v in LEVELS.items()], "spt")
+menu.register_preset("sports_auto", [("off", "끔"), ("big", "⚡ 주요 리그"), ("follow", "🔔 구독만")], "spt")
 menu.register_preset("sports_quiet", [(k, "🌙 " + v if k != "off" else "🔔 없음") for k, v in QUIET.items()], "spt")
 
 
@@ -39,10 +41,13 @@ async def s_spt(c: PanelCtx) -> Screen:
              f"상태: {'✅ 켜짐' if s['sports_enabled'] else '❌ 꺼짐 — 🧩 기능 켜기/끄기에서 켜기'}"
              + ("" if active else " · ⚠️ 이용 기간 중인 방만 알림이 가요"),
              f"구독 ({len(rows_db)}/{MAX_FOLLOWS}): " + (", ".join(esc(r["label"]) for r in rows_db) if rows_db else "없음"),
+             f"⚡ 자동 라이브 카드: {AUTO.get(s.get('sports_auto', 'off'), '끔')} — 경기가 시작되면 카드 1장이 뜨고 몇 초마다 점수가 저절로 바뀌어요 "
+             "(말 안 해도 · 주요 리그 = EPL·라리가·세리에A·분데스·리그1·챔스·유로파·MLB·NBA·NHL·KBO·K리그, 방마다 동시에 4장까지)",
              f"알림 종류: {LEVELS.get(s['sports_alerts'], LEVELS['goals'])[0]} (야구·농구·배구는 '골' 대신 시작·결과)",
              f"조용한 시간(한국): {QUIET.get(s['sports_quiet'], s['sports_quiet'])} — 이때 시작·골은 안 보내고 결과는 아침에 모아서"]
     quiet = menu._preset_row(s, c.cid, "sports_quiet")
-    kb = [menu._preset_row(s, c.cid, "sports_alerts")[:2], menu._preset_row(s, c.cid, "sports_alerts")[2:],
+    kb = [menu._preset_row(s, c.cid, "sports_auto"),
+          menu._preset_row(s, c.cid, "sports_alerts")[:2], menu._preset_row(s, c.cid, "sports_alerts")[2:],
           quiet[:3], quiet[3:],
           [B("➕ 리그 추가", f"m:sptl:{c.cid}"), B("➕ 팀 추가", f"m:in:{c.cid}:sptt")]]
     dels = [B(f"🗑 {r['label'][:18]}", f"m:k:{menu.token(c.svc, c.uid, c.cid, 'spt_del', (r['league'], r['team']), menu.LIST_TOKEN_TTL)}")

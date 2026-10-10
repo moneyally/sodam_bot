@@ -25,7 +25,7 @@ from telegram.error import Forbidden, TelegramError
 from ..db import DB, register_schema
 from ..settings import register_setting
 from ..util import esc
-from . import fmt
+from . import cards, fmt
 from .feed import Feed
 from .leagues import GOAL_SPORTS, LEAGUES, ko_name, same_team
 from .providers import BACKGROUND, KST, Game, SportsError
@@ -327,6 +327,8 @@ class Alerts:
             targets.setdefault(w["chat_id"], []).append(dict(w))
         for h in await self.db._all("SELECT DISTINCT chat_id FROM sports_held"):   # 끝난 경기 알림을 지웠어도 모아 둔 결과는 보내야 (리뷰 2026-10-10)
             targets.setdefault(h["chat_id"], [])
+        for r in await self.db._all("SELECT chat_id FROM chats WHERE chat_id < 0 AND settings LIKE '%sports_auto%'"):
+            targets.setdefault(r["chat_id"], [])          # ⚡ 자동 라이브 켠 방 (구독이 없어도)
         active: dict[int, tuple[dict | None, list]] = {}
         for cid, fl in targets.items():
             if cid > 0:                                   # 개인 1:1 — 본인이 건 것 (방 설정·이용 기간과 무관)
@@ -334,14 +336,17 @@ class Alerts:
                 continue
             s = await self.db.get_settings(cid)
             if s.get("sports_enabled") and (is_active is None or await is_active(cid)):
-                active[cid] = (s, fl)
+                active[cid] = (s, fl + cards.auto_entries(s.get("sports_auto") or "off"))
         events: list[Event] = []
         codes = {f["league"] for _, fl in active.values() for f in fl if f["league"] in LEAGUES}
         codes |= {c for _, fl in active.values() for f in fl if f["team"] for c in cups_for(f["league"])}
         done_keys: set[str] = set()
+        latest: dict[str, Game] = {}
         for code in sorted(codes, key=lambda c: (c == "world", c)):   # 리그 피드 먼저, 세계 축구는 마지막
             for g in await self._poll_league(code, now):
                 self.seen_in.setdefault(g.key, set()).add(code)    # 같은 경기가 'EPL'·'세계 축구' 두 곳에서 와도 구독 둘 다 맞게
+                if g.key not in latest or latest[g.key].league == "world":
+                    latest[g.key] = g
                 if g.key in done_keys:                             # 한 틱에 한 번만 비교 (두 피드 시차로 점수가 흔들려 가짜 '득점 취소' X)
                     continue
                 done_keys.add(g.key)
@@ -354,7 +359,8 @@ class Alerts:
         for cid, (s, fl) in active.items():
             quiet = s is not None and in_quiet(s.get("sports_quiet", "01-07"), hour)
             level = (s or {}).get("sports_alerts") or "goals"
-            mine = [e for e in events if self._wants(fl, level, e)]
+            mute = await cards.muted(self.db, cid) if cid < 0 else set()
+            mine = [e for e in events if e.game.key not in mute and self._wants(fl, level, e)]
             fresh = []
             for e in mine:
                 if e.kind in HOLD_KINDS and e.dedupe != "suspended":   # '중단'은 다시 이어질 수 있어 알림 유지
@@ -382,6 +388,16 @@ class Alerts:
             for e in (later if ok else now_lines + later):
                 if e.kind in HOLD_KINDS:
                     await self._hold(cid, e, now)
+            if cid < 0 and latest:                         # ⚡ 라이브 카드 (자동 모드 = 맞는 경기 전부, 아니면 콕 집은 경기만)
+                auto = (s or {}).get("sports_auto") or "off"
+                shown = [g for g in latest.values() if g.key not in mute and g.state != "pre"
+                         and any(f.get("game") == g.key for f in fl)
+                         or (auto != "off" and g.key not in mute and g.state != "pre" and self._covers(fl, g))]
+                if shown:
+                    try:
+                        await cards.update(self.db, bot, cid, shown, now, quiet)
+                    except Exception:
+                        log.exception("라이브 카드 실패 %s", cid)
         for cid, key in done_games:                        # 끝난 경기 하나짜리 알림은 정리
             await self.db._write("DELETE FROM sports_watch WHERE chat_id=? AND game=?", (cid, key))
         if now - self.last_prune > 3600:
@@ -396,6 +412,20 @@ class Alerts:
     async def _hold(self, cid: int, e: Event, now: float) -> None:
         await self.db._write("INSERT OR IGNORE INTO sports_held VALUES(?, ?, ?, ?, ?)",
                              (cid, e.game.key, e.dedupe, e.text, int(now)))
+
+    def _covers(self, follows: list, g: Game) -> bool:
+        """구독(리그·팀)·자동 항목이 이 경기를 덮나 (알림 종류와 무관 — 카드용)."""
+        seen = self.seen_in.get(g.key) or {g.league}
+        for f in follows:
+            if f.get("game"):
+                if f["game"] == g.key:
+                    return True
+                continue
+            if f["league"] not in seen and not (f["team"] and seen & set(cups_for(f["league"]))):
+                continue
+            if not f["team"] or same_team(g.home, f["team"], f["league"]) or same_team(g.away, f["team"], f["league"]):
+                return True
+        return False
 
     def _wants(self, follows: list, level: str, e: Event) -> bool:
         """구독·콕 집은 경기 중 하나라도 이 이벤트를 원하면. 콕 집은 줄은 자기 알림 종류(level), 방 구독은 방 설정."""
@@ -451,3 +481,4 @@ class Alerts:
         await self.db._write("DELETE FROM sports_alert_sent WHERE sent_at < ?", (cut,))
         await self.db._write("DELETE FROM sports_held WHERE created < ?", (int(now) - 2 * 86400,))
         await self.db._write("DELETE FROM sports_watch WHERE expires > 0 AND expires < ?", (int(now),))
+        await cards.prune(self.db, now)
