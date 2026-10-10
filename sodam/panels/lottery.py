@@ -9,13 +9,13 @@ from __future__ import annotations
 import logging
 import time
 
-from telegram import Message
+from telegram import Message, ReplyParameters
 from telegram.error import Forbidden, TelegramError
 
 from .. import fortune, hooks, lottery, menu, tools
 from ..menu import PUBLIC, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
-from ..util import esc, mention
+from ..util import esc, html_plain, mention
 from .greet import _save
 
 log = logging.getLogger(__name__)
@@ -58,27 +58,48 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
     return text, _checkin_kb(user.id, bool(left))
 
 
-async def do_scratch(svc, bot, chat_id: int, user) -> str:
+async def do_scratch(svc, bot, chat_id: int, user) -> tuple[str, str, tuple | None]:
+    """복권 긁기 → (방에 올릴 글, 결과 종류, 당첨이면 (당첨 id, 경품) — 관리자 알림은 부른 쪽이 응답 뒤에 announce_win)."""
     s = await svc.db.get_settings(chat_id)
     if not s.get("lotto_enabled"):
-        return "이 방은 복권이 꺼져 있어요. (관리자: 1:1 메뉴 [🎟 출석·복권])"
+        return "이 방은 복권이 꺼져 있어요. (관리자: 1:1 메뉴 [🎟 출석·복권])", "off", None
     r = await lottery.scratch(svc.db, svc.cfg.tz, chat_id, user.id, float(s["lotto_odds"]), int(s["lotto_week_max"]),
                               str(s["lotto_prize"]))
     name = mention(user.id, user.first_name or "멤버")
-    if r["result"] == "none":
-        return f"🎟 {name}님은 긁을 복권이 없어요. <code>.출석</code> 하면 하루 1장!"
-    if r["result"] == "win":
-        await _notify_admins(svc, bot, chat_id, user, r["win_id"], str(s["lotto_prize"]))
+    kind = r["result"]
+    if kind == "none":
+        return f"🎟 {name}님은 긁을 복권이 없어요. <code>.출석</code> 하면 하루 1장!", kind, None
+    if kind == "win":
         return (f"🎉🎉 <b>당첨!</b> {name}님 — 경품 <b>{esc(s['lotto_prize'])}</b>\n"
-                f"관리자가 1:1 로 연락드려요. (이번 주 남은 경품 {r['week_left']}개)")
-    if r["result"] == "recent":
-        return f"🎟 {name}님 당첨 칸이었는데 최근 {lottery.WIN_GAP_DAYS // 7}주 안에 이미 당첨되셔서 다른 분께 양보했어요 🙏"
-    if r["result"] == "soldout":
-        return f"🎟 {name}님 … 당첨 칸이었는데 <b>이번 주 경품이 다 나갔어요</b> 😭 다음 주 월요일에 다시 열려요."
-    return f"🎟 {name}님 꽝! 내일 또 출석하면 1장 더 (남은 복권 {r['left']}장 · 확률 {s['lotto_odds']:g}%)"
+                f"관리자가 1:1 로 연락드려요. (이번 주 남은 경품 {r['week_left']}개)"), kind, (r["win_id"], str(s["lotto_prize"]))
+    if kind == "recent":
+        return f"🎟 {name}님 당첨 칸이었는데 최근 {lottery.WIN_GAP_DAYS // 7}주 안에 이미 당첨되셔서 다른 분께 양보했어요 🙏", kind, None
+    if kind == "soldout":
+        return f"🎟 {name}님 … 당첨 칸이었는데 <b>이번 주 경품이 다 나갔어요</b> 😭 다음 주 월요일에 다시 열려요.", kind, None
+    return f"🎟 {name}님 꽝! 내일 또 출석하면 1장 더 (남은 복권 {r['left']}장 · 확률 {s['lotto_odds']:g}%)", kind, None
 
 
-async def _notify_admins(svc, bot, chat_id: int, user, win_id: int, prize: str) -> None:
+async def _post(bot, chat_id: int, text: str, reply_to: int | None, **kw) -> bool:
+    """방에 올림 — 답장할 글이 지워졌어도 보냄 (긁은 결과가 사라지면 안 됨)."""
+    rp = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
+    try:
+        await bot.send_message(chat_id, text, parse_mode="HTML", reply_parameters=rp, **kw)
+        return True
+    except TelegramError as e:
+        log.warning("출석·복권 글 보내기 실패 %s: %s", chat_id, e)
+        return False
+
+
+async def announce_win(svc, bot, chat_id: int, user, win: tuple | None) -> None:
+    """당첨 → 관리자 1:1. 아무에게도 못 보냈으면 방에 한 줄 (관리자 전원이 1:1 을 안 연 경우)."""
+    if not win:
+        return
+    if not await _notify_admins(svc, bot, chat_id, user, win[0], win[1]):
+        await _post(bot, chat_id, f"📮 관리자님, 당첨 알림을 1:1 로 못 보냈어요 → @{bot.username} 와 1:1 을 열고 "
+                                  "방 설정 [🎟 출석·복권] 에서 당첨자를 확인해 주세요.", None)
+
+
+async def _notify_admins(svc, bot, chat_id: int, user, win_id: int, prize: str) -> int:
     title = ""
     try:
         chat = await svc.db._one("SELECT title FROM chats WHERE chat_id=?", (chat_id,))
@@ -90,15 +111,18 @@ async def _notify_admins(svc, bot, chat_id: int, user, win_id: int, prize: str) 
     except TelegramError:
         admins = []
     who = f"{esc(user.first_name or '?')}" + (f" @{esc(user.username)}" if getattr(user, "username", None) else "") + f" (ID {user.id})"
+    sent = 0
     for aid in admins:
         try:
             await bot.send_message(aid, f"🎁 <b>복권 당첨</b> — {esc(title) or chat_id}\n당첨자: {who}\n경품: {esc(prize)}\n"
                                         "경품을 보낸 뒤 아래 버튼을 눌러 주세요.", parse_mode="HTML",
                                    reply_markup=menu._kb([[B("✅ 지급 완료", f"lotp:{chat_id}:{win_id}")]]))
+            sent += 1
         except Forbidden:
             continue
         except TelegramError as e:
             log.warning("복권 당첨 관리자 알림 실패 %s: %s", aid, e)
+    return sent
 
 
 async def on_button(svc, bot, q, parts) -> None:
@@ -112,12 +136,18 @@ async def on_button(svc, bot, q, parts) -> None:
     if str(q.from_user.id) != parts[1]:
         await q.answer("본인 복권만 긁을 수 있어요. .출석 하면 1장!", show_alert=True)
         return
-    text = await do_scratch(svc, bot, q.message.chat.id, q.from_user)
+    chat_id = q.message.chat.id
+    text, kind, win = await do_scratch(svc, bot, chat_id, q.from_user)
+    if kind in ("none", "off"):                       # 방에 안 올림 (복권 없는 사람이 연타하면 도배)
+        await q.answer(html_plain(text)[:200], show_alert=True)
+        return
     await q.answer("🎟")
-    try:
-        await bot.send_message(q.message.chat.id, text, parse_mode="HTML", reply_to_message_id=q.message.message_id)
-    except TelegramError as e:
-        log.warning("복권 결과 보내기 실패: %s", e)
+    if not await _post(bot, chat_id, text, q.message.message_id):
+        try:
+            await q.answer(html_plain(text)[:200], show_alert=True)
+        except TelegramError:
+            pass
+    await announce_win(svc, bot, chat_id, q.from_user, win)
 
 
 async def on_paid(svc, bot, q, parts) -> None:
@@ -127,15 +157,19 @@ async def on_paid(svc, bot, q, parts) -> None:
     except (IndexError, ValueError):
         await q.answer()
         return
-    if not await svc.perms.is_tg_admin(bot, chat_id, q.from_user.id):
+    try:
+        admin = await svc.perms.is_tg_admin(bot, chat_id, q.from_user.id)
+    except TelegramError:
+        admin = False
+    if not admin:
         await q.answer("그 방 관리자만 누를 수 있어요.", show_alert=True)
         return
     ok = await lottery.mark_paid(svc.db, chat_id, win_id, q.from_user.id)
     await q.answer("✅ 지급 완료로 표시했어요" if ok else "이미 지급 완료예요")
     if ok:
         try:
-            await q.edit_message_text((q.message.text_html if q.message else "") + "\n\n✅ 지급 완료", parse_mode="HTML")
-        except TelegramError:
+            await q.edit_message_text((getattr(q.message, "text_html", None) or "🎁 복권 당첨") + "\n\n✅ 지급 완료", parse_mode="HTML")
+        except (TelegramError, AttributeError):
             pass
 
 
@@ -161,11 +195,13 @@ async def rank_text(svc, chat_id: int) -> str:
 # ── 명령 ──────────────────────────────────────────────────
 async def c_checkin(ctx) -> None:
     text, kb = await do_checkin(ctx.svc, ctx.bot, ctx.chat_id, ctx.user, ctx.role)
-    await ctx.reply(text, reply_markup=kb)
+    await _post(ctx.bot, ctx.chat_id, text, ctx.msg.message_id, reply_markup=kb)
 
 
 async def c_scratch(ctx) -> None:
-    await ctx.reply(await do_scratch(ctx.svc, ctx.bot, ctx.chat_id, ctx.user))
+    text, _, win = await do_scratch(ctx.svc, ctx.bot, ctx.chat_id, ctx.user)
+    await _post(ctx.bot, ctx.chat_id, text, ctx.msg.message_id)
+    await announce_win(ctx.svc, ctx.bot, ctx.chat_id, ctx.user, win)
 
 
 async def c_fortune(ctx) -> None:
@@ -251,34 +287,28 @@ hooks.add_tick_hook(_prune_tick)
 # ── AI 도구 ───────────────────────────────────────────────
 async def t_attendance(ctx: tools.ToolCtx, a: dict) -> str:
     action = str(a.get("action") or "checkin")
+    reply_to = getattr(ctx.request_msg, "message_id", None)
     if action == "fortune":     # 1:1 에서도 됨
         f = fortune.today(ctx.svc.cfg.tz, ctx.caller.id)
-        try:
-            await ctx.bot.send_message(ctx.chat_id, fortune.text(f, mention(ctx.caller.id, ctx.caller.first_name or "멤버")),
-                                       parse_mode="HTML", reply_to_message_id=getattr(ctx.request_msg, "message_id", None))
-            ctx.quiet = True
-        except TelegramError:
+        if not await _post(ctx.bot, ctx.chat_id, fortune.text(f, mention(ctx.caller.id, ctx.caller.first_name or "멤버")), reply_to):
             return fortune.text(f)
+        ctx.quiet = True
         return "운세를 방에 올렸음 (하루 동안 같음)."
     if ctx.chat_id > 0:
         return "출석·복권은 그룹방에서만 됨."
     if action == "checkin":
         text, kb = await do_checkin(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, ctx.role)
-        try:
-            await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML", reply_markup=kb,
-                                       reply_to_message_id=getattr(ctx.request_msg, "message_id", None))
-            ctx.quiet = True
-        except TelegramError:
+        if not await _post(ctx.bot, ctx.chat_id, text, reply_to, reply_markup=kb):
             return "출석 처리함: " + text
+        ctx.quiet = True
         return "출석 처리하고 결과(버튼 포함)를 방에 올렸음."
     if action == "scratch":
-        text = await do_scratch(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller)
-        try:
-            await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML",
-                                       reply_to_message_id=getattr(ctx.request_msg, "message_id", None))
-            ctx.quiet = True
-        except TelegramError:
+        text, _, win = await do_scratch(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller)
+        ok = await _post(ctx.bot, ctx.chat_id, text, reply_to)
+        await announce_win(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, win)
+        if not ok:
             return text
+        ctx.quiet = True
         return "복권 결과를 방에 올렸음."
     if action == "wins":
         return await wins_text(ctx.svc, ctx.chat_id)

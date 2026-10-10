@@ -95,7 +95,7 @@ async def checkin(db, tz, chat_id: int, user_id: int, now: float | None = None, 
     """{'ok': 처음이면 True, 'streak': 연속 일수, 'month': 이번 달 출석 수, 'ticket': 새 복권 id 또는 None}."""
     now = time.time() if now is None else now
     day = kst_day(tz, now)
-    yday = kst_day(tz, now - DAY_SEC)
+    yday = (datetime.fromtimestamp(now, tz).date() - timedelta(days=1)).isoformat()   # 날짜로 하루 빼기 (서머타임 있는 시간대도 안전)
     month = day[:7]
 
     def run(c):
@@ -122,7 +122,10 @@ async def eligible(db, chat_id: int, user_id: int, min_days: int, now: float | N
     since = (m["joined_at"] if m and m["joined_at"] else None) or (first["t"] if first and first["t"] else None)
     if min_days > 0 and (since is None or now - since < min_days * DAY_SEC):
         return f"복권은 이 방에 들어온 지 {min_days}일 지난 분부터 받을 수 있어요 (출석은 됐어요)."
-    recent = await db._one("SELECT 1 FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND is_bot=0 LIMIT 1",
+    # 명령·소담 부르기는 대화로 안 셈 — 글은 명령보다 먼저 기록돼서 '.출석' 한 줄이 이 조건을 혼자 채웠음 (리뷰 2026-10-11)
+    recent = await db._one("SELECT 1 FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND is_bot=0 "
+                           "AND substr(ltrim(text),1,1) NOT IN ('.','!','/','。') AND text NOT LIKE '%소담%' "
+                           "AND length(trim(text))>=2 LIMIT 1",
                            (chat_id, user_id, int(now) - 7 * DAY_SEC))
     if recent is None:
         return "복권은 최근 7일 안에 이 방에서 대화한 분만 받을 수 있어요 (출석은 됐어요)."

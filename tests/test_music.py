@@ -1603,6 +1603,9 @@ async def popular_songs_are_fetched_at_night_once_and_stop_when_music_starts():
     w.players.pop(CHAT)
     import calendar
     kst4 = calendar.timegm((2026, 10, 10, W.PREFETCH_HOUR, 30, 0, 0, 0, 0)) - 9 * 3600   # 한국시각 4시 30분
+    if w._prefetch_task:                                # 실제 시각이 한국 새벽 4시대면 일꾼 루프가 이미 띄워 둠 (2026-10-11 04시 실패)
+        w._prefetch_task.cancel()
+    w._prefetch_task, w._prefetch_day = None, None
     w._maybe_night_prefetch(kst4 - 3600)                # 3시 → 안 함
     assert w._prefetch_task is None
     w._maybe_night_prefetch(kst4)

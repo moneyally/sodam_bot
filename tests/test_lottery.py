@@ -83,6 +83,9 @@ async def eligibility_new_member_silent_member_and_admin_get_no_ticket():
     assert await lottery.eligible(e.db, ROOM, NEW.id, 0) is None
     await e.db._write("DELETE FROM messages WHERE user_id=?", (B_.id,))
     assert "7일" in await lottery.eligible(e.db, ROOM, B_.id, 3), "말 안 하고 출석만 = 부계정 의심"
+    for t in (".출석", "소담아 출석", "!출석", "/start", "ㅋ"):          # 글은 명령보다 먼저 기록됨 → 명령·부르기는 대화로 안 셈
+        await e.db.log_message(ROOM, B_.id, 9, t)
+    assert "7일" in await lottery.eligible(e.db, ROOM, B_.id, 3), "'.출석' 한 줄이 자격을 채우면 안 됨 (리뷰 2026-10-11)"
     text, kb = await P.do_checkin(e.svc, e.bot, ROOM, ADMIN, Role.ADMIN)
     assert "관리자는 복권에서 빠져요" in text and "lot:s:" not in str(kb.inline_keyboard)
     text, kb = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
@@ -127,6 +130,19 @@ async def scratch_button_owner_only_win_notifies_admins_paid_once():
     await P.on_paid(e.svc, e.bot, q, data.split(":")[1:])
     assert "지급 완료로" in box[0] and "이미" in box[-1]
     assert "✅ 지급" in await P.wins_text(e.svc, ROOM)
+
+
+@test
+async def no_ticket_press_is_a_popup_not_a_room_post_and_ai_stops_after_posting():
+    e = await setup()
+    q, box = press(A, f"lot:s:{A.id}")
+    await P.on_button(e.svc, e.bot, q, ["s", str(A.id)])
+    assert "긁을 복권이 없어요" in box[0] and not e.bot.named("send_message"), "복권 없는 연타 = 팝업만"
+    from types import SimpleNamespace as NS
+    from sodam import agent
+    call = lambda action: NS(function=NS(name="attendance", arguments='{"action": "%s"}' % action))
+    assert agent._terminal(call("checkin")) and agent._terminal(call("fortune")) and not agent._terminal(call("wins")), \
+        "방에 직접 올린 결과면 AI 를 다시 안 부름, 조회는 부름"
 
 
 @test

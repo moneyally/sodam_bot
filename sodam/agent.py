@@ -420,17 +420,21 @@ class _Escalate(Exception):
 # 부르지 않음 (서버 14일: 끝말잇기 24·음성방 20·영상 34·선택지 16·포인트 9번 — 매번 1번씩 헛호출).
 TERMINAL = frozenset({"start_game", "game_control", "point_game", "voice_call", "make_video", "ask_choice", "copy_sticker"})
 SHOW_TERMINAL = frozenset({"chat_stats"})   # show=true(표를 방에 그대로 올림)일 때만 끝 도구
+ACTION_TERMINAL = {"attendance": {"checkin", "scratch", "fortune"}}   # 이 action 일 때만 결과를 방에 직접 올림
 
 
 def _terminal(c) -> bool:
     name = c.function.name
     if name in TERMINAL:
         return True
-    if name in SHOW_TERMINAL:
+    if name in SHOW_TERMINAL or name in ACTION_TERMINAL:
         try:
-            return bool(json.loads(c.function.arguments or "{}").get("show"))
+            args = json.loads(c.function.arguments or "{}")
         except (ValueError, AttributeError):
             return False
+        if name in ACTION_TERMINAL:
+            return args.get("action") in ACTION_TERMINAL[name]
+        return bool(args.get("show"))
     return False
 LIGHT_MAX_STEPS = 3    # 작은 모델은 도구 라운드 3번까지 (길게 찾으면 올려 보낸 큰 모델의 시간·요금을 먹음)
 DONE_NOTE = ("(이미 한 일) 이 요청에서 방금 이미 실행한 도구: {tools}. 같은 일을 다시 하지 말고 남은 일만 한다.")
