@@ -17,6 +17,7 @@ EXAMPLES = "예: EPL · 라리가 · 챔스 · MLB · NBA · KBO · 토트넘 ·
 NOT_READY = "국내 리그(KBO·K리그·KBL·V리그 등)는 아직 준비 중이에요."
 PER_LEAGUE = 10
 WORLD_MAX = 60       # 세계 축구 한 화면 경기 수 (진행 중 먼저)
+CHOICES = 4          # 경기 후보 버튼 수
 WEEK = "월화수목금토일"
 
 
@@ -64,6 +65,7 @@ class UI:
     def __init__(self, sports):
         self.sp = sports
         self.feed = sports.feed
+        self.choices: list = []           # watch() 가 고르지 못한 후보 경기 (부른 쪽이 버튼으로)
 
     def today(self) -> date:
         return datetime.fromtimestamp(self.feed.clock(), KST).date()
@@ -253,8 +255,10 @@ class UI:
 
 
     # ── 경기 하나 찾기 · 콕 집은 알림 (2026-10-10 벳블리 '보스턴 필라델피아 득점하면 말해줄래') ──
-    async def find_games(self, query: str) -> list:
-        """'NHL 보스턴 필라델피아' · '토트넘 아스널' · '다저스' → 어제~내일 중 낱말이 다 맞는 경기 (진행 중 → 곧 시작 → 막 끝난 순)."""
+    async def find_games(self, query: str, translate=None) -> list:
+        """'NHL 보스턴 필라델피아' · '토트넘 아스널' · '다저스' → 어제~내일 중 낱말이 맞는 경기 (진행 중 → 곧 시작 → 막 끝난 순).
+        translate: async fn([한글 낱말]) → {낱말: 영어 이름} — 표에 없는 팀('생테티엔')을 영어(Saint-Etienne)로 다시 찾기.
+        한 번 맞은 번역은 sports_alias 에 남겨 다음엔 AI 없이 (2026-10-11 벳블리: AI 가 한국어만 넘겨 4번 실패 → 웹 검색으로 시각 오보)."""
         hint, toks = None, []
         for w in re.split(r"[\s,/\-]+|\bvs\b", (query or "").lower()):
             w = _fold(w)
@@ -267,58 +271,102 @@ class UI:
                 toks.append(w)
         if not toks:
             return []
-        # 낱말 묶음: 전부 · 영어만 · 한글만 — 표에 없는 팀은 AI 가 '생테티엔 Saint-Etienne 로데즈 Rodez' 처럼 둘 다 줌 (2026-10-11 벳블리)
-        latin = [w for w in toks if re.search(r"[a-z]", w)]
-        hangul = [w for w in toks if re.search(r"[가-힣]", w)]
-        groups = [toks] + [gr for gr in (latin, hangul) if gr and gr != toks]
-        if hint:
-            leagues = [hint]
-        else:
-            per = [{t.league for t in TEAMS if any(w in norm(x) for x in (t.src, t.ko))} for w in toks]
-            both = set.intersection(*per) if all(per) else set()
-            leagues = [LEAGUES[c] for c in sorted(both or set().union(*per)) if c in LEAGUES][:6]
-            if "world" in LEAGUES:               # 표에 없는 팀(영어 이름)도: 세계 축구 하루치 한 요청에서 찾기
-                leagues.append(LEAGUES["world"])
-        leagues = [lg for lg in leagues if self.feed.available(lg)]
-        today = self.today()
-        found = []
-        for d in (today - timedelta(days=1), today, today + timedelta(days=1)):
-            for lg, games in await self._days(leagues, d):
-                for g in games or []:
-                    names = [_fold(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league))]
-                    if any(all(any(w in n for n in names) for w in gr) for gr in groups):
-                        found.append(g)
+        learned = await self._aliases([w for w in toks if _HANGUL.search(w)])
+        groups = _groups(toks, learned)
+        leagues = self._leagues_for(hint, [w for gr in groups for w in gr])
+        games = await self._games_around(leagues)
+        found = _match(games, groups)
+        if not found and translate is not None:
+            todo = [w for w in toks if _HANGUL.search(w) and w not in learned]
+            if todo:
+                try:
+                    got = await translate(todo)
+                except Exception:
+                    got = {}
+                got = {k: _fold(v) for k, v in (got or {}).items() if k in todo and isinstance(v, str) and _fold(v)}
+                if got:
+                    tr_groups = _groups(toks, {**learned, **got})
+                    more = self._leagues_for(hint, [w for gr in tr_groups for w in gr])
+                    games += await self._games_around([lg for lg in more if lg not in leagues])
+                    found = _match(games, tr_groups)
+                    if found:                     # 맞은 번역만 기억 (틀린 번역이 남지 않게)
+                        await self._learn({k: v for k, v in got.items()})
         now = self.feed.clock()
         order = {"in": 0, "pre": 1}
         uniq: dict = {}
         for g in found:                    # 같은 경기가 리그 피드·세계 축구 둘 다면 리그 쪽 (세계 축구는 목록 맨 뒤 — 리뷰 2026-10-10)
             if g.key not in uniq or uniq[g.key].league == "world":
                 uniq[g.key] = g
-        found = list(uniq.values())
-        return sorted(found, key=lambda g: (order.get(g.state, 2), abs(g.start - now)))
+        return sorted(uniq.values(), key=lambda g: (order.get(g.state, 2), abs(g.start - now)))
 
-    async def watch(self, target: int, user_id: int, query: str, level: str = "goals", game_only: bool = False) -> str:
+    def _leagues_for(self, hint, toks: list[str]) -> list:
+        if hint:   # 리그를 말해도 세계 축구까지 ('프랑스' = 리그1 이지만 생테티엔은 2부 — 2026-10-11)
+            leagues = [hint] + ([LEAGUES["world"]] if hint.sport == "soccer" and "world" in LEAGUES and hint.code != "world" else [])
+        else:
+            per = [{t.league for t in TEAMS if any(w in _fold(x) for x in (t.src, t.ko))} for w in toks]
+            hit = [p for p in per if p]
+            both = set.intersection(*hit) if hit else set()
+            leagues = [LEAGUES[c] for c in sorted(both or set().union(*hit) if hit else set()) if c in LEAGUES][:6]
+            if "world" in LEAGUES:               # 표에 없는 팀(영어 이름)도: 세계 축구 하루치 한 요청에서 찾기
+                leagues.append(LEAGUES["world"])
+        return [lg for lg in leagues if self.feed.available(lg)]
+
+    async def _games_around(self, leagues: list) -> list:
+        today = self.today()
+        out = []
+        for d in (today - timedelta(days=1), today, today + timedelta(days=1)):
+            for _lg, games in await self._days(leagues, d):
+                out += games or []
+        return out
+
+    async def _aliases(self, words: list[str]) -> dict:
+        if not words:
+            return {}
+        try:
+            rows = await self.sp.db._all(f"SELECT ko, en FROM sports_alias WHERE ko IN ({','.join('?' * len(words))})", tuple(words))
+        except Exception:
+            return {}
+        return {r["ko"]: r["en"] for r in rows}
+
+    async def _learn(self, pairs: dict) -> None:
+        import time as _t
+        for ko, en in pairs.items():
+            await self.sp.db._write("INSERT OR REPLACE INTO sports_alias VALUES(?,?,?)", (ko, en, int(_t.time())))
+
+    async def watch(self, target: int, user_id: int, query: str, level: str = "goals", game_only: bool = False,
+                    translate=None) -> str:
         """경기 하나(골·결과) 또는 팀·리그(계속)를 target(방 또는 그 사람 1:1)에 알림. 글은 HTML.
-        game_only: 경기 하나만 (멤버가 방에 거는 경우 — 계속 받는 팀·리그 알림은 관리자만)."""
-        from .alerts import MAX_WATCHES, WATCH_KEEP
+        game_only: 경기 하나만 (멤버가 방에 거는 경우 — 계속 받는 팀·리그 알림은 관리자만).
+        같은 상태(진행 중/곧 시작)의 경기가 여럿이면 걸지 않고 self.choices 에 후보를 남김 → 부른 쪽이 버튼으로 고르게."""
         level = level if level in LEVELS else "goals"
-        games = await self.find_games(query)
+        self.choices = []
+        games = await self.find_games(query, translate=translate)
         live = [g for g in games if g.state in ("in", "pre")]
         where = "이 방에" if target < 0 else "1:1 로"
+        if len(live) > 1 and live[1].state == live[0].state:
+            self.choices = live[:CHOICES]
+            return f"'{esc(query)}' 에 맞는 경기가 {len(live)}개예요. 버튼으로 골라 주세요."
         if live:
-            g = live[0]
-            label = f"{LEAGUES[g.league].name} {fmt.matchup(g, score=False)}" if g.league in LEAGUES else fmt.matchup(g, score=False)
-            r = await self.sp.alerts.watch(target, user_id, g.league, "", g.key, html_plain(label)[:80], level,
-                                           expires=int(g.start + WATCH_KEEP))
-            if r == "full":
-                return f"알림은 {MAX_WATCHES}개까지예요. 1:1 메뉴 [⚽ 스포츠] → 🔔 내 알림에서 정리해 주세요."
-            state = f"지금 {esc(g.detail or '진행 중')} {fmt.matchup(g)}" if g.state == "in" else f"{fmt.mdhm(g.start)} 시작"
-            more = f"\n(같은 이름 경기 {len(live) - 1}개 더 있음 — 다른 경기면 리그·날짜를 붙여서 다시)" if len(live) > 1 else ""
-            return (f"🔔 {fmt.tag(g)} {fmt.matchup(g, score=False)} — {LEVELS[level][0]} 알림 {where} 보낼게요. ({state})\n"
-                    f"경기 끝나면 알림도 자동으로 꺼져요.{more}")
+            return await self.watch_game(target, user_id, live[0], level, where)
         if games:
             g = games[0]
             return f"그 경기는 이미 끝났어요: {fmt.tag(g)} {fmt.matchup(g)}"
+        return await self._watch_team(target, user_id, query, level, game_only, where)
+
+    async def watch_game(self, target: int, user_id: int, g, level: str = "goals", where: str | None = None) -> str:
+        from .alerts import MAX_WATCHES, WATCH_KEEP
+        where = where or ("이 방에" if target < 0 else "1:1 로")
+        label = f"{fmt.tag(g)} {fmt.matchup(g, score=False)}"
+        r = await self.sp.alerts.watch(target, user_id, g.league, "", g.key, html_plain(label)[:80], level,
+                                       expires=int(g.start + WATCH_KEEP))
+        if r == "full":
+            return f"알림은 {MAX_WATCHES}개까지예요. 1:1 메뉴 [⚽ 스포츠] → 🔔 내 알림에서 정리해 주세요."
+        state = f"지금 {esc(g.detail or '진행 중')} {fmt.matchup(g)}" if g.state == "in" else f"{fmt.mdhm(g.start)} 시작"
+        return (f"🔔 {fmt.tag(g)} {fmt.matchup(g, score=False)} — {LEVELS[level][0]} 알림 {where} 보낼게요. ({state})\n"
+                "경기 끝나면 알림도 자동으로 꺼져요.")
+
+    async def _watch_team(self, target: int, user_id: int, query: str, level: str, game_only: bool, where: str) -> str:
+        from .alerts import MAX_WATCHES
         t = self._target(query)
         if isinstance(t, str):
             return (f"'{esc(query)}' 경기를 어제~내일 일정에서 못 찾았어요. 리그나 영어 팀 이름을 붙여 주세요 "
@@ -342,6 +390,35 @@ class UI:
             kind = "경기 하나" if r["game"] else "계속"
             out.append(f"• {esc(r['label'])} — {LEVELS.get(r['level'], LEVELS['goals'])[0]} ({kind})")
         return "\n".join(out)
+
+
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _groups(toks: list[str], alias: dict) -> list[list[str]]:
+    """맞춰 볼 낱말 묶음: 그대로 · 영어만 · 한글만 · 한글을 영어로 바꾼 것."""
+    latin = [w for w in toks if re.search(r"[a-z]", w)]
+    hangul = [w for w in toks if _HANGUL.search(w)]
+    swapped = [alias.get(w, w) for w in toks] if any(w in alias for w in toks) else []
+    out = [toks]
+    for gr in (swapped, latin, hangul):
+        if gr and gr not in out:
+            out.append(gr)
+    return out
+
+
+def _match(games: list, groups: list[list[str]]) -> list:
+    """낱말 묶음 중 하나라도 맞는 경기. 3낱말↑ 묶음은 절반만 맞아도 (예: '프랑스 리그2 생테티엔 로데즈' 의 '프랑스·리그2')."""
+    out = []
+    for g in games:
+        names = [_fold(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league), g.title or "")]
+        for gr in groups:
+            hits = sum(1 for w in gr if any(w in n for n in names))
+            need = len(gr) if len(gr) <= 2 else max(2, (len(gr) + 1) // 2)    # 3낱말↑ = 절반 이상(팀 둘) 맞으면
+            if hits >= need:
+                out.append(g)
+                break
+    return out
 
 
 def _fold(text: str) -> str:

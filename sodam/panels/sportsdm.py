@@ -503,3 +503,56 @@ async def _card_button(svc, bot, q, parts) -> None:
 
 
 hooks.add_callback_handler("sgc", _card_button)
+
+
+# ── 경기 후보 버튼 (sports alert 가 같은 이름 경기를 여럿 찾았을 때) ─────────────
+LEVEL_CODE = {"final": "f", "basic": "b", "goals": "g", "all": "a"}
+
+
+async def post_choices(bot, chat_id: int, user_id: int, where: str, level: str, games: list, reply_to=None) -> bool:
+    """버튼 sgw:<r|m>:<요청자>:<알림 종류>:<리그>:<경기 key> — 요청자만, 누르면 그 경기에 바로 알림."""
+    from ..sports import fmt
+    from ..util import html_plain
+    rows = []
+    for g in games:
+        data = f"sgw:{where}:{user_id}:{LEVEL_CODE.get(level, 'g')}:{g.league}:{g.key}"
+        if len(data.encode()) > 64:
+            continue
+        when = g.detail if g.state == "in" and g.detail else fmt.mdhm(g.start)
+        rows.append([B(html_plain(f"{fmt.tag(g)} {fmt.matchup(g, score=g.state == 'in')} · {when}")[:60], data)])
+    if not rows:
+        return False
+    try:
+        await bot.send_message(chat_id, "🔎 어느 경기요? 눌러 주면 바로 알림을 걸게요.", reply_markup=menu._kb(rows),
+                               reply_to_message_id=reply_to)
+        return True
+    except Exception as e:
+        log.warning("경기 후보 버튼 실패 %s: %s", chat_id, e)
+        return False
+
+
+async def on_choice(svc, bot, q, parts) -> None:
+    from ..sports import ui as sports_ui
+    if svc.sports is None or len(parts) < 5 or not q.message:
+        await q.answer()
+        return
+    where, uid, lv, league, key = parts[0], parts[1], parts[2], parts[3], ":".join(parts[4:])
+    if str(q.from_user.id) != uid:
+        await q.answer("부탁한 사람만 고를 수 있어요.", show_alert=True)
+        return
+    level = {v: k for k, v in LEVEL_CODE.items()}.get(lv, "goals")
+    c = PanelCtx(svc, bot, q.from_user.id, None, [])
+    g = await _game(c, league, key, "0")
+    if g is None:
+        await q.answer("경기를 못 찾았어요. 다시 부탁해 주세요.", show_alert=True)
+        return
+    target = q.message.chat.id if where == "r" else q.from_user.id
+    text = await sports_ui.UI(svc.sports).watch_game(target, q.from_user.id, g, level)
+    await q.answer("🔔 걸었어요")
+    try:
+        await q.edit_message_text(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+hooks.add_callback_handler("sgw", on_choice)
