@@ -618,6 +618,14 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   보내기 전 검사 make(agent._MAKE_ASK): '이모지·스티커 만들어' 에 도구 없이 ⓪① 글자로 때우면 한 번 더.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
 
+## 🧩 이모지 공방 = 타일 이모지 견본 받기 → 클로드가 제작 (`emojilab.py`, `tools/emoji_pack.py`, tests/test_emojilab.py · 뮤테이션 5개, 2026-10-10 오너)
+- 오너가 소담 1:1 에 프리미엄 커스텀 이모지(긴 배너를 100×100 조각으로 나눠 이어 치는 '제휴업체' 같은 것)를 보내면 — 2개↑(이모지 뺀 글 40자 안) 또는
+  1개 + 이모지·분석·타일·조각·만들 말 — getCustomEmojiStickers 로 조각 원본을 data/emoji_lab/<시각>/ 에 NN_<id>.webp|webm|tgs + meta.json(줄·순서·세트) +
+  preview.png, 오너에게 미리보기. 위치는 UTF-16 단위라 파이썬 위치로 바꿔 줄 계산. 메뉴 입력 다음·전달/AI 앞.
+- 제작은 클로드: ssh_ws --get 으로 견본 → 분석·PIL 로 100×100 조각(정지 PNG / 영상 WebM 64KB↓) → data/emoji_lab/out/<이름>/01.png… 올림 →
+  서버에서 `tools/emoji_pack.py --dir … --name … --title … --user <오너ID>` (sticker_type custom_emoji, 팩 <이름>_by_<봇>, --add 덧붙이기) → 오너 1:1 에 t.me/addemoji 링크.
+  쓰는 사람은 텔레그램 프리미엄이어야 함, 봇은 메시지에 커스텀 이모지를 못 씀(링크로만).
+
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
   길이 video_seconds(4~8, 기본 6). 둘 다 settings.OWNER_CAP (관리자는 줄이기만). 오너는 개수 한도 무시(요금은 셈).

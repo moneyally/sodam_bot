@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, leavelock, mediastore, medialog, modactions
+from . import autoreply, emojilab, leavelock, mediastore, medialog, modactions
 
 from .agent import run_agent
 from .db import disk_full
@@ -1242,6 +1242,8 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await svc.announcer.handle_message(bot, msg):
         return
     if await menu.handle_input(svc, bot, msg):
+        return
+    if await emojilab.maybe_capture(svc, bot, msg, user):   # 오너가 보낸 타일 이모지 → 조각 저장 (전달·AI 보다 먼저)
         return
     if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록
         role = await svc.perms.role(bot, msg.chat_id, user.id)
