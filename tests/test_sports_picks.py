@@ -202,5 +202,16 @@ async def settle_tick_hook_runs_once_a_minute():
     assert (await picks.stats(e.db, A.id, now=e.clock.t))["points"] == picks.WIN
 
 
+@test
+def tables_are_registered_when_the_bot_starts():
+    """서버 2026-10-11: picks·analysis 를 함수 안에서만 import 해서 DB 를 연 뒤에야 표가 등록됨 → 'no such table: sports_picks'."""
+    import subprocess
+    import sys
+    code = ("import sodam.handlers, sodam.db as d; "
+            "print(all(any(t in s for s in d.EXTRA_SCHEMA) for t in ('sports_picks', 'sports_analysis', 'sports_watch')))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(__import__('pathlib').Path(__file__).parents[1]))
+    assert out.stdout.strip().endswith("True"), (out.stdout, out.stderr[-500:])
+
+
 if __name__ == "__main__":
     run_all()

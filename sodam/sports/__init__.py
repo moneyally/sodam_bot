@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from . import analysis, picks  # noqa: F401 — 표(sports_picks·sports_analysis) 등록은 DB 열기 전에 (늦게 import 하면 표가 안 생김, 서버 2026-10-11)
 from .alerts import Alerts
 from .feed import Feed
 from .leagues import LEAGUES, SPORT_KO
