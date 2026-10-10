@@ -32,7 +32,7 @@ LIGHT_READ = frozenset({"web_search", "sports", "news_headlines", "sodam_guide",
 # light 가 이걸 실행한 뒤 올려 보내면 heavy 에 '이미 한 일' 로 알림 (agent.DONE_NOTE — 두 번 하지 않게)
 LIGHT_WRITE = frozenset({"greet_members", "mention_members", "start_game", "save_my_note", "set_my_style", "forget_my_memory",
                          "feature_request", "tag_alerts", "point_game", "stop_tag_all",
-                         "music"})   # 🎵 노래 신청·넘기기 — 권한·한도는 도구가 (멤버가 제일 많이 씀)   # 멈추기는 빨라야 (큰 모델로 안 올림)
+                         "music", "attendance"})   # 🎵 노래 신청·넘기기 — 권한·한도는 도구가 (멤버가 제일 많이 씀)   # 멈추기는 빨라야 (큰 모델로 안 올림)
 LIGHT_EXTRA = LIGHT_READ | LIGHT_WRITE
 ESCALATE_TOOL = "ask_senior"
 ESCALATE_SCHEMA = {"type": "function", "function": {

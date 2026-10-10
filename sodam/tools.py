@@ -1460,6 +1460,7 @@ CORE_TOOLS = frozenset({
     "sticker_catalog", "make_sticker", "copy_sticker", "run_code", "other_bot_results", "game_control",
     "schedule_task", "alert_rule",   # '23시55분에 나 불러줘' 를 말로만 약속한 실제 사례 (2026-10-05)
     "feature_request",    # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
+    "attendance",         # 📅 출석·🎟 복권 '소담아 출석' (2026-10-11 FOX 고객, panels/lottery.py)
     "music",              # 🎵 소담 뮤직봇 '○○ 틀어줘' (2026-10-08 — 음성채팅 DJ, panels/music.py)
     # 오너 1:1 에서만 보임 (다른 목록엔 영향 없음). '업데이트 보고' 때 불러오다 캐시가 깨져 실행 상한($0.05)에 걸림 (#2634, 2026-10-06)
     "owner_server_status"})

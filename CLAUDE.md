@@ -626,6 +626,17 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   서버에서 `tools/emoji_pack.py --dir … --name … --title … --user <오너ID>` (sticker_type custom_emoji, 팩 <이름>_by_<봇>, --add 덧붙이기) → 오너 1:1 에 t.me/addemoji 링크.
   쓰는 사람은 텔레그램 프리미엄이어야 함, 봇은 메시지에 커스텀 이모지를 못 씀(링크로만).
 
+## 📅 출석 · 🎟 복권 · 🔮 운세 · 📏 도배 빼기 (`lottery.py`·`panels/lottery.py`·`fortune.py`, tests/test_lottery.py · test_chat_min_chars.py, 뮤테이션 17개, 2026-10-11 FOX 고객)
+- `.출석`(출첵) 한국 날짜 하루 1번·연속 일수(어제 줄 +1) → 방 설정 lotto_enabled(기본 꺼짐)면 복권 1장(7일): 자격 = 관리자 아님·입장 lotto_min_days(3)일↑·7일 안 대화·
+  4주 안 당첨 없음. `.복권`/[🎟 복권 긁기](lot:s:<본인>) = secrets 0~9999 < 확률×100(lotto_odds %, 0.1~50) + **이번 주(한국 월요일) 당첨 < lotto_week_max**
+  를 INSERT…SELECT 한 문장으로 (동시 긁기도 상한 초과 X) → 당첨 = 방 축하 + 방 관리자(사람) 1:1 [✅ 지급 완료](lotp:<방>:<id>, TG 관리자, 한 번만).
+  경품 글 lotto_prize(40자, 링크·@ X)는 **방장이 직접** 줌 — 돈·포인트 X (포인트 게임 `!출석` 과 분리). 허브 🎟 m:lot · `.복권당첨` · `.출석순위`.
+  말로 '출석' = attendance 도구(복권 꺼진 방에서 '포인트 출석'이면 point_game). 법 조사: 무료 참여라 사행행위·복권법의 '재물·금전을 모아' 아님(변호사 의견 아님).
+- `.운세` = sha256(사람:한국 날짜) 로 우리가 쓴 문구 조각 고름(하루 같음, AI·DB 0원), 출석 글 [🔮 오늘의 운세](lot:f) = 누른 사람 팝업(200자), 1:1 m:fx.
+- 1:1 ⚽ m:sx 맨 위 나의 통계·나의 알림 · 🌟 오늘의 픽 m:sxt (BIG 리그 오늘 남은 경기 많이 고른 순 + 고른 비율, AI 는 🧠 누를 때만).
+- 채팅 집계 chat_no_repeat(📊 화면 토글, 기본 꺼짐): 같은 사람이 같은 글을 10분 안에 또 쓰면 1번 (`db.CountRule`·`count_filter(별명)`, top_chatters·chat_totals·
+  hourly_counts·stats.member_text 공통). 지워진 글 빼기는 아직 (messages 에 표시 없음).
+
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
   길이 video_seconds(4~8, 기본 6). 둘 다 settings.OWNER_CAP (관리자는 줄이기만). 오너는 개수 한도 무시(요금은 셈).

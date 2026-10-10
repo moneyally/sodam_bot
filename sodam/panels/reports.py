@@ -52,9 +52,11 @@ async def s_rp(c: PanelCtx) -> Screen:
         lines.append("⚠️ 이용 기간이 끝나서 지금은 요약을 보내지 않아요.")
     n_min = int(s.get("chat_min_chars") or 0)
     lines += ["", "📏 <b>채팅 집계</b> (<code>.랭킹</code>·통계·하루 리포트): "
-              + (f"<b>{n_min}글자 이상</b> 쓴 글만 셈 (띄어쓰기 빼고)" if n_min else "<b>모든 글</b>을 셈")]
+              + (f"<b>{n_min}글자 이상</b> 쓴 글만 셈 (띄어쓰기 빼고)" if n_min else "<b>모든 글</b>을 셈")
+              + (" · <b>도배 빼고</b> (같은 사람이 같은 글을 10분 안에 또 쓰면 1번만)" if s.get("chat_no_repeat") else "")]
     period_row = [B(("● " if k == days_key else "") + f"최근 {v}일", f"m:rp:{c.cid}:{k}") for k, v in PERIODS.items()]
-    rows = [period_row, menu._preset_row(s, c.cid, "digest_hour"), menu._preset_row(s, c.cid, "chat_min_chars")]
+    rows = [period_row, menu._preset_row(s, c.cid, "digest_hour"), menu._preset_row(s, c.cid, "chat_min_chars"),
+            *menu._toggle_rows(s, c.cid, ["chat_no_repeat"])]
     if await _can_receive(c):
         me = await reports.receives(svc, c.uid, c.cid)
         rows.append([B(("✅" if me else "❌") + " 🧠 하루 요약 받기 (나)", f"m:rpme:{c.cid}:{0 if me else 1}")])
@@ -130,6 +132,7 @@ async def r_dgp(c: PanelCtx) -> Screen:
 menu.register_hub(HubItem(8, "rp", "📊 활동 리포트 · AI 하루 요약", wide=True))
 menu.register_screen("rp", s_rp)
 menu.register_preset("digest_hour", reports.DIGEST_PRESETS, "rp")
+menu.register_toggle("chat_no_repeat", "rp")
 menu.register_preset("chat_min_chars", [("0", "📏 전부"), ("2", "2자↑"), ("3", "3자↑"), ("5", "5자↑"), ("10", "10자↑")], "rp")
 menu.register_route("rpme", Route(r_rpme, menu.TG_ADMIN))
 menu.register_route("dgp", Route(r_dgp, menu.PUBLIC, scoped=False))

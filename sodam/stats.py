@@ -1,7 +1,7 @@
 """채팅 집계 문구. 명령어·AI 도구·일일 리포트가 같이 쓴다."""
 from datetime import datetime
 
-from .db import DB, MIN_CHARS
+from .db import DB, CountRule, count_filter
 from .settings import register_setting
 from .util import display_name, esc, fmt_time, period_range
 
@@ -9,17 +9,23 @@ MEDALS = ["🥇", "🥈", "🥉"]
 
 # 2026-10-10 뉴월드 '채팅 집계 5글자부터만' — 'ㅋㅋ'·'ㅇㅇ' 로 순위 올리기 막기. 띄어쓰기 빼고 셈, 0 = 전부.
 register_setting("chat_min_chars", 0, "채팅 집계 최소 글자 수 (0=전부)", range_=(0, 50))
+# 2026-10-11 FOX '채팅집계 … 도배 X' — 같은 사람이 같은 글을 10분 안에 또 쓴 건 1번만 셈 (설계 docs/SPORTS_ENGAGE_DESIGN.md §3 F).
+register_setting("chat_no_repeat", False, "채팅 집계 도배 빼기")
 
 
-async def min_chars(db: DB, chat_id: int) -> int:
+async def min_chars(db: DB, chat_id: int) -> CountRule:
+    """이 방 채팅 집계 거르기 (최소 글자 수 + 도배 빼기)."""
+    s = await db.get_settings(chat_id)
     try:
-        return max(0, int((await db.get_settings(chat_id)).get("chat_min_chars") or 0))
+        n = max(0, int(s.get("chat_min_chars") or 0))
     except (TypeError, ValueError):
-        return 0
+        n = 0
+    return CountRule(n, bool(s.get("chat_no_repeat")))
 
 
-def _rule(n: int) -> str:
-    return f" ({n}글자 이상만)" if n > 0 else ""
+def _rule(r: CountRule) -> str:
+    bits = ([f"{r.min_chars}글자 이상만"] if r.min_chars > 0 else []) + (["도배 빼고"] if r.no_repeat else [])
+    return f" ({' · '.join(bits)})" if bits else ""
 
 
 def _name(row) -> str:
@@ -45,14 +51,14 @@ async def member_text(db: DB, chat_id: int, tz, period: str, user_id: int, name:
     end = until if until is not None else 1 << 62
     m = await min_chars(db, chat_id)
     mine = await db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                         + MIN_CHARS, (chat_id, user_id, since, end, m, m))
+                         + count_filter(), (chat_id, user_id, since, end, *m.args))
     n = int(mine["n"] if mine else 0)
     people = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                           + MIN_CHARS, (chat_id, since, end, m, m))
+                           + count_filter(), (chat_id, since, end, *m.args))
     if not n:
         return f"📊 {esc(name)} — {label} 채팅 0개{_rule(m)} (기록 기준, 참여 {people['n'] if people else 0}명)"
     above = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? AND ts<? "
-                          "AND is_bot=0 " + MIN_CHARS + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, m, m, n))
+                          "AND is_bot=0 " + count_filter() + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, *m.args, n))
     return f"📊 {esc(name)} — {label} 채팅 {n}개{_rule(m)} · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
 
 
