@@ -30,7 +30,7 @@ from .services import MenuToken, PendingInput
 from .settings import LABELS, coerce, over_cap, render
 from .styles import STYLES
 from .subscription import STATE_LABEL, chat_title, panel as sub_panel
-from .util import esc, human_minutes, iyeyo, josa
+from .util import esc, human_minutes, iyeyo, josa, to_int
 
 if TYPE_CHECKING:
     from .services import Services
@@ -227,12 +227,34 @@ async def admin_groups(svc: Services, bot: Bot, user_id: int) -> list[tuple[int,
     return list(out)
 
 
-async def groups_menu(svc: Services, bot: Bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    groups = await admin_groups(svc, bot, user_id)
-    rows = [[B(f"💬 {title[:30]}", f"m:g:{chat_id}")] for chat_id, title in groups[:20]]
+GROUPS_PAGE = 15   # 한 쪽에 방 몇 개 (2026-10-10: 예전엔 앞 20개만 → 방 27개인 오너에게 새로 들어온 '파멸' 방이 안 보였음)
+
+
+async def _recent_first(svc: Services, groups: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """최근 대화가 있는 방부터 (새로 들어온 방·바쁜 방이 위로). 기록 없는 방은 맨 뒤, 같으면 이름순."""
+    if len(groups) < 2:
+        return groups
+    ids = [cid for cid, _ in groups]
+    rows = await svc.db._all(f"SELECT chat_id, MAX(ts) AS t FROM messages WHERE chat_id IN ({','.join('?' * len(ids))}) "
+                             "GROUP BY chat_id", ids)
+    last = {r["chat_id"]: int(r["t"] or 0) for r in rows}
+    return sorted(groups, key=lambda g: (-last.get(g[0], 0), g[1]))
+
+
+async def groups_menu(svc: Services, bot: Bot, user_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    groups = await _recent_first(svc, await admin_groups(svc, bot, user_id))
+    pages = max(1, -(-len(groups) // GROUPS_PAGE))
+    page = min(max(page, 0), pages - 1)
+    shown = groups[page * GROUPS_PAGE:(page + 1) * GROUPS_PAGE]
+    rows = [[B(f"💬 {title[:30]}", f"m:g:{chat_id}")] for chat_id, title in shown]
+    if pages > 1:
+        nav = ([B("◀️ 이전", f"m:groups:{page - 1}")] if page > 0 else []) + [B(f"{page + 1}/{pages}", f"m:groups:{page}")] + \
+              ([B("다음 ▶️", f"m:groups:{page + 1}")] if page < pages - 1 else [])
+        rows.append(nav)
     rows.append([InlineKeyboardButton("➕ 그룹에 추가하기", url=add_to_group_url(bot.username))])
     rows.append([B("⬅️ 처음으로", "m:home")])
-    text = ("⚙️ <b>관리할 그룹을 고르세요</b>" if groups else
+    text = ((f"⚙️ <b>관리할 그룹을 고르세요</b> ({len(groups)}개 · 최근 대화 순)" if len(groups) > GROUPS_PAGE
+             else "⚙️ <b>관리할 그룹을 고르세요</b>") if groups else
             "관리 중인 그룹이 없어요.\n봇을 그룹에 추가하고, 그 그룹의 관리자인 계정으로 열어주세요.")
     return text, InlineKeyboardMarkup(rows)
 
@@ -254,7 +276,7 @@ async def r_home(c: PanelCtx) -> Screen:
 
 
 async def r_groups(c: PanelCtx) -> Screen:
-    return Screen(*await groups_menu(c.svc, c.bot, c.uid))
+    return Screen(*await groups_menu(c.svc, c.bot, c.uid, to_int(c.arg(0)) or 0))
 
 
 async def r_id(c: PanelCtx) -> Screen:

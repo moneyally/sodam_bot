@@ -72,6 +72,29 @@ async def main_menu_like_grouphelp():
 
 
 @test
+async def many_rooms_page_and_newest_first():
+    """2026-10-10: 방 27개 오너에게 앞 20개만 보여서 오늘 들어온 '파멸' 방이 목록에 없었음 → 쪽 넘기기 + 최근 대화 순."""
+    db = await make_db()
+    svc = await make_svc(db)
+    ids = [-1009000 - i for i in range(27)]
+    for i, cid in enumerate(ids):
+        await db.ensure_chat(cid, f"방{i:02d}")
+    await db.log_message(ids[26], 5, 1, "오늘 첫 대화", ts=int(__import__("time").time()))   # 맨 마지막에 들어온 방
+    svc.perms.candidate_chats = lambda uid: _async(ids)
+    svc.perms.is_admin = lambda bot, cid, uid: _async(True)
+    bot = FakeBot()
+    text, kb = await menu.groups_menu(svc, bot, 1)
+    labels = [b.text for b in buttons(kb)]
+    assert labels[0] == "💬 방26", "최근 대화가 있는 새 방이 맨 위"
+    assert "27개" in text and sum(t.startswith("💬") for t in labels) == menu.GROUPS_PAGE
+    nxt = next(b for b in buttons(kb) if "다음" in b.text)
+    page2 = [b.text for b in buttons((await menu.groups_menu(svc, bot, 1, 1))[1])]
+    assert nxt.callback_data == "m:groups:1" and sum(t.startswith("💬") for t in page2) == 27 - menu.GROUPS_PAGE
+    shown = {t for t in labels + page2 if t.startswith("💬")}
+    assert len(shown) == 27, "모든 방이 어느 쪽엔가 보임"
+
+
+@test
 async def toggles_and_presets_admin_only():
     db, svc, bot, _ = await setup()
     assert (await db.get_settings(CHAT))["captcha_enabled"] is True
