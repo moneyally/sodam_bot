@@ -965,6 +965,15 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   중복 = sports_alert_sent(방, 경기, 종류+점수, sent_at) 14일. 방마다 한 틱 = 한 메시지, 시간당 12통, 조용한 시간 sports_quiet(기본 01-07 KST):
   시작·골 버림, 종료·취소는 sports_held → 끝나면 '밤사이 경기 결과'. sports_enabled + 이용 중인 방(paid_features)만.
   알림 종류 sports_alerts final/basic/goals(기본)/all. 옛 표 sports_subs/sports_sent 는 안 씀(구독 0건이었음).
+- **⚡ 빠른 알림·경기 콕 집기·1:1 메뉴·세계 경기** (tests/test_sports_watch.py · 뮤테이션 8개, 2026-10-10 벳블리 'NHL 보스턴 필라델피아 득점하면 말해줄래'
+  → 낱말 규칙(alert_rule)이 생기고 '실시간 득점 알림 안 돼' + 고객 '라이브스코어보다 빠르게·전 세계 경기·후바오 스포츠봇처럼'):
+  ESPN 은 7초마다 새로 냄(cache-control max-age=7 실측) → LIVE_EVERY 60→8초, job_sports 4초(한 번에 하나, 뒤에서). 보내기 실패한 곳 FAIL_PAUSE 60초.
+  sports_watch(받을 곳 = 방 또는 사람 1:1, game key·팀·리그, level, expires) — 경기 하나는 시작+12시간에 만료·끝나면 지움, 1:1 막히면(Forbidden) 그 사람 것 지움.
+  AI 도구 sports action alert/my_alerts/unalert (to room=관리자만·me, 멤버는 1:1, 1:1 안 연 사람은 send_chat_action 으로 미리 확인) — `ui.find_games`(리그 힌트 +
+  두 팀 낱말, 어제~내일, 진행 중→곧→끝난 순). 같은 경기를 여러 리그(EPL·세계 축구)에서 받아도 `Alerts.seen_in` 으로 구독 다 맞음.
+  세계 축구 = League world(ESPN soccer/all?limit=1000, 하루 ~340경기 한 요청, 대회 이름 season.slug → Game.title·fmt.tag). 럭비·NBL·G리그·CFL·UFL·중남미 윈터리그·IPL(minor).
+  다른 종목은 ESPN 'all' 없음(400) — 리그별. NHL 팀 32개 표. 1:1 메인 [⚽ 스포츠](`panels/sportsdm.py` m:sp·spl·spd·spw·spwi·sps, 토큰 spw_game·spw_del).
+  다음 단계(오너 결정 대기): 🎯 승부 맞히기(돈 X, 점수)+랭킹+내 통계 · AI 경기 분석.
 - 국내 리그 안내 문장은 guide/sports.md '조건·예외' (API-Sports 무료 기준: 어제~내일·갱신 느림·순위 없음). 소스를 바꾸면 같이 고칠 것.
 
 ## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)

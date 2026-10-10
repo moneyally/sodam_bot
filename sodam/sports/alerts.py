@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import Forbidden, TelegramError
 
 from ..db import DB, register_schema
 from ..settings import register_setting
@@ -32,11 +32,16 @@ from .providers import BACKGROUND, KST, Game, SportsError
 
 log = logging.getLogger(__name__)
 
-LIVE_EVERY = 60            # 경기 중인 리그 다시 받는 간격(초)
+LIVE_EVERY = 8             # 경기 중인 리그 다시 받는 간격(초) — ESPN 이 7초마다 새로 냄(cache-control max-age=7, 서버 실측 2026-10-10).
+                           # 예전 60초 = 골 알림이 평균 30초↑ 늦음 ('라이브스코어보다 빠르게' 오너 요청)
 SCHEDULE_EVERY = 6 * 3600  # 경기 없을 때 일정 새로 받는 간격
 PRE_WINDOW = 15 * 60       # 시작 15분 전부터 '경기 중' 취급
 MAX_GAME_LEN = 6 * 3600    # 이보다 오래 '시작 전/진행 중'이면 멈춘 데이터로 보고 60초 폴링 안 함 (ESPN 이 SCHEDULED 로 남는 사례)
 MAX_PER_HOUR = 12          # 방마다 시간당 알림 메시지
+DM_PER_HOUR = 30           # 개인 1:1 알림 (본인이 고른 것이라 넉넉히)
+MAX_WATCHES = 10           # 한 사람(또는 한 방)의 콕 집은 경기·개인 구독 수
+FAIL_PAUSE = 60            # 보내기 실패한 곳은 이만큼 쉼 (틱이 몇 초라 막힌 방을 계속 두드리지 않게)
+WATCH_KEEP = 12 * 3600     # 경기 하나 알림은 시작 뒤 이 시간 지나면 자동으로 지움
 KEEP_DAYS = 14
 MAX_FOLLOWS = 20
 MAX_LINES = 40             # 한 메시지 줄 수 (넘치는 결과는 다음 틱으로)
@@ -66,6 +71,19 @@ CREATE TABLE IF NOT EXISTS sports_alert_sent (
     PRIMARY KEY (chat_id, game, kind)
 );
 CREATE INDEX IF NOT EXISTS sports_alert_sent_at ON sports_alert_sent(sent_at);
+CREATE TABLE IF NOT EXISTS sports_watch (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id  INTEGER NOT NULL,          -- 받을 곳: 방(음수) 또는 사람 1:1(양수)
+    user_id  INTEGER NOT NULL,          -- 건 사람
+    league   TEXT NOT NULL,
+    team     TEXT NOT NULL DEFAULT '',  -- 팀 소스 이름 ('' = 리그 전체)
+    game     TEXT NOT NULL DEFAULT '',  -- 경기 key (콕 집은 경기 하나, '' = 팀·리그 계속)
+    label    TEXT NOT NULL,
+    level    TEXT NOT NULL DEFAULT 'goals',
+    created  INTEGER NOT NULL,
+    expires  INTEGER NOT NULL DEFAULT 0 -- 0 = 계속
+);
+CREATE INDEX IF NOT EXISTS sports_watch_chat ON sports_watch(chat_id);
 CREATE TABLE IF NOT EXISTS sports_held (
     chat_id INTEGER NOT NULL,
     game    TEXT NOT NULL,
@@ -195,6 +213,8 @@ class Alerts:
         self.last_fetch: dict[str, float] = {}      # 리그 → 마지막으로 받은 시각
         self.last_sched: dict[str, float] = {}      # 리그 → 마지막으로 하루 전체 일정 받은 시각
         self.sent_times: dict[int, deque] = {}      # 방 → 최근 보낸 알림 시각 (시간당 상한)
+        self.fail_until: dict[int, float] = {}      # 방·사람 → 보내기 실패 뒤 쉬는 끝 시각
+        self.seen_in: dict[str, set] = {}           # 경기 key → 그 경기를 받아 온 리그들
         self.last_prune = 0.0
 
     # ── 구독 ─────────────────────────────────────────────
@@ -219,6 +239,34 @@ class Alerts:
     async def unfollow(self, chat_id: int, league: str, team: str) -> bool:
         return await self.db.atomic(lambda c: c.execute(
             "DELETE FROM sports_follow WHERE chat_id=? AND league=? AND team=?", (chat_id, league, team)).rowcount) > 0
+
+    # ── 콕 집은 경기 · 개인 1:1 알림 ───────────────────────
+    async def watch(self, chat_id: int, user_id: int, league: str, team: str, game: str, label: str,
+                    level: str = "goals", expires: int = 0) -> str:
+        """'added' / 'exists' / 'full'. chat_id = 받을 곳 (방 또는 그 사람 1:1)."""
+        level = level if level in LEVELS else "goals"
+
+        def run(c):
+            row = c.execute("SELECT id FROM sports_watch WHERE chat_id=? AND league=? AND team=? AND game=?",
+                            (chat_id, league, team, game)).fetchone()
+            if row:
+                c.execute("UPDATE sports_watch SET level=?, expires=? WHERE id=?", (level, expires, row[0]))
+                return "exists"
+            if c.execute("SELECT COUNT(*) FROM sports_watch WHERE chat_id=?", (chat_id,)).fetchone()[0] >= MAX_WATCHES:
+                return "full"
+            c.execute("INSERT INTO sports_watch(chat_id, user_id, league, team, game, label, level, created, expires) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)", (chat_id, user_id, league, team, game, label, level, int(self.clock()), expires))
+            return "added"
+        return await self.db.atomic(run)
+
+    async def watches(self, chat_id: int | None = None) -> list:
+        if chat_id is None:
+            return await self.db._all("SELECT * FROM sports_watch ORDER BY id")
+        return await self.db._all("SELECT * FROM sports_watch WHERE chat_id=? ORDER BY id", (chat_id,))
+
+    async def unwatch(self, chat_id: int, watch_id: int) -> bool:
+        return await self.db.atomic(lambda c: c.execute(
+            "DELETE FROM sports_watch WHERE chat_id=? AND id=?", (chat_id, watch_id)).rowcount) > 0
 
     # ── 폴링 ─────────────────────────────────────────────
     def _window(self, g: Game, now: float) -> bool:
@@ -267,13 +315,21 @@ class Alerts:
         return games
 
     async def tick(self, bot: Bot, is_active=None) -> int:
-        """30초마다. 보낸 메시지 수를 돌려줌."""
+        """몇 초마다 (handlers.job_sports). 보낸 메시지 수를 돌려줌.
+        받는 곳 = 방(구독 sports_follow + 콕 집은 경기 sports_watch) · 사람 1:1(sports_watch). 방은 sports_enabled + 이용 중일 때만."""
         now = self.clock()
-        rooms: dict[int, list] = {}
+        targets: dict[int, list] = {}
         for f in await self.follows():
-            rooms.setdefault(f["chat_id"], []).append(f)
-        active: dict[int, tuple[dict, list]] = {}
-        for cid, fl in rooms.items():
+            targets.setdefault(f["chat_id"], []).append(dict(f))
+        for w in await self.watches():
+            if w["expires"] and w["expires"] < now:
+                continue
+            targets.setdefault(w["chat_id"], []).append(dict(w))
+        active: dict[int, tuple[dict | None, list]] = {}
+        for cid, fl in targets.items():
+            if cid > 0:                                   # 개인 1:1 — 본인이 건 것 (방 설정·이용 기간과 무관)
+                active[cid] = (None, fl)
+                continue
             s = await self.db.get_settings(cid)
             if s.get("sports_enabled") and (is_active is None or await is_active(cid)):
                 active[cid] = (s, fl)
@@ -282,16 +338,21 @@ class Alerts:
         codes |= {c for _, fl in active.values() for f in fl if f["team"] for c in cups_for(f["league"])}
         for code in sorted(codes):
             for g in await self._poll_league(code, now):
+                self.seen_in.setdefault(g.key, set()).add(code)    # 같은 경기가 'EPL'·'세계 축구' 두 곳에서 와도 구독 둘 다 맞게
                 prev = self.snap.get(g.key)
                 events += diff(prev, g)
                 self.snap[g.key] = next_snap(prev, g)
         sent = 0
         hour = datetime.fromtimestamp(now, KST).hour
+        done_games: set[tuple[int, str]] = set()
         for cid, (s, fl) in active.items():
-            quiet = in_quiet(s.get("sports_quiet", "01-07"), hour)
-            mine = [e for e in events if self._wants(fl, s, e)]
+            quiet = s is not None and in_quiet(s.get("sports_quiet", "01-07"), hour)
+            level = (s or {}).get("sports_alerts") or "goals"
+            mine = [e for e in events if self._wants(fl, level, e)]
             fresh = []
             for e in mine:
+                if e.kind in HOLD_KINDS:
+                    done_games.add((cid, e.game.key))
                 if not await self._claim(cid, e, now):      # 이미 보냈거나 모아 둔 것
                     continue
                 if quiet:
@@ -315,26 +376,35 @@ class Alerts:
             for e in (later if ok else now_lines + later):
                 if e.kind in HOLD_KINDS:
                     await self._hold(cid, e, now)
+        for cid, key in done_games:                        # 끝난 경기 하나짜리 알림은 정리
+            await self.db._write("DELETE FROM sports_watch WHERE chat_id=? AND game=?", (cid, key))
         if now - self.last_prune > 3600:
             self.last_prune = now
             await self.prune(now)
             self.feed.forget_old(datetime.fromtimestamp(now, KST).date() - timedelta(days=2))
             for k in [k for k, v in self.snap.items() if v.state in ("post", "cancel", "postponed") and len(self.snap) > 5000]:
                 self.snap.pop(k, None)
+                self.seen_in.pop(k, None)
         return sent
 
     async def _hold(self, cid: int, e: Event, now: float) -> None:
         await self.db._write("INSERT OR IGNORE INTO sports_held VALUES(?, ?, ?, ?, ?)",
                              (cid, e.game.key, e.dedupe, e.text, int(now)))
 
-    def _wants(self, follows: list, s: dict, e: Event) -> bool:
-        level = LEVELS.get(s.get("sports_alerts") or "goals", LEVELS["goals"])[1]
-        if e.kind not in level:
-            return False
+    def _wants(self, follows: list, level: str, e: Event) -> bool:
+        """구독·콕 집은 경기 중 하나라도 이 이벤트를 원하면. 콕 집은 줄은 자기 알림 종류(level), 방 구독은 방 설정."""
         g = e.game
         for f in follows:
+            kinds = LEVELS.get(f.get("level") or level, LEVELS["goals"])[1]
+            if e.kind not in kinds:
+                continue
+            if f.get("game"):
+                if f["game"] == g.key:
+                    return True
+                continue
             # 팀 구독은 그 팀이 나가는 유럽 대항전(챔스·유로파) 경기도 (감사 2026-09-30: 토트넘 구독인데 챔스 알림 없음)
-            if f["league"] != g.league and not (f["team"] and g.league in cups_for(f["league"])):
+            seen = self.seen_in.get(g.key) or {g.league}
+            if f["league"] not in seen and not (f["team"] and seen & set(cups_for(f["league"]))):
                 continue
             if not f["team"] or same_team(g.home, f["team"], f["league"]) or same_team(g.away, f["team"], f["league"]):
                 return True
@@ -345,21 +415,33 @@ class Alerts:
             "INSERT OR IGNORE INTO sports_alert_sent VALUES(?, ?, ?, ?)", (cid, e.game.key, e.dedupe, int(now))).rowcount) > 0
 
     async def _send(self, bot: Bot, cid: int, text: str, now: float) -> bool:
+        if self.fail_until.get(cid, 0) > now:            # 막 실패한 곳은 잠깐 쉼 (몇 초 틱마다 두드리지 않게)
+            return False
         q = self.sent_times.setdefault(cid, deque())
         while q and now - q[0] > 3600:
             q.popleft()
-        if len(q) >= MAX_PER_HOUR:
-            log.info("sports alert cap %s (시간당 %d통)", cid, MAX_PER_HOUR)
+        cap = DM_PER_HOUR if cid > 0 else MAX_PER_HOUR
+        if len(q) >= cap:
+            log.info("sports alert cap %s (시간당 %d통)", cid, cap)
             return False
         q.append(now)
         try:
             await bot.send_message(cid, text, parse_mode="HTML", disable_notification=False)
             return True
+        except Forbidden as e:
+            log.warning("sports alert send %s forbidden: %s", cid, e)
+            if cid > 0:                                   # 1:1 을 막은 사람 → 그 사람 알림은 지움 (계속 못 받음)
+                await self.db._write("DELETE FROM sports_watch WHERE chat_id=?", (cid,))
+                await self.db._write("DELETE FROM sports_held WHERE chat_id=?", (cid,))
+            self.fail_until[cid] = now + FAIL_PAUSE
+            return False
         except TelegramError as e:
             log.warning("sports alert send %s failed: %s", cid, e)
+            self.fail_until[cid] = now + FAIL_PAUSE
             return False
 
     async def prune(self, now: float) -> None:
         cut = int(now) - KEEP_DAYS * 86400
         await self.db._write("DELETE FROM sports_alert_sent WHERE sent_at < ?", (cut,))
         await self.db._write("DELETE FROM sports_held WHERE created < ?", (int(now) - 2 * 86400,))
+        await self.db._write("DELETE FROM sports_watch WHERE expires > 0 AND expires < ?", (int(now),))

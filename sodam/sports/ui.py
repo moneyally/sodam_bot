@@ -5,16 +5,17 @@ import asyncio
 import re
 from datetime import date, datetime, timedelta
 
-from ..util import esc
+from ..util import esc, html_plain
 from . import fmt
 from .alerts import LEVELS, MAX_FOLLOWS, QUIET
-from .leagues import (LEAGUES, POPULAR, SPORT_KO, League, Team, find_group, find_league, find_sport, find_team, leagues_of_sport,
-                      same_team)
+from .leagues import (LEAGUES, POPULAR, SPORT_KO, TEAMS, League, Team, find_group, find_league, find_sport, find_team, ko_name,
+                      leagues_of_sport, norm, same_team)
 from .providers import KST, SportsError
 
 EXAMPLES = "예: EPL · 라리가 · 챔스 · MLB · NBA · KBO · 토트넘 · 다저스"
 NOT_READY = "국내 리그(KBO·K리그·KBL·V리그 등)는 아직 준비 중이에요."
 PER_LEAGUE = 10
+WORLD_MAX = 60       # 세계 축구 한 화면 경기 수 (진행 중 먼저)
 WEEK = "월화수목금토일"
 
 
@@ -114,6 +115,17 @@ class UI:
             if not games:
                 continue
             total += len(games)
+            if lg.code == "world":                 # 세계 축구: 대회 이름마다 묶어서 (하루 수백 경기 → 앞 WORLD_MAX 만)
+                out.append(f"\n🌍 <b>세계 축구 {len(games)}경기</b>")
+                head = None
+                for g in sorted(games, key=lambda g: (g.state != "in", g.title, g.start))[:WORLD_MAX]:
+                    if g.title != head:
+                        out.append(f"<i>{esc(g.title or '기타')}</i>")
+                        head = g.title
+                    out.append(fmt.line(g))
+                if len(games) > WORLD_MAX:
+                    out.append(f"… 외 {len(games) - WORLD_MAX}경기 (팀 이름으로 찾기: <code>.스포츠 팀이름</code>)")
+                continue
             out.append(f"\n{fmt.emoji(lg.code)} <b>{esc(lg.name)}</b>")
             out += [fmt.line(g) for g in games[:PER_LEAGUE]]
             if len(games) > PER_LEAGUE:
@@ -237,6 +249,90 @@ class UI:
         state = "켜짐" if s.get("sports_enabled") else "꺼짐 (🧩 기능에서 켜기)"
         return (f"🔔 <b>스포츠 알림</b> ({state})\n" + "\n".join(f"• {esc(r['label'])}" for r in rows)
                 + f"\n알림 종류: {LEVELS[s.get('sports_alerts', 'goals')][0]} · 조용한 시간: {QUIET.get(s.get('sports_quiet', '01-07'), '')}")
+
+
+    # ── 경기 하나 찾기 · 콕 집은 알림 (2026-10-10 벳블리 '보스턴 필라델피아 득점하면 말해줄래') ──
+    async def find_games(self, query: str) -> list:
+        """'NHL 보스턴 필라델피아' · '토트넘 아스널' · '다저스' → 어제~내일 중 낱말이 다 맞는 경기 (진행 중 → 곧 시작 → 막 끝난 순)."""
+        hint, toks = None, []
+        for w in re.split(r"[\s,/\-]+|\bvs\b", (query or "").lower()):
+            w = norm(w)
+            if not w or w in _FILLER:
+                continue
+            lg = find_league(w)
+            if lg and not find_team(w):
+                hint = lg
+            elif len(w) >= 2:
+                toks.append(w)
+        if not toks:
+            return []
+        if hint:
+            leagues = [hint]
+        else:
+            per = [{t.league for t in TEAMS if any(w in norm(x) for x in (t.src, t.ko))} for w in toks]
+            both = set.intersection(*per) if all(per) else set()
+            leagues = [LEAGUES[c] for c in sorted(both or set().union(*per)) if c in LEAGUES][:6]
+            if "world" in LEAGUES:               # 표에 없는 팀(영어 이름)도: 세계 축구 하루치 한 요청에서 찾기
+                leagues.append(LEAGUES["world"])
+        leagues = [lg for lg in leagues if self.feed.available(lg)]
+        today = self.today()
+        found = []
+        for d in (today - timedelta(days=1), today, today + timedelta(days=1)):
+            for lg, games in await self._days(leagues, d):
+                for g in games or []:
+                    names = [norm(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league))]
+                    if all(any(w in n for n in names) for w in toks):
+                        found.append(g)
+        now = self.feed.clock()
+        order = {"in": 0, "pre": 1}
+        found = list({g.key: g for g in found}.values())
+        return sorted(found, key=lambda g: (order.get(g.state, 2), abs(g.start - now)))
+
+    async def watch(self, target: int, user_id: int, query: str, level: str = "goals") -> str:
+        """경기 하나(골·결과) 또는 팀·리그(계속)를 target(방 또는 그 사람 1:1)에 알림. 글은 HTML."""
+        from .alerts import MAX_WATCHES, WATCH_KEEP
+        level = level if level in LEVELS else "goals"
+        games = await self.find_games(query)
+        live = [g for g in games if g.state in ("in", "pre")]
+        where = "이 방에" if target < 0 else "1:1 로"
+        if live:
+            g = live[0]
+            label = f"{LEAGUES[g.league].name} {fmt.matchup(g, score=False)}" if g.league in LEAGUES else fmt.matchup(g, score=False)
+            r = await self.sp.alerts.watch(target, user_id, g.league, "", g.key, html_plain(label)[:80], level,
+                                           expires=int(g.start + WATCH_KEEP))
+            if r == "full":
+                return f"알림은 {MAX_WATCHES}개까지예요. 1:1 메뉴 [⚽ 스포츠] → 🔔 내 알림에서 정리해 주세요."
+            state = f"지금 {esc(g.detail or '진행 중')} {fmt.matchup(g)}" if g.state == "in" else f"{fmt.mdhm(g.start)} 시작"
+            more = f"\n(같은 이름 경기 {len(live) - 1}개 더 있음 — 다른 경기면 리그·날짜를 붙여서 다시)" if len(live) > 1 else ""
+            return (f"🔔 {fmt.tag(g)} {fmt.matchup(g, score=False)} — {LEVELS[level][0]} 알림 {where} 보낼게요. ({state})\n"
+                    f"경기 끝나면 알림도 자동으로 꺼져요.{more}")
+        if games:
+            g = games[0]
+            return f"그 경기는 이미 끝났어요: {fmt.tag(g)} {fmt.matchup(g)}"
+        t = self._target(query)
+        if isinstance(t, str):
+            return f"'{esc(query)}' 경기를 어제~내일 일정에서 못 찾았어요. 리그를 붙여 주세요 (예: <code>NHL 보스턴 필라델피아</code>)."
+        code, team, label = t
+        if not self.feed.available(LEAGUES[code]):
+            return f"{esc(LEAGUES[code].name)} 알림은 아직 준비 중이에요."
+        r = await self.sp.alerts.watch(target, user_id, code, team, "", label[:80], level)
+        if r == "full":
+            return f"알림은 {MAX_WATCHES}개까지예요."
+        return f"🔔 {esc(label)} 경기 {LEVELS[level][0]} 알림을 {where} 계속 보낼게요. (지금은 가까운 경기가 없어서 다음 경기부터)"
+
+    async def watches_text(self, target: int) -> str:
+        rows = await self.sp.alerts.watches(target)
+        if not rows:
+            return "🔔 걸어 둔 경기 알림이 없어요."
+        out = ["🔔 <b>내 경기 알림</b>"]
+        for r in rows:
+            kind = "경기 하나" if r["game"] else "계속"
+            out.append(f"• {esc(r['label'])} — {LEVELS.get(r['level'], LEVELS['goals'])[0]} ({kind})")
+        return "\n".join(out)
+
+
+_FILLER = {norm(w) for w in ("경기", "득점", "골", "하면", "알려", "알려줘", "말해", "말해줘", "줘", "오늘", "내일", "지금", "랑", "와", "과",
+                             "의", "시합", "매치", "match", "game", "알림", "대", "vs")}
 
 
 HELP = ("⚽ <b>스포츠</b>\n"

@@ -511,7 +511,9 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
         elif action == "live":
             text = await ui.games_text(query, live_only=True)
         elif action == "follows":
-            text = await ui.follows_text(ctx.chat_id) if ctx.chat_id < 0 else "그룹방에서만 볼 수 있음."
+            text = await ui.follows_text(ctx.chat_id) if ctx.chat_id < 0 else await ui.watches_text(ctx.caller.id)
+        elif action in ("alert", "my_alerts", "unalert"):
+            text = await _sports_alert(ctx, ui, action, query, str(a.get("to") or ""), str(a.get("level") or "goals"))
         else:
             d = sports_ui.parse_day(str(a.get("day") or "오늘"), ui.today()) or ui.today()
             text = await ui.games_text(query, d)
@@ -522,6 +524,34 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
     if "못 찾았" in text and _BY_NAME.get("web_search"):   # 국가대표·없는 리그(NHL 등) — 포기 말고 다음 길 (서버 실수 #2160·#2231·#2395·#2462)
         text += (f"\n→ 스포츠 도구엔 없음. 끝내지 말고 web_search 로 '{query or '경기'} 경기 일정 결과' 를 찾아서 답할 것 "
                  "(찾은 곳을 '찾아보니'로 밝힘).")
+    return text
+
+
+async def _sports_alert(ctx: ToolCtx, ui, action: str, query: str, to: str, level: str) -> str:
+    """콕 집은 경기·팀 알림. 방에 = 관리자만 (모두가 받음), 멤버·1:1 = 본인 1:1 로."""
+    in_room = ctx.chat_id < 0
+    room = in_room and to != "me" and ctx.role >= Role.ADMIN
+    target = ctx.chat_id if room else ctx.caller.id
+    if action == "my_alerts":
+        return await ui.watches_text(target)
+    if action == "unalert":
+        rows = await ctx.svc.sports.alerts.watches(target)
+        hit = [r for r in rows if query and query.replace(" ", "") in r["label"].replace(" ", "")] or (rows if query in ("", "전부", "모두") else [])
+        for r in hit:
+            await ctx.svc.sports.alerts.unwatch(target, r["id"])
+        return f"🔕 경기 알림 {len(hit)}개를 껐어요." if hit else "꺼질 알림이 없어요."
+    if not query:
+        return "어느 경기·팀인지 필요함 (예: 'NHL 보스턴 필라델피아', '토트넘')."
+    if not room:
+        try:   # 1:1 을 한 번도 안 연 사람은 봇이 먼저 못 보냄 → 저장 전에 확인
+            await ctx.bot.send_chat_action(ctx.caller.id, "typing")
+        except Exception:
+            name = getattr(ctx.bot, "username", "") or ""
+            return (f"1:1 알림은 소담과 1:1 대화를 한 번 열어야 받을 수 있음 → https://t.me/{name} "
+                    "에서 시작 누른 뒤 다시 부탁하라고 안내할 것." + (" (방 전체 알림은 관리자만)" if in_room else ""))
+    text = await ui.watch(target, ctx.caller.id, query, level)
+    if in_room and not room and to != "me":
+        text += " (방 전체 알림은 관리자만 걸 수 있어서 본인 1:1 로)"
     return text
 
 
@@ -1227,11 +1257,16 @@ TOOLS: list[Tool] = [
          "query 는 리그(EPL·라리가·챔스·FA컵·MLS·리가MX·사우디·K리그·J리그·MLB·KBO·WBC·NBA·WNBA·KBL·NHL·NFL·F1·PGA·ATP·UFC·"
          "국가대표·월드컵 예선·북중미 네이션스리그 등 80여 개 — 한국어 이름 그대로)·종목(축구·야구·농구·하키·미식축구·골프·테니스)·"
          "묶음(여자농구·여자축구·컵대회·남미축구)·"
-         "팀(한국어 '토트넘·맨유·레알·다저스·레이커스' 또는 영어) 그대로. 알림 구독은 관리자가 '.스포츠 구독 EPL' 또는 1:1 메뉴 ⚽ 스포츠 알림.",
-         {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows"],
-                     "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · follows=이 방 알림 구독"},
-          "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그)"},
-          "day": {"type": "string", "description": "today 일 때: 오늘/내일/어제 또는 MM-DD"}},
+         "팀(한국어 '토트넘·맨유·레알·다저스·레이커스' 또는 영어) 그대로. "
+         "'○○ 경기 득점하면·끝나면 알려줘' = action alert (실제로 8초마다 보고 골·결과를 보냄 — 낱말 알림 규칙 alert_rule 아님).",
+         {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows", "alert", "my_alerts", "unalert"],
+                     "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · "
+                                    "follows=이 방 알림 구독 · alert=경기 하나(두 팀 이름)·팀·리그 골/결과 알림 걸기 · my_alerts=건 알림 목록 · unalert=끄기"},
+          "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그). alert 는 'NHL 보스턴 필라델피아'처럼 리그+두 팀"},
+          "day": {"type": "string", "description": "today 일 때: 오늘/내일/어제 또는 MM-DD"},
+          "to": {"type": "string", "enum": ["room", "me"], "description": "alert: room=이 방 모두(관리자만, 기본) · me=말한 사람 1:1"},
+          "level": {"type": "string", "enum": ["final", "basic", "goals", "all"],
+                    "description": "alert: final=결과만 · basic=시작·결과 · goals=골까지(기본) · all=점수 변화마다(야구·농구)"}},
          ["action"], t_sports, setting="sports_enabled"),
     Tool("save_my_note", "말한 사람 본인의 정보(호칭, 업종, 관심사, 소개)를 기억한다. 다른 사람 정보는 저장하지 않는다.",
          {"key": {"type": "string", "enum": NOTE_KEYS}, "value": {"type": "string", "description": "50자 이내, 빈 값이면 삭제"}},

@@ -31,15 +31,17 @@ class League:
 
 
 SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊",
-               "football": "🏈", "racing": "🏎️", "golf": "⛳", "tennis": "🎾", "afootball": "🏉"}
+               "football": "🏈", "racing": "🏎️", "golf": "⛳", "tennis": "🎾", "afootball": "🏉", "rugby": "🏉",
+               "cricket": "🏏"}
 SPORT_KO = {"soccer": "축구", "baseball": "야구", "basketball": "농구", "volleyball": "배구", "hockey": "아이스하키",
             "mma": "격투기", "football": "미식축구", "racing": "모터스포츠", "golf": "골프", "tennis": "테니스",
-            "afootball": "호주식 풋볼"}
+            "afootball": "호주식 풋볼", "rugby": "럭비", "cricket": "크리켓"}
 SPORT_WORDS = {"축구": "soccer", "해외축구": "soccer", "soccer": "soccer", "football": "soccer", "야구": "baseball",
                "baseball": "baseball", "농구": "basketball", "basketball": "basketball", "배구": "volleyball",
                "volleyball": "volleyball", "하키": "hockey", "아이스하키": "hockey", "hockey": "hockey",
                "격투기": "mma", "종합격투기": "mma", "mma": "mma", "풋볼": "football", "골프": "golf", "golf": "golf",
-               "테니스": "tennis", "tennis": "tennis", "모터스포츠": "racing", "레이싱": "racing", "자동차경주": "racing"}
+               "테니스": "tennis", "tennis": "tennis", "모터스포츠": "racing", "레이싱": "racing", "자동차경주": "racing",
+               "럭비": "rugby", "rugby": "rugby", "크리켓": "cricket", "cricket": "cricket"}
 # 골(득점 하나하나) 알림이 의미 있는 종목. 나머지(야구·농구·배구)는 기본 시작·결과만 (득점이 너무 잦음)
 GOAL_SPORTS = {"soccer", "hockey"}
 
@@ -112,6 +114,28 @@ _L = [
            ("v리그", "브이리그", "kovo", "남자배구", "v리그 남자", "v리그남자", "남배"), korean=True),
     League("wvleague", "V리그 여자", "volleyball", None, "wkovo", None, ("volleyball", 152),
            ("여자배구", "v리그 여자", "v리그여자", "wkovo", "여배"), korean=True),
+    # 전 세계 축구 한 번에 (ESPN soccer/all — 서버 실측 2026-10-10: 하루 343경기·진행 중 43경기 한 요청 0.7초, 리그 이름은 season.slug).
+    # minor: '.스포츠 축구'·주요 리그엔 안 넣음 (수백 경기). '세계 축구'·'모든 축구'로 부르거나 이름 모를 팀 찾기·라이브 화면에서 씀
+    League("world", "세계 축구", "soccer", "soccer/all", aliases=("세계축구", "전세계축구", "모든축구", "전체축구", "해외축구전체", "all soccer",
+                                                              "world soccer", "월드사커"), minor=True),
+    # 더 넓게 (2026-10-10 오너 '전 세계 게임' — 서버에서 ESPN 주소 하나하나 실측, 전부 200·홈/원정 있음). minor = 이름으로 부를 때·라이브 화면에서만
+    League("nbl", "호주 NBL", "basketball", "basketball/nbl", aliases=("nbl", "호주농구", "호주nbl"), minor=True),
+    League("gleague", "NBA G리그", "basketball", "basketball/nba-development", aliases=("g리그", "지리그", "gleague", "nba g league"), minor=True),
+    League("cfl", "CFL", "football", "football/cfl", aliases=("cfl", "캐나다풋볼", "캐나다 미식축구"), minor=True),
+    League("ufl", "UFL", "football", "football/ufl", aliases=("ufl",), minor=True),
+    League("lidom", "도미니카 윈터리그", "baseball", "baseball/dominican-winter-league", aliases=("도미니카리그", "도미니카 윈터리그", "lidom"), minor=True),
+    League("lmp", "멕시코 윈터리그", "baseball", "baseball/mexican-winter-league", aliases=("멕시코리그", "멕시코 윈터리그", "lmp"), minor=True),
+    League("lvbp", "베네수엘라 윈터리그", "baseball", "baseball/venezuelan-winter-league", aliases=("베네수엘라리그", "lvbp"), minor=True),
+    League("lbprc", "푸에르토리코 윈터리그", "baseball", "baseball/puerto-rican-winter-league", aliases=("푸에르토리코리그",), minor=True),
+    League("carib", "캐리비안 시리즈", "baseball", "baseball/caribbean-series", aliases=("캐리비안시리즈", "caribbean series"), minor=True),
+    League("prem_rugby", "잉글랜드 프리미어십 럭비", "rugby", "rugby/267979", aliases=("프리미어십럭비", "갤러거프렘", "gallagher prem"), minor=True),
+    League("urc", "URC 럭비", "rugby", "rugby/270557", aliases=("urc", "유나이티드럭비"), minor=True),
+    League("top14", "프랑스 TOP14 럭비", "rugby", "rugby/270559", aliases=("top14", "탑14", "프랑스럭비"), minor=True),
+    League("six_nations", "식스네이션스", "rugby", "rugby/180659", aliases=("식스네이션스", "six nations", "6개국럭비"), minor=True),
+    League("rwc", "럭비 월드컵", "rugby", "rugby/164205", aliases=("럭비월드컵", "rugby world cup"), minor=True),
+    League("super_rugby", "슈퍼럭비", "rugby", "rugby/242041", aliases=("슈퍼럭비", "super rugby"), minor=True),
+    League("ercc", "유럽 럭비 챔피언스컵", "rugby", "rugby/271937", aliases=("럭비챔스", "champions cup rugby"), minor=True),
+    League("ipl", "IPL 크리켓", "cricket", "cricket/8048", aliases=("ipl", "인도크리켓", "인디언프리미어리그"), minor=True),
     League("nhl", "NHL", "hockey", "hockey/nhl", None, "4380", None, ("nhl", "북미하키", "엔에이치엘", "미국하키")),
     League("khl", "KHL", "hockey", aliases=("khl", "케이에이치엘", "콘티넨탈하키리그", "콘티넨탈 하키 리그", "콘티넨탈하키",
                                             "러시아하키", "러시아아이스하키", "kontinental hockey league"), khl=True),
@@ -305,6 +329,20 @@ _T = [
     ("nhl", "Toronto Maple Leafs", "토론토 메이플리프스", "메이플리프스"), ("nhl", "Edmonton Oilers", "에드먼턴", "오일러스"),
     ("nhl", "New York Rangers", "뉴욕 레인저스"), ("nhl", "Boston Bruins", "보스턴 브루인스", "브루인스"),
     ("nhl", "Vegas Golden Knights", "베이거스", "골든나이츠"), ("nhl", "Florida Panthers", "플로리다", "팬서스"),
+    # NHL 나머지 (2026-10-10 벳블리 '보스턴 필라델피아 득점하면' — 필라델피아 플라이어스가 표에 없어 경기를 못 찾음)
+    ("nhl", "Anaheim Ducks", "애너하임 덕스", "덕스"), ("nhl", "Buffalo Sabres", "버펄로 세이버스", "세이버스"),
+    ("nhl", "Calgary Flames", "캘거리 플레임스", "플레임스"), ("nhl", "Carolina Hurricanes", "캐롤라이나 허리케인스", "허리케인스"),
+    ("nhl", "Chicago Blackhawks", "시카고 블랙호크스", "블랙호크스"), ("nhl", "Colorado Avalanche", "콜로라도 애벌랜치", "애벌랜치"),
+    ("nhl", "Columbus Blue Jackets", "콜럼버스 블루재키츠", "블루재키츠"), ("nhl", "Dallas Stars", "댈러스 스타스"),
+    ("nhl", "Detroit Red Wings", "디트로이트 레드윙스", "레드윙스"), ("nhl", "Los Angeles Kings", "LA 킹스", "킹스"),
+    ("nhl", "Minnesota Wild", "미네소타 와일드"), ("nhl", "Montreal Canadiens", "몬트리올 캐나디언스", "캐나디언스", "Montréal Canadiens"),
+    ("nhl", "Nashville Predators", "내슈빌 프레데터스", "프레데터스"), ("nhl", "New Jersey Devils", "뉴저지 데블스", "데블스"),
+    ("nhl", "New York Islanders", "뉴욕 아일랜더스", "아일랜더스"), ("nhl", "Ottawa Senators", "오타와 세너터스", "세너터스"),
+    ("nhl", "Philadelphia Flyers", "필라델피아 플라이어스", "플라이어스"), ("nhl", "Pittsburgh Penguins", "피츠버그 펭귄스", "펭귄스"),
+    ("nhl", "San Jose Sharks", "새너제이 샤크스", "샤크스"), ("nhl", "Seattle Kraken", "시애틀 크라켄", "크라켄"),
+    ("nhl", "St. Louis Blues", "세인트루이스 블루스"), ("nhl", "Tampa Bay Lightning", "탬파베이 라이트닝", "라이트닝"),
+    ("nhl", "Utah Mammoth", "유타 매머드", "매머드", "Utah Hockey Club"), ("nhl", "Vancouver Canucks", "밴쿠버 커넉스", "커넉스"),
+    ("nhl", "Washington Capitals", "워싱턴 캐피털스", "캐피털스"), ("nhl", "Winnipeg Jets", "위니펙 제츠"),
     # KHL (소스 = KHL 공식 앱 API 러시아어 팀 이름, 실측 2026-10-08 22팀)
     ("khl", "СКА", "SKA", "ska", "에스카", "ска", "상트페테르부르크"), ("khl", "ЦСКА", "CSKA", "cska", "цска", "씨에스카"),
     ("khl", "Спартак", "스파르타크", "spartak", "спартак", "스파르타크 모스크바"),

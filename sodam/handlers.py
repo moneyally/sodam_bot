@@ -1340,9 +1340,22 @@ async def job_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("tick %s 느림 %.1f초", name, time.monotonic() - t0)
 
 
+_sports_task: asyncio.Task | None = None
+
+
 async def job_sports(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """4초마다. 알림 한 바퀴는 뒤에서 — 경기 정보 받기가 느려도 작업 줄이 밀리거나 겹치지 않게 (한 번에 하나)."""
+    global _sports_task
+    if _sports_task is not None and not _sports_task.done():
+        return
     svc = _svc(context)
-    await svc.sports.run_alerts(context.bot, is_active=svc.paid_features)
+
+    async def run():
+        try:
+            await svc.sports.run_alerts(context.bot, is_active=svc.paid_features)
+        except Exception:
+            log.exception("스포츠 알림 실패")
+    _sports_task = asyncio.create_task(run())
 
 
 REMINDER_TTL = 6 * 3600  # 방에 올린 기간 안내는 이 시간 뒤 자동 삭제
@@ -1612,7 +1625,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     hh, mm = map(int, backup_time.split(":"))
     jq.run_repeating(job_tick, interval=30, first=10, name="tick")
     jq.run_repeating(job_name_sweep, interval=60, first=90, name="name_sweep")
-    jq.run_repeating(job_sports, interval=30, first=45, name="sports")   # 리그별로 60초(경기 중)·6시간(일정)만 실제로 받음 (sports/alerts.py)
+    jq.run_repeating(job_sports, interval=4, first=45, name="sports")   # 리그별로 8초(경기 중)·6시간(일정)만 실제로 받음 (sports/alerts.py)
     jq.run_daily(job_daily_report, time=dtime(23, 50, tzinfo=tz), name="daily_report")
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")

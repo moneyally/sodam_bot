@@ -47,6 +47,8 @@ def line(g: Game, with_date: bool = False) -> str:
 
 
 def tag(g: Game) -> str:
+    if g.league == "world" and g.title and (g.home or g.away):    # 세계 축구 = 실제 대회 이름 (season.slug)
+        return f"[{esc(g.title)}]"
     lg = LEAGUES.get(g.league)
     return f"[{lg.name}]" if lg else ""
 
