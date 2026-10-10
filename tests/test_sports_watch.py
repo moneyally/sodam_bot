@@ -106,9 +106,27 @@ async def admin_in_room_gets_goal_and_final_for_that_game_then_it_turns_off():
 
 
 @test
-async def member_asks_in_room_and_gets_it_in_their_own_dm():
+async def member_in_room_gets_one_game_in_the_room_but_not_a_whole_team():
+    """2026-10-11 벳블리 '생테티엔 로데즈 경기 실시간 알림해줘' (멤버) → '1:1 먼저 열어'로 막힘 → 오너 '그룹방에서도 띄우게'."""
     e = await setup()
     out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="보스턴 필라델피아")      # 리그 없이도 NHL 경기 찾음
+    assert "이 방에" in out and [w["game"] for w in await e.sp.alerts.watches(ROOM)] == ["espn:77"], out
+    out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="토트넘")
+    assert "관리자" in out and len(await e.sp.alerts.watches(ROOM)) == 1, "팀 계속 알림을 방에 = 관리자만"
+
+
+@test
+async def unknown_team_found_by_english_name_alongside_korean():
+    e = await setup()
+    e.src.games["world"] = [Game("espn:88", "world", KICK, "AS Saint-Étienne", "Rodez AF", src="20261010", title="French Ligue 2")]
+    out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="생테티엔 Saint-Etienne 로데즈 Rodez")
+    assert "이 방에" in out and (await e.sp.alerts.watches(ROOM))[0]["game"] == "espn:88", out
+
+
+@test
+async def member_asks_for_dm_and_gets_it_in_their_own_dm():
+    e = await setup()
+    out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="보스턴 필라델피아", to="me")
     assert "1:1 로" in out and not await e.sp.alerts.watches(ROOM), out
     await e.sp.run_alerts(e.bot)
     await step(e, KICK + 30, nhl("in", 0, 0))
@@ -124,7 +142,7 @@ async def member_asks_in_room_and_gets_it_in_their_own_dm():
 async def member_who_never_opened_dm_is_told_how_and_nothing_saved():
     e = await setup()
     e.bot.blocked = {MEMBER.id}
-    out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="NHL 보스턴 필라델피아")
+    out = await ask(e, MEMBER, Role.MEMBER, ROOM, query="NHL 보스턴 필라델피아", to="me")
     assert "1:1 대화를 한 번 열어야" in out and not await e.sp.alerts.watches(MEMBER.id)
     e.bot.blocked = set()
 
