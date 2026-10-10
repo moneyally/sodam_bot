@@ -170,6 +170,45 @@ async def game_watch_ignores_other_games_of_the_same_league():
 
 
 @test
+async def final_held_in_quiet_hours_still_arrives_after_the_game_watch_is_removed():
+    """리뷰 2026-10-10: 새벽에 끝난 경기 하나 알림 → 결과는 모아 뒀는데 알림 줄을 지워서 아침에 안 감."""
+    night = ts(2026, 10, 11, 2, 0)
+    e = await setup(night - 3600)
+    e.src.games["nhl"] = [Game("espn:77", "nhl", night, "Philadelphia Flyers", "Boston Bruins", src="20261010")]
+    await ask(e, ADMIN, Role.ADMIN, ROOM, query="NHL 보스턴 필라델피아")
+    await e.sp.run_alerts(e.bot)
+    for t, st, sc in ((night + 30, "in", (0, 0)), (night + 9000, "post", (2, 1))):
+        e.clock.t = t
+        e.src.games["nhl"] = [Game("espn:77", "nhl", night, "Philadelphia Flyers", "Boston Bruins", *sc, st, src="20261010")]
+        await e.sp.run_alerts(e.bot)
+    assert not sent(e, ROOM) and not await e.sp.alerts.watches(ROOM)
+    e.clock.t = ts(2026, 10, 11, 8, 0)
+    await e.sp.run_alerts(e.bot)
+    assert any("밤사이 경기 결과" in t and "보스턴" in t for t in sent(e, ROOM)), sent(e, ROOM)
+
+
+@test
+async def suspended_game_keeps_its_watch():
+    e = await setup()
+    await ask(e, ADMIN, Role.ADMIN, ROOM, query="NHL 보스턴 필라델피아")
+    await e.sp.run_alerts(e.bot)
+    await step(e, KICK + 30, nhl("in", 0, 0))
+    await step(e, KICK + 600, nhl("suspended", 0, 0))
+    assert await e.sp.alerts.watches(ROOM), "중단은 다시 이어질 수 있어 알림 유지"
+
+
+@test
+async def find_games_prefers_the_real_league_over_world_soccer():
+    """리뷰 2026-10-10: 같은 경기가 EPL·세계 축구 둘 다면 세계 축구 쪽이 남아 8초마다 수백 경기를 받고 분석도 기록이 빠짐."""
+    e = await setup()
+    mk = lambda lg: Game("espn:5", lg, KICK, "Tottenham Hotspur", "Arsenal", src="20261010", title="EPL" if lg == "world" else "")
+    e.src.games.update(epl=[mk("epl")], world=[mk("world")])
+    from sodam.sports import ui as sports_ui
+    games = await sports_ui.UI(e.sp).find_games("토트넘 아스널")
+    assert [g.league for g in games] == ["epl"], [g.league for g in games]
+
+
+@test
 def world_titles_read_from_season_slug():
     assert league_title("2026-27-scottish-championship") == "Scottish Championship"
     assert league_title("") == ""

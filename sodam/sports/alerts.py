@@ -325,6 +325,8 @@ class Alerts:
             if w["expires"] and w["expires"] < now:
                 continue
             targets.setdefault(w["chat_id"], []).append(dict(w))
+        for h in await self.db._all("SELECT DISTINCT chat_id FROM sports_held"):   # 끝난 경기 알림을 지웠어도 모아 둔 결과는 보내야 (리뷰 2026-10-10)
+            targets.setdefault(h["chat_id"], [])
         active: dict[int, tuple[dict | None, list]] = {}
         for cid, fl in targets.items():
             if cid > 0:                                   # 개인 1:1 — 본인이 건 것 (방 설정·이용 기간과 무관)
@@ -336,9 +338,13 @@ class Alerts:
         events: list[Event] = []
         codes = {f["league"] for _, fl in active.values() for f in fl if f["league"] in LEAGUES}
         codes |= {c for _, fl in active.values() for f in fl if f["team"] for c in cups_for(f["league"])}
-        for code in sorted(codes):
+        done_keys: set[str] = set()
+        for code in sorted(codes, key=lambda c: (c == "world", c)):   # 리그 피드 먼저, 세계 축구는 마지막
             for g in await self._poll_league(code, now):
                 self.seen_in.setdefault(g.key, set()).add(code)    # 같은 경기가 'EPL'·'세계 축구' 두 곳에서 와도 구독 둘 다 맞게
+                if g.key in done_keys:                             # 한 틱에 한 번만 비교 (두 피드 시차로 점수가 흔들려 가짜 '득점 취소' X)
+                    continue
+                done_keys.add(g.key)
                 prev = self.snap.get(g.key)
                 events += diff(prev, g)
                 self.snap[g.key] = next_snap(prev, g)
@@ -351,7 +357,7 @@ class Alerts:
             mine = [e for e in events if self._wants(fl, level, e)]
             fresh = []
             for e in mine:
-                if e.kind in HOLD_KINDS:
+                if e.kind in HOLD_KINDS and e.dedupe != "suspended":   # '중단'은 다시 이어질 수 있어 알림 유지
                     done_games.add((cid, e.game.key))
                 if not await self._claim(cid, e, now):      # 이미 보냈거나 모아 둔 것
                     continue

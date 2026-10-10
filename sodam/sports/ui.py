@@ -285,7 +285,11 @@ class UI:
                         found.append(g)
         now = self.feed.clock()
         order = {"in": 0, "pre": 1}
-        found = list({g.key: g for g in found}.values())
+        uniq: dict = {}
+        for g in found:                    # 같은 경기가 리그 피드·세계 축구 둘 다면 리그 쪽 (세계 축구는 목록 맨 뒤 — 리뷰 2026-10-10)
+            if g.key not in uniq or uniq[g.key].league == "world":
+                uniq[g.key] = g
+        found = list(uniq.values())
         return sorted(found, key=lambda g: (order.get(g.state, 2), abs(g.start - now)))
 
     async def watch(self, target: int, user_id: int, query: str, level: str = "goals") -> str:

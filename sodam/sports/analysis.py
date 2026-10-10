@@ -18,6 +18,7 @@ from .providers import SportsError
 log = logging.getLogger(__name__)
 
 TTL = 3 * 3600
+RETRY = 600
 DAILY_NEW = 300            # 하루에 새로 만드는 분석 수 (전체) — 넘으면 사실만
 RECENT = 5
 
@@ -115,7 +116,9 @@ async def analyze(svc, g, now: float | None = None) -> str:
             log.warning("경기 분석 AI 실패 %s: %s", g.key, e)
     text = head + "\n\n📋 <b>기록</b>\n" + body + (f"\n\n🤖 <b>AI 분석</b>\n{ai}" if ai else "") + \
         "\n\n<i>기록을 보고 쓴 재미용 전망이에요. 결과를 보장하지 않아요.</i>"
-    await db._write("INSERT OR REPLACE INTO sports_analysis VALUES(?,?,?)", (g.key, text, int(now)))
+    # AI 를 못 붙였으면 10분 뒤 다시 시도 (실패한 글이 3시간 굳지 않게 — 리뷰 2026-10-10)
+    stamp = int(now) if ai or getattr(svc, "llm", None) is None else int(now) - TTL + RETRY
+    await db._write("INSERT OR REPLACE INTO sports_analysis VALUES(?,?,?)", (g.key, text, stamp))
     await db._write("DELETE FROM sports_analysis WHERE created < ?", (int(now) - 2 * 86400,))
     return text
 

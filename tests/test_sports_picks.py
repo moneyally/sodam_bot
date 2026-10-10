@@ -99,6 +99,20 @@ async def ranking_week_and_room_members_only():
 
 
 @test
+async def voided_game_rescheduled_can_be_picked_again():
+    """리뷰 2026-10-10: 연기로 무효가 된 경기를 같은 key 로 다시 잡으면 고르기가 '골랐어요'만 하고 저장은 안 됐음."""
+    e = await setup()
+    await picks.pick(e.db, A.id, epl(), "h", now=e.clock.t)
+    e.clock.t = KICK + 600
+    e.src.games["epl"] = [epl("postponed")]
+    await picks.settle(e.db, e.sp.feed, now=e.clock.t)
+    later = epl(start=KICK + 7 * 86400)
+    assert await picks.pick(e.db, A.id, later, "a", now=e.clock.t) == "changed"
+    row = await e.db._one("SELECT pick, result, start FROM sports_picks WHERE user_id=?", (A.id,))
+    assert (row["pick"], row["result"], row["start"]) == ("away", None, KICK + 7 * 86400)
+
+
+@test
 async def daily_limit():
     e = await setup()
     for i in range(picks.DAILY_MAX):

@@ -13,6 +13,7 @@ m:sxr[:all]          📊 내 기록 + 이번 주·전체 랭킹
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 
 from telegram import Message
@@ -125,7 +126,10 @@ async def s_live(c: PanelCtx) -> Screen:
     if len(gs) > SHOW:
         lines.append(f"… 외 {len(gs) - SHOW}경기")
     bells = [await _bell(c, g) for g in gs[:GAME_BTNS]]
-    return Screen("\n".join(lines) + "\n\n🔔 = 그 경기 골·결과를 1:1 로", menu._kb(menu._chunks(bells, 2) + [back]))
+    text = "\n".join(lines)
+    if len(text) > 3700:                       # 텔레그램 글 4,096자 (세계 축구 40경기 + 대회 머리글 — 리뷰 2026-10-10)
+        text = text[:3700].rsplit("\n", 1)[0] + "\n…"
+    return Screen(text + "\n\n🔔 = 그 경기 골·결과를 1:1 로", menu._kb(menu._chunks(bells, 2) + [back]))
 
 
 async def s_day(c: PanelCtx) -> Screen:
@@ -360,6 +364,8 @@ menu.register_input("sxwi", "", "sxw", in_add, s_after, need=PUBLIC)
 
 # ── 그룹방: .맞히기 [리그] 카드 · .맞히기순위 · .분석 팀 팀 ──────────────
 ROOM_SHOW = 5
+PRESS_GAP = 1.0
+_press: dict[int, float] = {}
 
 
 async def room_card(svc, chat_id: int, query: str) -> tuple[str, list]:
@@ -411,6 +417,13 @@ async def on_room_pick(svc, bot, q, parts) -> None:
         await q.answer()
         return
     code, key, side = parts[0], ":".join(parts[1:-1]), parts[-1]
+    now = time.monotonic()
+    if now - _press.get(q.from_user.id, 0) < PRESS_GAP:     # 연타 (누를 때마다 일정 받기 — 리뷰 2026-10-10)
+        await q.answer("천천히 눌러 주세요.")
+        return
+    _press[q.from_user.id] = now
+    if len(_press) > 5000:
+        _press.clear()
     c = PanelCtx(svc, bot, q.from_user.id, None, [])
     g = await _game(c, code, key, "0")
     if g is None:
@@ -451,6 +464,9 @@ async def c_analysis(ctx) -> None:
     from ..sports import analysis
     from ..sports import ui as sports_ui
     if ctx.svc.sports is None:
+        return
+    if ctx.chat_id < 0 and not await ctx.svc.paid_features(ctx.chat_id):   # AI 비용 — 이용 중인 방만 (1:1 은 하루 300개 전체 한도)
+        await ctx.reply("경기 분석은 이용 기간 중인 방에서 쓸 수 있어요. 1:1 [⚽ 스포츠] → 🎯 의 🧠 도 돼요.")
         return
     q = ctx.argstr.strip()
     if not q:

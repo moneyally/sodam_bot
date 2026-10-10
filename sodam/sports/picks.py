@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from ..db import register_schema
 from .leagues import LEAGUES
-from .providers import KST, SportsError
+from .providers import BACKGROUND, KST, SportsError
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +70,13 @@ async def pick(db, user_id: int, g, side: str, chat_id: int = 0, now: float | No
     day0 = int(datetime.fromtimestamp(now, KST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
     def run(c):
-        old = c.execute("SELECT pick FROM sports_picks WHERE user_id=? AND game=?", (user_id, g.key)).fetchone()
-        if old:
-            c.execute("UPDATE sports_picks SET pick=?, created=? WHERE user_id=? AND game=? AND result IS NULL",
-                      (side, int(now), user_id, g.key))
-            return "changed" if old[0] != side else "ok"
+        old = c.execute("SELECT pick, result FROM sports_picks WHERE user_id=? AND game=?", (user_id, g.key)).fetchone()
+        if old and old[1] in ("win", "lose"):
+            return "started"
+        if old:   # 아직 결과 전 · 또는 연기돼 무효였는데 같은 경기가 다시 잡힘 → 새 시각으로 다시 (리뷰 2026-10-10)
+            c.execute("UPDATE sports_picks SET pick=?, created=?, start=?, result=NULL, points=0, settled=NULL "
+                      "WHERE user_id=? AND game=?", (side, int(now), int(g.start), user_id, g.key))
+            return "changed" if old[0] != side or old[1] == "void" else "ok"
         if c.execute("SELECT COUNT(*) FROM sports_picks WHERE user_id=? AND created>=?", (user_id, day0)).fetchone()[0] >= DAILY_MAX:
             return "full"
         c.execute("INSERT INTO sports_picks(user_id, game, league, pick, home, away, start, chat_id, created) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -118,10 +120,13 @@ async def settle(db, feed, now: float | None = None) -> int:
             games = feed.cached_day(lg, d)
             found = next((g for g in games or [] if g.key == r["game"]), None)
             if found is None or winner(found) is None:
+                bg = BACKGROUND.set(True)          # 자동 정산 = 명령용 예비 한도는 안 씀 (API-Sports)
                 try:
                     games = await feed.day(lg, d, max_age=300)
                 except SportsError:
                     games = []
+                finally:
+                    BACKGROUND.reset(bg)
                 found = next((g for g in games if g.key == r["game"]), None)
             res = winner(found) if found else None
         if res is None and now - r["start"] > GIVE_UP:
