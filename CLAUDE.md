@@ -973,7 +973,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   두 팀 낱말, 어제~내일, 진행 중→곧→끝난 순). 같은 경기를 여러 리그(EPL·세계 축구)에서 받아도 `Alerts.seen_in` 으로 구독 다 맞음.
   세계 축구 = League world(ESPN soccer/all?limit=1000, 하루 ~340경기 한 요청, 대회 이름 season.slug → Game.title·fmt.tag). 럭비·NBL·G리그·CFL·UFL·중남미 윈터리그·IPL(minor).
   다른 종목은 ESPN 'all' 없음(400) — 리그별. NHL 팀 32개 표. 1:1 메인 [⚽ 스포츠](`panels/sportsdm.py` m:sx·sxl·sxd·sxw·sxwi·sxs·sxp·sxpx·sxa·sxr, 토큰 spw_game·spw_del — m:sp·spl 은 스팸 방패가 씀).
-  다음 단계(오너 결정 대기): 🎯 승부 맞히기(돈 X, 점수)+랭킹+내 통계 · AI 경기 분석.
+  🎯 맞히기(`sports/picks.py`, 점수만·돈 X, 1분 정산 tick 훅)·🧠 분석(`sports/analysis.py`, 기록 모아 guard 모델 4줄, 경기마다 3시간) — tests/test_sports_picks.py.
+  ⚡ **라이브 카드·자동 라이브** (`sports/cards.py`, tests/test_sports_cards.py · 뮤테이션 7개, 설계 docs/SPORTS_ENGAGE_DESIGN.md — 출석·복권·운세·도배 제외 집계도 거기):
+  방 설정 sports_auto off(기본)/big(주요 리그 BIG)/follow → 경기 시작 때 카드 1장(알림음 없이), 점수·상태 바뀌면 바로·시간만은 30초에 한 번 고침,
+  방마다 4장, 조용한 시간엔 새 카드 X. 콕 집은 경기(sports_watch game)는 자동 꺼져도 카드. 버튼 sgc: dm·an(방에 한 번, analyzed 차지)·off(관리자, sports_mute = 그 경기 알림도 끔).
+  표는 sports/__init__ 에서 import (DB 열기 전에 — 늦게 import 하면 'no such table', 서버 10-11 실제).
 - 국내 리그 안내 문장은 guide/sports.md '조건·예외' (API-Sports 무료 기준: 어제~내일·갱신 느림·순위 없음). 소스를 바꾸면 같이 고칠 것.
 
 ## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)

@@ -495,3 +495,11 @@ def register_commands() -> None:
 
 
 hooks.add_callback_handler("sgp", on_room_pick)
+
+
+async def _card_button(svc, bot, q, parts) -> None:
+    from ..sports import cards
+    await cards.on_button(svc, bot, q, parts)
+
+
+hooks.add_callback_handler("sgc", _card_button)
