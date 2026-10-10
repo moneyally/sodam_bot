@@ -70,5 +70,34 @@ async def _no(c):
     return False
 
 
+@test
+async def no_repeat_counts_same_text_within_ten_minutes_once():
+    db = await make_db()
+    await db.ensure_chat(CHAT, "방")
+    now = int(time.time()) - 3600
+    for uid, name in ((1, "도배"), (2, "보통")):
+        await db.upsert_user(fake_user(uid, name))
+    for i in range(8):                                            # 같은 글 8번 (1분 간격) → 1번
+        await db.log_message(CHAT, 1, 300 + i, "출석체크 이벤트", ts=now + i * 60)
+    await db.log_message(CHAT, 1, 320, "출석체크 이벤트", ts=now + 7 * 60 + 601)   # 마지막 반복 뒤 10분 넘음 → 다시 셈
+    await db.log_message(CHAT, 3, 330, "출석체크 이벤트", ts=now + 30)            # 다른 사람 같은 글은 셈
+    await db.upsert_user(fake_user(3, "남"))
+    await db.log_message(CHAT, 4, 340, "두번", ts=now)                # 같은 초에 두 번 → 1번
+    await db.log_message(CHAT, 4, 341, "두번", ts=now)
+    await db.upsert_user(fake_user(4, "같은초"))
+    for i, t in enumerate(["안녕", "뭐해", "밥 먹었어", "ㅋㅋ"]):
+        await db.log_message(CHAT, 2, 400 + i, t, ts=now + i * 60)
+    text = await stats.ranking_text(db, CHAT, TZ, "7일")          # '오늘'이면 자정 직후에 시험이 흔들림
+    assert "도배 — 9개" in text, text
+    await db.set_setting(CHAT, "chat_no_repeat", True)
+    text = await stats.ranking_text(db, CHAT, TZ, "7일")
+    assert "도배 빼고" in text and "보통 — 4개" in text and "도배 — 2개" in text and "남 — 1개" in text and "같은초 — 1개" in text, text
+    assert text.index("보통 —") < text.index("도배 —")
+    me = await stats.member_text(db, CHAT, TZ, "7일", 1, "도배")
+    assert "2개" in me and "2위" in me, me
+    totals = await db.chat_totals(CHAT, 0, None, await stats.min_chars(db, CHAT))
+    assert totals["messages"] == 8
+
+
 if __name__ == "__main__":
     run_all()

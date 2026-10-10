@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS sports_watch (
     expires  INTEGER NOT NULL DEFAULT 0 -- 0 = 계속
 );
 CREATE INDEX IF NOT EXISTS sports_watch_chat ON sports_watch(chat_id);
+CREATE TABLE IF NOT EXISTS sports_alias (
+    ko      TEXT PRIMARY KEY,           -- 한글 낱말 ('생테티엔')
+    en      TEXT NOT NULL,              -- 맞았던 영어 이름 (정리된 글자, 'saintetienne')
+    created INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sports_held (
     chat_id INTEGER NOT NULL,
     game    TEXT NOT NULL,

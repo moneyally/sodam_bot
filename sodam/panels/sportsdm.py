@@ -9,6 +9,8 @@ m:sxp[:<0|1>:<리그>]  🎯 승부 맞히기 — 시작 전 경기마다 [홈 �
 m:sxpx:<리그>:<소스>:<id>:<h|d|a>:<날>  고르기 → 같은 목록 다시
 m:sxa:<리그>:<소스>:<id>:<날>  🧠 AI 분석 (sports/analysis.py, 경기마다 3시간 공유)
 m:sxr[:all]          📊 내 기록 + 이번 주·전체 랭킹
+m:sxt                🌟 오늘의 픽 — 주요 리그 오늘 남은 경기, 사용자들이 고른 비율 + 🧠 분석 · 🎯 고르기 (AI 는 🧠 누를 때만)
+m:fx                 🔮 오늘의 운세 (panels/lottery.py)
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ def _home_kb():
     return menu._kb([[B("🔴 지금 라이브 (전 세계)", "m:sxl")],
                      [B("📅 오늘 경기", "m:sxd:0"), B("📅 내일 경기", "m:sxd:1")],
                      [B("🎯 승부 맞히기", "m:sxp"), B("📊 내 기록·랭킹", "m:sxr")],
+                     [B("🌟 오늘의 픽", "m:sxt"), B("🔮 오늘의 운세", "m:fx")],
                      [B("🔔 내 경기 알림", "m:sxw"), B("🏆 리그 순위", "m:sxs")],
                      [B("⬅️ 처음으로", "m:home")]])
 
@@ -40,11 +43,18 @@ def _home_kb():
 async def s_home(c: PanelCtx) -> Screen:
     if c.svc.sports is None:
         return Screen("⚽ 스포츠 기능이 꺼져 있어요.", menu._kb([[B("⬅️ 처음으로", "m:home")]]))
-    n = len(await c.svc.sports.alerts.watches(c.uid))
-    return Screen("⚽ <b>스포츠</b>\n"
-                  "전 세계 경기 점수·일정을 보고, 원하는 경기·팀의 <b>골·결과를 1:1 로 바로</b> 받아요 "
-                  "(경기 중엔 8초마다 확인).\n"
-                  f"\n🔔 내 알림 {n}개 · 그룹방에선 '소담아 ○○ 경기 득점하면 알려줘' 도 돼요.", _home_kb())
+    from ..sports import picks
+    ws = await c.svc.sports.alerts.watches(c.uid)
+    st = await picks.stats(c.svc.db, c.uid, now=c.svc.sports.feed.clock())
+    lines = ["⚽ <b>스포츠</b>",
+             "전 세계 경기 점수·일정을 보고, 원하는 경기·팀의 <b>골·결과를 1:1 로 바로</b> 받아요 (경기 중엔 8초마다 확인).", "",
+             "📊 <b>나의 통계</b> — " + (f"승률 {st['rate']}% ({st['wins']}/{st['settled']}) · 누적 {st['points']}점 · 이번 주 {st['week']}점"
+                                     + (f" {st['week_rank']}위" if st["week_rank"] else "") if st["settled"] or st["open"]
+                                     else "아직 맞힌 경기가 없어요 → 🎯 승부 맞히기"),
+             f"🔔 <b>나의 알림</b> {len(ws)}개" + ("" if ws else " — 경기·팀을 골라 골·결과를 받아 보세요")]
+    lines += [f"  · {esc(w['label'])[:60]}" for w in ws[:3]] + (["  · …"] if len(ws) > 3 else [])
+    lines += ["", "그룹방에선 '소담아 ○○ 경기 득점하면 알려줘' 도 돼요."]
+    return Screen("\n".join(lines), _home_kb())
 
 
 def _live_leagues():
@@ -330,6 +340,52 @@ async def s_record(c: PanelCtx) -> Screen:
     return Screen("\n".join(lines), menu._kb([tabs, [B("🎯 맞히기", "m:sxp"), B("⬅️ 스포츠", "m:sx")]]))
 
 
+TODAY_PICKS = 6
+
+
+async def s_today(c: PanelCtx) -> Screen:
+    """🌟 오늘의 픽 — 주요 리그 오늘 남은 경기 중 많이 고른 순 + 고른 비율. 분석(AI)은 🧠 누를 때만."""
+    from ..sports import fmt, picks
+    from ..sports import ui as sports_ui
+    from ..sports.cards import BIG
+    from ..sports.leagues import LEAGUES, ko_name
+    from ..sports.providers import SportsError
+    if c.svc.sports is None:
+        return await s_home(c)
+    sp = c.svc.sports
+    d = sports_ui.UI(sp).today()
+    leagues = [LEAGUES[k] for k in BIG if k in LEAGUES and sp.feed.available(LEAGUES[k])]
+
+    async def one(lg):
+        try:
+            return await sp.feed.day(lg, d)
+        except SportsError:
+            return []
+    now = sp.feed.clock()
+    games = [g for got in await asyncio.gather(*(one(lg) for lg in leagues)) for g in got
+             if g.state == "pre" and g.start > now and g.home and g.away]
+    scored = []
+    for g in games:
+        sp_ = await picks.split(c.svc.db, g.key)
+        scored.append((-sum(sp_.values()), BIG.index(g.league), g.start, g, sp_))
+    scored.sort(key=lambda t: t[:3])
+    lines, rows = ["🌟 <b>오늘의 픽</b> — 주요 리그 오늘 남은 경기 (많이 고른 순)", ""], []
+    for i, (_, _, _, g, sp_) in enumerate(scored[:TODAY_PICKS], 1):
+        home, away = ko_name(g.home, g.league), ko_name(g.away, g.league)
+        n = sum(sp_.values())
+        share = (" · 고른 비율 " + " / ".join(f"{label} {sp_.get(k, 0) * 100 // n}%" for k, label in
+                                             (("home", home[:6]), ("draw", "무"), ("away", away[:6])) if k != "draw" or picks.draw_ok(g.league))
+                 + f" ({n}명)") if n else " · 아직 아무도 안 골랐어요"
+        lines.append(f"{i}. {fmt.tag(g)} {fmt.hhmm(g.start)} {esc(home)} vs {esc(away)}{share}")
+        base = f"{g.league}:{g.key}"
+        if len(f"m:sxa:{base}:0".encode()) <= 64:
+            rows.append([B(f"🧠 {i} 분석", f"m:sxa:{base}:0"), B(f"🎯 {i} 고르기", f"m:sxp:0:{g.league}")])
+    if not scored:
+        lines.append("오늘 남은 주요 리그 경기가 없어요. 📅 내일 경기를 보세요.")
+    lines += ["", "<i>분석은 기록을 모아 AI 가 쓴 재미용 전망이에요. 돈·포인트는 걸지 않아요.</i>"]
+    return Screen("\n".join(lines)[:3900], menu._kb(rows + [[B("📅 내일 경기", "m:sxd:1"), B("⬅️ 스포츠", "m:sx")]]))
+
+
 _last_settle = [0.0]
 
 
@@ -355,7 +411,7 @@ hooks.add_tick_hook(settle_tick)
 
 menu.register_main(25, "sx", "⚽ 스포츠")
 for _code, _fn in (("sx", s_home), ("sxl", s_live), ("sxd", s_day), ("sxw", s_watches), ("sxwi", r_add), ("sxs", s_standings),
-                   ("sxp", s_picks), ("sxpx", r_pick), ("sxa", s_analysis), ("sxr", s_record)):
+                   ("sxp", s_picks), ("sxpx", r_pick), ("sxa", s_analysis), ("sxr", s_record), ("sxt", s_today)):
     menu.register_route(_code, Route(_fn, PUBLIC, scoped=False))
 menu.register_token_action("spw_game", t_game, need=PUBLIC)
 menu.register_token_action("spw_del", t_del, need=PUBLIC)
@@ -503,3 +559,56 @@ async def _card_button(svc, bot, q, parts) -> None:
 
 
 hooks.add_callback_handler("sgc", _card_button)
+
+
+# ── 경기 후보 버튼 (sports alert 가 같은 이름 경기를 여럿 찾았을 때) ─────────────
+LEVEL_CODE = {"final": "f", "basic": "b", "goals": "g", "all": "a"}
+
+
+async def post_choices(bot, chat_id: int, user_id: int, where: str, level: str, games: list, reply_to=None) -> bool:
+    """버튼 sgw:<r|m>:<요청자>:<알림 종류>:<리그>:<경기 key> — 요청자만, 누르면 그 경기에 바로 알림."""
+    from ..sports import fmt
+    from ..util import html_plain
+    rows = []
+    for g in games:
+        data = f"sgw:{where}:{user_id}:{LEVEL_CODE.get(level, 'g')}:{g.league}:{g.key}"
+        if len(data.encode()) > 64:
+            continue
+        when = g.detail if g.state == "in" and g.detail else fmt.mdhm(g.start)
+        rows.append([B(html_plain(f"{fmt.tag(g)} {fmt.matchup(g, score=g.state == 'in')} · {when}")[:60], data)])
+    if not rows:
+        return False
+    try:
+        await bot.send_message(chat_id, "🔎 어느 경기요? 눌러 주면 바로 알림을 걸게요.", reply_markup=menu._kb(rows),
+                               reply_to_message_id=reply_to)
+        return True
+    except Exception as e:
+        log.warning("경기 후보 버튼 실패 %s: %s", chat_id, e)
+        return False
+
+
+async def on_choice(svc, bot, q, parts) -> None:
+    from ..sports import ui as sports_ui
+    if svc.sports is None or len(parts) < 5 or not q.message:
+        await q.answer()
+        return
+    where, uid, lv, league, key = parts[0], parts[1], parts[2], parts[3], ":".join(parts[4:])
+    if str(q.from_user.id) != uid:
+        await q.answer("부탁한 사람만 고를 수 있어요.", show_alert=True)
+        return
+    level = {v: k for k, v in LEVEL_CODE.items()}.get(lv, "goals")
+    c = PanelCtx(svc, bot, q.from_user.id, None, [])
+    g = await _game(c, league, key, "0")
+    if g is None:
+        await q.answer("경기를 못 찾았어요. 다시 부탁해 주세요.", show_alert=True)
+        return
+    target = q.message.chat.id if where == "r" else q.from_user.id
+    text = await sports_ui.UI(svc.sports).watch_game(target, q.from_user.id, g, level)
+    await q.answer("🔔 걸었어요")
+    try:
+        await q.edit_message_text(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+hooks.add_callback_handler("sgw", on_choice)

@@ -208,9 +208,31 @@ def tables_are_registered_when_the_bot_starts():
     import subprocess
     import sys
     code = ("import sodam.handlers, sodam.db as d; "
-            "print(all(any(t in s for s in d.EXTRA_SCHEMA) for t in ('sports_picks', 'sports_analysis', 'sports_watch')))")
+            "print(all(any(t in s for s in d.EXTRA_SCHEMA) for t in ('sports_picks', 'sports_analysis', 'sports_watch', 'sports_cards', 'attend', 'lotto_tickets', 'lotto_wins')))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(__import__('pathlib').Path(__file__).parents[1]))
     assert out.stdout.strip().endswith("True"), (out.stdout, out.stderr[-500:])
+
+
+@test
+async def dm_home_shows_my_stats_and_alerts_and_today_picks_ranks_by_popularity():
+    e = await setup()
+    hot = epl(key="espn:502", home="Chelsea", away="Liverpool", start=KICK + 1800)
+    e.src.games["epl"] = [epl(), hot]
+    for u in (A, B_):
+        await picks.pick(e.db, u.id, hot, "a", now=e.clock.t)
+    await picks.pick(e.db, C.id, hot, "h", now=e.clock.t)
+    await e.sp.alerts.watch(A.id, A.id, "epl", "", "espn:501", "토트넘 vs 아스널", expires=KICK + 99999)
+    c = SimpleNamespace(svc=e.svc, bot=FakeBot(), uid=A.id, cid=None, args=[], arg=lambda i: c.args[i] if len(c.args) > i else "")
+    home = await D.s_home(c)
+    assert "나의 통계" in home.text and "나의 알림</b> 1개" in home.text and "토트넘 vs 아스널" in home.text, home.text
+    assert {"m:sxt", "m:fx"} <= {b.callback_data for row in home.kb.inline_keyboard for b in row}
+    today = await D.s_today(c)
+    first, second = [ln for ln in today.text.split("\n") if ln[:2] in ("1.", "2.")]
+    assert "첼시" in first and "66%" in first and "(3명)" in first, today.text
+    assert "아무도" in second
+    assert today.kb.inline_keyboard[0][0].callback_data == "m:sxa:epl:espn:502:0"
+    e.clock.t = KICK + 3600
+    assert "남은 주요 리그 경기가 없어요" in (await D.s_today(c)).text, "시작한 경기는 빠짐"
 
 
 if __name__ == "__main__":
