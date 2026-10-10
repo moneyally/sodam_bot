@@ -512,6 +512,20 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
             text = await ui.games_text(query, live_only=True)
         elif action == "follows":
             text = await ui.follows_text(ctx.chat_id) if ctx.chat_id < 0 else await ui.watches_text(ctx.caller.id)
+        elif action == "analysis":
+            from .sports import analysis
+            games = await ui.find_games(query) if query else []
+            text = (await analysis.analyze(ctx.svc, games[0]) if games else
+                    f"'{query}' 경기를 어제~내일 일정에서 못 찾음 — 리그·두 팀 이름을 붙여 다시.")
+            text += "\n→ 기록·AI 분석 결과를 그대로 짧게 전할 것. 배당·베팅 권유 X."
+        elif action == "picks":
+            from .sports import picks
+            st = await picks.stats(ctx.svc.db, ctx.caller.id)
+            top = await picks.ranking(ctx.svc.db, chat_id=ctx.chat_id if ctx.chat_id < 0 else None)
+            text = (f"말한 사람 승부 맞히기: 승률 {st['rate']}% ({st['wins']}/{st['settled']}) · 누적 {st['points']}점 · 이번 주 {st['week']}점"
+                    + (f" {st['week_rank']}위" if st["week_rank"] else "") + "\n이번 주 순위: "
+                    + (", ".join(f"{i}. {n} {p}점" for i, (_, n, p, _w, _t) in enumerate(top, 1)) or "없음")
+                    + "\n(맞히기 = 방 '.맞히기 리그' 카드 또는 1:1 [⚽ 스포츠] → 🎯, 돈·포인트 안 걸림)")
         elif action in ("alert", "my_alerts", "unalert"):
             text = await _sports_alert(ctx, ui, action, query, str(a.get("to") or ""), str(a.get("level") or "goals"))
         else:
@@ -1259,9 +1273,11 @@ TOOLS: list[Tool] = [
          "묶음(여자농구·여자축구·컵대회·남미축구)·"
          "팀(한국어 '토트넘·맨유·레알·다저스·레이커스' 또는 영어) 그대로. "
          "'○○ 경기 득점하면·끝나면 알려줘' = action alert (실제로 8초마다 보고 골·결과를 보냄 — 낱말 알림 규칙 alert_rule 아님).",
-         {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows", "alert", "my_alerts", "unalert"],
+         {"action": {"type": "string", "enum": ["today", "live", "standings", "team", "follows", "alert", "my_alerts", "unalert",
+                                                "analysis", "picks"],
                      "description": "today=날짜별 경기(기본) · live=지금 진행 중 · standings=순위 · team=팀 최근 결과·다음 경기 · "
-                                    "follows=이 방 알림 구독 · alert=경기 하나(두 팀 이름)·팀·리그 골/결과 알림 걸기 · my_alerts=건 알림 목록 · unalert=끄기"},
+                                    "follows=이 방 알림 구독 · alert=경기 하나(두 팀 이름)·팀·리그 골/결과 알림 걸기 · my_alerts=건 알림 목록 · unalert=끄기 · "
+                                    "analysis=경기 분석(기록+AI, query=두 팀) · picks=승부 맞히기 내 기록·순위"},
           "query": {"type": "string", "description": "리그·종목·팀 이름 (비우면 주요 리그). alert 는 'NHL 보스턴 필라델피아'처럼 리그+두 팀"},
           "day": {"type": "string", "description": "today 일 때: 오늘/내일/어제 또는 MM-DD"},
           "to": {"type": "string", "enum": ["room", "me"], "description": "alert: room=이 방 모두(관리자만, 기본) · me=말한 사람 1:1"},

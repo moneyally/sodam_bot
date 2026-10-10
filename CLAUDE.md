@@ -972,7 +972,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   AI 도구 sports action alert/my_alerts/unalert (to room=관리자만·me, 멤버는 1:1, 1:1 안 연 사람은 send_chat_action 으로 미리 확인) — `ui.find_games`(리그 힌트 +
   두 팀 낱말, 어제~내일, 진행 중→곧→끝난 순). 같은 경기를 여러 리그(EPL·세계 축구)에서 받아도 `Alerts.seen_in` 으로 구독 다 맞음.
   세계 축구 = League world(ESPN soccer/all?limit=1000, 하루 ~340경기 한 요청, 대회 이름 season.slug → Game.title·fmt.tag). 럭비·NBL·G리그·CFL·UFL·중남미 윈터리그·IPL(minor).
-  다른 종목은 ESPN 'all' 없음(400) — 리그별. NHL 팀 32개 표. 1:1 메인 [⚽ 스포츠](`panels/sportsdm.py` m:sp·spl·spd·spw·spwi·sps, 토큰 spw_game·spw_del).
+  다른 종목은 ESPN 'all' 없음(400) — 리그별. NHL 팀 32개 표. 1:1 메인 [⚽ 스포츠](`panels/sportsdm.py` m:sx·sxl·sxd·sxw·sxwi·sxs·sxp·sxpx·sxa·sxr, 토큰 spw_game·spw_del — m:sp·spl 은 스팸 방패가 씀).
   다음 단계(오너 결정 대기): 🎯 승부 맞히기(돈 X, 점수)+랭킹+내 통계 · AI 경기 분석.
 - 국내 리그 안내 문장은 guide/sports.md '조건·예외' (API-Sports 무료 기준: 어제~내일·갱신 느림·순위 없음). 소스를 바꾸면 같이 고칠 것.
 

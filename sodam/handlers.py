@@ -42,6 +42,8 @@ from .util import RateLimiter, day_start, send_retry, surely_unsent, esc, human_
 
 log = logging.getLogger(__name__)
 autoreply.register_commands()   # .reply 명령 (commands → menu → panels 순환이라 여기서 등록)
+from .panels import sportsdm as _sportsdm  # noqa: E402
+_sportsdm.register_commands()   # .맞히기 · .맞히기순위 · .분석
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다

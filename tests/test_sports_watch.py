@@ -183,9 +183,9 @@ async def dm_menu_live_screen_bell_and_my_alerts():
     e.src.games["nhl"] = [nhl("in", 1, 0)]
     c = SimpleNamespace(svc=e.svc, bot=e.bot, uid=MEMBER.id, cid=None, args=[], arg=lambda i: c.args[i] if len(c.args) > i else "")
     home = await D.s_home(c)
-    assert "8초" in home.text and "m:spl" in str(home.kb.inline_keyboard)
+    assert "8초" in home.text and "m:sxl" in str(home.kb.inline_keyboard)
     live = await D.s_live(c)
-    assert "전 세계 1경기" in live.text and "m:spl:hockey" in str(live.kb.inline_keyboard), live.text
+    assert "전 세계 1경기" in live.text and "m:sxl:hockey" in str(live.kb.inline_keyboard), live.text
     c.args = ["hockey"]
     live = await D.s_live(c)
     assert "보스턴 브루인스 0-1" in live.text or "1-0" in live.text, live.text
