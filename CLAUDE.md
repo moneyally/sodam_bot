@@ -803,6 +803,10 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   ⑥ 새벽 4시대 인기곡(사람이 2번↑ 튼 곡) 20개 미리 받기, 노래 시작하면 멈춤 ⑦ 1분마다 끊김 숫자 → 최근 5분 기준(밀림 15·박자 다시 5·빔 50·보내기 느림 30)
   넘으면 오너 1:1 (방마다 1시간 1번), 세션 끝 숫자는 music_sessions.stats ⑨ update.sh: 시험한 커밋으로 reset --hard(손으로 넣은 파일 때문에 merge 가
   말없이 멈추던 것), 설명 글만 바뀐 커밋은 시험 건너뜀, 시험 로그에 '느린 모듈'.
+- **멈췄는데 붙잡히는 DJ 막기** (2026-10-10 파멸방, tests/test_music_xfade.py·test_music.py): 텔레그램 DC 4 내부 오류로 도우미가 통화에서 튕김 → 'not in a call' 로 멈췄는데
+  재생 카드·음성채팅 제목 요청(Telethon)이 답을 안 줘 진행 담당이 붙잡힘 → 정리·다시 들어가기·새 신청 전부 막힘 (재시작으로 풂, 종료도 SIGKILL).
+  `Player._say` ANNOUNCE_TIMEOUT 20초 · `Worker._vc_title` VC_TITLE_TIMEOUT 15초 · `Player.run` 은 멈춤(_done)과 진행 담당 중 먼저 끝나는 쪽 →
+  멈췄으면 STOP_GRACE 5초 뒤 진행 담당을 끊음. 서버에 ffmpeg 풀기 프로세스가 몇 시간째 남아 있던 것(새는 Decoder)은 아직 원인 미확인.
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·

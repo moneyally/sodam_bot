@@ -90,6 +90,7 @@ OWNER_ALERT_SEC = 6 * 3600       # 🎵 음원 막힘 오너 알림 간격
 STUTTER_EVERY = 60
 STUTTER_WIN = 300
 STUTTER_ALERT_SEC = 3600
+VC_TITLE_TIMEOUT = 15.0     # 음성채팅 제목 바꾸기 — 텔레그램 답 기다리는 최대 초
 STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
 STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
 STUTTER_KEY = "music_stutter_alert"
@@ -800,7 +801,14 @@ class Worker:
 
     async def _vc_title(self, chat_id: int, title: str | None) -> None:
         """음성채팅 제목을 지금 곡으로 (방 설정 vc_title). title None = 처음 제목으로 되돌림.
-        도우미에게 '음성채팅 관리' 권한이 있어야 함 (노래 신청 때 봇이 줌) — 안 되면 조용히 건너뜀."""
+        도우미에게 '음성채팅 관리' 권한이 있어야 함 (노래 신청 때 봇이 줌) — 안 되면 조용히 건너뜀.
+        텔레그램이 답을 안 주면 VC_TITLE_TIMEOUT 만 기다림 (2026-10-10 DC 4 내부 오류 때 노래 끝 정리가 통째로 붙잡힘)."""
+        try:
+            await asyncio.wait_for(self._vc_title_now(chat_id, title), VC_TITLE_TIMEOUT)
+        except asyncio.TimeoutError:
+            log.info("음성채팅 제목 못 바꿈 %s: 텔레그램 답 없음", chat_id)
+
+    async def _vc_title_now(self, chat_id: int, title: str | None) -> None:
         if not self.client:
             return
         try:
