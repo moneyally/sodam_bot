@@ -367,11 +367,26 @@ async def admin_preview_works_on_a_disabled_room_for_an_hour():
     await e.db._write("DELETE FROM members WHERE chat_id=? AND user_id=?", (RA, ADMIN.id))   # 관리자가 멤버 기록에 없어도
     sc = await P.r_preview(menu.PanelCtx(e.svc, e.bot, ADMIN.id, RA, []))
     assert "미리보기" in sc.toast or "띄웠" in sc.toast
-    assert await P.on_text(e.svc, e.bot, dm(ADMIN, "🔮 오늘의 운세")), "꺼진 방도 미리보기 중엔 눌림"
+    n = len(e.bot.named("send_photo"))
+    assert await P.on_text(e.svc, e.bot, dm(ADMIN, "🔮 오늘의 운세"))
+    assert len(e.bot.named("send_photo")) == n + 1, "꺼진 방도 미리보기 중엔 운세 카드가 감"
     await e.db._write("UPDATE brand_session SET ts=ts-? WHERE user_id=?", (brand.PREVIEW_SEC + 5, ADMIN.id))
     assert not await P.on_text(e.svc, e.bot, dm(A, "🔮 오늘의 운세")), "멤버는 꺼진 방 메뉴 못 씀"
     assert await brand.usable(e.svc, RA, ADMIN.id) is None, "1시간 지나면 미리보기 끝"
     assert menu.ROUTES["bdv"].need == menu.ADMIN
+
+
+@test
+async def a_failing_button_never_falls_through_to_ai():
+    e = await setup(both=False)
+    await brand.select(e.db, A.id, RA)
+
+    async def boom(*a, **k):
+        raise RuntimeError("사진 서버 오류")
+    e.bot.send_photo = boom
+    m = dm(A, "🔮 오늘의 운세")
+    assert await P.on_text(e.svc, e.bot, m), "버튼으로 맞았으면 오류가 나도 True (AI 로 안 감)"
+    assert "다시" in m.replies[-1]
 
 
 @test

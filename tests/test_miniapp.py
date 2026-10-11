@@ -99,6 +99,16 @@ async def api_needs_signed_member_and_scratch_result_comes_from_server():
         assert await e.db._one("SELECT 1 FROM lotto_wins WHERE chat_id=? AND user_id=?", (ROOM, A.id)), "당첨은 서버 DB 에"
         st, body = await post("scratch", {"initData": good, "room": e.room.code})
         assert json.loads(body)["result"] == "none", "복권 없으면 또 못 긁음"
+        await brand.update(e.db, ROOM, 1, buttons=[{"k": "checkin"}, {"k": "fortune"}])   # 메뉴판에 복권 버튼이 없어도
+        assert "lotto" in json.loads((await post("state", {"initData": good, "room": e.room.code}))[1])["tabs"], \
+            "복권 켠 방은 복권 칸 늘 있음 (출석 카드 ✋ 버튼이 복권 칸으로 엶)"
+        await e.db._write("UPDATE attend SET day='2026-01-01' WHERE chat_id=?", (ROOM,))
+        st, body = await post("state", {"initData": good, "room": e.room.code})
+        assert json.loads(body)["checkin"]["streak"] == 0, "이틀 넘게 쉬면 연속 0"
+        e.bot.member_status = {(ROOM, A.id): "kicked"}                 # 소담이 못 본 사이 밴 (DB 엔 멤버)
+        st, body = await post("checkin", {"initData": good, "room": e.room.code})
+        assert st == 403, "미니앱으로도 밴된 사람 출석 X"
+        e.bot.member_status = {}
         await brand.update(e.db, ROOM, 1, enabled=False)
         st, _ = await post("state", {"initData": good, "room": e.room.code})
         assert st == 403, "메뉴를 끄면 미니앱도 닫힘"

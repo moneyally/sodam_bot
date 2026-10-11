@@ -47,7 +47,14 @@ def _font(path: Path, size: int):
 
 
 def plain(text: str) -> str:
-    return " ".join(_EMOJI.sub("", text or "").split())
+    """이모지·기호 빼고 + 나눔고딕에도 없는 글자(한자·é 등)는 빼서 빈 자리로 안 남게."""
+    t = _EMOJI.sub("", text or "")
+    try:
+        f = _font(BODY, 40)
+        t = "".join(ch for ch in t if not ch.strip() or f.getmask(ch).getbbox() is not None)
+    except Exception:
+        pass
+    return " ".join(t.split())
 
 
 # ── 배경 보관 ─────────────────────────────────────────────
@@ -61,6 +68,11 @@ def normalize(data: bytes) -> bytes:
             raise ValueError("too many pixels")
         im.draft("RGB", (W * 2, H * 2))
         im = ImageOps.exif_transpose(im)            # 휴대폰 사진 돌림 정보
+        if im.mode in ("RGBA", "LA", "P"):           # 투명 PNG: 까맣게 말고 흰 바탕 위에
+            im = im.convert("RGBA")
+            flat = Image.new("RGB", im.size, (255, 255, 255))
+            flat.paste(im, mask=im.getchannel("A"))
+            im = flat
         im = im.convert("RGB")
     except Exception as e:
         raise ValueError("사진이 너무 크거나 사진으로 못 읽었어요") from e

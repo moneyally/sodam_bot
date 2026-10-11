@@ -429,7 +429,10 @@ async def _state(svc, bot, room: brand.Room, user: dict) -> dict:
     month = today[:7]
     days = [r["day"] for r in await svc.db._all("SELECT day FROM attend WHERE chat_id=? AND user_id=? AND day LIKE ?",
                                                 (cid, uid, month + "%"))]
-    st = await svc.db._one("SELECT streak FROM attend WHERE chat_id=? AND user_id=? ORDER BY day DESC LIMIT 1", (cid, uid))
+    from datetime import datetime, timedelta
+    yday = (datetime.fromtimestamp(now, tz).date() - timedelta(days=1)).isoformat()
+    st = await svc.db._one("SELECT streak FROM attend WHERE chat_id=? AND user_id=? AND day IN (?, ?) ORDER BY day DESC LIMIT 1",
+                           (cid, uid, today, yday))   # 이틀 넘게 쉬었으면 연속 0 (옛 숫자 그대로 보이던 것)
     f = fortune.today(tz, uid)
     kinds = {b["k"] for b in room.buttons}
     picks_out = []
@@ -454,7 +457,9 @@ async def _state(svc, bot, room: brand.Room, user: dict) -> dict:
         "texts": {k: room.text(k) for k in brand.TEXTS if not brand.TEXTS[k][2]},
         "tpl": {k: room.texts.get(k) or brand.TEXTS[k][1] for k in brand.TEXTS if brand.TEXTS[k][2]},
         "bg": f"f/bg/{room.code}.jpg?v={bg['file'][-14:-4]}" if bg else None,
-        "tabs": [k for k in ("lotto", "checkin", "fortune", "picks") if k in kinds or "app" in kinds],
+        # 복권이 켜진 방은 복권 칸을 늘 넣음 (출석 카드의 ✋ 버튼이 &t=lotto 로 열기 때문 — 리뷰 2026-10-12)
+        "tabs": [k for k in ("lotto", "checkin", "fortune", "picks")
+                 if k in kinds or "app" in kinds or (k == "lotto" and s.get("lotto_enabled"))],
         "lotto": {"on": bool(s.get("lotto_enabled")), "prize": str(s.get("lotto_prize", "")),
                   "left": await lottery.open_tickets(svc.db, cid, uid, life=s.get("lotto_ticket_life", "7d"), tz=tz)
                   if s.get("lotto_enabled") else 0,
@@ -480,6 +485,8 @@ async def api_checkin(svc, bot, user: dict, req: dict):
     room, why = await _app_room(svc, bot, user, req)
     if room is None:
         return 403, {"error": why}
+    if not await _still_in(svc, bot, room.chat_id, user["id"]):
+        return 403, {"error": "그 방 멤버만 출석할 수 있어요"}
     role = await svc.perms.role(bot, room.chat_id, user["id"])
     text, r, s, left = await lot.checkin_info(svc, bot, room.chat_id, _user_ns(user), role)
     from ..util import html_plain
@@ -491,6 +498,8 @@ async def api_scratch(svc, bot, user: dict, req: dict):
     room, why = await _app_room(svc, bot, user, req)
     if room is None:
         return 403, {"error": why}
+    if not await _still_in(svc, bot, room.chat_id, user["id"]):
+        return 403, {"error": "그 방 멤버만 긁을 수 있어요"}
     got = await scratch_for(svc, bot, room, _user_ns(user))
     kind = got["kind"]
     if kind in ("none", "off"):

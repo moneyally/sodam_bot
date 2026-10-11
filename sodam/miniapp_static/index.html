@@ -49,9 +49,9 @@ canvas.gone{opacity:0;pointer-events:none}
 @keyframes pop{0%{transform:scale(.3)}70%{transform:scale(1.15)}100%{transform:scale(1)}}
 /* 운세 */
 .flip{perspective:900px;cursor:pointer}
-.flip .in{position:relative;height:260px;transition:transform .7s;transform-style:preserve-3d}
+.flip .in{display:grid;min-height:260px;transition:transform .7s;transform-style:preserve-3d}
 .flip.open .in{transform:rotateY(180deg)}
-.face{position:absolute;inset:0;backface-visibility:hidden;border-radius:18px;display:grid;place-items:center;padding:16px;text-align:center;
+.face{grid-area:1/1;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:18px;display:grid;place-items:center;padding:16px;text-align:center;
   border:2px solid var(--accent);background:radial-gradient(120% 90% at 80% 15%,var(--bg2),var(--bg1))}
 .back{transform:rotateY(180deg);align-content:center;gap:6px}
 /* 픽 */
@@ -77,20 +77,24 @@ canvas.gone{opacity:0;pointer-events:none}
 <script>
 (function(){
   const tg = window.Telegram && Telegram.WebApp;
-  if (tg) { tg.ready(); tg.expand(); }
+  if (tg) { tg.ready(); tg.expand();
+    try { if (tg.isVersionAtLeast && tg.isVersionAtLeast("7.7")) tg.disableVerticalSwipes(); } catch(e) {} }   // 아래로 문질러도 창이 안 내려가게
   const q = new URLSearchParams(location.search);
   const ROOM = (q.get("r") || "").replace(/[^0-9a-f]/g, "").slice(0, 10);
   const START = q.get("t") || "";
   const initData = tg ? tg.initData : "";
-  let S = null, busy = false;
+  let S = null, busy = false, PENDING = null;   // PENDING = 긁기 시작한 복권의 결과 (서버가 이미 정함)
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const fill = (tpl, v) => String(tpl || "").replace(/\{([a-z_]+)\}/g, (_, k) => v[k] != null ? v[k] : "");
   function toast(t){ const x=$("toast"); x.textContent=t; x.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>x.classList.remove("show"),2600); }
   function haptic(kind){ try{ tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind); }catch(e){} }
   async function api(action, extra){
-    const r = await fetch("api/" + action, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(Object.assign({initData: initData, room: ROOM}, extra || {}))});
+    let r;
+    try {
+      r = await fetch("api/" + action, {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(Object.assign({initData: initData, room: ROOM}, extra || {}))});
+    } catch(e) { throw new Error("연결이 안 돼요. 잠시 후 다시 해 주세요"); }
     let j = null; try { j = await r.json(); } catch(e) {}
     if (!r.ok || !j || typeof j !== "object") throw new Error((j && j.error) || "잠시 후 다시 해 주세요");
     return j;
@@ -122,7 +126,7 @@ canvas.gone{opacity:0;pointer-events:none}
     if (!L.on) { p.appendChild(el("p","muted","이 방은 지금 복권이 꺼져 있어요.")); return; }
     p.appendChild(el("p","muted", fill(S.tpl.lotto_left, {left: L.left}) + " · " + (L.life === "day" ? "오늘 자정까지" : "받은 뒤 7일 안에") + " 긁기"));
     if (S.notice) p.appendChild(el("p","muted",S.notice));
-    if (L.left <= 0) {
+    if (L.left <= 0 && !PENDING) {
       p.appendChild(el("p","big","🎟 0장"));
       p.appendChild(el("p","muted","출석하면 하루 1장 받아요."));
       const b = el("button","btn","📅 출석하러 가기"); b.onclick = () => show("checkin"); p.appendChild(b); return;
@@ -132,9 +136,10 @@ canvas.gone{opacity:0;pointer-events:none}
     const inner = el("div"); inner.appendChild(t); inner.appendChild(s); res.appendChild(inner);
     box.appendChild(res); box.appendChild(cv); box.appendChild(conf); p.appendChild(box);
     const hint = el("p","muted","✋ 은박을 손가락으로 문질러 보세요 — 긁기 시작하면 복권 1장이 쓰여요"); p.appendChild(hint);
-    let ctx, drawing=false, last=null, result=null, asked=false, done=false;
+    let ctx, drawing=false, last=null, result=null, done=false, LW=1, LH=1;
     function foil(){
       const r = box.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+      LW = r.width; LH = r.height;                           // 그린 때 크기 — 화면이 바뀌어도 손가락 위치를 이 크기로 맞춤
       cv.width = Math.round(r.width*d); cv.height = Math.round(r.height*d);
       ctx = cv.getContext("2d"); ctx.setTransform(d,0,0,d,0,0);
       const w=r.width,h=r.height,g=ctx.createLinearGradient(0,0,w,h);
@@ -143,29 +148,37 @@ canvas.gone{opacity:0;pointer-events:none}
       ctx.globalAlpha=.2; ctx.strokeStyle="#fff"; ctx.lineWidth=3;
       for(let x=-h;x<w;x+=12){ctx.beginPath();ctx.moveTo(x,h);ctx.lineTo(x+h*.6,0);ctx.stroke();}
       ctx.globalAlpha=1; ctx.fillStyle="#5b606c"; ctx.textAlign="center"; ctx.textBaseline="middle";
-      ctx.font="900 "+Math.round(w/11)+"px sans-serif"; ctx.fillText(S.texts.lotto_title || "긁어서 확인!", w/2, h/2);
+      const title = S.texts.lotto_title || "긁어서 확인!";
+      let fs = Math.round(w/11); ctx.font = "900 "+fs+"px sans-serif";
+      while (fs > 12 && ctx.measureText(title).width > w*0.88) { fs -= 2; ctx.font = "900 "+fs+"px sans-serif"; }   // 긴 글은 줄여서
+      ctx.fillText(title, w/2, h/2);
     }
-    function pos(e){ const r = cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+    function pos(e){ const r = cv.getBoundingClientRect(); return {x:(e.clientX-r.left)*LW/r.width, y:(e.clientY-r.top)*LH/r.height}; }
     function rub(pt){ ctx.globalCompositeOperation="destination-out"; ctx.lineCap="round"; ctx.lineWidth=36;
       ctx.beginPath(); ctx.moveTo((last||pt).x,(last||pt).y); ctx.lineTo(pt.x,pt.y); ctx.stroke(); last=pt; }
     function cleared(){ const d=ctx.getImageData(0,0,cv.width,cv.height).data; let n=0,c=0; for(let i=3;i<d.length;i+=64){c++; if(d[i]===0)n++;} return c?n/c:0; }
+    function showResult(res){
+      if (res.result === "none" || res.result === "off" || res.result === "error") {
+        done = true; PENDING = null; cv.classList.add("gone"); t.textContent = res.result === "error" ? "다시 열어 주세요" : "복권이 없어요"; s.textContent = "";
+      } else { t.textContent = res.title || ""; s.textContent = (res.sub || "") + (res.contact ? "  ·  @" + res.contact + " 로 연락" : ""); }
+      S.lotto.left = res.left != null ? res.left : S.lotto.left;
+    }
     async function ask(){
-      if (asked) return; asked = true;
-      try { result = await api("scratch"); }
-      catch(e){ toast(e.message); result = {result:"error"}; }
-      if (result.result === "none" || result.result === "off" || result.result === "error") {
-        done = true; cv.classList.add("gone"); t.textContent = result.result === "error" ? "다시 열어 주세요" : "복권이 없어요"; s.textContent = "";
-      } else { t.textContent = result.title || ""; s.textContent = (result.sub || "") + (result.contact ? "  ·  @" + result.contact + " 로 연락" : ""); }
-      S.lotto.left = result.left != null ? result.left : S.lotto.left;
+      if (!PENDING) {                                        // 한 장에 한 번만 (칸을 바꿨다 와도 이어서 — 리뷰: 2장 쓰이던 것)
+        PENDING = api("scratch").catch(e => { toast(e.message); return {result:"error"}; });
+      }
+      result = await PENDING;
+      showResult(result);
       maybeReveal();
     }
     function maybeReveal(){
       if (done || !result || cleared() < .45) return;
-      done = true; cv.classList.add("gone");
+      done = true; cv.classList.add("gone"); PENDING = null;
       if (result.result === "win") { haptic("success"); burst(conf); hint.textContent = "🎉 축하해요! 1:1 채팅에도 당첨 안내를 보냈어요"; }
       else { haptic("warning"); hint.textContent = "다음 기회에! 내일 출석하면 새 복권"; }
       if (S.lotto.left > 0) { const b = el("button","btn","🎟 다음 복권 긁기 (" + S.lotto.left + "장)"); b.onclick = () => show("lotto"); p.appendChild(b); }
     }
+    if (PENDING) { hint.textContent = "✋ 아까 긁던 복권이에요 — 마저 긁어 보세요"; ask(); }
     cv.addEventListener("pointerdown", e => { if (done) return; drawing = true; last = null; cv.setPointerCapture(e.pointerId); rub(pos(e)); ask(); });
     cv.addEventListener("pointermove", e => { if (drawing && !done) rub(pos(e)); });
     const up = () => { if (!drawing) return; drawing = false; last = null; maybeReveal(); };
