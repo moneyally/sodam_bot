@@ -59,7 +59,7 @@ async def s_home(c: PanelCtx) -> Screen:
 
 def _live_leagues():
     from ..sports.leagues import LEAGUES
-    out = [lg for lg in LEAGUES.values() if (lg.espn or lg.khl) and lg.sport != "soccer" and lg.sport not in ("golf", "racing")]
+    out = [lg for lg in LEAGUES.values() if (lg.espn or lg.khl or lg.bo3) and lg.sport != "soccer" and lg.sport not in ("golf", "racing")]
     if "world" in LEAGUES:
         out.insert(0, LEAGUES["world"])
     return out

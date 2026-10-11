@@ -14,7 +14,7 @@ from . import analysis, picks  # noqa: F401 — 표(sports_picks·sports_analysi
 from .alerts import Alerts
 from .feed import Feed
 from .leagues import LEAGUES, SPORT_KO
-from .providers import ESPN, KHL, APISports, Http, Naver, SportsDB, SportsError
+from .providers import ESPN, KHL, APISports, Bo3, Http, Naver, SportsDB, SportsError
 
 # 예전 이름 (AI 도구 enum 등에서 쓰던 것)
 SPORTS_KO = {v: k for k, v in SPORT_KO.items()}
@@ -24,16 +24,18 @@ __all__ = ["Sports", "SportsError", "SPORTS_KO", "LEAGUES"]
 
 class Sports:
     def __init__(self, api_key: str, db, tz, fetch=None, naver: bool | None = None, clock=None, aps_key: str | None = None,
-                 aps_daily: int | None = None, khl: bool | None = None):
+                 aps_daily: int | None = None, khl: bool | None = None, esports: bool | None = None):
         self.http = None
         if fetch is not None and aps_key is None:   # 테스트(가짜 fetch)는 서버 환경변수 키를 절대 안 씀
             aps_key = ""
         if fetch is not None and khl is None:       # 테스트(가짜 fetch)는 KHL 을 켤 때만 (다른 테스트의 하키 요청 수가 그대로)
             khl = False
+        if fetch is not None and esports is None:   # e스포츠도 같음 (가짜 fetch 테스트는 켤 때만)
+            esports = False
         if fetch is None:
             self.http = fetch = Http()
         self.db, self.tz = db, tz
-        self.providers = [ESPN(fetch), KHL(fetch, khl, clock=clock), APISports(fetch, aps_key, aps_daily, clock=clock), Naver(fetch, naver), SportsDB(fetch, api_key)]
+        self.providers = [ESPN(fetch), KHL(fetch, khl, clock=clock), Bo3(fetch, esports, clock=clock), APISports(fetch, aps_key, aps_daily, clock=clock), Naver(fetch, naver), SportsDB(fetch, api_key)]
         kw = {"clock": clock} if clock else {}
         self.feed = Feed(self.providers, **kw)
         self.alerts = Alerts(self.feed, db, **kw)

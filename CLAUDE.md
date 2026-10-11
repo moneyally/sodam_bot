@@ -989,6 +989,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   방 설정 sports_auto off(기본)/big(주요 리그 BIG)/follow → 경기 시작 때 카드 1장(알림음 없이), 점수·상태 바뀌면 바로·시간만은 30초에 한 번 고침,
   방마다 4장, 조용한 시간엔 새 카드 X. 콕 집은 경기(sports_watch game)는 자동 꺼져도 카드. 버튼 sgc: dm·an(방에 한 번, analyzed 차지)·off(관리자, sports_mute = 그 경기 알림도 끔).
   표는 sports/__init__ 에서 import (DB 열기 전에 — 늦게 import 하면 'no such table', 서버 10-11 실제).
+- **🎮 e스포츠** (`providers.Bo3`, tests/test_sports_esports.py · 뮤테이션 4개, 2026-10-11 벳블리 'CS2 European Pro League·United21·LCP 승강전·VCS 도 중계·알림'):
+  bo3.gg 사이트 JSON(키 없음·비공식, 서버 실측) — 리그 cs2·valorant·lol·dota2·r6·mlbb (League.bo3 = 종목 번호 1·2·3·4·7·8, sport esports).
+  날짜 거르기 안 먹힘 → 상태별(current 20초·finished 60초 최근 순 3쪽·upcoming 5분 3쪽)로 모아 두고 한국 날짜로 거름(종목 없이 부르면 CS2 만 옴).
+  대회 이름 = Game.title → `[LoL · VCS 2026 Finals]`, 목록은 대회별 묶음·진행 중 먼저(세계 축구와 같은 길). 세트 이기면 '골까지' 알림('○○ 세트 승리!').
+  순위 없음. 끄기 SPORTS_ESPORTS=0. PandaScore 무료 키는 실시간·LoL·CS2 가 무료에 없어 안 씀(조사 2026-10-11).
 - 국내 리그 안내 문장은 guide/sports.md '조건·예외' (API-Sports 무료 기준: 어제~내일·갱신 느림·순위 없음). 소스를 바꾸면 같이 고칠 것.
 
 ## 👮 관리자 말로 관리 (`panels/admintools.py`·`setkeys.py`·`modactions.py`, tests/test_admin_nl.py · 뮤테이션 22개, 2026-09-30 전수 점검)

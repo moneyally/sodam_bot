@@ -744,6 +744,7 @@ class APISports(Provider):
 # finished · period(10·-1 같은 내부 값 — 안 씀) · score "team_a:team_b" (team_a = 홈 — location 이 team_a 도시) · start_at(ms) ·
 # scores.first_period…overtime·bullitt(슛아웃). 순위는 이 API 에서 확인 못 함. 끄기: SPORTS_KHL=0.
 KHL_URL = "https://khl.api.webcaster.pro/api/khl_mobile/events_v2.json"
+BO3_URL = "https://api.bo3.gg/api/v1/matches"
 _KHL_STATE = {"not_yet_started": "pre", "in_progress": "in", "finished": "post"}
 KHL_PAGES = 3          # 하루치(보통 5~11경기)는 1~2쪽, 팀 경기는 3쪽(약 일주일)
 
@@ -837,3 +838,107 @@ class KHL(Provider):
             if g and (same_team(g.home, team, lg.code) or same_team(g.away, team, lg.code)):
                 games[g.key] = g
         return sorted(games.values(), key=lambda g: g.start)
+
+
+# ── e스포츠: bo3.gg 경기 데이터 (키 없음·비공식 — 사이트가 쓰는 JSON, 서버 실측 2026-10-11) ────────────
+# 실측: 날짜 거르기(filter[...start_date]) 는 안 먹힘 → 상태별로 받음. 종목(discipline_id)을 안 주면 CS2 만.
+#   current = 진행 중(몇 개) · upcoming = 예정(CS2 262개 = 4~5일 치, 시작 순) · finished = 끝(최근 순으로 앞쪽만)
+#   team1_score/team2_score = 이긴 맵 수, bo_type = Bo3·Bo5, status defwin = 부전승, canceled.
+# 알림은 8초마다 다시 묻지만 여기서 상태별로 모아 둔 걸 씀 (진행 중 20초 · 끝 60초 · 예정 5분) → 종목당 시간에 ~250번.
+BO3_TTL = {"current": 20, "finished": 60, "upcoming": 300}
+BO3_PAGES = {"current": 1, "finished": 3, "upcoming": 3}
+_BO3_STATE = {"current": "in", "upcoming": "pre", "finished": "post", "defwin": "post", "canceled": "cancel"}
+
+
+class Bo3(Provider):
+    name = "bo3"
+
+    def __init__(self, fetch: Fetch, on: bool | None = None, clock=None):
+        self.fetch = fetch
+        self._on = on
+        self.clock = clock or time.time
+        self._cache: dict[tuple[int, str], tuple[float, list[dict]]] = {}
+        self._locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+    def enabled(self) -> bool:
+        return self._on if self._on is not None else os.getenv("SPORTS_ESPORTS", "1") != "0"
+
+    def supports(self, lg: League) -> bool:
+        return bool(lg.bo3)
+
+    async def _status(self, disc: int, status: str, older_than: int | None = None) -> list[dict]:
+        """그 종목·상태 경기 (모아 둔 것). finished 는 최근 순 — older_than 보다 앞선 경기가 나오면 그만 받음."""
+        key = (disc, status)
+        hit = self._cache.get(key)
+        if hit and self.clock() - hit[0] < BO3_TTL[status]:
+            return hit[1]
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            hit = self._cache.get(key)
+            if hit and self.clock() - hit[0] < BO3_TTL[status]:
+                return hit[1]
+            out: list[dict] = []
+            sort = "-start_date" if status == "finished" else "start_date"
+            for page in range(BO3_PAGES[status]):
+                data = await self.fetch(BO3_URL, {"page[offset]": str(page * 100), "page[limit]": "100", "sort": sort,
+                                                  "filter[matches.status][in]": status if status != "finished" else "finished,defwin",
+                                                  "filter[matches.discipline_id][eq]": str(disc), "with": "teams,tournament"},
+                                        {"User-Agent": UA, "Accept": "application/json"})
+                rows = [r for r in (data or {}).get("results") or [] if isinstance(r, dict)] if isinstance(data, dict) else []
+                out += rows
+                if len(rows) < 100:
+                    break
+                if status == "finished" and older_than is not None and _bo3_ts(rows[-1]) < older_than:
+                    break
+            self._cache[key] = (self.clock(), out)
+            return out
+
+    def parse(self, lg: League, m: dict, src: str = "") -> Game | None:
+        start = _bo3_ts(m)
+        if not start or not m.get("id"):
+            return None
+        state = _BO3_STATE.get(str(m.get("status") or ""), "pre")
+        t1, t2 = m.get("team1") or {}, m.get("team2") or {}
+        hs = as_ = None
+        if state in ("in", "post"):
+            try:
+                hs, as_ = int(m.get("team1_score") or 0), int(m.get("team2_score") or 0)
+            except (TypeError, ValueError):
+                pass
+        bo = m.get("bo_type")
+        detail = ""
+        if state == "in" and bo:
+            detail = f"Bo{bo}" + (f" · {(hs or 0) + (as_ or 0) + 1}세트" if hs is not None else "")
+        elif m.get("status") == "defwin":
+            detail = "부전승"
+        title = str((m.get("tournament") or {}).get("name") or "")[:80]
+        return Game(f"bo3:{m['id']}", lg.code, start, str(t1.get("name") or "미정"), str(t2.get("name") or "미정"),
+                    hs, as_, state, detail, src=src, title=title)
+
+    async def day(self, lg: League, d: date, only: set[str] | None = None) -> list[Game]:
+        src = f"bo3:{d.isoformat()}"
+        if only is not None and src not in only:
+            return []
+        begin = int(datetime(d.year, d.month, d.day, tzinfo=KST).timestamp())
+        now = self.clock()
+        wanted = ["current"]
+        if begin + 86400 > now - 3600:            # 오늘·앞날 → 예정도
+            wanted.append("upcoming")
+        if begin < now:                           # 오늘·지난날 → 끝난 것도
+            wanted.append("finished")
+        games: dict[str, Game] = {}
+        for status in wanted:
+            for m in await self._status(lg.bo3, status, older_than=begin):
+                g = self.parse(lg, m, src)
+                if g and kst_day(g.start) == d and (g.key not in games or g.state == "in"):
+                    games[g.key] = g
+        return sorted(games.values(), key=lambda g: (g.start, g.key))
+
+    async def standings(self, lg: League) -> list[Row]:
+        raise SportsError(f"{lg.name} 순위는 아직 못 봐요 (경기 일정·점수·알림은 돼요).")
+
+
+def _bo3_ts(m: dict) -> int:
+    try:
+        return int(datetime.fromisoformat(str(m.get("start_date") or "").replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0

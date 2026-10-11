@@ -193,7 +193,11 @@ def diff(prev: Snap | None, g: Game) -> list[Event]:
             return out                     # 줄어든 점수는 한 틱 더 보고 확정 (next_snap 이 보류)
         gen = prev.gen + (1 if now < before else 0)
         if now != before or (g.home_score, g.away_score) != (prev.hs, prev.as_):
-            if sport in GOAL_SPORTS:
+            if sport == "esports" and now > before:      # 이긴 맵·세트 하나 = 골처럼 ('골까지' 받는 방에 감)
+                won = g.home if g.home_score > (prev.hs or 0) else g.away
+                out.append(Event(g, "goal", f"goal:{_score(g)}:{gen}",
+                                 f"{em} {esc(won)} 세트 승리! {tag} {fmt.matchup(g)}"))
+            elif sport in GOAL_SPORTS:
                 if now > before:
                     who = _scorers(g, g.goals[prev.ngoals:]) if len(g.goals) > prev.ngoals else ""
                     out.append(Event(g, "goal", f"goal:{_score(g)}:{gen}",

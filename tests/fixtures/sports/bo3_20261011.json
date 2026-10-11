@@ -1,0 +1,2203 @@
+{
+"1:current": {
+"total": {
+"count": 4,
+"pages": 1,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 131155,
+"status": "current",
+"start_date": "2026-10-11T08:00:00.000+00:00",
+"team1": {
+"id": 23107,
+"name": "Just Players"
+},
+"team2": {
+"id": 20952,
+"name": "Misa"
+},
+"team1_score": 1,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6169,
+"name": "NODWIN Clutch Series 13 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131241,
+"status": "current",
+"start_date": "2026-10-11T08:00:00.000+00:00",
+"team1": {
+"id": 23335,
+"name": "Vitality Academy"
+},
+"team2": {
+"id": 21069,
+"name": "Elite Klan"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6170,
+"name": "European Pro League Regular Season 7"
+},
+"discipline_id": 1
+},
+{
+"id": 131557,
+"status": "current",
+"start_date": "2026-10-11T08:20:00.000+00:00",
+"team1": {
+"id": 23051,
+"name": "5star"
+},
+"team2": {
+"id": 9974,
+"name": "Chinggis Warriors"
+},
+"team1_score": 0,
+"team2_score": 1,
+"bo_type": 3,
+"tournament": {
+"id": 6192,
+"name": "MESA Pro Series Fall 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131257,
+"status": "current",
+"start_date": "2026-10-11T08:30:00.000+00:00",
+"team1": {
+"id": 10493,
+"name": "STATE"
+},
+"team2": {
+"id": 6255,
+"name": "PCIFIC"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6141,
+"name": "United21 Season 56"
+},
+"discipline_id": 1
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=current&page%5Blimit%5D=25&sort=start_date"
+}
+},
+"1:upcoming": {
+"total": {
+"count": 262,
+"pages": 11,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 131258,
+"status": "upcoming",
+"start_date": "2026-10-11T10:30:00.000+00:00",
+"team1": {
+"id": 22879,
+"name": "THE UNIT"
+},
+"team2": {
+"id": 24977,
+"name": "Teletubisie"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6141,
+"name": "United21 Season 56"
+},
+"discipline_id": 1
+},
+{
+"id": 131246,
+"status": "upcoming",
+"start_date": "2026-10-11T10:30:00.000+00:00",
+"team1": {
+"id": 25374,
+"name": "TheChampionGG"
+},
+"team2": {
+"id": 21123,
+"name": "VP.Future"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6170,
+"name": "European Pro League Regular Season 7"
+},
+"discipline_id": 1
+},
+{
+"id": 131156,
+"status": "upcoming",
+"start_date": "2026-10-11T11:00:00.000+00:00",
+"team1": {
+"id": 16724,
+"name": "Fire Flux"
+},
+"team2": {
+"id": 25275,
+"name": "Gothic"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6169,
+"name": "NODWIN Clutch Series 13 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131414,
+"status": "upcoming",
+"start_date": "2026-10-11T11:00:00.000+00:00",
+"team1": {
+"id": 24506,
+"name": "Noir Verse"
+},
+"team2": {
+"id": 1226,
+"name": "megoshort"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6190,
+"name": "CCT Europe 2026 Series 11 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 130753,
+"status": "upcoming",
+"start_date": "2026-10-11T11:30:00.000+00:00",
+"team1": {
+"id": 3598,
+"name": "Aurora"
+},
+"team2": {
+"id": 654,
+"name": "Spirit"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 5110,
+"name": "ESL Pro League Season 24"
+},
+"discipline_id": 1
+},
+{
+"id": 131313,
+"status": "upcoming",
+"start_date": "2026-10-11T13:00:00.000+00:00",
+"team1": {
+"id": 25341,
+"name": "The KnockoutX"
+},
+"team2": {
+"id": 4170,
+"name": "Alter Ego"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6165,
+"name": "ESL Challenger League Season 52: Asia - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131314,
+"status": "upcoming",
+"start_date": "2026-10-11T13:00:00.000+00:00",
+"team1": {
+"id": 21032,
+"name": "Kaleido"
+},
+"team2": {
+"id": 9974,
+"name": "Chinggis Warriors"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6165,
+"name": "ESL Challenger League Season 52: Asia - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131419,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 22169,
+"name": "Bebop"
+},
+"team2": {
+"id": 23102,
+"name": "mellren"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6190,
+"name": "CCT Europe 2026 Series 11 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131685,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 1059,
+"name": "MASONIC"
+},
+"team2": {
+"id": 6024,
+"name": "Aurora Young Blud"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6134,
+"name": "Stake Ranked Episode 6: Open Qualifier"
+},
+"discipline_id": 1
+},
+{
+"id": 131683,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 24639,
+"name": "ARGOS"
+},
+"team2": {
+"id": 10014,
+"name": "aimclub"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6134,
+"name": "Stake Ranked Episode 6: Open Qualifier"
+},
+"discipline_id": 1
+},
+{
+"id": 131157,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 24507,
+"name": "6666"
+},
+"team2": {
+"id": 22240,
+"name": "benched gods"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6169,
+"name": "NODWIN Clutch Series 13 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131684,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 495,
+"name": "9INE"
+},
+"team2": {
+"id": 1309,
+"name": "Spirit Academy"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6134,
+"name": "Stake Ranked Episode 6: Open Qualifier"
+},
+"discipline_id": 1
+},
+{
+"id": 131686,
+"status": "upcoming",
+"start_date": "2026-10-11T14:00:00.000+00:00",
+"team1": {
+"id": 1578,
+"name": "Metizport"
+},
+"team2": {
+"id": 21815,
+"name": "Spirit Academy Black"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6134,
+"name": "Stake Ranked Episode 6: Open Qualifier"
+},
+"discipline_id": 1
+},
+{
+"id": 131622,
+"status": "upcoming",
+"start_date": "2026-10-11T15:00:00.000+00:00",
+"team1": {
+"id": 751,
+"name": "NRG"
+},
+"team2": {
+"id": 1430,
+"name": "Imperial"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 130754,
+"status": "upcoming",
+"start_date": "2026-10-11T15:00:00.000+00:00",
+"team1": {
+"id": 667,
+"name": "Vitality"
+},
+"team2": {
+"id": 765,
+"name": "MOUZ"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 5110,
+"name": "ESL Pro League Season 24"
+},
+"discipline_id": 1
+},
+{
+"id": 131158,
+"status": "upcoming",
+"start_date": "2026-10-11T17:00:00.000+00:00",
+"team1": {
+"id": 23102,
+"name": "mellren"
+},
+"team2": {
+"id": 23078,
+"name": "Lavked"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6169,
+"name": "NODWIN Clutch Series 13 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131424,
+"status": "upcoming",
+"start_date": "2026-10-11T17:00:00.000+00:00",
+"team1": {
+"id": 25428,
+"name": "antidaun"
+},
+"team2": {
+"id": 25223,
+"name": "Saint Sinners"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6190,
+"name": "CCT Europe 2026 Series 11 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131623,
+"status": "upcoming",
+"start_date": "2026-10-11T17:45:00.000+00:00",
+"team1": {
+"id": 24956,
+"name": "DENDELE"
+},
+"team2": null,
+"team1_score": 0,
+"team2_score": null,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131624,
+"status": "upcoming",
+"start_date": "2026-10-11T20:30:00.000+00:00",
+"team1": null,
+"team2": {
+"id": 6062,
+"name": "Wildcard"
+},
+"team1_score": null,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131286,
+"status": "upcoming",
+"start_date": "2026-10-11T21:00:00.000+00:00",
+"team1": {
+"id": 6282,
+"name": "Bounty Hunters"
+},
+"team2": {
+"id": 24668,
+"name": "BORRACHEIROS"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131285,
+"status": "upcoming",
+"start_date": "2026-10-11T21:00:00.000+00:00",
+"team1": {
+"id": 3625,
+"name": "Yawara"
+},
+"team2": {
+"id": 10049,
+"name": "Galorys"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131385,
+"status": "upcoming",
+"start_date": "2026-10-12T01:00:00.000+00:00",
+"team1": {
+"id": 23579,
+"name": "Overtake Sector"
+},
+"team2": {
+"id": 9655,
+"name": "regain"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131386,
+"status": "upcoming",
+"start_date": "2026-10-12T01:00:00.000+00:00",
+"team1": {
+"id": 24126,
+"name": "Iowa Stormboar"
+},
+"team2": {
+"id": 1618,
+"name": "DETONATE"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131425,
+"status": "upcoming",
+"start_date": "2026-10-12T08:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 3,
+"tournament": {
+"id": 6190,
+"name": "CCT Europe 2026 Series 11 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131234,
+"status": "upcoming",
+"start_date": "2026-10-12T08:00:00.000+00:00",
+"team1": {
+"id": 25395,
+"name": "Bread Eaters Esports"
+},
+"team2": {
+"id": 22861,
+"name": "Passion Academy"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6170,
+"name": "European Pro League Regular Season 7"
+},
+"discipline_id": 1
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&sort=start_date",
+"next": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&page%5Boffset%5D=25&sort=start_date",
+"last": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&page%5Boffset%5D=250&sort=start_date"
+}
+},
+"1:finished": {
+"total": {
+"count": 79802,
+"pages": 3193,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 131409,
+"status": "finished",
+"start_date": "2026-10-11T08:10:00.000+00:00",
+"team1": {
+"id": 22240,
+"name": "benched gods"
+},
+"team2": {
+"id": 3022,
+"name": "Illyrians"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6190,
+"name": "CCT Europe 2026 Series 11 Play-In"
+},
+"discipline_id": 1
+},
+{
+"id": 131516,
+"status": "finished",
+"start_date": "2026-10-11T07:45:00.000+00:00",
+"team1": {
+"id": 10398,
+"name": "FlyQuest"
+},
+"team2": {
+"id": 22732,
+"name": "Abyssal"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131515,
+"status": "finished",
+"start_date": "2026-10-11T04:30:00.000+00:00",
+"team1": {
+"id": 584,
+"name": "Ground Zero"
+},
+"team2": {
+"id": 22732,
+"name": "Abyssal"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131556,
+"status": "finished",
+"start_date": "2026-10-11T04:15:00.000+00:00",
+"team1": {
+"id": 22560,
+"name": "NEXVOID"
+},
+"team2": {
+"id": 9974,
+"name": "Chinggis Warriors"
+},
+"team1_score": 1,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6192,
+"name": "MESA Pro Series Fall 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131514,
+"status": "finished",
+"start_date": "2026-10-11T01:20:00.000+00:00",
+"team1": {
+"id": 584,
+"name": "Ground Zero"
+},
+"team2": {
+"id": 10398,
+"name": "FlyQuest"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131513,
+"status": "finished",
+"start_date": "2026-10-11T01:20:00.000+00:00",
+"team1": {
+"id": 22732,
+"name": "Abyssal"
+},
+"team2": {
+"id": 5719,
+"name": "KZG"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131381,
+"status": "finished",
+"start_date": "2026-10-11T01:10:00.000+00:00",
+"team1": {
+"id": 9655,
+"name": "regain"
+},
+"team2": {
+"id": 331,
+"name": "EMPIRE"
+},
+"team1_score": 2,
+"team2_score": 1,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131384,
+"status": "finished",
+"start_date": "2026-10-11T01:10:00.000+00:00",
+"team1": {
+"id": 24126,
+"name": "Iowa Stormboar"
+},
+"team2": {
+"id": 5745,
+"name": "Zomblers"
+},
+"team1_score": 1,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131382,
+"status": "finished",
+"start_date": "2026-10-11T01:10:00.000+00:00",
+"team1": {
+"id": 1618,
+"name": "DETONATE"
+},
+"team2": {
+"id": 7536,
+"name": "Wanted Goons"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131383,
+"status": "finished",
+"start_date": "2026-10-11T01:00:00.000+00:00",
+"team1": {
+"id": 18964,
+"name": "Chicken Coop"
+},
+"team2": {
+"id": 23579,
+"name": "Overtake Sector"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6145,
+"name": "ESL Challenger League Season 52: North America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131512,
+"status": "finished",
+"start_date": "2026-10-11T00:10:00.000+00:00",
+"team1": {
+"id": 584,
+"name": "Ground Zero"
+},
+"team2": {
+"id": 22732,
+"name": "Abyssal"
+},
+"team1_score": 1,
+"team2_score": 0,
+"bo_type": 1,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131511,
+"status": "finished",
+"start_date": "2026-10-11T00:10:00.000+00:00",
+"team1": {
+"id": 10398,
+"name": "FlyQuest"
+},
+"team2": {
+"id": 5719,
+"name": "KZG"
+},
+"team1_score": 1,
+"team2_score": 0,
+"bo_type": 1,
+"tournament": {
+"id": 6191,
+"name": "ANZC Locals Spring 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131621,
+"status": "finished",
+"start_date": "2026-10-10T23:20:00.000+00:00",
+"team1": {
+"id": 1430,
+"name": "Imperial"
+},
+"team2": {
+"id": 4077,
+"name": "Without a Roof"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131619,
+"status": "finished",
+"start_date": "2026-10-10T23:00:00.000+00:00",
+"team1": {
+"id": 24956,
+"name": "DENDELE"
+},
+"team2": {
+"id": 6062,
+"name": "Wildcard"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131620,
+"status": "finished",
+"start_date": "2026-10-10T22:50:00.000+00:00",
+"team1": {
+"id": 751,
+"name": "NRG"
+},
+"team2": {
+"id": 21550,
+"name": "SportsBetExpert"
+},
+"team1_score": 2,
+"team2_score": 1,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131283,
+"status": "finished",
+"start_date": "2026-10-10T21:30:00.000+00:00",
+"team1": {
+"id": 6282,
+"name": "Bounty Hunters"
+},
+"team2": {
+"id": 3012,
+"name": "LP"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131616,
+"status": "finished",
+"start_date": "2026-10-10T21:20:00.000+00:00",
+"team1": {
+"id": 4077,
+"name": "Without a Roof"
+},
+"team2": {
+"id": 25130,
+"name": "Unreal Nightmare"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131617,
+"status": "finished",
+"start_date": "2026-10-10T21:00:00.000+00:00",
+"team1": {
+"id": 751,
+"name": "NRG"
+},
+"team2": {
+"id": 6062,
+"name": "Wildcard"
+},
+"team1_score": 0,
+"team2_score": 1,
+"bo_type": 1,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131284,
+"status": "finished",
+"start_date": "2026-10-10T21:00:00.000+00:00",
+"team1": {
+"id": 3625,
+"name": "Yawara"
+},
+"team2": {
+"id": 21424,
+"name": "ex-Keyd Stars"
+},
+"team1_score": 1,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131282,
+"status": "finished",
+"start_date": "2026-10-10T21:00:00.000+00:00",
+"team1": {
+"id": 25011,
+"name": "MEIA NOITE"
+},
+"team2": {
+"id": 10049,
+"name": "Galorys"
+},
+"team1_score": 1,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131281,
+"status": "finished",
+"start_date": "2026-10-10T21:00:00.000+00:00",
+"team1": {
+"id": 24668,
+"name": "BORRACHEIROS"
+},
+"team2": {
+"id": 898,
+"name": "Procyon"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6144,
+"name": "ESL Challenger League Season 52: South America - Cup 3"
+},
+"discipline_id": 1
+},
+{
+"id": 131615,
+"status": "finished",
+"start_date": "2026-10-10T19:55:00.000+00:00",
+"team1": {
+"id": 21550,
+"name": "SportsBetExpert"
+},
+"team2": {
+"id": 19187,
+"name": "Marsborne"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131618,
+"status": "finished",
+"start_date": "2026-10-10T19:50:00.000+00:00",
+"team1": {
+"id": 24956,
+"name": "DENDELE"
+},
+"team2": {
+"id": 1430,
+"name": "Imperial"
+},
+"team1_score": 1,
+"team2_score": 0,
+"bo_type": 1,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+},
+{
+"id": 131134,
+"status": "finished",
+"start_date": "2026-10-10T18:20:00.000+00:00",
+"team1": {
+"id": 791,
+"name": "FaZe"
+},
+"team2": {
+"id": 441,
+"name": "NAVI Junior"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6159,
+"name": "Roman Imperium Cup IX"
+},
+"discipline_id": 1
+},
+{
+"id": 131612,
+"status": "finished",
+"start_date": "2026-10-10T17:55:00.000+00:00",
+"team1": {
+"id": 21550,
+"name": "SportsBetExpert"
+},
+"team2": {
+"id": 24953,
+"name": "Fathom"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6143,
+"name": "FRAG University 2026"
+},
+"discipline_id": 1
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&sort=-start_date",
+"next": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&page%5Boffset%5D=25&sort=-start_date",
+"last": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=1&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&page%5Boffset%5D=79800&sort=-start_date"
+}
+},
+"3:current": {
+"total": {
+"count": 1,
+"pages": 1,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 131560,
+"status": "current",
+"start_date": "2026-10-11T08:20:00.000+00:00",
+"team1": {
+"id": 17180,
+"name": "West Point Esports Philippines"
+},
+"team2": {
+"id": 25433,
+"name": "Nothin'Here"
+},
+"team1_score": 0,
+"team2_score": 1,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=current&page%5Blimit%5D=25&sort=start_date"
+}
+},
+"3:upcoming": {
+"total": {
+"count": 62,
+"pages": 3,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 126084,
+"status": "upcoming",
+"start_date": "2026-10-11T10:00:00.000+00:00",
+"team1": {
+"id": 22895,
+"name": "Saigon Warriors"
+},
+"team2": {
+"id": 22896,
+"name": "MVK Academy"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 5393,
+"name": "VCS 2026 Finals"
+},
+"discipline_id": 3
+},
+{
+"id": 131561,
+"status": "upcoming",
+"start_date": "2026-10-11T12:00:00.000+00:00",
+"team1": {
+"id": 25431,
+"name": "PART TIMERS"
+},
+"team2": {
+"id": 25432,
+"name": "essences"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+},
+{
+"id": 129974,
+"status": "upcoming",
+"start_date": "2026-10-12T06:00:00.000+00:00",
+"team1": {
+"id": 18156,
+"name": "KT Rolster"
+},
+"team2": {
+"id": 18129,
+"name": "Team Vitality"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129973,
+"status": "upcoming",
+"start_date": "2026-10-12T09:00:00.000+00:00",
+"team1": {
+"id": 18335,
+"name": "BNK FEARX"
+},
+"team2": {
+"id": 18021,
+"name": "JD Gaming"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 131562,
+"status": "upcoming",
+"start_date": "2026-10-12T12:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+},
+{
+"id": 129913,
+"status": "upcoming",
+"start_date": "2026-10-12T21:00:00.000+00:00",
+"team1": {
+"id": 16923,
+"name": "LOS"
+},
+"team2": {
+"id": 20354,
+"name": "KaBuM! Ilha das Lendas"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6030,
+"name": "CBLOL 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 129920,
+"status": "upcoming",
+"start_date": "2026-10-12T23:00:00.000+00:00",
+"team1": {
+"id": 17077,
+"name": "Maryville University"
+},
+"team2": {
+"id": 16807,
+"name": "Disguised"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 129975,
+"status": "upcoming",
+"start_date": "2026-10-13T06:00:00.000+00:00",
+"team1": {
+"id": 17801,
+"name": "Team WE"
+},
+"team2": {
+"id": 18027,
+"name": "FlyQuest"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129976,
+"status": "upcoming",
+"start_date": "2026-10-13T09:00:00.000+00:00",
+"team1": {
+"id": 20350,
+"name": "Hanjin BRION"
+},
+"team2": {
+"id": 17957,
+"name": "LGD Gaming"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 131563,
+"status": "upcoming",
+"start_date": "2026-10-13T12:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+},
+{
+"id": 130166,
+"status": "upcoming",
+"start_date": "2026-10-13T16:00:00.000+00:00",
+"team1": {
+"id": 20584,
+"name": "Movistar KOI Fénix"
+},
+"team2": {
+"id": 18886,
+"name": "Galions"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 129977,
+"status": "upcoming",
+"start_date": "2026-10-14T09:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130165,
+"status": "upcoming",
+"start_date": "2026-10-14T16:00:00.000+00:00",
+"team1": {
+"id": 17873,
+"name": "Solary"
+},
+"team2": {
+"id": 17042,
+"name": "Anubis Gaming"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 129978,
+"status": "upcoming",
+"start_date": "2026-10-15T09:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130788,
+"status": "upcoming",
+"start_date": "2026-10-15T18:00:00.000+00:00",
+"team1": {
+"id": 17448,
+"name": "FURIA"
+},
+"team2": {
+"id": 18361,
+"name": "MVK Esports"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130789,
+"status": "upcoming",
+"start_date": "2026-10-15T23:00:00.000+00:00",
+"team1": {
+"id": 17900,
+"name": "Cloud9"
+},
+"team2": {
+"id": 18342,
+"name": "Karmine Corp"
+},
+"team1_score": 0,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130790,
+"status": "upcoming",
+"start_date": "2026-10-16T18:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130791,
+"status": "upcoming",
+"start_date": "2026-10-16T23:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129979,
+"status": "upcoming",
+"start_date": "2026-10-17T09:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130792,
+"status": "upcoming",
+"start_date": "2026-10-17T18:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130793,
+"status": "upcoming",
+"start_date": "2026-10-18T18:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130167,
+"status": "upcoming",
+"start_date": "2026-10-23T16:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130794,
+"status": "upcoming",
+"start_date": "2026-10-23T17:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 1,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130795,
+"status": "upcoming",
+"start_date": "2026-10-23T18:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 1,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 130796,
+"status": "upcoming",
+"start_date": "2026-10-23T19:00:00.000+00:00",
+"team1": null,
+"team2": null,
+"team1_score": null,
+"team2_score": null,
+"bo_type": 1,
+"tournament": {
+"id": 4693,
+"name": "Worlds 2026"
+},
+"discipline_id": 3
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&sort=start_date",
+"next": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&page%5Boffset%5D=25&sort=start_date",
+"last": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=upcoming&page%5Blimit%5D=25&page%5Boffset%5D=50&sort=start_date"
+}
+},
+"3:finished": {
+"total": {
+"count": 14945,
+"pages": 598,
+"offset": 0,
+"limit": 25
+},
+"results": [
+{
+"id": 129919,
+"status": "finished",
+"start_date": "2026-10-10T21:00:00.000+00:00",
+"team1": {
+"id": 20536,
+"name": "Cupid Esports"
+},
+"team2": {
+"id": 16807,
+"name": "Disguised"
+},
+"team1_score": 0,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 128582,
+"status": "finished",
+"start_date": "2026-10-10T17:00:00.000+00:00",
+"team1": {
+"id": 16923,
+"name": "LOS"
+},
+"team2": {
+"id": 17448,
+"name": "FURIA"
+},
+"team1_score": 3,
+"team2_score": 2,
+"bo_type": 5,
+"tournament": {
+"id": 5097,
+"name": "CBLOL 2026 Split 2"
+},
+"discipline_id": 3
+},
+{
+"id": 130162,
+"status": "finished",
+"start_date": "2026-10-10T16:00:00.000+00:00",
+"team1": {
+"id": 17873,
+"name": "Solary"
+},
+"team2": {
+"id": 22411,
+"name": "G2 NORD"
+},
+"team1_score": 3,
+"team2_score": 1,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130161,
+"status": "finished",
+"start_date": "2026-10-10T16:00:00.000+00:00",
+"team1": {
+"id": 17288,
+"name": "Karmine Corp Blue"
+},
+"team2": {
+"id": 17042,
+"name": "Anubis Gaming"
+},
+"team1_score": 0,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 131559,
+"status": "finished",
+"start_date": "2026-10-10T12:45:00.000+00:00",
+"team1": {
+"id": 25432,
+"name": "essences"
+},
+"team2": {
+"id": 25433,
+"name": "Nothin'Here"
+},
+"team1_score": 2,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+},
+{
+"id": 131558,
+"status": "finished",
+"start_date": "2026-10-10T08:25:00.000+00:00",
+"team1": {
+"id": 25431,
+"name": "PART TIMERS"
+},
+"team2": {
+"id": 17180,
+"name": "West Point Esports Philippines"
+},
+"team1_score": 1,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6128,
+"name": "LCP 2027 Promotion - Wild Card Playoffs"
+},
+"discipline_id": 3
+},
+{
+"id": 129918,
+"status": "finished",
+"start_date": "2026-10-09T23:00:00.000+00:00",
+"team1": {
+"id": 17813,
+"name": "Fuego"
+},
+"team2": {
+"id": 16807,
+"name": "Disguised"
+},
+"team1_score": 0,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 130164,
+"status": "finished",
+"start_date": "2026-10-09T16:45:00.000+00:00",
+"team1": {
+"id": 20584,
+"name": "Movistar KOI Fénix"
+},
+"team2": {
+"id": 22371,
+"name": "TLN Pirates"
+},
+"team1_score": 3,
+"team2_score": 1,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130163,
+"status": "finished",
+"start_date": "2026-10-09T16:00:00.000+00:00",
+"team1": {
+"id": 18886,
+"name": "Galions"
+},
+"team2": {
+"id": 16963,
+"name": "Kaufland Hangry Knights"
+},
+"team1_score": 3,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 129917,
+"status": "finished",
+"start_date": "2026-10-08T21:00:00.000+00:00",
+"team1": {
+"id": 20536,
+"name": "Cupid Esports"
+},
+"team2": {
+"id": 17077,
+"name": "Maryville University"
+},
+"team1_score": 0,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 129971,
+"status": "finished",
+"start_date": "2026-10-08T11:00:00.000+00:00",
+"team1": {
+"id": 17800,
+"name": "Natus Vincere"
+},
+"team2": {
+"id": 18021,
+"name": "JD Gaming"
+},
+"team1_score": 1,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129972,
+"status": "finished",
+"start_date": "2026-10-08T09:00:00.000+00:00",
+"team1": {
+"id": 18027,
+"name": "FlyQuest"
+},
+"team2": {
+"id": 18103,
+"name": "RED Canids"
+},
+"team1_score": 2,
+"team2_score": 0,
+"bo_type": 3,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129916,
+"status": "finished",
+"start_date": "2026-10-07T21:00:00.000+00:00",
+"team1": {
+"id": 16807,
+"name": "Disguised"
+},
+"team2": {
+"id": 17077,
+"name": "Maryville University"
+},
+"team1_score": 1,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 130160,
+"status": "finished",
+"start_date": "2026-10-07T16:00:00.000+00:00",
+"team1": {
+"id": 16945,
+"name": "Los Heretics"
+},
+"team2": {
+"id": 22411,
+"name": "G2 NORD"
+},
+"team1_score": 2,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130158,
+"status": "finished",
+"start_date": "2026-10-07T16:00:00.000+00:00",
+"team1": {
+"id": 17042,
+"name": "Anubis Gaming"
+},
+"team2": {
+"id": 19094,
+"name": "Ruddy Corporation"
+},
+"team1_score": 3,
+"team2_score": 2,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130159,
+"status": "finished",
+"start_date": "2026-10-07T16:00:00.000+00:00",
+"team1": {
+"id": 17288,
+"name": "Karmine Corp Blue"
+},
+"team2": {
+"id": 18323,
+"name": "Skillcamp Esport"
+},
+"team1_score": 3,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130157,
+"status": "finished",
+"start_date": "2026-10-07T16:00:00.000+00:00",
+"team1": {
+"id": 16963,
+"name": "Kaufland Hangry Knights"
+},
+"team2": {
+"id": 17414,
+"name": "Unicorns Of Love Sexy Edition"
+},
+"team1_score": 3,
+"team2_score": 1,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 129970,
+"status": "finished",
+"start_date": "2026-10-07T10:15:00.000+00:00",
+"team1": {
+"id": 18027,
+"name": "FlyQuest"
+},
+"team2": {
+"id": 18358,
+"name": "Shopify Rebellion"
+},
+"team1_score": 2,
+"team2_score": 1,
+"bo_type": 3,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129969,
+"status": "finished",
+"start_date": "2026-10-07T08:30:00.000+00:00",
+"team1": {
+"id": 17572,
+"name": "GAM Esports"
+},
+"team2": {
+"id": 18358,
+"name": "Shopify Rebellion"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129968,
+"status": "finished",
+"start_date": "2026-10-07T07:00:00.000+00:00",
+"team1": {
+"id": 17572,
+"name": "GAM Esports"
+},
+"team2": {
+"id": 18027,
+"name": "FlyQuest"
+},
+"team1_score": 0,
+"team2_score": 2,
+"bo_type": 3,
+"tournament": {
+"id": 6107,
+"name": "Demacia Cup Global Invitational 2026"
+},
+"discipline_id": 3
+},
+{
+"id": 129912,
+"status": "finished",
+"start_date": "2026-10-06T21:00:00.000+00:00",
+"team1": {
+"id": 17258,
+"name": "Estral Esports"
+},
+"team2": {
+"id": 20354,
+"name": "KaBuM! Ilha das Lendas"
+},
+"team1_score": 2,
+"team2_score": 3,
+"bo_type": 5,
+"tournament": {
+"id": 6030,
+"name": "CBLOL 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 129915,
+"status": "finished",
+"start_date": "2026-10-06T21:00:00.000+00:00",
+"team1": {
+"id": 20536,
+"name": "Cupid Esports"
+},
+"team2": {
+"id": 17813,
+"name": "Fuego"
+},
+"team1_score": 3,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6104,
+"name": "LCS 2027 Promotion Tournament"
+},
+"discipline_id": 3
+},
+{
+"id": 130156,
+"status": "finished",
+"start_date": "2026-10-06T16:00:00.000+00:00",
+"team1": {
+"id": 18886,
+"name": "Galions"
+},
+"team2": {
+"id": 17553,
+"name": "BIG"
+},
+"team1_score": 3,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130155,
+"status": "finished",
+"start_date": "2026-10-06T16:00:00.000+00:00",
+"team1": {
+"id": 17873,
+"name": "Solary"
+},
+"team2": {
+"id": 24645,
+"name": "Valerion"
+},
+"team1_score": 3,
+"team2_score": 0,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+},
+{
+"id": 130154,
+"status": "finished",
+"start_date": "2026-10-06T16:00:00.000+00:00",
+"team1": {
+"id": 20584,
+"name": "Movistar KOI Fénix"
+},
+"team2": {
+"id": 22314,
+"name": "Frites Esports Club"
+},
+"team1_score": 3,
+"team2_score": 1,
+"bo_type": 5,
+"tournament": {
+"id": 6031,
+"name": "EMEA Masters 2026 Summer"
+},
+"discipline_id": 3
+}
+],
+"links": {
+"self": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&sort=-start_date",
+"next": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&page%5Boffset%5D=25&sort=-start_date",
+"last": "/api/v1/matches?filter%5Bmatches.discipline_id%5D%5Beq%5D=3&filter%5Bmatches.status%5D%5Bin%5D=finished%2Cdefwin&page%5Blimit%5D=25&page%5Boffset%5D=14925&sort=-start_date"
+}
+}
+}

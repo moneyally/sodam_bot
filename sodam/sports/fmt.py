@@ -50,6 +50,8 @@ def tag(g: Game) -> str:
     if g.league == "world" and g.title and (g.home or g.away):    # 세계 축구 = 실제 대회 이름 (season.slug)
         return f"[{esc(g.title)}]"
     lg = LEAGUES.get(g.league)
+    if lg and lg.sport == "esports" and g.title:              # e스포츠 = 게임 + 실제 대회 (VCS 2026 Finals …)
+        return f"[{lg.name} · {esc(g.title)}]"
     return f"[{lg.name}]" if lg else ""
 
 
