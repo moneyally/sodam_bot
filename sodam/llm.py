@@ -468,11 +468,13 @@ class LLM:
             return {}
         return data if isinstance(data, dict) else {}
 
-    async def image(self, prompt: str, source=None, chat_id: int | None = None) -> bytes:
+    async def image(self, prompt: str, source=None, chat_id: int | None = None, size: str = "1024x1024") -> bytes:
         """이미지 만들기(source 없음)·고치기(source = vision.Attached). 결과 이미지 bytes.
+        size = 1024x1024 / 1536x1024(가로) / 1024x1536(세로).
         안전 정책에 걸리면 OpenAI 가 BadRequestError(code=moderation_blocked) 를 낸다."""
         await self._check_budget(chat_id)
-        common = {"prompt": prompt[:4000], "size": "1024x1024", "quality": self.cfg.image_quality}
+        common = {"prompt": prompt[:4000], "size": size if size in ("1024x1024", "1536x1024", "1024x1536") else "1024x1024",
+                  "quality": self.cfg.image_quality}
         if source is not None:
             ext = source.mime.split("/")[-1]
             # sunburst 는 원본 유지가 기본 (input_fidelity 인자를 받지 않음 — 실제 API 400 확인)

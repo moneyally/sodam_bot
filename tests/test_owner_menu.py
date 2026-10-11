@@ -20,7 +20,7 @@ SECRETS = [fmt_usdt(u) for u in (seed.PAID_UNITS, seed.LAST_UNITS, seed.ODD_UNIT
 
 
 def buttons(kb):
-    return [b for row in kb.inline_keyboard for b in row] if kb else []
+    return [b for row in getattr(kb, "inline_keyboard", ()) for b in row] if kb else []   # 아래쪽 메뉴판(ReplyKeyboardMarkup)은 콜백 없음
 
 
 def find(kb, text):

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>혜택 메뉴</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+/* 방 전용 혜택 화면 — 색은 방장이 고른 값(--bg1·--bg2·--accent)으로 서버가 채움. 글자는 전부 textContent 로 (방장 글을 HTML 로 안 씀) */
+:root{--bg1:#0d1633;--bg2:#2c3f86;--accent:#f2c14e;--fg:#fff;--card:rgba(255,255,255,.07);--line:rgba(255,255,255,.14);--muted:rgba(255,255,255,.72)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{background:linear-gradient(160deg,var(--bg1),var(--bg2));background-attachment:fixed;color:var(--fg);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif}
+.wrap{max-width:520px;margin:0 auto;padding:14px 16px 32px}
+header{position:relative;border-radius:18px;overflow:hidden;min-height:110px;display:flex;align-items:flex-end;padding:14px 16px;
+  background:rgba(0,0,0,.25) center/cover no-repeat}
+header::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 30%,rgba(0,0,0,.65))}
+header h1{position:relative;z-index:1;margin:0;font-size:24px;font-weight:900;color:var(--accent);text-shadow:0 2px 6px rgba(0,0,0,.6)}
+nav{display:flex;gap:6px;margin:14px 0;overflow-x:auto}
+nav button{flex:1;min-width:72px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:12px;padding:10px 6px;
+  font:inherit;font-weight:700;cursor:pointer}
+nav button[aria-selected="true"]{background:var(--accent);color:#111;border-color:transparent}
+section[hidden]{display:none}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:grid;gap:12px}
+.muted{color:var(--muted);font-size:13px}
+.panel p{margin:0}
+.big{font-size:30px;font-weight:900;color:var(--accent);text-align:center;margin:0}
+.btn{border:0;border-radius:14px;padding:13px;font:inherit;font-weight:800;background:var(--accent);color:#111;cursor:pointer;width:100%}
+.btn[disabled]{opacity:.45}
+.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+/* 복권 */
+.scratch{position:relative;aspect-ratio:16/10;border-radius:16px;overflow:hidden;border:3px solid var(--accent);touch-action:none;user-select:none}
+.res{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:12px;
+  background:radial-gradient(120% 90% at 80% 15%,var(--bg2),var(--bg1))}
+.res .t{font-size:clamp(28px,9vw,44px);font-weight:900;color:var(--accent);text-shadow:0 0 18px rgba(255,255,255,.25)}
+.res .s{color:var(--muted);margin-top:6px}
+canvas{position:absolute;inset:0;width:100%;height:100%;transition:opacity .5s;cursor:grab}
+canvas.gone{opacity:0;pointer-events:none}
+.confetti{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.confetti i{position:absolute;top:-10px;width:8px;height:12px;border-radius:2px;animation:fall 1.8s ease-in forwards}
+@keyframes fall{to{transform:translateY(420px) rotate(560deg);opacity:0}}
+/* 출석 */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;text-align:center}
+.cal b{font-size:11px;color:var(--muted);font-weight:600}
+.cal span{aspect-ratio:1;display:grid;place-items:center;border-radius:50%;font-size:13px;border:1px solid transparent}
+.cal span.on{background:var(--accent);color:#111;font-weight:900;animation:pop .4s}
+.cal span.today{border-color:var(--accent)}
+@keyframes pop{0%{transform:scale(.3)}70%{transform:scale(1.15)}100%{transform:scale(1)}}
+/* 운세 */
+.flip{perspective:900px;cursor:pointer}
+.flip .in{display:grid;min-height:260px;transition:transform .7s;transform-style:preserve-3d}
+.flip.open .in{transform:rotateY(180deg)}
+.face{grid-area:1/1;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:18px;display:grid;place-items:center;padding:16px;text-align:center;
+  border:2px solid var(--accent);background:radial-gradient(120% 90% at 80% 15%,var(--bg2),var(--bg1))}
+.back{transform:rotateY(180deg);align-content:center;gap:6px}
+/* 픽 */
+.pick{border-top:1px solid var(--line);padding-top:10px;display:grid;gap:4px}
+.pick:first-child{border-top:0;padding-top:0}
+.bar{height:8px;border-radius:6px;background:rgba(255,255,255,.12);overflow:hidden;display:flex}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar i+i{background:rgba(255,255,255,.45)}
+.err{padding:30px 10px;text-align:center}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:10px 16px;border-radius:12px;
+  font-size:14px;max-width:90%;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+@media (prefers-reduced-motion:reduce){.confetti{display:none}.flip .in,canvas{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header id="hd"><h1 id="nm">혜택 메뉴</h1></header>
+  <nav id="tabs" role="tablist"></nav>
+  <main id="main"><div class="err muted" id="load">불러오는 중…</div></main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(function(){
+  const tg = window.Telegram && Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand();
+    try { if (tg.isVersionAtLeast && tg.isVersionAtLeast("7.7")) tg.disableVerticalSwipes(); } catch(e) {} }   // 아래로 문질러도 창이 안 내려가게
+  const q = new URLSearchParams(location.search);
+  const ROOM = (q.get("r") || "").replace(/[^0-9a-f]/g, "").slice(0, 10);
+  const START = q.get("t") || "";
+  const initData = tg ? tg.initData : "";
+  let S = null, busy = false, PENDING = null;   // PENDING = 긁기 시작한 복권의 결과 (서버가 이미 정함)
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const fill = (tpl, v) => String(tpl || "").replace(/\{([a-z_]+)\}/g, (_, k) => v[k] != null ? v[k] : "");
+  function toast(t){ const x=$("toast"); x.textContent=t; x.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>x.classList.remove("show"),2600); }
+  function haptic(kind){ try{ tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind); }catch(e){} }
+  async function api(action, extra){
+    let r;
+    try {
+      r = await fetch("api/" + action, {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(Object.assign({initData: initData, room: ROOM}, extra || {}))});
+    } catch(e) { throw new Error("연결이 안 돼요. 잠시 후 다시 해 주세요"); }
+    let j = null; try { j = await r.json(); } catch(e) {}
+    if (!r.ok || !j || typeof j !== "object") throw new Error((j && j.error) || "잠시 후 다시 해 주세요");
+    return j;
+  }
+  function paint(){
+    const c = S.colors, root = document.documentElement.style;
+    root.setProperty("--bg1", c.bg1); root.setProperty("--bg2", c.bg2); root.setProperty("--accent", c.accent); root.setProperty("--fg", c.fg);
+    try { tg && tg.setHeaderColor && tg.setHeaderColor(c.bg1); tg && tg.setBackgroundColor && tg.setBackgroundColor(c.bg1); } catch(e){}
+    $("nm").textContent = S.name || "혜택 메뉴";
+    if (S.bg) $("hd").style.backgroundImage = "url(" + S.bg + ")";
+  }
+  const NAMES = {lotto:"🎟 복권", checkin:"📅 출석", fortune:"🔮 운세", picks:"🌟 추천픽"};
+  function tabs(){
+    const nav = $("tabs"); nav.innerHTML = "";
+    const list = S.tabs.length ? S.tabs : ["checkin"];
+    list.forEach(k => { const b = el("button", "", NAMES[k]); b.setAttribute("role","tab"); b.onclick = () => show(k); b.dataset.k = k; nav.appendChild(b); });
+    show(list.includes(START) ? START : list[0]);
+  }
+  function show(k){
+    document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.k === k));
+    const m = $("main"); m.innerHTML = "";
+    ({lotto: vLotto, checkin: vCheckin, fortune: vFortune, picks: vPicks})[k](m);
+  }
+
+  // 🎟 복권: 결과는 서버가 정함 (긁기 시작하는 순간 api/scratch), 화면은 보여 주기만
+  function vLotto(m){
+    const p = el("div","panel"); m.appendChild(p);
+    const L = S.lotto;
+    if (!L.on) { p.appendChild(el("p","muted","이 방은 지금 복권이 꺼져 있어요.")); return; }
+    p.appendChild(el("p","muted", fill(S.tpl.lotto_left, {left: L.left}) + " · " + (L.life === "day" ? "오늘 자정까지" : "받은 뒤 7일 안에") + " 긁기"));
+    if (S.notice) p.appendChild(el("p","muted",S.notice));
+    if (L.left <= 0 && !PENDING) {
+      p.appendChild(el("p","big","🎟 0장"));
+      p.appendChild(el("p","muted","출석하면 하루 1장 받아요."));
+      const b = el("button","btn","📅 출석하러 가기"); b.onclick = () => show("checkin"); p.appendChild(b); return;
+    }
+    const box = el("div","scratch"), res = el("div","res"), cv = el("canvas"), conf = el("div","confetti");
+    const t = el("div","t",""), s = el("div","s","");
+    const inner = el("div"); inner.appendChild(t); inner.appendChild(s); res.appendChild(inner);
+    box.appendChild(res); box.appendChild(cv); box.appendChild(conf); p.appendChild(box);
+    const hint = el("p","muted","✋ 은박을 손가락으로 문질러 보세요 — 긁기 시작하면 복권 1장이 쓰여요"); p.appendChild(hint);
+    let ctx, drawing=false, last=null, result=null, done=false, LW=1, LH=1;
+    function foil(){
+      const r = box.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+      LW = r.width; LH = r.height;                           // 그린 때 크기 — 화면이 바뀌어도 손가락 위치를 이 크기로 맞춤
+      cv.width = Math.round(r.width*d); cv.height = Math.round(r.height*d);
+      ctx = cv.getContext("2d"); ctx.setTransform(d,0,0,d,0,0);
+      const w=r.width,h=r.height,g=ctx.createLinearGradient(0,0,w,h);
+      g.addColorStop(0,"#b9bcc4"); g.addColorStop(.45,"#f1f2f5"); g.addColorStop(.55,"#d5d8de"); g.addColorStop(1,"#9fa3ad");
+      ctx.globalCompositeOperation="source-over"; ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
+      ctx.globalAlpha=.2; ctx.strokeStyle="#fff"; ctx.lineWidth=3;
+      for(let x=-h;x<w;x+=12){ctx.beginPath();ctx.moveTo(x,h);ctx.lineTo(x+h*.6,0);ctx.stroke();}
+      ctx.globalAlpha=1; ctx.fillStyle="#5b606c"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      const title = S.texts.lotto_title || "긁어서 확인!";
+      let fs = Math.round(w/11); ctx.font = "900 "+fs+"px sans-serif";
+      while (fs > 12 && ctx.measureText(title).width > w*0.88) { fs -= 2; ctx.font = "900 "+fs+"px sans-serif"; }   // 긴 글은 줄여서
+      ctx.fillText(title, w/2, h/2);
+    }
+    function pos(e){ const r = cv.getBoundingClientRect(); return {x:(e.clientX-r.left)*LW/r.width, y:(e.clientY-r.top)*LH/r.height}; }
+    function rub(pt){ ctx.globalCompositeOperation="destination-out"; ctx.lineCap="round"; ctx.lineWidth=36;
+      ctx.beginPath(); ctx.moveTo((last||pt).x,(last||pt).y); ctx.lineTo(pt.x,pt.y); ctx.stroke(); last=pt; }
+    function cleared(){ const d=ctx.getImageData(0,0,cv.width,cv.height).data; let n=0,c=0; for(let i=3;i<d.length;i+=64){c++; if(d[i]===0)n++;} return c?n/c:0; }
+    function showResult(res){
+      if (res.result === "none" || res.result === "off" || res.result === "error") {
+        done = true; PENDING = null; cv.classList.add("gone"); t.textContent = res.result === "error" ? "다시 열어 주세요" : "복권이 없어요"; s.textContent = "";
+      } else { t.textContent = res.title || ""; s.textContent = (res.sub || "") + (res.contact ? "  ·  @" + res.contact + " 로 연락" : ""); }
+      S.lotto.left = res.left != null ? res.left : S.lotto.left;
+    }
+    async function ask(){
+      if (!PENDING) {                                        // 한 장에 한 번만 (칸을 바꿨다 와도 이어서 — 리뷰: 2장 쓰이던 것)
+        PENDING = api("scratch").catch(e => { toast(e.message); return {result:"error"}; });
+      }
+      result = await PENDING;
+      showResult(result);
+      maybeReveal();
+    }
+    function maybeReveal(){
+      if (done || !result || cleared() < .45) return;
+      done = true; cv.classList.add("gone"); PENDING = null;
+      if (result.result === "win") { haptic("success"); burst(conf); hint.textContent = "🎉 축하해요! 1:1 채팅에도 당첨 안내를 보냈어요"; }
+      else { haptic("warning"); hint.textContent = "다음 기회에! 내일 출석하면 새 복권"; }
+      if (S.lotto.left > 0) { const b = el("button","btn","🎟 다음 복권 긁기 (" + S.lotto.left + "장)"); b.onclick = () => show("lotto"); p.appendChild(b); }
+    }
+    if (PENDING) { hint.textContent = "✋ 아까 긁던 복권이에요 — 마저 긁어 보세요"; ask(); }
+    cv.addEventListener("pointerdown", e => { if (done) return; drawing = true; last = null; cv.setPointerCapture(e.pointerId); rub(pos(e)); ask(); });
+    cv.addEventListener("pointermove", e => { if (drawing && !done) rub(pos(e)); });
+    const up = () => { if (!drawing) return; drawing = false; last = null; maybeReveal(); };
+    cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+    requestAnimationFrame(foil);
+  }
+  function burst(box){
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const cols = ["#f2c14e","#ff6b6b","#7d9cff","#4fc28c","#ffffff"];
+    for (let i=0;i<70;i++){ const c=el("i"); c.style.left=Math.random()*100+"%"; c.style.background=cols[i%cols.length];
+      c.style.animationDelay=(Math.random()*.4)+"s"; box.appendChild(c); }
+  }
+
+  // 📅 출석: 이번 달 달력 + 도장
+  function vCheckin(m){
+    const p = el("div","panel"); m.appendChild(p);
+    const C = S.checkin;
+    p.appendChild(el("p","big", C.streak ? fill(S.tpl.checkin_title, {streak: C.streak}) : "📅 출석"));
+    const [y, mo] = C.month.split("-").map(Number);
+    const first = new Date(y, mo-1, 1).getDay(), last = new Date(y, mo, 0).getDate(), today = C.todayn;
+    const cal = el("div","cal");
+    "일월화수목금토".split("").forEach(d => cal.appendChild(el("b","",d)));
+    for (let i=0;i<first;i++) cal.appendChild(el("span"));
+    for (let d=1; d<=last; d++){ const x = el("span","",String(d)); if (C.days.includes(d)) x.classList.add("on"); if (d===today) x.classList.add("today"); cal.appendChild(x); }
+    p.appendChild(cal);
+    p.appendChild(el("p","muted", fill(S.tpl.checkin_sub, {month: C.days.length})));
+    const b = el("button","btn", C.today ? "✅ 오늘 출석 완료" : "📅 오늘 출석하기");
+    b.disabled = C.today || busy;
+    b.onclick = async () => {
+      if (busy) return; busy = true; b.disabled = true;
+      try { const r = await api("checkin"); S = r.state; haptic("success"); toast(r.message || "출석!"); show("checkin");
+            if (r.ticket) setTimeout(() => toast("🎟 복권 1장 받았어요 — 복권 칸에서 긁어 보세요"), 1500); }
+      catch(e){ toast(e.message); b.disabled = false; }
+      busy = false;
+    };
+    p.appendChild(b);
+  }
+
+  // 🔮 운세: 카드 뒤집기 (하루 동안 같음)
+  function vFortune(m){
+    const F = S.fortune, w = el("div","flip"), inn = el("div","in"), front = el("div","face"), back = el("div","face back");
+    front.appendChild(el("p","big","🔮")); front.appendChild(el("p","muted","탭해서 오늘 운세 뒤집기"));
+    back.appendChild(el("p","big", fill(S.tpl.fortune_title, {grade: F.grade})));
+    [F.overall, "💰 " + F.money, "💕 " + F.love, "💪 " + F.health, "🍀 행운 숫자 " + F.number + " · 행운 색 " + F.color, F.tip]
+      .forEach(t => back.appendChild(el("div","",t)));
+    back.appendChild(el("div","muted","재미로 보는 운세예요"));
+    inn.appendChild(front); inn.appendChild(back); w.appendChild(inn); m.appendChild(w);
+    w.onclick = () => { w.classList.toggle("open"); haptic("success"); };
+  }
+
+  // 🌟 추천픽: 오늘 경기 + 많이 고른 쪽
+  function vPicks(m){
+    const p = el("div","panel"); m.appendChild(p);
+    if (!S.picks.length) { p.appendChild(el("p","muted","오늘 남은 주요 리그 경기가 없어요.")); return; }
+    S.picks.forEach(g => {
+      const r = el("div","pick");
+      r.appendChild(el("div","muted", g.tag + " · " + g.time));
+      r.appendChild(el("div","", g.home + "  vs  " + g.away));
+      if (g.n) { const bar = el("div","bar"), a = el("i"), b = el("i"); a.style.width = g.home_pct + "%"; b.style.width = g.away_pct + "%";
+                 bar.appendChild(a); bar.appendChild(b); r.appendChild(bar);
+                 r.appendChild(el("div","muted", "고른 비율 " + g.home_pct + "% / " + g.away_pct + "% (" + g.n + "명)")); }
+      else r.appendChild(el("div","muted","아직 아무도 안 골랐어요"));
+      p.appendChild(r);
+    });
+    p.appendChild(el("p","muted","1:1 메뉴 🌟 에서 직접 고르고 분석도 볼 수 있어요. 돈·포인트는 걸지 않아요."));
+  }
+
+  (async () => {
+    if (!initData) { $("load").textContent = "텔레그램 안에서 열어 주세요."; return; }
+    try { S = await api("state"); if (!S.colors || !S.lotto) throw new Error("잠시 후 다시 열어 주세요"); paint(); tabs(); }
+    catch(e){ $("load").textContent = e.message; }
+  })();
+})();
+</script>
+</body>
+</html>

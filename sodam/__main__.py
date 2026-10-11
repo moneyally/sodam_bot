@@ -24,7 +24,7 @@ from .llm import LLM
 from .moderation import Moderator
 from .mtproto import MTProto
 from .permissions import Permissions
-from . import casino, cleanup, namehist, persist
+from . import casino, cleanup, hooks, namehist, persist
 from .ratelimit import ChatRateLimiter
 from .services import Services
 from .sports import Sports
@@ -238,6 +238,7 @@ def build_app(cfg: Config, db: DB) -> Application:
                 logging.info("갱신 결과 알림 실패: %s", e)
         if cfg.bot_role != "dealer":
             jq.run_repeating(_diag_token, interval=300, first=20, name="diag_token")
+            await hooks.run_all(hooks.STARTUP_HOOKS, svc, app.bot)   # 🎁 미니앱 웹 서버 등 (sodam/miniapp.py)
 
     async def post_stop(app: Application) -> None:
         # post_shutdown 때는 봇 연결이 이미 닫혀 있어서 여기서 보냄
@@ -249,6 +250,7 @@ def build_app(cfg: Config, db: DB) -> Application:
     async def post_shutdown(app: Application) -> None:
         svc: Services | None = app.bot_data.get("svc")
         if svc:
+            await hooks.run_all(hooks.SHUTDOWN_HOOKS, svc, app.bot)
             await casino.shutdown(svc)  # 진행 중인 블랙잭·하이로우·그래프 판 환불 (DB 닫기 전)
             if svc.mtproto:
                 await svc.mtproto.stop()

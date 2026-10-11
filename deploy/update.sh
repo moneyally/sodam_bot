@@ -150,6 +150,7 @@ voice_setup() {
 # 🔌 원격 점검 창구(sodam-diag) + Caddy(https://<공인IP>.sslip.io, 인증서 자동) + 방화벽 80·443. 실패해도 본체는 그대로.
 # 창구는 읽기 전용·토큰 필수 (sodam/diag.py). 토큰은 봇이 오너 1:1 로만 보냄.
 DIAG_PORT=${DIAG_PORT:-8787}
+MINIAPP_PORT=${MINIAPP_PORT:-8790}   # 🎁 미니앱 (봇 프로세스 안 웹 서버, sodam/miniapp.py) — Caddy /app*
 SSHWS_PORT=${SSHWS_PORT:-8023}
 SSHD_CONF=${SSHD_CONF:-/etc/ssh/sshd_config}
 ROOT_KEYS=${ROOT_KEYS:-/root/.ssh/authorized_keys}
@@ -166,10 +167,11 @@ diag_setup() {
     host="${ip//./-}.sslip.io"
     conf=$(mktemp)
     if [ -f "$APP_DIR/deploy/sodam-sshws.service" ]; then   # 🔐 /sshws = SSH 웹소켓 다리 (sodam/sshws.py), 나머지 = 점검 창구
-        printf '%s {\n\thandle /sshws {\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n\thandle {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n}\n' \
-            "$host" "$SSHWS_PORT" "$DIAG_PORT" > "$conf"
+        printf '%s {\n\thandle /sshws {\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n\thandle /app* {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n\thandle {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n}\n' \
+            "$host" "$SSHWS_PORT" "$MINIAPP_PORT" "$DIAG_PORT" > "$conf"
     else
-        printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$host" "$DIAG_PORT" > "$conf"
+        printf '%s {\n\thandle /app* {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n\thandle {\n\t\tencode gzip\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n}\n' \
+            "$host" "$MINIAPP_PORT" "$DIAG_PORT" > "$conf"
     fi
     if ! cmp -s "$conf" /etc/caddy/Caddyfile; then
         cp "$conf" /etc/caddy/Caddyfile && $SYSTEMCTL reload-or-restart caddy && log "diag: Caddy → https://$host"
