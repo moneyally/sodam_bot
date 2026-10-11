@@ -55,7 +55,8 @@ ON = ("켜", "켜기", "켜줘", "on", "1", "온")
 OFF = ("꺼", "끄기", "꺼줘", "off", "0", "오프")
 RESULT = {"skipped": "⏭ 다음 곡으로 넘겼어요.", "paused": "⏸ 일시정지했어요. <code>.다시재생</code> 으로 이어서.",
           "resumed": "▶️ 다시 틀어요.", "muted": "🔇 노래 소리를 껐어요 (계속 흐름).", "unmuted": "🔊 노래 소리를 켰어요.",
-          "ended": "⏹ 노래를 끝내고 음성채팅에서 나왔어요.", "no_music": "지금 틀고 있는 노래가 없어요."}
+          "ended": "⏹ 노래를 끝내고 음성채팅에서 나왔어요.", "no_music": "지금 틀고 있는 노래가 없어요.",
+          "restarted": "▶️ 대기열에 남은 곡을 다시 틀어요."}
 FAILED_CTL = {"skip": "넘길 곡이 없어요.", "pause": "이미 멈춰 있거나 틀고 있는 곡이 없어요.",
               "resume": "멈춘 곡이 없어요.", "seek": "그 위치로 못 가요 (곡 길이를 넘었어요)."}
 END_REASON = {"idle": "틀 노래가 없어서", "chat_closed": "음성채팅이 닫혀서", "kicked": "음성채팅에서 내보내져서",
@@ -222,7 +223,7 @@ async def control(svc, chat_id: int, user_id: int, role: Role, op: str, value=No
             return "⏹ 끝내기는 관리자만 (또는 남은 곡이 전부 내가 신청한 곡일 때) 할 수 있어요."
     elif not await can_control(svc, chat_id, user_id, role):
         return "🎵 관리자나 지금 곡을 신청한 분만 할 수 있어요."
-    if not await musicq.active_session(svc.db, chat_id):
+    if not await musicq.active_session(svc.db, chat_id) and not (op == "resume" and await musicq.has_queue(svc.db, chat_id)):
         return RESULT["no_music"]
     payload = {"value": value, "relative": relative}
     jid = await store.add_job(svc.db, chat_id, f"music_{op}", payload, user_id, dedupe=op not in ("seek", "volume", "loop"))

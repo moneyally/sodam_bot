@@ -301,7 +301,11 @@ async def has_queue(db, chat_id: int) -> bool:
 
 
 async def session_start(db, chat_id: int, by: int | None) -> int:
-    return await db._write("INSERT INTO music_sessions(chat_id, by_id, start_ts) VALUES(?,?,?)", (chat_id, by, _now()))
+    """새 DJ 자리. 그 방에 끝 표시 없이 남은 옛 자리는 'lost' 로 닫음 (옛 DJ 정리가 붙잡혀 못 닫은 것 — 2026-10-11 벳블리 56·57번)."""
+    def run(c):
+        c.execute("UPDATE music_sessions SET end_ts=?, reason='lost' WHERE chat_id=? AND end_ts IS NULL", (_now(), chat_id))
+        return c.execute("INSERT INTO music_sessions(chat_id, by_id, start_ts) VALUES(?,?,?)", (chat_id, by, _now())).lastrowid
+    return await db.atomic(run)
 
 
 async def session_end(db, sid: int, reason: str, tracks: int, stats: dict | None = None) -> None:

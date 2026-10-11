@@ -752,6 +752,15 @@ class Worker:
         rid, pos, why = await musicq.add(self.db, chat_id, title=info["title"], url=info["url"], vid=info["vid"],
                                          duration=info["duration"], by_id=by, by_name=name, path=info.get("path"),
                                          msg_id=status)
+        if not rid and why == "dup" and not self._dj_alive(chat_id) and await musicq.has_queue(self.db, chat_id):
+            # 대기열엔 있는데 트는 DJ 가 없음 (앞 DJ 가 통화 끊김으로 멈춘 채) → 같은 곡을 또 신청하면 다시 틀어 줌
+            # (2026-10-11 벳블리: '이미 대기열에 있어요' 만 5번 → 아무도 못 틀었음)
+            pl, res = await self._get_player(chat_id, p, by)
+            if pl is None:
+                return False, res
+            await self._music_edit(chat_id, status, "▶️ 대기열에 있던 곡을 다시 틀어요.")
+            pl.wake()
+            return True, "playing"
         if not rid:
             text = (f"⚠️ 대기열이 꽉 찼어요 ({musicq.QUEUE_MAX}곡)." if why == "full"
                     else f"🎶 이미 틀고 있거나 대기열에 있는 곡이에요: {musicq._esc(info['title'])[:80]}" if why == "dup"
@@ -834,9 +843,19 @@ class Worker:
         except Exception as e:
             log.info("음성채팅 제목 못 바꿈 %s: %r", chat_id, e)
 
+    def _dj_alive(self, chat_id: int) -> bool:
+        pl = self.players.get(chat_id)
+        return pl is not None and not pl.done
+
     async def _music_ctl(self, chat_id: int, op: str, p: dict) -> tuple[bool, str]:
         pl = self.players.get(chat_id)
         if pl is None or pl.done:
+            if op == "resume" and await musicq.has_queue(self.db, chat_id):     # '다시 틀어' = 남은 대기열을 새 DJ 로
+                pl, res = await self._get_player(chat_id, p, p.get("by"))
+                if pl is None:
+                    return False, res
+                pl.wake()
+                return True, "restarted"
             return False, "no_music"
         if op == "skip":
             return pl.skip(), "skipped"

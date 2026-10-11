@@ -1565,6 +1565,39 @@ async def closed_voice_chat_keeps_the_queue_and_rejoins_when_reopened():
 
 
 @test
+async def a_left_over_queue_restarts_on_same_request_or_resume():
+    """2026-10-11 벳블리: 통화가 끊겨 DJ 가 멈췄는데 곡은 대기열에 남음 → '갓질라 틀어' 5번 = '이미 대기열에 있어요',
+    '다시 틀어' = '틀고 있는 노래가 없어요' 만 나오고 아무도 못 틀었음. 남은 곡이 있고 DJ 가 없으면 그 말로 다시 튼다."""
+    db, w, _, _ = await make_worker()
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "갓질라")
+        await until(lambda: CHAT in w.players)
+        w.players[CHAT].stop("chat_closed")
+        await until(lambda: CHAT not in w.players)
+        await db.set_state(0, musicq.REJOIN_KEY, None)             # 다시 들어가기도 안 걸린 상태 (실제: 정리가 붙잡혀 못 걸었음)
+        assert await musicq.has_queue(db, CHAT)
+        row = await play(db, w, "갓질라")
+        assert (row["status"], row["result"]) == ("done", "playing"), dict(row)
+        await until(lambda: w._dj_alive(CHAT))
+        w.players[CHAT].stop("chat_closed")
+        await until(lambda: CHAT not in w.players)
+        row = await run_job(db, w, "music_resume", {"by": 5}, CHAT)
+        assert (row["status"], row["result"]) == ("done", "restarted"), dict(row)
+        await until(lambda: w._dj_alive(CHAT))
+        assert len(await db._all("SELECT id FROM music_sessions WHERE chat_id=? AND end_ts IS NULL", (CHAT,))) == 1, "옛 자리는 닫힘"
+        await musicq.session_start(db, CHAT, 5)                     # 옛 DJ 정리가 붙잡혀 끝 표시를 못 한 경우
+        rows = await db._all("SELECT reason FROM music_sessions WHERE chat_id=? ORDER BY id DESC LIMIT 2", (CHAT,))
+        assert rows[0]["reason"] is None and rows[1]["reason"] == "lost", [dict(r) for r in rows]
+        await run_job(db, w, "music_end", {}, CHAT)
+        row = await run_job(db, w, "music_resume", {"by": 5}, CHAT)
+        assert row["result"] == "no_music", "남은 곡이 없으면 예전처럼"
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+
+
+@test
 async def closed_voice_chat_gives_up_after_the_wait_and_survives_a_restart():
     db, w, _, _ = await make_worker()
     FakeDecoder.LEN = 100000
