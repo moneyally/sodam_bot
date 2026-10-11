@@ -361,6 +361,20 @@ async def review_fixes_keyboard_web_app_limits_and_closed_rooms():
 
 
 @test
+async def admin_preview_works_on_a_disabled_room_for_an_hour():
+    e = await setup(both=False)
+    await brand.update(e.db, RA, ADMIN.id, enabled=False)
+    await e.db._write("DELETE FROM members WHERE chat_id=? AND user_id=?", (RA, ADMIN.id))   # 관리자가 멤버 기록에 없어도
+    sc = await P.r_preview(menu.PanelCtx(e.svc, e.bot, ADMIN.id, RA, []))
+    assert "미리보기" in sc.toast or "띄웠" in sc.toast
+    assert await P.on_text(e.svc, e.bot, dm(ADMIN, "🔮 오늘의 운세")), "꺼진 방도 미리보기 중엔 눌림"
+    await e.db._write("UPDATE brand_session SET ts=ts-? WHERE user_id=?", (brand.PREVIEW_SEC + 5, ADMIN.id))
+    assert not await P.on_text(e.svc, e.bot, dm(A, "🔮 오늘의 운세")), "멤버는 꺼진 방 메뉴 못 씀"
+    assert await brand.usable(e.svc, RA, ADMIN.id) is None, "1시간 지나면 미리보기 끝"
+    assert menu.ROUTES["bdv"].need == menu.ADMIN
+
+
+@test
 async def hooks_wired():
     assert P.on_text in hooks.DM_TEXT_HOOKS and "b" in hooks.DEEP_LINKS and "bd" in hooks.CALLBACK_HANDLERS
     assert miniapp.start in hooks.STARTUP_HOOKS and {"state", "checkin", "scratch"} <= set(miniapp.API)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from types import SimpleNamespace
 
@@ -152,9 +153,9 @@ async def _set_menu_button(svc, bot, user_id: int, room: brand.Room | None) -> N
 
 
 # ── 손님: 열기 ─────────────────────────────────────────────
-async def open_room(svc, bot, user_id: int, room: brand.Room, intro: bool = True) -> None:
+async def open_room(svc, bot, user_id: int, room: brand.Room, intro: bool = True, preview: bool = False) -> None:
     """방을 고르고 메뉴판 + 첫 카드. 버튼 이모지를 텔레그램이 거절하면 빼고 다시."""
-    await brand.select(svc.db, user_id, room.chat_id)
+    await brand.select(svc.db, user_id, room.chat_id, preview=preview)
     switch = len(await _rooms_ok(svc, user_id)) > 1
     caption = f"🎁 <b>{esc(room.name)}</b>\n{esc(room.text('welcome_sub'))}"
     photo = await card(svc, room, "welcome") if intro else None
@@ -167,7 +168,7 @@ async def open_room(svc, bot, user_id: int, room: brand.Room, intro: bool = True
                 await bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=kb)
             break
         except BadRequest as e:
-            if icons and any(b.get("i") for b in room.buttons):
+            if icons and any(b.get("i") for b in room.buttons) and re.search(r"emoji|icon|premium|document_invalid", str(e), re.I):
                 log.info("button emoji refused (%s) — sending without", e)
                 _icons_off[0] = True
                 continue
@@ -204,8 +205,13 @@ async def on_text(svc, bot, msg: Message) -> bool:
         return False
     uid = msg.from_user.id
     if text == SWITCH:
+        if not await _rooms_ok(svc, uid):
+            await msg.reply_text("혜택 메뉴를 켠 방이 없어요.", reply_markup=ReplyKeyboardRemove())
+            return True
         await picker(svc, bot, uid)
         return True
+    if not await brand.known_label(svc.db, text):   # 어느 방 버튼 글자도 아니면 바로 대화로 (DB 조회 0)
+        return False
     prev = await brand.selected(svc.db, uid)
     room = await brand.current(svc, uid)
     b = brand.button_for(room, text) if room else None
@@ -230,7 +236,14 @@ async def on_text(svc, bot, msg: Message) -> bool:
     if not svc.menu_limiter.allow(("bdpress", uid), PRESS_PER_MIN):   # 연타 = 카드 그리기·보내기 반복 (CPU·텔레그램 한도)
         await msg.reply_text("천천히 눌러 주세요 🙏")
         return True
-    await press(svc, bot, msg.from_user, room, b)
+    try:
+        await press(svc, bot, msg.from_user, room, b)
+    except Exception:   # 버튼으로 맞았으면 오류가 나도 AI 로 넘기지 않음 (버튼 글자에 AI 가 답하던 것 — 리뷰 2026-10-12)
+        log.exception("brand press failed %s", b.get("k"))
+        try:
+            await msg.reply_text("잠깐 문제가 생겼어요. 잠시 후 다시 눌러 주세요.")
+        except TelegramError:
+            pass
     return True
 
 
@@ -354,20 +367,40 @@ async def on_button(svc, bot, q, parts) -> None:
         await q.answer("이 방 멤버만 긁을 수 있어요.", show_alert=True)
         return
     user = SimpleNamespace(id=uid, first_name=q.from_user.first_name, last_name=q.from_user.last_name, username=q.from_user.username)
-    got = await scratch_for(svc, bot, room, user)
+    try:
+        got = await scratch_for(svc, bot, room, user)
+    except Exception:
+        log.exception("brand scratch failed")
+        await q.answer("잠깐 문제가 생겼어요. 잠시 후 다시.", show_alert=True)
+        return
     kind = got["kind"]
     if kind in ("none", "off"):
         await q.answer("긁을 복권이 없어요. 📅 출석하면 1장!" if kind == "none" else "복권이 꺼져 있어요.", show_alert=True)
         return
     await q.answer("🪙 사사삭…")
-    photo = await card(svc, room, "win" if kind == "win" else ("soldout" if kind == "soldout" else "lose"),
-                       prize=got["prize"])
+    try:
+        photo = await card(svc, room, "win" if kind == "win" else ("soldout" if kind == "soldout" else "lose"),
+                           prize=got["prize"])
+    except Exception:
+        log.exception("brand card failed")
+        photo = None
     cap = "✨ 그림을 눌러 결과를 확인하세요!" + (f"\n남은 복권 {got['left']}장" if got["left"] else "")
     try:
+        if photo is None:
+            raise BadRequest("no card")
         await q.edit_message_media(InputMediaPhoto(photo, caption=cap, has_spoiler=True),
                                    reply_markup=_scratch_kb(svc, room, cid, got["left"]))
     except TelegramError:
-        await bot.send_photo(uid, photo, caption=cap, has_spoiler=True, reply_markup=_scratch_kb(svc, room, cid, got["left"]))
+        try:
+            if photo is None:
+                raise BadRequest("no card")
+            await bot.send_photo(uid, photo, caption=cap, has_spoiler=True, reply_markup=_scratch_kb(svc, room, cid, got["left"]))
+        except TelegramError:   # 사진이 안 가도 결과는 글로 (복권은 이미 쓰였음)
+            from ..util import html_plain
+            try:
+                await bot.send_message(uid, "🎟 " + html_plain(got["text"])[:500])
+            except TelegramError:
+                pass
     if kind == "win":
         await celebrate(svc, bot, uid, room, got["prize"])
 
@@ -378,6 +411,8 @@ async def _app_room(svc, bot, user: dict, req: dict) -> tuple[brand.Room | None,
     if room is None:
         cid = await brand.selected(svc.db, user["id"])
         room = await brand.get(svc.db, cid) if cid else None
+    if room is not None and await brand.previewing(svc.db, user["id"], room.chat_id):
+        return room, ""
     if room is None or not room.enabled or not await svc.paid_features(room.chat_id):
         return None, "이 혜택 메뉴는 지금 닫혀 있어요"
     if not await _member_live(svc, bot, room.chat_id, user["id"]):
@@ -436,7 +471,8 @@ async def api_state(svc, bot, user: dict, req: dict):
     room, why = await _app_room(svc, bot, user, req)
     if room is None:
         return 403, {"error": why}
-    await brand.select(svc.db, user["id"], room.chat_id)
+    if not await brand.previewing(svc.db, user["id"], room.chat_id):
+        await brand.select(svc.db, user["id"], room.chat_id)
     return 200, await _state(svc, bot, room, user)
 
 
@@ -532,10 +568,10 @@ async def r_relink(c: PanelCtx) -> Screen:
 async def r_preview(c: PanelCtx) -> Screen:
     room = await brand.ensure(c.svc.db, c.cid)
     try:
-        await open_room(c.svc, c.bot, c.uid, room)
+        await open_room(c.svc, c.bot, c.uid, room, preview=True)
     except TelegramError as e:
         return Screen(None, toast=f"보내기 실패: {str(e)[:120]}", alert=True)
-    return Screen(None, toast="👀 아래에 멤버가 보는 화면을 띄웠어요 (꺼져 있어도 미리보기는 돼요)")
+    return Screen(None, toast="👀 아래에 멤버가 보는 화면을 띄웠어요 (꺼져 있어도 1시간 동안 눌러 볼 수 있어요)")
 
 
 async def r_post(c: PanelCtx) -> Screen:
@@ -604,6 +640,8 @@ async def _ask_value(c: PanelCtx, kind: str, label: str) -> Screen:
     c.svc.inputs[c.uid] = PendingInput("bdval", c.cid, args=[str(-1), kind, label])
     if hasattr(c.svc.inputs, "save"):   # 재시작에도 남게 (sodam/persist.py InputStore)
         c.svc.inputs.save(c.uid)
+    if c.svc.announcer:   # 1:1 입력 흐름은 하나만 (예약공지 마법사가 값 입력을 가로채지 않게 — menu.r_input 과 같음)
+        c.svc.announcer.drafts.pop((c.uid, c.uid), None)
     return Screen(prompt + "\n\n5분 안에 보내주세요. 그만두려면 <code>취소</code>", menu._kb([[B("❌ 취소", f"m:bdb:{c.cid}")]]))
 
 
@@ -908,6 +946,8 @@ async def in_value(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     if i is None:
         return False, "❌ 버튼이 바뀌었어요. 다시 골라 주세요."
     kind = brand.PARTS[bs[i]["k"]].value
+    if not kind:   # 기다리는 사이 버튼 순서가 바뀜
+        return True, "버튼 순서가 바뀌었어요. 🔘 버튼에서 다시 골라 주세요."
     try:
         v = {"url": brand.clean_url, "contact": brand.clean_contact, "text": brand.clean_text}[kind](msg.text or "")
     except ValueError as e:
@@ -1029,7 +1069,12 @@ async def in_ai(c: PanelCtx, msg: Message) -> tuple[bool, str]:
             return True, f"오늘 이 방 그림 한도({limit}장)를 다 썼어요. 내일 다시 하거나 사진을 올려 주세요."
     await c.bot.send_message(c.uid, "🤖 그리는 중… (30초~1분)")
     try:
-        data = await c.svc.llm.image(AI_PROMPT.format(want=want), None, c.cid)
+        try:   # 카드는 가로 16:9 → 가로 그림(1536×1024)으로 (정사각이면 위아래가 잘림). 모델이 그 크기를 거절하면 정사각
+            data = await c.svc.llm.image(AI_PROMPT.format(want=want), None, c.cid, size="1536x1024")
+        except Exception as e:
+            if "size" not in str(e).lower():
+                raise
+            data = await c.svc.llm.image(AI_PROMPT.format(want=want), None, c.cid)
         await _store_image(c.svc, c.cid, slot, data, "ai")
         if owner:
             await c.svc.db.bump(day, c.cid, "image")
@@ -1121,7 +1166,7 @@ menu.register_input("bdcont", "💬 당첨되면 연락할 @아이디를 보내 
 menu.register_input("bdlabel", f"✏️ 버튼 이름을 보내 주세요 ({brand.LABEL_MAX}자 안, 이모지 OK)", "bdb", in_label, s_edit)
 menu.register_input("bdvalue", "✏️ 새 값을 보내 주세요 (바로가기 = https 주소 · 문의 = @아이디 · 안내 = 글)", "bdb", in_value, s_edit)
 menu.register_input("bdval", "값을 보내 주세요", "bdb", in_newvalue, s_buttons)
-menu.register_input("bdicon", "😀 버튼 앞에 붙일 <b>프리미엄 이모지</b>를 하나 보내 주세요.", "bdb", in_icon, s_edit)
+menu.register_input("bdicon", "😀 버튼 앞에 붙일 <b>프리미엄 이모지</b>를 하나 보내 주세요.", "bdb", in_icon, s_edit, media=True)
 menu.register_input("bdtext", "📝 새 글자를 보내 주세요 (40자 안). 기본으로 돌리려면 <code>기본</code>", "bdx", in_text, s_texts)
 menu.register_input("bdcolor", "🎨 색을 #RRGGBB 로 보내 주세요. 예: <code>#f2c14e</code>", "bdc", in_color, s_colors)
 menu.register_input("bdimg", "📤 사진을 보내 주세요 (가로로 긴 사진 · 가운데를 16:9 로 잘라 써요).", "bdi", in_image, s_images,

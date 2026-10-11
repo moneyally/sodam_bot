@@ -136,9 +136,9 @@ async def public_url_comes_from_env_or_diag_status():
     svc = SimpleNamespace(cfg=SimpleNamespace(db_path=os.path.join(d, "sodam.db")))
     os.environ.pop("MINIAPP_URL", None)
     assert miniapp.public_base(svc) is None
-    open(os.path.join(d, "diag_setup.status"), "w").write("diag_ok https://1-2-3-4.sslip.io\n")
+    open(os.path.join(d, "diag_setup.status"), "w").write("2026-10-11 19:00:01 diag_ok https://1-2-3-4.sslip.io\n")   # update.sh report() 실제 모양
     assert miniapp.public_base(svc) == "https://1-2-3-4.sslip.io/app/"
-    open(os.path.join(d, "diag_setup.status"), "w").write("diag_fail caddy\n")
+    open(os.path.join(d, "diag_setup.status"), "w").write("2026-10-11 19:00:01 diag_fail caddy 설치 실패\n")
     assert miniapp.public_base(svc) is None
     os.environ["MINIAPP_URL"] = "https://x.example/app"
     try:

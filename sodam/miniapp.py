@@ -113,8 +113,11 @@ def public_base(svc) -> str | None:
         st = (Path(svc.cfg.db_path).resolve().parent / "diag_setup.status").read_text().split()
     except (OSError, AttributeError):
         return None
-    if len(st) >= 2 and st[0] == "diag_ok" and re.fullmatch(r"https://[a-z0-9.-]+", st[1]):
-        return st[1] + "/app/"
+    # update.sh report() 는 '<날짜> <시각> diag_ok https://…' 꼴 (리뷰 2026-10-12: 첫 낱말만 보면 늘 못 찾았음)
+    if "diag_ok" in st:
+        i = st.index("diag_ok")
+        if i + 1 < len(st) and re.fullmatch(r"https://[a-z0-9.-]+", st[i + 1]):
+            return st[i + 1] + "/app/"
     return None
 
 

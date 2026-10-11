@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS brand_rooms (
 CREATE TABLE IF NOT EXISTS brand_session (
     user_id INTEGER PRIMARY KEY,
     chat_id INTEGER NOT NULL,
-    ts      INTEGER NOT NULL
+    ts      INTEGER NOT NULL,
+    preview INTEGER NOT NULL DEFAULT 0     -- 방장 미리보기 (꺼진 방도 PREVIEW_SEC 동안 열림 — 관리자 확인은 미리보기 버튼에서)
 );
 CREATE TABLE IF NOT EXISTS brand_images (
     chat_id INTEGER NOT NULL,
@@ -280,7 +281,9 @@ async def ensure(db, chat_id: int, title: str = "") -> Room:
         return got
     name = (" ".join(_CTRL.sub("", title or "").split()) or "혜택 메뉴")[:NAME_MAX]
     await db._write("INSERT OR IGNORE INTO brand_rooms(chat_id, code, name, buttons, updated) VALUES(?,?,?,?,?)",
-                    (chat_id, secrets.token_hex(5), name, json.dumps(DEFAULT_BUTTONS), int(time.time())))
+                    (chat_id, secrets.token_hex(5), name, json.dumps(clean_buttons(DEFAULT_BUTTONS), ensure_ascii=False),
+                     int(time.time())))
+    forget_labels()
     return await get(db, chat_id)
 
 
@@ -308,6 +311,8 @@ async def update(db, chat_id: int, by: int | None = None, **fields) -> None:
         raise ValueError("없는 색")
     if "enabled" in sets:
         sets["enabled"] = 1 if sets["enabled"] else 0
+    if "buttons" in sets:
+        forget_labels()
     cols = ", ".join(f"{k}=?" for k in sets)
     await db._write(f"UPDATE brand_rooms SET {cols}, updated=?, updated_by=? WHERE chat_id=?",
                     (*sets.values(), int(time.time()), by, chat_id))
@@ -353,10 +358,19 @@ async def rooms_for(db, user_id: int) -> list[tuple[int, str]]:
     return out
 
 
-async def select(db, user_id: int, chat_id: int) -> None:
-    await db._write("INSERT INTO brand_session(user_id, chat_id, ts) VALUES(?,?,?) "
-                    "ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id, ts=excluded.ts",
-                    (user_id, chat_id, int(time.time())))
+PREVIEW_SEC = 3600
+
+
+async def select(db, user_id: int, chat_id: int, preview: bool = False) -> None:
+    await db._write("INSERT INTO brand_session(user_id, chat_id, ts, preview) VALUES(?,?,?,?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id, ts=excluded.ts, preview=excluded.preview",
+                    (user_id, chat_id, int(time.time()), 1 if preview else 0))
+
+
+async def previewing(db, user_id: int, chat_id: int) -> bool:
+    r = await db._one("SELECT 1 FROM brand_session WHERE user_id=? AND chat_id=? AND preview=1 AND ts>=?",
+                      (user_id, chat_id, int(time.time()) - PREVIEW_SEC))
+    return r is not None
 
 
 async def forget(db, user_id: int) -> None:
@@ -369,8 +383,11 @@ async def selected(db, user_id: int) -> int | None:
 
 
 async def usable(svc, chat_id: int, user_id: int) -> Room | None:
-    """지금 이 사람에게 이 방 메뉴를 보여 줘도 되는지 — 켜짐·이용 기간·멤버. 아니면 None."""
+    """지금 이 사람에게 이 방 메뉴를 보여 줘도 되는지 — 켜짐·이용 기간·멤버. 아니면 None.
+    방장 미리보기(1시간)는 꺼진 방·멤버 기록 없어도 통과 (관리자 확인은 미리보기 버튼이 함)."""
     room = await get(svc.db, chat_id)
+    if room is not None and await previewing(svc.db, user_id, chat_id):
+        return room
     if room is None or not room.enabled:
         return None
     if not await svc.paid_features(chat_id):
@@ -394,6 +411,28 @@ async def current(svc, user_id: int) -> Room | None:
         await select(svc.db, user_id, ok[0])
         return await get(svc.db, ok[0])
     return None
+
+
+_labels: dict = {"at": 0.0, "set": frozenset()}
+LABELS_TTL = 30
+
+
+async def known_label(db, text: str) -> bool:
+    """모든 방(켜짐·꺼짐) 메뉴 버튼 글자 중 하나인지 — 1:1 메시지마다 DB 를 여러 번 읽지 않게 30초 캐시 (리뷰 2026-10-12)."""
+    now = time.monotonic()
+    if now - _labels["at"] > LABELS_TTL:
+        got = set()
+        for r in await db._all("SELECT buttons FROM brand_rooms"):
+            try:
+                got.update(b["t"] for b in clean_buttons(json.loads(r["buttons"] or "[]")))   # 기본 이름도 (저장엔 이름이 없을 수 있음)
+            except (ValueError, TypeError):
+                pass
+        _labels.update(at=now, set=frozenset(got))
+    return " ".join((text or "").split()) in _labels["set"]
+
+
+def forget_labels() -> None:
+    _labels["at"] = 0.0
 
 
 def button_for(room: Room, text: str) -> dict | None:
