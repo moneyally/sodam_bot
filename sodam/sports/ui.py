@@ -118,10 +118,12 @@ class UI:
             if not games:
                 continue
             total += len(games)
-            if lg.code == "world":                 # 세계 축구: 대회 이름마다 묶어서 (하루 수백 경기 → 앞 WORLD_MAX 만)
-                out.append(f"\n🌍 <b>세계 축구 {len(games)}경기</b>")
+            if lg.code == "world" or lg.sport == "esports":   # 세계 축구·e스포츠: 대회 이름마다 묶어서 (하루 수백 경기 → 앞 WORLD_MAX 만)
+                out.append(f"\n🌍 <b>세계 축구 {len(games)}경기</b>" if lg.code == "world"
+                           else f"\n{fmt.emoji(lg.code)} <b>{esc(lg.name)} {len(games)}경기</b>")
                 head = None
-                for g in sorted(games, key=lambda g: (g.state != "in", g.title, g.start))[:WORLD_MAX]:
+                rank = {"in": 0, "pre": 1}             # 진행 중 → 곧 → 끝난 순 (e스포츠는 끝난 경기가 하루 수십 개)
+                for g in sorted(games, key=lambda g: (rank.get(g.state, 2), g.title, g.start))[:WORLD_MAX]:
                     if g.title != head:
                         out.append(f"<i>{esc(g.title or '기타')}</i>")
                         head = g.title

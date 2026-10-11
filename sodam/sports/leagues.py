@@ -28,15 +28,16 @@ class League:
     naver_codes: tuple[str, ...] = ()   # 네이버 종합대회(아시안게임 등): gameId[4:7] 종목 코드로 거름 (FBL 축구 · VVO 배구 · VBV 비치발리볼)
     minor: bool = False       # 이름으로 부를 때만 (종목 전체 '.스포츠 축구' 에선 빼서 ESPN 요청이 수십 개로 늘지 않게)
     khl: bool = False         # KHL 공식 앱 API (providers.KHL — ESPN·API-Sports 에 없음)
+    bo3: int = 0              # e스포츠: bo3.gg 종목 번호 (providers.Bo3 — CS2 1·발로란트 2·LoL 3·도타2 4·레식 7·모바일레전드 8)
 
 
 SPORT_EMOJI = {"soccer": "⚽", "baseball": "⚾", "basketball": "🏀", "volleyball": "🏐", "hockey": "🏒", "mma": "🥊",
                "football": "🏈", "racing": "🏎️", "golf": "⛳", "tennis": "🎾", "afootball": "🏉", "rugby": "🏉",
-               "cricket": "🏏"}
+               "cricket": "🏏", "esports": "🎮"}
 SPORT_KO = {"soccer": "축구", "baseball": "야구", "basketball": "농구", "volleyball": "배구", "hockey": "아이스하키",
             "mma": "격투기", "football": "미식축구", "racing": "모터스포츠", "golf": "골프", "tennis": "테니스",
-            "afootball": "호주식 풋볼", "rugby": "럭비", "cricket": "크리켓"}
-SPORT_WORDS = {"축구": "soccer", "해외축구": "soccer", "soccer": "soccer", "football": "soccer", "야구": "baseball",
+            "afootball": "호주식 풋볼", "rugby": "럭비", "cricket": "크리켓", "esports": "e스포츠"}
+SPORT_WORDS = {"이스포츠": "esports", "e스포츠": "esports", "esports": "esports", "e-sports": "esports", "축구": "soccer", "해외축구": "soccer", "soccer": "soccer", "football": "soccer", "야구": "baseball",
                "baseball": "baseball", "농구": "basketball", "basketball": "basketball", "배구": "volleyball",
                "volleyball": "volleyball", "하키": "hockey", "아이스하키": "hockey", "hockey": "hockey",
                "격투기": "mma", "종합격투기": "mma", "mma": "mma", "풋볼": "football", "골프": "golf", "golf": "golf",
@@ -140,6 +141,16 @@ _L = [
     League("khl", "KHL", "hockey", aliases=("khl", "케이에이치엘", "콘티넨탈하키리그", "콘티넨탈 하키 리그", "콘티넨탈하키",
                                             "러시아하키", "러시아아이스하키", "kontinental hockey league"), khl=True),
     League("ufc", "UFC", "mma", "mma/ufc", "ufc", None, None, ("ufc", "유에프씨")),
+    # ── e스포츠 (2026-10-11 벳블리 '이 게임들도 중계·알림 — 전세계 이스포츠'): bo3.gg 경기 데이터 (키 없음·비공식, 서버 실측)
+    #    대회는 소형 리그(European Pro League·United21·LCP 승강전·VCS)까지 — 경기 이름표에 실제 대회 이름(Game.title)
+    League("cs2", "CS2", "esports", aliases=("cs2", "cs", "csgo", "cs:go", "카스", "카스2", "카운터스트라이크", "카운터 스트라이크",
+                                             "counter-strike", "counter strike", "counterstrike"), bo3=1),
+    League("valorant", "발로란트", "esports", aliases=("valorant", "발로란트", "발로", "vct", "발로란트챔피언스"), bo3=2),
+    League("lol", "LoL", "esports", aliases=("lol", "롤", "리그오브레전드", "리그 오브 레전드", "league of legends", "롤드컵", "월즈",
+                                            "worlds", "lck", "lpl", "lec", "lcs", "lcp", "vcs", "msi"), bo3=3),
+    League("dota2", "도타2", "esports", aliases=("dota2", "dota", "dota 2", "도타", "도타2", "도타 2"), bo3=4),
+    League("r6", "레식", "esports", aliases=("r6", "r6s", "레식", "레인보우식스", "레인보우 식스", "rainbow six", "rainbow6"), bo3=7),
+    League("mlbb", "모바일레전드", "esports", aliases=("mlbb", "모바일레전드", "모바일 레전드", "모바레", "mobile legends", "mpl"), bo3=8),
     # ── 2026-10-03 추가 ('우리 없는 데이터 전부' — 방 요청이 계속 옴). ESPN 실측으로 경기가 오는 것만, 이름으로 부를 때만 (minor)
     League("championship", "잉글랜드 챔피언십", "soccer", "soccer/eng.2", None, None, None, ('챔피언십', 'efl챔피언십', '잉글랜드2부', 'championship'), minor=True),
     League("facup", "FA컵", "soccer", "soccer/eng.fa", None, None, None, ('fa컵', 'facup', '에프에이컵'), minor=True),
