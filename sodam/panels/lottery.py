@@ -51,7 +51,7 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
         text = f"📅 {name}님 출석! 연속 <b>{r['streak']}일</b> · 이번 달 {r['month']}일"
         if r["ticket"]:
             left = await lottery.week_left(svc.db, svc.cfg.tz, chat_id, int(s["lotto_week_max"]))
-            text += (f"\n🎟 복권 1장 받았어요 — 당첨 확률 {s['lotto_odds']:g}% · 경품 {esc(s['lotto_prize'])} · 이번 주 남은 경품 {left}개"
+            text += (f"\n🎟 복권 1장 받았어요 — 경품 {esc(s['lotto_prize'])} · 이번 주 남은 경품 {left}개"
                      if left else "\n🎟 복권 1장 받았어요 — <b>이번 주 경품은 마감</b>이라 지금 긁으면 꽝이에요. 7일 안에 다음 주(월요일~) 긁어도 돼요.")
         elif why:
             text += f"\n<i>{esc(why)}</i>"
@@ -77,7 +77,7 @@ async def do_scratch(svc, bot, chat_id: int, user) -> tuple[str, str, tuple | No
         return f"🎟 {name}님 당첨 칸이었는데 최근 {lottery.WIN_GAP_DAYS // 7}주 안에 이미 당첨되셔서 다른 분께 양보했어요 🙏", kind, None
     if kind == "soldout":
         return f"🎟 {name}님 … 당첨 칸이었는데 <b>이번 주 경품이 다 나갔어요</b> 😭 다음 주 월요일에 다시 열려요.", kind, None
-    return f"🎟 {name}님 꽝! 내일 또 출석하면 1장 더 (남은 복권 {r['left']}장 · 확률 {s['lotto_odds']:g}%)", kind, None
+    return f"🎟 {name}님 꽝! 내일 또 출석하면 1장 더 (남은 복권 {r['left']}장)", kind, None
 
 
 async def _post(bot, chat_id: int, text: str, reply_to: int | None, **kw) -> bool:
@@ -317,7 +317,7 @@ async def t_attendance(ctx: tools.ToolCtx, a: dict) -> str:
         return await rank_text(ctx.svc, ctx.chat_id)
     s = await ctx.svc.db.get_settings(ctx.chat_id)
     left = await lottery.open_tickets(ctx.svc.db, ctx.chat_id, ctx.caller.id)
-    return (f"복권 {'켜짐' if s['lotto_enabled'] else '꺼짐'} · 확률 {s['lotto_odds']:g}% · 주 {s['lotto_week_max']}명 · "
+    return (f"복권 {'켜짐' if s['lotto_enabled'] else '꺼짐'} · 주 {s['lotto_week_max']}명 · "
             f"경품 {s['lotto_prize']} · 말한 사람 남은 복권 {left}장 (출석은 .출석 또는 이 도구 checkin)")
 
 

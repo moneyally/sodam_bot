@@ -95,6 +95,11 @@ async def eligibility_new_member_silent_member_and_admin_get_no_ticket():
     assert "관리자가 복권에서 빠져요" in text and "lot:s:" not in str(kb.inline_keyboard), "끄면 관리자 빠짐"
     text, kb = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
     assert "복권 1장" in text and kb.inline_keyboard[0][0].callback_data == f"lot:s:{A.id}"
+    assert "확률" not in text, "방 글엔 확률 숫자 안 씀 (오너 2026-10-11)"
+    await e.db.set_setting(ROOM, "lotto_odds", 0.1)
+    lose, kind, _ = await P.do_scratch(e.svc, e.bot, ROOM, A)
+    assert kind == "lose" or kind == "win"
+    assert "확률" not in lose
     off = await setup(enabled=False)
     text, kb = await P.do_checkin(off.svc, off.bot, ROOM, A, Role.MEMBER)
     assert "출석" in text and "복권" not in text and [b.callback_data for b in kb.inline_keyboard[0]] == ["lot:f"], "복권 꺼진 방 = 출석 + 운세"
