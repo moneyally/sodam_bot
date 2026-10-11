@@ -46,6 +46,8 @@ from .panels import sportsdm as _sportsdm  # noqa: E402
 _sportsdm.register_commands()   # .맞히기 · .맞히기순위 · .분석
 from .panels import lottery as _lottery  # noqa: E402
 _lottery.register_commands()    # .출석 · .복권 · .복권당첨 · .출석순위
+from .panels import brand as _brand  # noqa: E402
+_brand.register_commands()      # .혜택 (방 전용 1:1 메뉴 입구)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다

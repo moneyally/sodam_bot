@@ -17,7 +17,6 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-from .brand import THEMES
 
 W, H = 1280, 720
 FONT_DIR = Path(__file__).parent / "data_files" / "fonts"
@@ -208,44 +207,68 @@ def _sub(im, text: str, y: int, color=(225, 230, 245), size: int = 40) -> None:
         _text(im, (W // 2, y), _clip(text, f, W - 160), f, color, stroke=2)
 
 
-def render(kind: str, *, theme: str = "navy", name: str = "", bg: bytes | None = None, **kw) -> bytes:
-    """카드 그림 JPEG. kind = lotto/win/lose/soldout/recent/checkin/fortune/welcome."""
-    t = THEMES.get(theme, THEMES["navy"])
+def render(kind: str, room, bg: bytes | None = None, **kw) -> bytes:
+    """카드 그림 JPEG. kind = lotto/win/lose/soldout/checkin/fortune/welcome. 글자·색은 전부 방 설정(room.text·room.colors)."""
+    t = room.colors
     im = _base(t, bg)
-    _brand(im, t, name)
-    big = lambda s, y=330, size=150: _text(im, (W // 2, y), s, _fit(s, DISPLAY, W - 140, size), t["accent"],  # noqa: E731
-                                           stroke=4, stroke_fill=(30, 20, 0), glow=t["accent"])
+    _brand(im, t, room.name)
+
+    def big(s: str, y: int, size: int) -> None:
+        s = plain(s)
+        if s:
+            _text(im, (W // 2, y), s, _fit(s, DISPLAY_FOR(s), W - 140, size), t["accent"], stroke=4, stroke_fill=(30, 20, 0),
+                  glow=t["accent"])
     if kind == "lotto":
         _foil(im, (W // 2 - 400, 170, W // 2 + 400, 500), t)
-        _text(im, (W // 2, 335), "긁어서 확인!", _font(DISPLAY, 92), (88, 92, 104))
-        _sub(im, f"남은 복권 {int(kw.get('left', 0))}장", 600, size=44)
-        _sub(im, kw.get("notice", ""), 666, size=30)
+        title = plain(room.text("lotto_title"))
+        _text(im, (W // 2, 335), title, _fit(title, DISPLAY_FOR(title), 720, 92), (88, 92, 104))
+        _sub(im, room.text("lotto_left", left=int(kw.get("left", 0))), 600, size=44)
+        _sub(im, room.notice.split("\n")[0] if room.notice else "", 666, size=30)
     elif kind == "win":
-        big("당첨!", 300, 220)
-        _sub(im, kw.get("prize", ""), 500, t["fg"], 60)
-        _sub(im, kw.get("contact", ""), 600, size=38)
+        big(room.text("win_title"), 300, 220)
+        _sub(im, room.text("win_sub", prize=kw.get("prize", "")), 500, t["fg"], 60)
+        if room.contact:
+            _sub(im, f"@{room.contact}", 600, size=38)
     elif kind == "lose":
-        big("다음 기회에", 310, 130)
-        _sub(im, "내일 출석하면 새 복권 1장", 500, size=48)
-    elif kind == "soldout":
-        big("이번 주 경품 마감", 310, 110)
-        _sub(im, "다음 주 월요일에 다시 열려요", 500, size=46)
-    elif kind == "recent":
-        big("다음 분 차례", 310, 120)
-        _sub(im, "최근에 당첨되셔서 이번엔 양보했어요", 500, size=44)
+        big(room.text("lose_title"), 310, 130)
+        _sub(im, room.text("lose_sub"), 500, size=48)
+    elif kind in ("soldout", "recent"):
+        big(room.text("soldout_title") if kind == "soldout" else room.text("lose_title"), 310, 110)
     elif kind == "checkin":
-        big(f"출석 {int(kw.get('streak', 1))}일째", 250, 130)
+        big(room.text("checkin_title", streak=int(kw.get("streak", 1))), 250, 130)
         _stamps(im, t, int(kw.get("streak", 1)), W // 2, 430)
-        _sub(im, f"이번 달 {int(kw.get('month', 1))}일 출석", 560, size=44)
+        _sub(im, room.text("checkin_sub", month=int(kw.get("month", 1))), 560, size=44)
         if kw.get("ticket"):
-            _sub(im, "복권 1장 받았어요", 640, t["accent"], 44)
+            _sub(im, "+ " + room.text("lotto_left", left=1).replace("남은 ", ""), 640, t["accent"], 40)
     elif kind == "fortune":
-        big(plain(kw.get("grade", "")) or "오늘의 운세", 250, 140)
+        big(room.text("fortune_title", grade=plain(kw.get("grade", ""))), 250, 140)
         _sub(im, kw.get("line", ""), 430, t["fg"], 46)
         _sub(im, f"행운 숫자 {kw.get('number', '')}  ·  행운 색 {kw.get('color', '')}", 540, size=40)
     else:   # welcome
-        big(plain(name) or "혜택 메뉴", 300, 130)
-        _sub(im, "아래 메뉴를 눌러 보세요", 480, size=48)
+        big(plain(room.name) or "혜택 메뉴", 300, 130)
+        _sub(im, room.text("welcome_sub"), 480, size=48)
     out = io.BytesIO()
     im.save(out, "JPEG", quality=86, optimize=True)
     return out.getvalue()
+
+
+def backdrop(room, bg: bytes | None = None, size: int = 512) -> bytes:
+    """글자 없는 정사각 배경 (당첨 스티커 원본 — 글자는 스티커 엔진이 자막으로 얹음)."""
+    im = _base(room.colors, bg)
+    left = (W - H) // 2
+    im = im.crop((left, 0, left + H, H)).resize((size, size), Image.LANCZOS)
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
+def DISPLAY_FOR(text: str) -> Path:
+    """방장이 쓴 글에 Black Han Sans(흔한 한글 2,350자)에 없는 글자가 있으면 나눔고딕 (빈 네모 방지)."""
+    f = _font(DISPLAY, 40)
+    try:
+        for ch in text:
+            if ch.strip() and f.getmask(ch).getbbox() is None:
+                return BODY
+    except Exception:
+        return BODY
+    return DISPLAY

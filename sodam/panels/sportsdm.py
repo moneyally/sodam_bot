@@ -343,16 +343,16 @@ async def s_record(c: PanelCtx) -> Screen:
 TODAY_PICKS = 6
 
 
-async def s_today(c: PanelCtx) -> Screen:
-    """🌟 오늘의 픽 — 주요 리그 오늘 남은 경기 중 많이 고른 순 + 고른 비율. 분석(AI)은 🧠 누를 때만."""
-    from ..sports import fmt, picks
+async def today_picks(svc, limit: int = TODAY_PICKS) -> list[tuple]:
+    """주요 리그 오늘 남은 경기 (많이 고른 순) → [(경기, 고른 수 {home|draw|away: n})]. 1:1 🌟·방 전용 메뉴·미니앱이 같이 씀."""
+    from ..sports import picks
     from ..sports import ui as sports_ui
     from ..sports.cards import BIG
-    from ..sports.leagues import LEAGUES, ko_name
+    from ..sports.leagues import LEAGUES
     from ..sports.providers import SportsError
-    if c.svc.sports is None:
-        return await s_home(c)
-    sp = c.svc.sports
+    sp = svc.sports
+    if sp is None:
+        return []
     d = sports_ui.UI(sp).today()
     leagues = [LEAGUES[k] for k in BIG if k in LEAGUES and sp.feed.available(LEAGUES[k])]
 
@@ -366,9 +366,19 @@ async def s_today(c: PanelCtx) -> Screen:
              if g.state == "pre" and g.start > now and g.home and g.away]
     scored = []
     for g in games:
-        sp_ = await picks.split(c.svc.db, g.key)
+        sp_ = await picks.split(svc.db, g.key)
         scored.append((-sum(sp_.values()), BIG.index(g.league), g.start, g, sp_))
     scored.sort(key=lambda t: t[:3])
+    return [(g, sp_) for *_, g, sp_ in scored[:limit]]
+
+
+async def s_today(c: PanelCtx) -> Screen:
+    """🌟 오늘의 픽 — 주요 리그 오늘 남은 경기 중 많이 고른 순 + 고른 비율. 분석(AI)은 🧠 누를 때만."""
+    from ..sports import fmt, picks
+    from ..sports.leagues import ko_name
+    if c.svc.sports is None:
+        return await s_home(c)
+    scored = [(0, 0, 0, g, sp_) for g, sp_ in await today_picks(c.svc)]
     lines, rows = ["🌟 <b>오늘의 픽</b> — 주요 리그 오늘 남은 경기 (많이 고른 순)", ""], []
     for i, (_, _, _, g, sp_) in enumerate(scored[:TODAY_PICKS], 1):
         home, away = ko_name(g.home, g.league), ko_name(g.away, g.league)

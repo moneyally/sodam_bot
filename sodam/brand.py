@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS brand_rooms (
     buttons  TEXT NOT NULL DEFAULT '[]',
     notice   TEXT NOT NULL DEFAULT '',
     contact  TEXT NOT NULL DEFAULT '',
+    texts    TEXT NOT NULL DEFAULT '{}',   -- 카드·화면 글자 (TEXTS 키 → 방장 글, 없으면 기본)
+    colors   TEXT NOT NULL DEFAULT '{}',   -- 색 직접 고르기 (bg1·bg2·accent → #RRGGBB, 없으면 theme 색)
     updated  INTEGER NOT NULL DEFAULT 0,
     updated_by INTEGER
 );
@@ -55,7 +57,7 @@ NAME_MAX = 24
 SLOTS = {"bg": "카드 배경", "win": "당첨 그림"}
 STYLES = {"": "기본", "primary": "파랑", "success": "초록", "danger": "빨강"}
 
-# 색 묶음: 카드·미니앱이 같이 씀 (bg1→bg2 그라데이션, 강조색, 글자색). 방장은 이름만 고름
+# 색 묶음(시작점): 카드·미니앱이 같이 씀 (bg1→bg2 그라데이션, 강조색, 글자색). 방장이 묶음을 고르고, 색 하나하나를 #RRGGBB 로 바꿀 수도 있음
 THEMES: dict[str, dict] = {
     "navy":   {"label": "남색·금색", "bg1": (13, 22, 51), "bg2": (44, 63, 134), "accent": (242, 193, 78), "fg": (255, 255, 255)},
     "red":    {"label": "빨강·금색", "bg1": (60, 8, 14), "bg2": (150, 22, 36), "accent": (255, 205, 90), "fg": (255, 255, 255)},
@@ -63,6 +65,25 @@ THEMES: dict[str, dict] = {
     "green":  {"label": "초록·금색", "bg1": (6, 40, 28), "bg2": (18, 104, 70), "accent": (250, 210, 100), "fg": (255, 255, 255)},
     "purple": {"label": "보라·분홍", "bg1": (30, 10, 60), "bg2": (96, 36, 150), "accent": (255, 140, 210), "fg": (255, 255, 255)},
 }
+
+
+COLOR_KEYS = {"bg1": "배경 색 1", "bg2": "배경 색 2", "accent": "강조 색"}
+
+# 카드·미니앱에 들어가는 글자 — 전부 방장이 바꿀 수 있음 (코드 값은 기본값일 뿐). {이름} 칸은 그때 값으로 채움
+TEXTS: dict[str, tuple[str, str, tuple]] = {
+    "welcome_sub":   ("첫 화면 안내", "아래 메뉴를 눌러 보세요", ()),
+    "lotto_title":   ("복권 은박 글", "긁어서 확인!", ()),
+    "lotto_left":    ("복권 남은 수", "남은 복권 {left}장", ("left",)),
+    "win_title":     ("당첨 제목", "당첨!", ()),
+    "win_sub":       ("당첨 안내", "{prize}", ("prize",)),
+    "lose_title":    ("꽝 제목", "다음 기회에", ()),
+    "lose_sub":      ("꽝 안내", "내일 출석하면 새 복권 1장", ()),
+    "soldout_title": ("주간 마감 제목", "이번 주 경품 마감", ()),
+    "checkin_title": ("출석 제목", "출석 {streak}일째", ("streak",)),
+    "checkin_sub":   ("출석 안내", "이번 달 {month}일 출석", ("month",)),
+    "fortune_title": ("운세 제목", "{grade}", ("grade",)),
+}
+TEXT_LINE_MAX = 40
 
 
 @dataclass(frozen=True)
@@ -98,10 +119,17 @@ class Room:
     buttons: list = field(default_factory=list)
     notice: str = ""
     contact: str = ""
+    texts: dict = field(default_factory=dict)
+    custom: dict = field(default_factory=dict)      # 직접 고른 색 {bg1|bg2|accent: (r,g,b)}
 
     @property
     def colors(self) -> dict:
-        return THEMES.get(self.theme, THEMES["navy"])
+        return {**THEMES.get(self.theme, THEMES["navy"]), **self.custom}
+
+    def text(self, key: str, **vals) -> str:
+        """방장 글(없으면 기본) + {칸} 채우기. 모르는 칸은 그대로 두지 않고 지움."""
+        raw = self.texts.get(key) or TEXTS[key][1]
+        return re.sub(r"\{([a-z_]+)\}", lambda m: str(vals.get(m.group(1), "")), raw).strip()
 
 
 def _row(r) -> Room:
@@ -109,8 +137,43 @@ def _row(r) -> Room:
         buttons = clean_buttons(json.loads(r["buttons"] or "[]"))
     except (ValueError, TypeError):
         buttons = []
+    def js(col: str) -> dict:
+        try:
+            v = json.loads(r[col] or "{}")
+        except (ValueError, TypeError, IndexError):
+            return {}
+        return v if isinstance(v, dict) else {}
+    texts = {k: v for k, v in js("texts").items() if k in TEXTS and isinstance(v, str)}
+    custom = {k: hex_rgb(v) for k, v in js("colors").items() if k in COLOR_KEYS and hex_rgb(v)}
     return Room(r["chat_id"], r["code"], bool(r["enabled"]), r["name"] or "", r["theme"] if r["theme"] in THEMES else "navy",
-                buttons, r["notice"] or "", r["contact"] or "")
+                buttons, r["notice"] or "", r["contact"] or "", texts, custom)
+
+
+def hex_rgb(v) -> tuple | None:
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(v or "").strip())
+    return tuple(int(m.group(1)[i:i + 2], 16) for i in (0, 2, 4)) if m else None
+
+
+def rgb_hex(c) -> str:
+    return "#%02x%02x%02x" % tuple(c[:3])
+
+
+def clean_card_text(key: str, raw: str) -> str:
+    """카드 글자 한 줄 — 40자, 링크·@ 금지(카드는 그림이라 눌리지도 않음), 모르는 {칸} 거절."""
+    if key not in TEXTS:
+        raise ValueError("없는 글자 칸")
+    v = " ".join(_CTRL.sub("", str(raw or "")).split())
+    if not v:
+        raise ValueError("글이 비었어요")
+    if len(v) > TEXT_LINE_MAX:
+        raise ValueError(f"{TEXT_LINE_MAX}자 안으로")
+    if re.search(r"https?://|t\.me/", v, re.I):
+        raise ValueError("카드 글엔 링크를 못 넣어요")
+    bad = [x for x in re.findall(r"\{([^}]*)\}", v) if x not in TEXTS[key][2]]
+    if bad:
+        ok = " ".join("{" + x + "}" for x in TEXTS[key][2]) or "없음"
+        raise ValueError(f"쓸 수 있는 칸: {ok}")
+    return v
 
 
 # ── 값 검사 (저장 전에 늘 여기로) ─────────────────────────
@@ -182,6 +245,8 @@ def clean_button(b: dict) -> dict | None:
         return None
     if b.get("s") in STYLES and b.get("s"):
         out["s"] = b["s"]
+    if re.fullmatch(r"\d{5,25}", str(b.get("i") or "")):   # 버튼 앞 프리미엄 이모지 (봇 주인 프리미엄일 때만 텔레그램이 받음)
+        out["i"] = str(b["i"])
     if b.get("w") == 2:
         out["w"] = 2
     return out
@@ -226,12 +291,17 @@ async def by_code(db, code: str) -> Room | None:
 
 async def update(db, chat_id: int, by: int | None = None, **fields) -> None:
     """정해진 칸만 (값은 부른 쪽이 clean_* 로 검사)."""
-    allowed = {"enabled", "name", "theme", "buttons", "notice", "contact", "code"}
+    allowed = {"enabled", "name", "theme", "buttons", "notice", "contact", "code", "texts", "colors"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
     if "buttons" in sets:
         sets["buttons"] = json.dumps(clean_buttons(sets["buttons"]), ensure_ascii=False)
+    if "texts" in sets:
+        sets["texts"] = json.dumps({k: v for k, v in dict(sets["texts"]).items() if k in TEXTS and v}, ensure_ascii=False)
+    if "colors" in sets:
+        sets["colors"] = json.dumps({k: rgb_hex(hex_rgb(v)) for k, v in dict(sets["colors"]).items()
+                                     if k in COLOR_KEYS and hex_rgb(v)})
     if "theme" in sets and sets["theme"] not in THEMES:
         raise ValueError("없는 색")
     if "enabled" in sets:
@@ -246,6 +316,11 @@ async def new_code(db, chat_id: int, by: int | None = None) -> str:
     code = secrets.token_hex(5)
     await update(db, chat_id, by, code=code)
     return code
+
+
+def opens_inside(url: str) -> bool:
+    """바로가기 버튼을 텔레그램 안 창(web_app)으로 열지 — 일반 https 사이트만. t.me 는 텔레그램이 직접 열어야 해서 글 버튼으로."""
+    return url.startswith("https://") and not re.match(r"https://(t\.me|telegram\.me)/", url, re.I)
 
 
 def link(bot_username: str, room: Room) -> str:

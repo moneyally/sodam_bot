@@ -38,8 +38,8 @@ def _checkin_kb(user_id: int, ticket: bool):
     return menu._kb([row])
 
 
-async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, object]:
-    """출석 처리 → (방에 보낼 글, 버튼). 명령·AI 도구가 같이 씀."""
+async def checkin_info(svc, bot, chat_id: int, user, role: Role) -> tuple[str, dict, dict, int]:
+    """출석 처리 → (글, lottery.checkin 결과, 방 설정, 남은 복권 수). 방·1:1(방 전용 메뉴)·미니앱이 같이 씀."""
     s = await svc.db.get_settings(chat_id)
     give, why = False, None
     if s.get("lotto_enabled"):
@@ -63,6 +63,12 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
         text += f"\n<i>{esc(why)}</i>"
     left = await lottery.open_tickets(svc.db, chat_id, user.id, life=s.get("lotto_ticket_life", "7d"), tz=svc.cfg.tz) \
         if s.get("lotto_enabled") else 0
+    return text, r, s, left
+
+
+async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, object]:
+    """출석 처리 → (방에 보낼 글, 버튼). 명령·AI 도구가 같이 씀."""
+    text, _, _, left = await checkin_info(svc, bot, chat_id, user, role)
     return text, _checkin_kb(user.id, bool(left))
 
 

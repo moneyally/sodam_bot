@@ -132,6 +132,10 @@ class FakeBot:
     async def delete_messages(self, chat_id, message_ids):
         self.calls.append(("delete_many", chat_id, list(message_ids)))
 
+    async def set_chat_menu_button(self, chat_id=None, menu_button=None, **kw):
+        self.calls.append(("menu_button", chat_id, menu_button))
+        return True
+
     async def pin_chat_message(self, chat_id, message_id, **kw):
         self.calls.append(("pin", chat_id, message_id))
 
