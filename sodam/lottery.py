@@ -7,7 +7,8 @@
 - `.복권` / [🎟 긁기] = 내 복권 1장 긁기: 당첨 = secrets 난수 < 확률(방 설정 lotto_odds %), **이번 주(한국 월요일~) 당첨 수가 상한 미만일 때만** —
   당첨 줄을 넣는 SQL 한 문장이 상한을 다시 셈(동시에 긁어도 상한 초과 X). 상한이 찼으면 솔직히 '이번 주 경품 소진'.
 - 자격: 이 방에 들어온 지 lotto_min_days 일↑ (입장 기록 없으면 처음 본 날) + 최근 7일 이 방에서 글 1개↑ (출석만 하러 오는 부계정 방지).
-- 관리자·봇도 출석은 되지만 복권은 관리자 제외(lotto_admins=False 기본 — 방장이 자기 경품 타는 것 방지).
+- 관리자도 복권을 받음(lotto_admins 기본 켬 — 오너 결정 2026-10-11 백악관: 관리자만 출석해 보니 복권이 안 나와 '왜 없냐').
+  방장이 자기 경품 타는 게 싫으면 🎟 화면에서 끔.
 """
 from __future__ import annotations
 
@@ -44,6 +45,7 @@ def _prize(raw: str) -> str:
 
 
 register_setting("lotto_enabled", False, "출석 복권")
+register_setting("lotto_admins", True, "관리자도 복권 받기")
 register_setting("lotto_odds", 1.0, "복권 당첨 확률(%)", validator=_odds, render_fn=lambda v: f"{v:g}%")
 register_setting("lotto_week_max", 2, "복권 주간 당첨 수", range_=(0, 50))
 register_setting("lotto_prize", "커피 기프티콘", "복권 경품", validator=_prize)
