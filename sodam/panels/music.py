@@ -228,7 +228,7 @@ async def control(svc, chat_id: int, user_id: int, role: Role, op: str, value=No
     payload = {"value": value, "relative": relative}
     jid = await store.add_job(svc.db, chat_id, f"music_{op}", payload, user_id, dedupe=op not in ("seek", "volume", "loop"))
     if not jid:
-        return "⏳ 처리하는 중이에요."
+        return "⏳ 바로 앞 같은 요청을 아직 처리하는 중이에요 (아직 안 됐어요 — 잠깐 뒤에 결과가 보여요)."
     st, res = await voice._wait(svc.db, jid, timeout=WAIT_CTL)
     await store.mark_notified(svc.db, "voice_jobs", jid)
     if st == "done":
@@ -616,7 +616,9 @@ tools.register_tool(tools.Tool(
     "'전체 반복'·'계속 돌려' → loop_queue(on) · '자동으로 이어서 틀어'·'자동재생 켜/꺼' → autoplay(on) · "
     "'가사 뭐야'·'후렴 가사' → lyrics (전문을 받아 물어본 부분만 인용) · '인기곡'·'많이 들은 노래' → top(value=일수). "
     "'대기열'·'뭐 나와?' → queue / now · '소리 줄여 50' → volume(value). 음악 파일에 답장하며 '이거 틀어' → play(query 비움). "
-    "'노래재생'·'다시 틀어'·'노래 켜' = resume (예전에 신청한 링크·제목을 다시 play 하지 말 것 — 사람이 새로 말한 곡만 play). "
+    "'노래재생'·'다시 틀어'·'노래 켜'·'새로고침'·'멈췄어'·'다시 켜'·'대기 중인 곡 틀어'·'안 나와' = resume — 대기열에 남은 곡을 다시 틀어 줌 "
+    "(예전에 신청한 링크·제목을 다시 play 하지 말 것 — 사람이 새로 말한 곡만 play). "
+    "결과가 '처리하는 중'·'없어요'·'못'이면 된 게 아님 — '했어/켰어/넣었어'라고 하지 말고 결과 그대로 말할 것. "
     "딱 맞는 곡이 없으면 신청 글이 고르기 버튼으로 바뀜 (신청한 사람이 고름) — '틀었어요'라고 하지 말 것. "
     "커버·라이브를 원하면 query 에 '커버'·'라이브'를 그대로 넣음. "
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
