@@ -1247,6 +1247,8 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if await menu.handle_input(svc, bot, msg):
         return
+    if await hooks.dm_text(svc, bot, msg):   # 🎁 방 전용 아래쪽 메뉴 버튼 글자 (sodam/panels/brand.py)
+        return
     if await emojilab.maybe_capture(svc, bot, msg, user):   # 오너가 보낸 타일 이모지 → 조각 저장 (전달·AI 보다 먼저)
         return
     if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록

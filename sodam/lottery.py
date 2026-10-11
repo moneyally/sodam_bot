@@ -50,6 +50,8 @@ register_setting("lotto_odds", 1.0, "복권 당첨 확률(%)", validator=_odds, 
 register_setting("lotto_week_max", 2, "복권 주간 당첨 수", range_=(0, 50))
 register_setting("lotto_prize", "커피 기프티콘", "복권 경품", validator=_prize)
 register_setting("lotto_min_days", 3, "복권 자격: 들어온 지 며칠", range_=(0, 30))
+register_setting("lotto_ticket_life", "7d", "복권 유효 기간", choices={"7d": "7d", "day": "day"},
+                 choice_labels={"7d": "7일", "day": "그날 자정까지"})   # 7일 / 그날 자정까지 (2026-10-12 고객 '자정 초기화')
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS attend (
@@ -86,6 +88,15 @@ CREATE INDEX IF NOT EXISTS lotto_wins_week ON lotto_wins(chat_id, week);
 
 def kst_day(tz, now: float) -> str:
     return datetime.fromtimestamp(now, tz).strftime("%Y-%m-%d")
+
+
+def day_start(tz, now: float) -> int:
+    return int(datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+
+def valid_since(tz, now: float, life: str = "7d") -> int:
+    """이 시각 이후에 받은 복권만 유효 — 7d = 7일 · day = 오늘 0시(한국)부터 (자정에 사라짐)."""
+    return day_start(tz, now) if life == "day" else int(now) - TICKET_DAYS * DAY_SEC
 
 
 def week_start(tz, now: float) -> int:
@@ -141,24 +152,26 @@ async def eligible(db, chat_id: int, user_id: int, min_days: int, now: float | N
     return None
 
 
-async def open_tickets(db, chat_id: int, user_id: int, now: float | None = None) -> int:
+async def open_tickets(db, chat_id: int, user_id: int, now: float | None = None, life: str = "7d", tz=None) -> int:
     now = time.time() if now is None else now
+    since = valid_since(tz, now, life) if tz is not None else int(now) - TICKET_DAYS * DAY_SEC
     r = await db._one("SELECT COUNT(*) n FROM lotto_tickets WHERE chat_id=? AND user_id=? AND scratched IS NULL AND created>=?",
-                      (chat_id, user_id, int(now) - TICKET_DAYS * DAY_SEC))
+                      (chat_id, user_id, since))
     return r["n"] if r else 0
 
 
 async def scratch(db, tz, chat_id: int, user_id: int, odds_pct: float, week_max: int, prize: str,
-                  now: float | None = None, roll: int | None = None) -> dict:
+                  now: float | None = None, roll: int | None = None, life: str = "7d") -> dict:
     """내 복권 1장 긁기 → {'result': win/lose/soldout/recent/none, 'left': 남은 복권, 'week_left': 이번 주 남은 경품, 'win_id'}."""
     now = time.time() if now is None else now
     ws = week_start(tz, now)
+    since = valid_since(tz, now, life)
     roll = secrets.randbelow(10_000) if roll is None else roll          # 0~9999, 확률 1% = 100 미만
     hit = roll < int(round(max(0.0, min(100.0, float(odds_pct))) * 100))
 
     def run(c):
         t = c.execute("SELECT id FROM lotto_tickets WHERE chat_id=? AND user_id=? AND scratched IS NULL AND created>=? "
-                      "ORDER BY id LIMIT 1", (chat_id, user_id, int(now) - TICKET_DAYS * DAY_SEC)).fetchone()
+                      "ORDER BY id LIMIT 1", (chat_id, user_id, since)).fetchone()
         if t is None:
             return {"result": "none", "left": 0, "week_left": None, "win_id": None}
         result, win_id = "lose", None
@@ -177,7 +190,7 @@ async def scratch(db, tz, chat_id: int, user_id: int, odds_pct: float, week_max:
                 result = "soldout"
         c.execute("UPDATE lotto_tickets SET scratched=?, result=? WHERE id=?", (int(now), result, t[0]))
         left = c.execute("SELECT COUNT(*) FROM lotto_tickets WHERE chat_id=? AND user_id=? AND scratched IS NULL AND created>=?",
-                         (chat_id, user_id, int(now) - TICKET_DAYS * DAY_SEC)).fetchone()[0]
+                         (chat_id, user_id, since)).fetchone()[0]
         used = c.execute("SELECT COUNT(*) FROM lotto_wins WHERE chat_id=? AND week=?", (chat_id, ws)).fetchone()[0]
         return {"result": result, "left": left, "week_left": max(0, int(week_max) - used), "win_id": win_id}
     return await db.atomic(run)

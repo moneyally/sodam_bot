@@ -26,6 +26,11 @@ menu.register_toggle("lotto_admins", "lot")
 menu.register_preset("lotto_odds", [("0.5", "0.5%"), ("1.0", "1%"), ("2.0", "2%"), ("5.0", "5%"), ("10.0", "10%")], "lot")
 menu.register_preset("lotto_week_max", [("1", "주 1명"), ("2", "주 2명"), ("3", "주 3명"), ("5", "주 5명"), ("10", "주 10명")], "lot")
 menu.register_preset("lotto_min_days", [("0", "바로"), ("1", "1일"), ("3", "3일"), ("7", "7일")], "lot")
+menu.register_preset("lotto_ticket_life", [("7d", "복권 7일"), ("day", "복권 자정까지")], "lot")
+
+
+def life_text(life: str) -> str:
+    return "오늘 자정까지" if life == "day" else "7일 안에"
 
 
 def _checkin_kb(user_id: int, ticket: bool):
@@ -52,10 +57,12 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
     if r["ticket"]:
         left = await lottery.week_left(svc.db, svc.cfg.tz, chat_id, int(s["lotto_week_max"]))
         text += (f"\n🎟 복권 1장 받았어요 — 경품 {esc(s['lotto_prize'])} · 이번 주 남은 경품 {left}개"
-                 if left else "\n🎟 복권 1장 받았어요 — <b>이번 주 경품은 마감</b>이라 지금 긁으면 꽝이에요. 7일 안에 다음 주(월요일~) 긁어도 돼요.")
+                 if left else "\n🎟 복권 1장 받았어요 — <b>이번 주 경품은 마감</b>이라 지금 긁으면 꽝이에요."
+                 + (" 7일 안에 다음 주(월요일~) 긁어도 돼요." if s.get("lotto_ticket_life") != "day" else " 복권은 오늘 자정에 사라져요."))
     elif why:
         text += f"\n<i>{esc(why)}</i>"
-    left = await lottery.open_tickets(svc.db, chat_id, user.id) if s.get("lotto_enabled") else 0
+    left = await lottery.open_tickets(svc.db, chat_id, user.id, life=s.get("lotto_ticket_life", "7d"), tz=svc.cfg.tz) \
+        if s.get("lotto_enabled") else 0
     return text, _checkin_kb(user.id, bool(left))
 
 
@@ -65,7 +72,7 @@ async def do_scratch(svc, bot, chat_id: int, user) -> tuple[str, str, tuple | No
     if not s.get("lotto_enabled"):
         return "이 방은 복권이 꺼져 있어요. (관리자: 1:1 메뉴 [🎟 출석·복권])", "off", None
     r = await lottery.scratch(svc.db, svc.cfg.tz, chat_id, user.id, float(s["lotto_odds"]), int(s["lotto_week_max"]),
-                              str(s["lotto_prize"]))
+                              str(s["lotto_prize"]), life=s.get("lotto_ticket_life", "7d"))
     name = mention(user.id, user.first_name or "멤버")
     kind = r["result"]
     if kind == "none":
@@ -242,11 +249,12 @@ async def s_lot(c: PanelCtx) -> Screen:
              "<b>경품은 관리자가 직접</b> 보내 주면 돼요(돈·포인트 걸기 없음).",
              "", f"지금: <b>{'✅ 켜짐' if s['lotto_enabled'] else '❌ 꺼짐 (출석만 됨)'}</b>",
              f"확률 <b>{s['lotto_odds']:g}%</b> · 주간 당첨 상한 <b>{s['lotto_week_max']}명</b> (이번 주 {week['n'] if week else 0}명) · "
-             f"자격: 들어온 지 {s['lotto_min_days']}일↑ + 최근 7일 대화",
+             f"자격: 들어온 지 {s['lotto_min_days']}일↑ + 최근 7일 대화 · 복권은 받은 뒤 {life_text(s.get('lotto_ticket_life', '7d'))} 긁기",
              f"경품: <b>{esc(s['lotto_prize'])}</b>", "", await wins_text(c.svc, c.cid)]
     rows = menu._toggle_rows(s, c.cid, ["lotto_enabled", "lotto_admins"]) + [
         menu._preset_row(s, c.cid, "lotto_odds"), menu._preset_row(s, c.cid, "lotto_week_max"),
-        menu._preset_row(s, c.cid, "lotto_min_days"), [B("✏️ 경품 글 바꾸기", f"m:in:{c.cid}:lotpz")], menu._back(c.cid)]
+        menu._preset_row(s, c.cid, "lotto_min_days"), menu._preset_row(s, c.cid, "lotto_ticket_life"),
+        [B("✏️ 경품 글 바꾸기", f"m:in:{c.cid}:lotpz")], menu._back(c.cid)]
     return Screen("\n".join(lines)[:3900], menu._kb(rows))
 
 
@@ -316,7 +324,7 @@ async def t_attendance(ctx: tools.ToolCtx, a: dict) -> str:
     if action == "rank":
         return await rank_text(ctx.svc, ctx.chat_id)
     s = await ctx.svc.db.get_settings(ctx.chat_id)
-    left = await lottery.open_tickets(ctx.svc.db, ctx.chat_id, ctx.caller.id)
+    left = await lottery.open_tickets(ctx.svc.db, ctx.chat_id, ctx.caller.id, life=s.get("lotto_ticket_life", "7d"), tz=ctx.svc.cfg.tz)
     return (f"복권 {'켜짐' if s['lotto_enabled'] else '꺼짐'} · 주 {s['lotto_week_max']}명 · "
             f"경품 {s['lotto_prize']} · 말한 사람 남은 복권 {left}장 (출석은 .출석 또는 이 도구 checkin)")
 

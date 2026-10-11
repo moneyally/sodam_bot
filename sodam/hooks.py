@@ -35,6 +35,49 @@ def add_deep_link(prefix: str, fn) -> None:
     DEEP_LINKS[prefix] = fn
 
 
+# 1:1 글자 (메뉴 글자 입력 다음, 명령·AI 전): async fn(svc, bot, msg) -> bool — True 면 처리 끝 (sodam/panels/brand.py 아래쪽 메뉴 버튼)
+DM_TEXT_HOOKS: list = []
+# 봇 시작(post_init 끝, 딜러 봇 제외) · 종료(post_shutdown, DB 닫기 전): async fn(svc, bot) (sodam/miniapp.py 웹 서버)
+STARTUP_HOOKS: list = []
+SHUTDOWN_HOOKS: list = []
+
+
+def add_dm_text_hook(fn) -> None:
+    if fn not in DM_TEXT_HOOKS:
+        DM_TEXT_HOOKS.append(fn)
+
+
+async def dm_text(svc, bot, msg) -> bool:
+    for fn in DM_TEXT_HOOKS:
+        try:
+            if await fn(svc, bot, msg):
+                return True
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("dm text hook failed: %s", getattr(fn, "__name__", fn))
+    return False
+
+
+def add_startup_hook(fn) -> None:
+    if fn not in STARTUP_HOOKS:
+        STARTUP_HOOKS.append(fn)
+
+
+def add_shutdown_hook(fn) -> None:
+    if fn not in SHUTDOWN_HOOKS:
+        SHUTDOWN_HOOKS.append(fn)
+
+
+async def run_all(fns: list, svc, bot) -> None:
+    """시작·종료 훅을 차례로 — 하나가 터져도 봇 시작·종료는 계속."""
+    import logging
+    for fn in list(fns):
+        try:
+            await fn(svc, bot)
+        except Exception:
+            logging.getLogger(__name__).exception("hook failed: %s", getattr(fn, "__name__", fn))
+
+
 def add_group_message_hook(fn) -> None:
     if fn not in GROUP_MESSAGE_HOOKS:
         GROUP_MESSAGE_HOOKS.append(fn)
