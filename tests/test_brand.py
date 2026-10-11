@@ -304,6 +304,63 @@ async def ticket_life_day_expires_at_midnight():
 
 
 @test
+async def review_fixes_keyboard_web_app_limits_and_closed_rooms():
+    e = await setup()
+    room = await brand.get(e.db, RA)
+    room.buttons = brand.clean_buttons([{"k": "lotto", "t": "복권"}, {"k": "app", "t": "혜택"}])
+    miniapp._server = object()                                    # 미니앱이 켜져 있어도
+    import os
+    os.environ["MINIAPP_URL"] = "https://x.example/app"
+    try:
+        flat = [b for row in P.keyboard(e.svc, room, False).to_dict()["keyboard"] for b in row]
+        assert all("web_app" not in b for b in flat), "메뉴판 web_app 은 initData 가 비어서 미니앱이 안 됨 → 글 버튼"
+        kb = P._scratch_kb(e.svc, room, RA, 1).to_dict()
+        assert kb["inline_keyboard"][0][1]["web_app"]["url"].startswith("https://x.example/app/?r="), "글 아래 버튼으로 엶"
+    finally:
+        miniapp._server = None
+        os.environ.pop("MINIAPP_URL", None)
+    try:
+        brand.clean_label(".출석")
+        raise AssertionError("점으로 시작하면 명령어로 읽혀 안 눌림")
+    except ValueError:
+        pass
+    # AI 배경: 방 그림 한도(image_daily) 를 같이 씀 — 0 이면 못 그림
+    await e.db.set_setting(RA, "image_daily", 0)
+    called = []
+
+    async def image(*a, **k):
+        called.append(1)
+        return b"x"
+    e.svc.llm = SimpleNamespace(image=image)
+    ok, msg = await P.in_ai(menu.PanelCtx(e.svc, e.bot, ADMIN.id, RA, ["bg"]), dm(ADMIN, "금화 카지노"))
+    assert not called and "한도" in msg, msg
+    assert await e.db.counter(P._kst_day(e.svc), RA, "image") == 0, "거절이면 한도 되돌림"
+    # 큰 그림 거절
+    import io
+    from PIL import Image
+    big = io.BytesIO()
+    Image.new("1", (8000, 6000)).save(big, "PNG")
+    try:
+        brandcard.normalize(big.getvalue())
+        raise AssertionError("4천만 픽셀 넘음")
+    except ValueError:
+        pass
+    # 고른 방이 닫히면 옛 메뉴판을 누를 때 메뉴판을 치움
+    await brand.select(e.db, A.id, RB)
+    await brand.update(e.db, RB, ADMIN.id, enabled=False)
+    await brand.update(e.db, RA, ADMIN.id, enabled=False)
+    m = dm(A, "출석!")
+    assert await P.on_text(e.svc, e.bot, m)
+    assert "닫혀" in m.replies[-1] and type(m.reply_kws[-1]["reply_markup"]).__name__ == "ReplyKeyboardRemove"
+    # 소담이 못 본 사이 밴된 사람: 1:1 출석 안 됨
+    await brand.update(e.db, RA, ADMIN.id, enabled=True)
+    await brand.select(e.db, A.id, RA)
+    e.bot.member_status = {(RA, A.id): "kicked"}
+    assert await P.on_text(e.svc, e.bot, dm(A, "📅 출석체크"))
+    assert not await e.db._one("SELECT 1 FROM attend WHERE chat_id=? AND user_id=?", (RA, A.id)), "밴된 사람 출석 X"
+
+
+@test
 async def hooks_wired():
     assert P.on_text in hooks.DM_TEXT_HOOKS and "b" in hooks.DEEP_LINKS and "bd" in hooks.CALLBACK_HANDLERS
     assert miniapp.start in hooks.STARTUP_HOOKS and {"state", "checkin", "scratch"} <= set(miniapp.API)

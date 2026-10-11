@@ -17,7 +17,7 @@ import time
 from types import SimpleNamespace
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, KeyboardButton, Message,
-                      MenuButtonDefault, MenuButtonWebApp, ReplyKeyboardMarkup, WebAppInfo)
+                      MenuButtonDefault, MenuButtonWebApp, ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo)
 from telegram.error import BadRequest, Forbidden, TelegramError
 
 from .. import brand, brandcard, fortune, hooks, lottery, menu, miniapp, persist, tools
@@ -30,13 +30,18 @@ log = logging.getLogger(__name__)
 
 SWITCH = "🏠 방 바꾸기"
 EFFECT_PARTY = "5046509860389126442"     # 🎉 메시지 효과 (공식 앱의 기본 효과 id, 1:1 만)
-AI_IMAGE_DAILY = 6                       # 방마다 하루 배경 AI 그림 (그림 한 장 몇십 원 — 오너 결정 2026-10-12 'AI 로 만들어 주기도')
+STICKER_DAILY = 5                        # 방마다 하루 당첨 스티커 만들기 (스티커 엔진은 전체에서 한 번에 하나 — 멤버 스티커가 밀리지 않게)
 PRESS_PER_MIN = 12                       # 한 사람 아래쪽 메뉴 누르기 분당
 POST_GAP = 60                            # 방에 [🎁 혜택 메뉴] 글 올리기 간격
 _icons_off = [False]                     # 이 봇이 버튼 이모지를 못 쓰면(프리미엄 아님) 프로세스 동안 빼고 보냄
 
 
 # ── 공통 ──────────────────────────────────────────────────
+def _kst_day(svc) -> str:
+    from datetime import datetime
+    return datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+
+
 def _user_ns(u: dict):
     return SimpleNamespace(id=u["id"], first_name=u.get("first_name") or "멤버", last_name=u.get("last_name"),
                            username=u.get("username"), is_bot=False)
@@ -55,9 +60,10 @@ def _kbtn(svc, room: brand.Room, b: dict, icons: bool) -> KeyboardButton:
     if icons and b.get("i"):
         extra["icon_custom_emoji_id"] = b["i"]
     web = None
-    if b["k"] in ("lotto", "app") and (url := app_url(svc, room)):
-        web = WebAppInfo(url + ("&t=lotto" if b["k"] == "lotto" else ""))
-    elif b["k"] == "link" and brand.opens_inside(b.get("v", "")):
+    # 복권·혜택 화면은 아래쪽 메뉴판 web_app 으로 열면 안 됨: 텔레그램이 initData(누가 열었는지)를 비워서 넘김
+    # (공식 문서 WebAppInitData: "empty if the Mini App was launched from a keyboard button") → 글 버튼으로 두고
+    # 누르면 글 아래 버튼(InlineKeyboardButton.web_app)·≡ 메뉴 버튼으로 엶 (이 둘은 initData 가 옴). 리뷰 2026-10-12
+    if b["k"] == "link" and brand.opens_inside(b.get("v", "")):
         web = WebAppInfo(b["v"])
     return KeyboardButton(b["t"], web_app=web, api_kwargs=extra or None)
 
@@ -117,6 +123,22 @@ async def _member_live(svc, bot, chat_id: int, user_id: int) -> bool:
         except Exception:
             pass
     return ok
+
+
+async def _still_in(svc, bot, chat_id: int, user_id: int) -> bool:
+    """출석·긁기 직전 텔레그램에 한 번 더 (소담이 못 본 사이 밴·나감). 물어보기 실패면 DB 판단 그대로."""
+    try:
+        m = await bot.get_chat_member(chat_id, user_id)
+    except TelegramError:
+        return True
+    if m.status in ("left", "kicked") or (m.status == "restricted" and not getattr(m, "is_member", True)):
+        try:
+            await svc.db._write("INSERT OR REPLACE INTO member_left(chat_id, user_id, ts) VALUES(?,?,?)",
+                                (chat_id, user_id, int(time.time())))
+        except Exception:
+            pass
+        return False
+    return True
 
 
 async def _set_menu_button(svc, bot, user_id: int, room: brand.Room | None) -> None:
@@ -184,6 +206,7 @@ async def on_text(svc, bot, msg: Message) -> bool:
     if text == SWITCH:
         await picker(svc, bot, uid)
         return True
+    prev = await brand.selected(svc.db, uid)
     room = await brand.current(svc, uid)
     b = brand.button_for(room, text) if room else None
     if b is None:   # 고른 방이 없거나 바뀌었는데 옛 메뉴판을 누른 경우 → 그 글자를 가진 방이 하나면 그 방으로
@@ -193,6 +216,12 @@ async def on_text(svc, bot, msg: Message) -> bool:
             if r and (bb := brand.button_for(r, text)):
                 hits.append((r, bb))
         if len(hits) != 1:
+            if prev is not None and (room is None or room.chat_id != prev):   # 고른 방이 닫혔는데 그 방 메뉴판을 누름
+                old = await brand.get(svc.db, prev)
+                if old and brand.button_for(old, text):
+                    await msg.reply_text("이 방 혜택 메뉴는 지금 닫혀 있어요.", reply_markup=ReplyKeyboardRemove())
+                    await _set_menu_button(svc, bot, uid, None)
+                    return True
             return False
         room, b = hits[0]
         await brand.select(svc.db, uid, room.chat_id)
@@ -216,6 +245,9 @@ def _scratch_kb(svc, room: brand.Room, chat_id: int, left: int) -> InlineKeyboar
 
 async def press(svc, bot, user, room: brand.Room, b: dict) -> None:
     kind, cid, uid = b["k"], room.chat_id, user.id
+    if kind in ("checkin", "lotto") and not await _still_in(svc, bot, cid, uid):
+        await bot.send_message(uid, "이 방 멤버만 쓸 수 있어요.", reply_markup=ReplyKeyboardRemove())
+        return
     if kind == "checkin":
         role = await svc.perms.role(bot, cid, uid)
         text, r, s, left = await lot.checkin_info(svc, bot, cid, user, role)
@@ -317,6 +349,9 @@ async def on_button(svc, bot, q, parts) -> None:
         return
     if not svc.menu_limiter.allow(("bd", uid), 20):
         await q.answer("너무 빨라요. 잠시 후 다시.")
+        return
+    if not await _still_in(svc, bot, cid, uid):
+        await q.answer("이 방 멤버만 긁을 수 있어요.", show_alert=True)
         return
     user = SimpleNamespace(id=uid, first_name=q.from_user.first_name, last_name=q.from_user.last_name, username=q.from_user.username)
     got = await scratch_for(svc, bot, room, user)
@@ -702,8 +737,9 @@ async def r_colors_reset(c: PanelCtx) -> Screen:
 async def s_images(c: PanelCtx) -> Screen:
     rows_db = {r["slot"]: r for r in await c.svc.db._all("SELECT slot, src, sticker FROM brand_images WHERE chat_id=?", (c.cid,))}
     stk = rows_db.pop("stk", None)
-    day = time.strftime("%Y-%m-%d")
-    used = await c.svc.db.counter(day, c.cid, "brand_img")
+    day = _kst_day(c.svc)
+    used = await c.svc.db.counter(day, c.cid, "image")
+    limit = int((await c.svc.db.get_settings(c.cid)).get("image_daily", 5))
     lines = ["🖼 <b>그림</b> — 카드 배경·당첨 그림을 사진으로 올리거나 AI 로 만들어요. 글자는 소담이 위에 얹어요 "
              "(AI 에겐 글자를 안 쓰게 함 — 한글이 깨짐).", ""]
     for slot, label in brand.SLOTS.items():
@@ -711,7 +747,7 @@ async def s_images(c: PanelCtx) -> Screen:
         lines.append(f"• {label}: " + ({"upload": "올린 사진", "ai": "AI 그림"}.get(r["src"], "있음") if r else
                                        ("없음 (카드 배경 사용)" if slot == "win" else "없음 (색 그라데이션)")))
     lines.append(f"• 당첨 스티커: {'있음 🎉 (다시 만들면 바뀜)' if stk and stk['sticker'] else '없음'}")
-    lines.append(f"\nAI 그림 오늘 {used}/{AI_IMAGE_DAILY}장")
+    lines.append(f"\nAI 그림 오늘 {used}/{limit}장 (방 그림 한도와 같이 셈)")
     rows = []
     for slot, label in brand.SLOTS.items():
         rows.append([B(f"📤 {label} 올리기", f"m:in:{c.cid}:bdimg:{slot}"), B("🤖 AI", f"m:in:{c.cid}:bdai:{slot}")]
@@ -766,6 +802,13 @@ async def r_sticker(c: PanelCtx) -> Screen:
     look = STICKER_LOOKS.get(c.arg(0)) or STICKER_LOOKS["money"]
     if c.cid in _stk_running:
         return Screen(None, toast="만드는 중이에요. 잠시만요.", alert=True)
+    if not await c.svc.paid_features(c.cid):
+        return Screen(None, toast="이용 기간 중인 방만 만들 수 있어요.", alert=True)
+    day = _kst_day(c.svc)
+    if await c.svc.db.bump(day, c.cid, "brand_stk") > STICKER_DAILY:
+        await c.svc.db.bump(day, c.cid, "brand_stk", -1)
+        return Screen(None, toast=f"당첨 스티커는 방마다 하루 {STICKER_DAILY}번까지예요.", alert=True)
+    _stk_running.add(c.cid)        # 누르는 쪽에서 바로 (빨리 두 번 눌러도 하나만)
     room = await brand.ensure(c.svc.db, c.cid)
     persist.spawn(_make_sticker(c.svc, c.bot, c.uid, room, look[1]))
     return Screen(None, toast="🎉 당첨 스티커 만드는 중… 1분쯤 걸려요. 다 되면 1:1 로 보내 드려요.", alert=True)
@@ -975,18 +1018,26 @@ async def in_ai(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     from ..mediapolicy import hard_line
     if why := hard_line(want, False):
         return True, f"🙅 {esc(why[:200])}"
-    day = time.strftime("%Y-%m-%d")
+    if not await c.svc.paid_features(c.cid):
+        return True, "AI 그림은 이용 기간 중인 방만 돼요. 사진 올리기는 돼요."
     owner = c.uid in await c.svc.perms.owners()
-    if not owner and await c.svc.db.counter(day, c.cid, "brand_img") >= AI_IMAGE_DAILY:
-        return True, f"오늘 AI 그림 {AI_IMAGE_DAILY}장을 다 썼어요. 내일 다시 하거나 사진을 올려 주세요."
+    day = _kst_day(c.svc)
+    limit = int((await c.svc.db.get_settings(c.cid)).get("image_daily", 5))
+    if not owner:   # 방 그림 한도(image_daily, 오너만 올림)와 같은 카운터 — 먼저 자리를 잡고(+1) 넘으면 되돌림 (동시에 눌러도 안 넘게)
+        if await c.svc.db.bump(day, c.cid, "image") > limit:
+            await c.svc.db.bump(day, c.cid, "image", -1)
+            return True, f"오늘 이 방 그림 한도({limit}장)를 다 썼어요. 내일 다시 하거나 사진을 올려 주세요."
     await c.bot.send_message(c.uid, "🤖 그리는 중… (30초~1분)")
     try:
         data = await c.svc.llm.image(AI_PROMPT.format(want=want), None, c.cid)
-        await c.svc.db.bump(day, c.cid, "brand_img")
         await _store_image(c.svc, c.cid, slot, data, "ai")
-    except ValueError as e:
-        return True, f"❌ {e}"
+        if owner:
+            await c.svc.db.bump(day, c.cid, "image")
     except Exception as e:
+        if not owner:
+            await c.svc.db.bump(day, c.cid, "image", -1)   # 못 그렸으면 한도 돌려줌
+        if isinstance(e, ValueError):
+            return True, f"❌ {e}"
         log.warning("brand ai image failed: %s", e)
         return True, "😢 그림을 못 만들었어요 (AI 한도·안전 정책·서버 문제). 표현을 바꿔 다시 해 보세요."
     room = await brand.ensure(c.svc.db, c.cid)
@@ -1101,6 +1152,8 @@ async def t_benefit(ctx: tools.ToolCtx, a: dict) -> str:
     room = await brand.get(ctx.svc.db, ctx.chat_id)
     if not room or not room.enabled or not await ctx.svc.paid_features(ctx.chat_id):
         return "이 방은 혜택 메뉴가 꺼져 있음. 관리자가 1:1 메뉴 → 🎁 1:1 메뉴에서 켤 수 있다고 안내할 것."
+    if not await persist.claim(ctx.svc.db, f"brandpost:{ctx.chat_id}", POST_GAP):
+        return "방금 혜택 메뉴 버튼을 올렸음 (1분에 한 번). 위의 버튼을 누르라고 짧게 안내할 것."
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🎁 {room.name[:24]} 혜택 메뉴", url=brand.link(ctx.bot.username, room))]])
     try:
         await ctx.bot.send_message(ctx.chat_id, f"🎁 <b>{esc(room.name)}</b> — 출석·복권·운세·추천픽은 소담 1:1 에서 👇",

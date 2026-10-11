@@ -15,7 +15,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 
 W, H = 1280, 720
@@ -23,6 +23,7 @@ FONT_DIR = Path(__file__).parent / "data_files" / "fonts"
 DISPLAY = FONT_DIR / "BlackHanSans.ttf"
 BODY = FONT_DIR / "NanumGothic-ExtraBold.ttf"
 MAX_UPLOAD = 15 * 1024 * 1024
+MAX_PIXELS = 40_000_000
 _EMOJI = re.compile("[\U00010000-\U0010ffff☀-➿⬀-⯿️‍⃣]")
 _fonts: dict = {}
 
@@ -56,10 +57,13 @@ def normalize(data: bytes) -> bytes:
         raise ValueError("사진이 너무 크거나 비었어요 (15MB 안)")
     try:
         im = Image.open(io.BytesIO(data))
+        if im.size[0] * im.size[1] > MAX_PIXELS:   # 펼치기 전에 (작은 파일이 큰 그림으로 풀리는 것 막기)
+            raise ValueError("too many pixels")
         im.draft("RGB", (W * 2, H * 2))
+        im = ImageOps.exif_transpose(im)            # 휴대폰 사진 돌림 정보
         im = im.convert("RGB")
     except Exception as e:
-        raise ValueError("사진으로 못 읽었어요") from e
+        raise ValueError("사진이 너무 크거나 사진으로 못 읽었어요") from e
     if min(im.size) < 200:
         raise ValueError("사진이 너무 작아요 (가로·세로 200px 넘게)")
     w, h = im.size

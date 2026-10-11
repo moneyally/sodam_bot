@@ -240,6 +240,7 @@ async def start(svc, bot) -> None:
 
 
 async def stop(svc, bot) -> None:
+    """종료: 새 요청을 안 받고, 처리 중인 요청은 3초까지 기다림 (DB 닫기 전에 끝나게)."""
     global _server
     if _server is not None:
         _server.close()

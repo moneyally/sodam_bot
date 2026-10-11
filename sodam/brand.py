@@ -189,6 +189,8 @@ def clean_label(raw: str) -> str:
         raise ValueError("버튼 글자가 비었어요")
     if len(v) > LABEL_MAX:
         raise ValueError(f"버튼 글자는 {LABEL_MAX}자 안으로")
+    if v[0] in "./":
+        raise ValueError("버튼 글자는 . 이나 / 로 시작하면 안 돼요 (명령어로 읽혀요)")
     return v
 
 
