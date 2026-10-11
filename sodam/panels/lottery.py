@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 NOTIFY_ADMINS = 5
 
 menu.register_toggle("lotto_enabled", "lot")
+menu.register_toggle("lotto_admins", "lot")
 menu.register_preset("lotto_odds", [("0.5", "0.5%"), ("1.0", "1%"), ("2.0", "2%"), ("5.0", "5%"), ("10.0", "10%")], "lot")
 menu.register_preset("lotto_week_max", [("1", "주 1명"), ("2", "주 2명"), ("3", "주 3명"), ("5", "주 5명"), ("10", "주 10명")], "lot")
 menu.register_preset("lotto_min_days", [("0", "바로"), ("1", "1일"), ("3", "3일"), ("7", "7일")], "lot")
@@ -37,8 +38,8 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
     s = await svc.db.get_settings(chat_id)
     give, why = False, None
     if s.get("lotto_enabled"):
-        if role >= Role.ADMIN:
-            why = "관리자는 복권에서 빠져요 (출석은 됐어요)."
+        if role >= Role.ADMIN and not s.get("lotto_admins", True):
+            why = "이 방은 관리자가 복권에서 빠져요 (출석은 됐어요)."
         else:
             why = await lottery.eligible(svc.db, chat_id, user.id, int(s.get("lotto_min_days", 3)))
         give = why is None
@@ -243,7 +244,7 @@ async def s_lot(c: PanelCtx) -> Screen:
              f"확률 <b>{s['lotto_odds']:g}%</b> · 주간 당첨 상한 <b>{s['lotto_week_max']}명</b> (이번 주 {week['n'] if week else 0}명) · "
              f"자격: 들어온 지 {s['lotto_min_days']}일↑ + 최근 7일 대화",
              f"경품: <b>{esc(s['lotto_prize'])}</b>", "", await wins_text(c.svc, c.cid)]
-    rows = menu._toggle_rows(s, c.cid, ["lotto_enabled"]) + [
+    rows = menu._toggle_rows(s, c.cid, ["lotto_enabled", "lotto_admins"]) + [
         menu._preset_row(s, c.cid, "lotto_odds"), menu._preset_row(s, c.cid, "lotto_week_max"),
         menu._preset_row(s, c.cid, "lotto_min_days"), [B("✏️ 경품 글 바꾸기", f"m:in:{c.cid}:lotpz")], menu._back(c.cid)]
     return Screen("\n".join(lines)[:3900], menu._kb(rows))

@@ -87,7 +87,12 @@ async def eligibility_new_member_silent_member_and_admin_get_no_ticket():
         await e.db.log_message(ROOM, B_.id, 9, t)
     assert "7일" in await lottery.eligible(e.db, ROOM, B_.id, 3), "'.출석' 한 줄이 자격을 채우면 안 됨 (리뷰 2026-10-11)"
     text, kb = await P.do_checkin(e.svc, e.bot, ROOM, ADMIN, Role.ADMIN)
-    assert "관리자는 복권에서 빠져요" in text and "lot:s:" not in str(kb.inline_keyboard)
+    assert "복권 1장" in text and f"lot:s:{ADMIN.id}" in str(kb.inline_keyboard), "관리자도 기본으로 받음 (백악관 2026-10-11)"
+    await e.db._write("DELETE FROM attend")
+    await e.db._write("DELETE FROM lotto_tickets")              # 받아 둔 복권이 있으면 긁기 버튼은 남는 게 맞음
+    await e.db.set_setting(ROOM, "lotto_admins", False)
+    text, kb = await P.do_checkin(e.svc, e.bot, ROOM, ADMIN, Role.ADMIN)
+    assert "관리자가 복권에서 빠져요" in text and "lot:s:" not in str(kb.inline_keyboard), "끄면 관리자 빠짐"
     text, kb = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
     assert "복권 1장" in text and kb.inline_keyboard[0][0].callback_data == f"lot:s:{A.id}"
     off = await setup(enabled=False)

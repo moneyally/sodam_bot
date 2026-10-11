@@ -627,7 +627,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   쓰는 사람은 텔레그램 프리미엄이어야 함, 봇은 메시지에 커스텀 이모지를 못 씀(링크로만).
 
 ## 📅 출석 · 🎟 복권 · 🔮 운세 · 📏 도배 빼기 (`lottery.py`·`panels/lottery.py`·`fortune.py`, tests/test_lottery.py · test_chat_min_chars.py, 뮤테이션 17개, 2026-10-11 FOX 고객)
-- `.출석`(출첵) 한국 날짜 하루 1번·연속 일수(어제 줄 +1) → 방 설정 lotto_enabled(기본 꺼짐)면 복권 1장(7일): 자격 = 관리자 아님·입장 lotto_min_days(3)일↑·7일 안 대화·
+- `.출석`(출첵) 한국 날짜 하루 1번·연속 일수(어제 줄 +1) → 방 설정 lotto_enabled(기본 꺼짐)면 복권 1장(7일): 자격 = 입장 lotto_min_days(3)일↑ (관리자도 받음, lotto_admins 끄면 관리자 빠짐 — 백악관 2026-10-11)·7일 안 대화·
   4주 안 당첨 없음. `.복권`/[🎟 복권 긁기](lot:s:<본인>) = secrets 0~9999 < 확률×100(lotto_odds %, 0.1~50) + **이번 주(한국 월요일) 당첨 < lotto_week_max**
   를 INSERT…SELECT 한 문장으로 (동시 긁기도 상한 초과 X) → 당첨 = 방 축하 + 방 관리자(사람) 1:1 [✅ 지급 완료](lotp:<방>:<id>, TG 관리자, 한 번만).
   경품 글 lotto_prize(40자, 링크·@ X)는 **방장이 직접** 줌 — 돈·포인트 X (포인트 게임 `!출석` 과 분리). 허브 🎟 m:lot · `.복권당첨` · `.출석순위`.
