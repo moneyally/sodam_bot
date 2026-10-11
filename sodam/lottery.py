@@ -97,7 +97,8 @@ async def checkin(db, tz, chat_id: int, user_id: int, now: float | None = None, 
     """{'ok': 처음이면 True, 'streak': 연속 일수, 'month': 이번 달 출석 수, 'ticket': 새 복권 id 또는 None}."""
     now = time.time() if now is None else now
     day = kst_day(tz, now)
-    yday = (datetime.fromtimestamp(now, tz).date() - timedelta(days=1)).isoformat()   # 날짜로 하루 빼기 (서머타임 있는 시간대도 안전)
+    yday = (datetime.fromtimestamp(now, tz).date() - timedelta(days=1)).isoformat()
+    day_start = int(datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())   # 날짜로 하루 빼기 (서머타임 있는 시간대도 안전)
     month = day[:7]
 
     def run(c):
@@ -106,7 +107,9 @@ async def checkin(db, tz, chat_id: int, user_id: int, now: float | None = None, 
         n = c.execute("INSERT OR IGNORE INTO attend(chat_id, user_id, day, ts, streak) VALUES(?,?,?,?,?)",
                       (chat_id, user_id, day, int(now), streak)).rowcount
         ticket = None
-        if n and give_ticket:
+        # 오늘 복권을 아직 안 받았으면 줌 — 출석 뒤에 관리자가 복권을 켠 날도 다시 '.출석' 하면 받음 (벳블리 2026-10-11)
+        if give_ticket and not c.execute("SELECT 1 FROM lotto_tickets WHERE chat_id=? AND user_id=? AND created>=?",
+                                         (chat_id, user_id, day_start)).fetchone():
             ticket = c.execute("INSERT INTO lotto_tickets(chat_id, user_id, created) VALUES(?,?,?)",
                                (chat_id, user_id, int(now))).lastrowid
         cur = c.execute("SELECT streak FROM attend WHERE chat_id=? AND user_id=? AND day=?", (chat_id, user_id, day)).fetchone()[0]

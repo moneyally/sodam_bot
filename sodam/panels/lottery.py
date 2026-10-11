@@ -49,12 +49,12 @@ async def do_checkin(svc, bot, chat_id: int, user, role: Role) -> tuple[str, obj
         text = f"📅 {name}님은 오늘 이미 출석했어요 · 연속 {r['streak']}일 · 이번 달 {r['month']}일"
     else:
         text = f"📅 {name}님 출석! 연속 <b>{r['streak']}일</b> · 이번 달 {r['month']}일"
-        if r["ticket"]:
-            left = await lottery.week_left(svc.db, svc.cfg.tz, chat_id, int(s["lotto_week_max"]))
-            text += (f"\n🎟 복권 1장 받았어요 — 경품 {esc(s['lotto_prize'])} · 이번 주 남은 경품 {left}개"
-                     if left else "\n🎟 복권 1장 받았어요 — <b>이번 주 경품은 마감</b>이라 지금 긁으면 꽝이에요. 7일 안에 다음 주(월요일~) 긁어도 돼요.")
-        elif why:
-            text += f"\n<i>{esc(why)}</i>"
+    if r["ticket"]:
+        left = await lottery.week_left(svc.db, svc.cfg.tz, chat_id, int(s["lotto_week_max"]))
+        text += (f"\n🎟 복권 1장 받았어요 — 경품 {esc(s['lotto_prize'])} · 이번 주 남은 경품 {left}개"
+                 if left else "\n🎟 복권 1장 받았어요 — <b>이번 주 경품은 마감</b>이라 지금 긁으면 꽝이에요. 7일 안에 다음 주(월요일~) 긁어도 돼요.")
+    elif why:
+        text += f"\n<i>{esc(why)}</i>"
     left = await lottery.open_tickets(svc.db, chat_id, user.id) if s.get("lotto_enabled") else 0
     return text, _checkin_kb(user.id, bool(left))
 

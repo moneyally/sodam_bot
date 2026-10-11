@@ -51,6 +51,18 @@ async def checkin_once_a_day_and_streak_counts_consecutive_kst_days():
 
 
 @test
+async def turning_lottery_on_after_checkin_gives_the_ticket_on_second_checkin():
+    e = await setup(enabled=False)
+    text, _ = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
+    assert "복권" not in text
+    await e.db.set_setting(ROOM, "lotto_enabled", True)                      # 벳블리 2026-10-11: 출석 뒤에 켬
+    text, kb = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
+    assert "이미 출석" in text and "복권 1장" in text and f"lot:s:{A.id}" in str(kb.inline_keyboard), text
+    text, _ = await P.do_checkin(e.svc, e.bot, ROOM, A, Role.MEMBER)
+    assert "복권 1장" not in text and await lottery.open_tickets(e.db, ROOM, A.id) == 1, "하루 1장"
+
+
+@test
 async def weekly_cap_holds_when_many_scratch_at_once():
     e = await setup(week_max=2)
     tz = e.svc.cfg.tz
