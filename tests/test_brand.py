@@ -66,8 +66,10 @@ async def values_are_checked_before_saving():
     b = brand.clean_button({"k": "checkin", "t": " 출석 ", "s": "danger", "w": 2, "i": "5368324170671202286"})
     assert b == {"k": "checkin", "t": "출석", "s": "danger", "w": 2, "i": "5368324170671202286"}, b
     assert brand.clean_button({"k": "checkin", "s": "rainbow", "i": "abc"}) == {"k": "checkin", "t": "📅 출석체크"}
-    many = brand.clean_buttons([{"k": "fortune", "t": f"운세{i}"} for i in range(20)] + [{"k": "fortune", "t": "운세1"}])
-    assert len(many) == brand.MAX_BUTTONS and len({b["t"] for b in many}) == len(many), "8개·같은 글자 하나"
+    many = brand.clean_buttons([{"k": "fortune", "t": f"운세{i}"} for i in range(20)])
+    assert len(many) == brand.MAX_BUTTONS, "8개까지"
+    dup = brand.clean_buttons([{"k": "fortune", "t": "운세"}, {"k": "checkin", "t": "운세"}, {"k": "lotto"}])
+    assert [b["k"] for b in dup] == ["fortune", "lotto"], "같은 글자 버튼은 하나만 (누르면 어느 쪽인지 모름)"
     try:
         brand.clean_card_text("win_title", "잭팟 {prize}")
         raise AssertionError("당첨 제목엔 {prize} 칸 없음")
@@ -135,6 +137,25 @@ async def checkin_from_the_menu_counts_in_the_selected_room_only():
     assert await lottery.open_tickets(e.db, RA, A.id) == 0 and await lottery.open_tickets(e.db, RB, A.id) == 1
     eff = [c for c in e.bot.named("send_message") if c[1] == A.id and c[3].get("message_effect_id")]
     assert eff, "당첨 = 🎉 화면 효과"
+
+
+@test
+async def forged_callbacks_for_rooms_you_are_not_in_are_refused():
+    e = await setup()
+    await lottery.checkin(e.db, e.svc.cfg.tz, RA, A.id, give_ticket=True)
+    q = SimpleNamespace(from_user=OUT, message=SimpleNamespace(chat=SimpleNamespace(id=OUT.id), chat_id=OUT.id), answers=[])
+
+    async def answer(text=None, show_alert=False):
+        q.answers.append(text)
+    q.answer = answer
+    await P.on_button(e.svc, e.bot, q, ["s", str(RA)])            # 방 멤버가 아닌 사람이 콜백을 지어서 보냄
+    assert q.answers and "쓸 수 없어요" in q.answers[0], q.answers
+    await P.on_button(e.svc, e.bot, q, ["p", str(RA)])
+    assert await brand.selected(e.db, OUT.id) is None, "방 고르기도 안 됨"
+    q.from_user = A
+    q.message = SimpleNamespace(chat=SimpleNamespace(id=-5), chat_id=-5)  # 방(그룹)에서 누름
+    await P.on_button(e.svc, e.bot, q, ["s", str(RA)])
+    assert "1:1" in q.answers[-1] and await lottery.open_tickets(e.db, RA, A.id) == 1, "1:1 에서만"
 
 
 @test

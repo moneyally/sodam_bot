@@ -637,6 +637,21 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 채팅 집계 chat_no_repeat(📊 화면 토글, 기본 꺼짐): 같은 사람이 같은 글을 10분 안에 또 쓰면 1번 (`db.CountRule`·`count_filter(별명)`, top_chatters·chat_totals·
   hourly_counts·stats.member_text 공통). 지워진 글 빼기는 아직 (messages 에 표시 없음).
 
+## 🎁 방 전용 1:1 메뉴 + 미니앱 (`brand.py`·`brandcard.py`·`miniapp.py`·`panels/brand.py`·`miniapp_static/index.html`, tests/test_brand.py · test_miniapp.py · 뮤테이션 18개, 2026-10-12 고객 'AI 픽스터처럼' · 오너 '하드코딩 없이 방장이 고르고 채우게')
+- 소담은 봇 하나를 여러 방이 씀 → 1:1 에서 '어느 방 손님인지'(brand_session) 먼저. 입구 = t.me/<봇>?start=b_<코드>(무작위 10자, 🔄 로 바꾸면 옛 링크 끝),
+  `brand.usable` = 켜짐·이용 기간·멤버(DB members − member_left, 없으면 get_chat_member 로 한 번 더) 를 **쓸 때마다** 다시 확인. 기록은 원래 표 그대로 (방, 사람) 키.
+- 전부 방장 값(코드는 기본값만): 버튼 = 부품 PARTS(checkin·lotto·fortune·picks·alerts·app·link·contact·text) + 이름·색 style(danger/success/primary, Bot API 9.4)·
+  넓이·버튼 앞 프리미엄 이모지(icon_custom_emoji_id — 봇 주인 프리미엄일 때만, 거절되면 `_icons_off` 로 빼고 다시) · 카드 글자 TEXTS({칸} 검사) · 색(묶음 + #RRGGBB) ·
+  그림(올리기 / AI 배경 하루 6장 brand_img, 글자는 AI 아니고 PIL) · 당첨 스티커(스티커 공방 레시피 STICKER_LOOKS, slot 'stk').
+- 1:1 메뉴판 = ReplyKeyboardMarkup(is_persistent). 누른 글자는 `hooks.DM_TEXT_HOOKS`(handlers.on_private 의 menu.handle_input 다음)에서 정확히 같은 글자만 버튼으로.
+  ↗ 바로가기 = KeyboardButton.web_app(https, t.me 는 글 버튼) · ≡ 메뉴 버튼 = setChatMenuButton(MenuButtonWebApp) 사람마다.
+  채팅 긁기 = 같은 사진을 결과 카드로 editMessageMedia(has_spoiler 가림막) + 당첨이면 message_effect_id 🎉(1:1 만) + 당첨 스티커.
+- 미니앱 = 봇 프로세스 안 asyncio 서버 127.0.0.1:8790(`hooks.STARTUP_HOOKS`, 딜러 봇 제외) ← Caddy `/app*`(update.sh diag_setup). 주소 = MINIAPP_URL 또는
+  data/diag_setup.status 의 https 주소 + /app/?r=<코드>. initData 서명(HMAC 'WebAppData'·24시간·같은 이름 두 번 거절) 확인 뒤에만, 결과·출석은 서버 DB 가 정함(화면은 보여 주기만).
+  API state/checkin/scratch(panels/brand.py 가 miniapp.register_api), 배경 f/bg/<코드>.jpg. 사람 분당 40·IP 분당 120, 머리·몸 16KB.
+- 복권 유효 기간 lotto_ticket_life 7d/day(그날 자정까지) — `lottery.valid_since`. 출석 처리 = `panels/lottery.checkin_info`(방·1:1·미니앱 공통).
+- 방장 화면 그룹 허브 🎁(m:bd) · 방 명령 `.혜택`(입구 버튼, 방마다 60초 1번) · AI 도구 benefit_menu · 1:1 메인 [🎁 혜택 메뉴](m:bdm, 켠 방 멤버에게만). 안내서 guide/brand-menu.md.
+
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
   길이 video_seconds(4~8, 기본 6). 둘 다 settings.OWNER_CAP (관리자는 줄이기만). 오너는 개수 한도 무시(요금은 셈).

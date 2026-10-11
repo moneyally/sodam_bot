@@ -37,6 +37,7 @@ async def init_data_signature_is_checked():
     assert miniapp.check_init_data(tampered, TOKEN) is None, "값을 바꾸면 서명이 안 맞음"
     assert miniapp.check_init_data(sign(u, auth=int(time.time()) - 2 * 86400), TOKEN) is None, "오래된 값"
     assert miniapp.check_init_data(sign(u) + "&user=x", TOKEN) is None, "같은 이름 두 번"
+    assert miniapp.check_init_data(sign(u) + "&query_id=AAE", TOKEN) is None, "같은 값이 두 번이어도 (끼워 넣기) 거절"
     assert miniapp.check_init_data(sign({"id": 5, "is_bot": True}), TOKEN) is None
     assert miniapp.check_init_data("", TOKEN) is None and miniapp.check_init_data("a" * 5000, TOKEN) is None
 
