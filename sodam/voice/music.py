@@ -49,6 +49,25 @@ TARGET_LUFS = -14.0                                        # 맞출 크기 (음�
 NORM_MIN, NORM_MAX = 0.35, 1.6                             # 크기 맞춤 배수 범위 (작은 곡을 너무 키우면 찌그러짐)
 ANNOUNCE_TIMEOUT = 20.0     # 재생 카드·음성채팅 제목 — 텔레그램이 답을 안 줘도 이만큼만 기다림 (2026-10-10 DC 4 내부 오류 때 무한 대기)
 STOP_GRACE = 5.0            # 멈춘 뒤 진행 담당이 정리할 시간 — 넘으면 끊고 끝냄
+CLEANUP_WAIT = 3.0          # 끊은 일·풀기 프로그램이 정말 끝나길 기다리는 한도 — 넘으면 버려 두고 넘어감
+
+
+async def _drop(task: asyncio.Future | None, wait: float | None = None, *, finish_first: bool = False) -> None:
+    """일을 끊고(finish_first 면 먼저 끝나길 기다렸다 끊고) 잠깐만 기다림. 취소를 삼키거나 텔레그램·ffmpeg 답을 기다리며
+    안 끝나도 여기서 붙잡히지 않음 (2026-10-11 벳블리: 통화가 끊긴 뒤 'await 진행 담당' 에서 영영 붙잡혀 DJ 정리가 안 돼
+    대기열 곡이 안 틀어지고 새 신청은 전부 '이미 대기열')."""
+    if task is None:
+        return
+    limit = CLEANUP_WAIT if wait is None else wait
+    if finish_first and not task.done():
+        await asyncio.wait({task}, timeout=limit)
+    if not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=limit)
+    if task.done() and not task.cancelled():
+        task.exception()                                   # 꺼내 둬야 '가져가지 않은 오류' 경고가 안 남
+    elif not task.done():
+        log.warning("정리 안 끝난 일 버려 둠: %r", task)
 RESUME_REASONS = ("restart", "chat_closed")               # 이렇게 끝나면 곡 위치를 남김 (재시작 / 음성채팅이 다시 열리면 이어서)
 NORM_STEP = 0.005                                          # 재는 게 늦게 끝나면 조각마다 이만큼씩 (1초에 0.5) 따라감
 VOICE_KEEP = 60                                            # 섞을 소담 목소리 조각 (0.6초 넘게 밀리면 오래된 것부터 버림)
@@ -648,6 +667,11 @@ def ffmpeg_bin() -> str:
         return "ffmpeg"
 
 
+async def _close_quietly(dec) -> None:
+    with contextlib.suppress(Exception):
+        await dec.close()
+
+
 class Decoder:
     """파일 → 48 kHz 모노 10 ms 조각. 뒤에서 AHEAD 조각까지 미리 풀어 둠 (pacer 는 기다리지 않고 꺼내기만)."""
 
@@ -705,15 +729,11 @@ class Decoder:
         return self.eof and not self.buf
 
     async def close(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._task
+        await _drop(self._task)
         if self._proc and self._proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self._proc.kill()
-            with contextlib.suppress(Exception):
-                await self._proc.wait()
+            await _drop(asyncio.ensure_future(self._proc.wait()), finish_first=True)   # 죽인 ffmpeg 를 기다리다 붙잡히지 않게
 
 
 LIMIT = 0.85 * 32767                                       # 이보다 큰 소리는 부드럽게 눌러 줌 (딱딱 잘리면 '지직·튐')
@@ -905,29 +925,18 @@ class Player:
                     await asyncio.wait_for(asyncio.shield(conductor), STOP_GRACE)
                 except asyncio.TimeoutError:
                     log.warning("노래 진행 담당이 멈추지 않아 끊음 %s (%s)", self.chat_id, self.reason)
-                    conductor.cancel()
-                    with contextlib.suppress(BaseException):
-                        await conductor
+                    await _drop(conductor)
             else:
                 conductor.result()                         # 진행 담당의 오류는 그대로 (worker 가 기록)
         finally:
-            if not conductor.done():
-                conductor.cancel()
-                with contextlib.suppress(BaseException):
-                    await conductor
-            pacer.cancel()
-            with contextlib.suppress(BaseException):
-                await pacer
+            await _drop(conductor)
+            await _drop(pacer)
             for t in list(self._bg):                               # 뒤에서 하던 미리 받기·크기 재기도 끊음 (끝난 뒤 풀기 프로그램을 띄우지 않게)
-                t.cancel()
-            for t in list(self._bg):
-                with contextlib.suppress(BaseException):
-                    await t
+                await _drop(t)
             carried = self._carry is not None and self.dec is self._carry["dec"]
             decs = [self.dec, self._prev_dec, (self._next or {}).get("dec"), (self._carry or {}).get("dec")]
             for d in {id(d): d for d in decs if d is not None}.values():
-                with contextlib.suppress(Exception):
-                    await d.close()
+                await _drop(asyncio.ensure_future(_close_quietly(d)), finish_first=True)
             self.dec = self._prev_dec = self._next = self._carry = self._xf = None
             if self.row and self.reason in RESUME_REASONS:         # 재시작·음성채팅 닫힘: 곡 위치를 남겨 이어서
                 with contextlib.suppress(Exception):

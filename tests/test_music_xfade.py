@@ -313,6 +313,58 @@ async def a_hanging_announce_does_not_keep_a_stopped_dj_alive():
 
 
 @test
+async def a_conductor_that_ignores_cancel_does_not_keep_the_dj_alive():
+    """2026-10-11 벳블리: 통화가 끊긴 뒤 '진행 담당을 끊고 끝나길 기다림' 에서 영영 붙잡힘 → DJ 정리·세션 끝·다시 들어가기가 전부 안 됨,
+    대기열 곡은 남아 새 신청은 '이미 대기열' 만. 끊은 일은 잠깐만 기다리고 버려 둔다."""
+    db, pl, sent = await setup("a")
+    forever = asyncio.Event()
+
+    async def announce(kind, chat_id, row, why):
+        while not forever.is_set():                       # 취소를 삼키며 계속 기다림 (텔레그램 라이브러리 안에서 이런 일이 생김)
+            try:
+                await forever.wait()
+            except asyncio.CancelledError:
+                continue
+    pl.announce = announce
+    old = (music.ANNOUNCE_TIMEOUT, music.STOP_GRACE, music.CLEANUP_WAIT)
+    music.ANNOUNCE_TIMEOUT, music.STOP_GRACE, music.CLEANUP_WAIT = 60.0, 0.2, 0.2
+    asyncio.get_running_loop().call_later(0.3, pl.stop, "chat_closed")
+    t0 = time.monotonic()
+    try:
+        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        took = time.monotonic() - t0
+    finally:
+        music.ANNOUNCE_TIMEOUT, music.STOP_GRACE, music.CLEANUP_WAIT = old
+        forever.set()                                     # 시험 끝: 버려 둔 일도 끝나게
+    assert took < 3, "취소를 삼키는 진행 담당에 붙잡히지 않음"
+
+
+@test
+async def a_decoder_whose_close_hangs_does_not_keep_the_dj_alive():
+    class Stuck(XDec):
+        async def close(self):
+            await asyncio.Event().wait()                  # 죽인 ffmpeg 가 안 끝나는 경우
+    db = await make_db()
+    await musicq.add(db, CHAT, title="a", url="u", vid="a" * 11, duration=100, by_id=1, by_name="x")
+    t = [0.0]
+
+    async def sleep(s):
+        t[0] += s
+        await asyncio.sleep(0.001)
+
+    async def send(f):
+        pass
+    pl = music.Player(db, CHAT, send, source=Src(), decoder=Stuck, clock=lambda: t[0], sleep=sleep, poll=0.02, idle_sec=0.3)
+    old = music.CLEANUP_WAIT
+    music.CLEANUP_WAIT = 0.2
+    asyncio.get_running_loop().call_later(0.3, pl.stop, "chat_closed")
+    try:
+        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+    finally:
+        music.CLEANUP_WAIT = old
+
+
+@test
 async def a_hanging_announce_times_out_and_the_song_still_plays():
     db, pl, sent = await setup("a")
 
