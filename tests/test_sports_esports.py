@@ -103,6 +103,12 @@ async def sports_command_shows_esports():
     assert out.index("Vitality Academy") < out.index("종료"), "진행 중 먼저"
     out = await cmd(svc, ".스포츠 롤")
     assert "West Point" in out, out
+    # 배팅 내역 화면에 적힌 이름 그대로 (2026-10-11 백악관 '내 경기가 안 보여요' — 사이트마다 이름이 조금 다름)
+    out = await cmd(svc, ".스포츠 State Wraith Pacific")
+    assert "STATE" in out and "PCIFIC" in out and "United21" in out, out
+    from sodam.sports import ui as sports_ui
+    games = await sports_ui.UI(svc.sports).find_games("Vitality Academy Elite Klan Vella")
+    assert [(g.home, g.away) for g in games][:1] == [("Vitality Academy", "Elite Klan")], games
 
 
 if __name__ == "__main__":

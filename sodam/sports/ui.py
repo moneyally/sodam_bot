@@ -311,6 +311,9 @@ class UI:
             leagues = [LEAGUES[c] for c in sorted(both or set().union(*hit) if hit else set()) if c in LEAGUES][:6]
             if "world" in LEAGUES:               # 표에 없는 팀(영어 이름)도: 세계 축구 하루치 한 요청에서 찾기
                 leagues.append(LEAGUES["world"])
+            # e스포츠 팀은 표에 없음 (영어 이름 그대로) — 상태별로 모아 둔 걸 써서 요청은 거의 안 늘어남
+            # (2026-10-11 백악관 '내 경기가 안 보여요': 'Vitality Academy'·'State vs Wraith Pacific' 로 물으면 못 찾았음)
+            leagues += [lg for lg in LEAGUES.values() if lg.bo3]
         return [lg for lg in leagues if self.feed.available(lg)]
 
     async def _games_around(self, leagues: list) -> list:
@@ -414,13 +417,26 @@ def _match(games: list, groups: list[list[str]]) -> list:
     out = []
     for g in games:
         names = [_fold(x) for x in (g.home, g.away, ko_name(g.home, g.league), ko_name(g.away, g.league), g.title or "")]
+        words = {_fold(w) for x in (g.home, g.away) for w in re.split(r"[\s\-_.]+", x or "") if len(w) >= 5}
         for gr in groups:
-            hits = sum(1 for w in gr if any(w in n for n in names))
+            hits = sum(1 for w in gr if any(w in n for n in names) or (len(w) >= 5 and any(_one_off(w, x) for x in words)))
             need = len(gr) if len(gr) <= 2 else max(2, (len(gr) + 1) // 2)    # 3낱말↑ = 절반 이상(팀 둘) 맞으면
             if hits >= need:
                 out.append(g)
                 break
     return out
+
+
+def _one_off(a: str, b: str) -> bool:
+    """한 글자 빠짐·더함·바뀜 (사이트마다 'Pcific'·'Pacific' 처럼 철자가 조금 다름 — 5글자↑ 영어 낱말만)."""
+    if a == b or abs(len(a) - len(b)) > 1 or not re.fullmatch(r"[a-z0-9]+", a + b):
+        return a == b
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    return a[i + (len(a) == len(b)):] == b[i + 1:]
 
 
 def _fold(text: str) -> str:
@@ -487,6 +503,10 @@ async def command(svc, chat_id: int, user_id: int, is_admin: bool, args: list[st
         found = resolve(whole)
         if found and found[0] == "team":
             return await ui.team_text(whole)
+        if found is None:                       # 리그·팀 표에 없는 이름 (e스포츠 팀·하부 리그 팀) → 경기에서 직접 찾기
+            games = await ui.find_games(whole)
+            if games:
+                return f"🔎 <b>'{esc(whole)}' 경기</b>\n" + "\n".join(f"{fmt.tag(g)} {fmt.line(g)}" for g in games[:10])
         return await ui.games_text(whole)
     except SportsError as e:
         return esc(str(e))
