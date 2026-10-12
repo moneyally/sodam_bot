@@ -94,6 +94,8 @@ async def render_fills_room_template_with_counts_prizes_and_my_place():
     assert out.endswith("매일 자정 시상식")
     assert cr.show_name({"username": "sin1n1", "first_name": "가나"}, "mask") == "si***"
     assert cr.show_name({"username": None, "first_name": "가나다"}, "user") == "가나다"
+    assert cr.show_name({"user_id": 8263231614, "username": None, "first_name": "@"}, "user") == "멤버1614", "'@' 뿐인 이름 (백악관 실제)"
+    assert cr.show_name({"user_id": 8019304490, "username": None, "first_name": "\u2063"}, "name") == "멤버4490", "투명 글자뿐인 이름"
 
 
 @test
