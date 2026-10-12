@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from .db import register_schema
-from .util import display_name, esc, html_balanced, html_plain, period_range
+from .util import display_name, esc, html_balanced, html_plain, name_key, period_range
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS rank_rooms (
@@ -212,9 +212,12 @@ def mask(name: str) -> str:
 def show_name(row, mode: str) -> str:
     uname, first = (row["username"] or "").strip(), row["first_name"] or ""
     if mode == "name":
-        name = display_name(first, None, None) or uname or "멤버"
+        name = display_name(first, None, None) or uname
     else:
-        name = uname or display_name(first, None, None) or "멤버"
+        name = uname or display_name(first, None, None)
+    if not name_key(name or ""):          # '@'·투명 글자뿐인 이름 (실제 백악관 2026-10-12) → 누군지 알아보게 ID 끝 4자리
+        uid = row["user_id"] if "user_id" in row.keys() else None
+        name = f"멤버{str(uid)[-4:]}" if uid else "멤버"
     return mask(name) if mode == "mask" else name
 
 
