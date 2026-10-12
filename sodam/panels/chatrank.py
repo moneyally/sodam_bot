@@ -1,4 +1,4 @@
-"""🏆 채팅 순위 — 방장 꾸미기 화면(허브 m:crk) · 방 명령 .순위 · 1:1 메뉴판 부품 'rank' · 미니앱 칸 · 시상식(그 시각에 어제 순위 + 지급 완료 버튼).
+"""🏆 채팅 순위 — 방장 꾸미기 화면(허브 m:crk) · 방 명령 .순위 · .나(내 채팅 수·등수) · 1:1 메뉴판 부품 'rank' · 미니앱 칸 · 시상식(그 시각에 어제 순위 + 지급 완료 버튼).
 데이터·틀은 sodam/chatrank.py. 버튼 rkp:<방>:<날짜>:<등수> = 그 방 텔레그램 관리자 '지급 완료'. 테스트 tests/test_chatrank.py.
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ from ..util import esc, html_plain, rich_html
 log = logging.getLogger(__name__)
 
 POST_GAP = 20            # 방에서 .순위 간격 (초)
+ME_GAP = 10              # .나 한 사람 간격 (초)
 NOTIFY_ADMINS = 5
 TOPS = (3, 5, 7, 10)
 
@@ -85,15 +86,32 @@ async def c_rank(ctx) -> None:
     await send_html(ctx.bot, ctx.chat_id, html, await room_buttons(ctx.svc, ctx.bot, ctx.chat_id), ctx.msg.message_id)
 
 
+async def c_me(ctx) -> None:
+    """.나 — 내 채팅 수·등수 (순위와 같은 기간·세는 기준). 한 사람 10초에 한 번."""
+    if ctx.chat_id > 0:
+        await ctx.reply("방에서 <code>.나</code> 를 쳐 주세요.")
+        return
+    if not await persist.claim(ctx.svc.db, f"crkme:{ctx.chat_id}:{ctx.user.id}", ME_GAP):
+        return
+    period = _PERIOD_WORDS.get((ctx.args[0] if ctx.args else "").strip())
+    cfg = await cr.get(ctx.svc.db, ctx.chat_id)
+    rank, n = await cr.my_place(ctx.svc, ctx.chat_id, ctx.user.id, cfg, period)
+    row = {"username": getattr(ctx.user, "username", None), "first_name": ctx.user.first_name}
+    html = cr.me_html(cfg, cr.show_name(row, "name" if cfg.names == "mask" else cfg.names), cr.PERIODS[period or cfg.period][1], rank, n)
+    await send_html(ctx.bot, ctx.chat_id, html, reply_to=ctx.msg.message_id)
+
+
 def register_commands() -> None:
     from .. import commands
     if any(c.fn is c_rank for c in commands.COMMANDS):
         return
-    cmd = commands.Cmd(("순위", "채팅순위", "채팅왕"), c_rank, usage="[오늘|어제|주간|월간]",
-                       help="방장이 꾸민 채팅 순위 (상품·어제 당첨자)", group="집계")
-    commands.COMMANDS.append(cmd)
-    for name in cmd.names:
-        commands._INDEX.setdefault(name.lower(), cmd)
+    for cmd in (commands.Cmd(("순위", "채팅순위", "채팅왕"), c_rank, usage="[오늘|어제|주간|월간]",
+                             help="방장이 꾸민 채팅 순위 (상품·어제 당첨자)", group="집계"),
+                commands.Cmd(("나", "내순위", "내채팅"), c_me, usage="[오늘|어제|주간|월간]",
+                             help="내 채팅 수·등수", group="집계")):
+        commands.COMMANDS.append(cmd)
+        for name in cmd.names:
+            commands._INDEX.setdefault(name.lower(), cmd)
 
 
 # ── 1:1 메뉴판 · 미니앱 ───────────────────────────────────
@@ -223,6 +241,7 @@ async def s_crk(c: PanelCtx) -> Screen:
              "", f"기간: <b>{cr.PERIODS[cfg.period][1]}</b> · {cfg.top}등까지 · 이름: {cr.NAME_MODES[cfg.names]}",
              f"상품: {prizes}",
              f"줄 모양: <code>{esc(html_plain(cfg.line))}</code>",
+             f"<code>.나</code> 모양: <code>{esc(html_plain(cfg.me))}</code>",
              f"등수 그림: {esc(' '.join(html_plain(cfg.icon(i)) for i in range(cfg.top)))}",
              f"관리자 빼기: {'✅' if cfg.no_admin else '❌'} · 어제 당첨자 칸: {'✅' if cfg.yday else '❌'}",
              f"🕛 시상식: <b>{_hour(cfg.award)}</b> (그 시각에 어제 하루 순위를 방에 올리고, 상품 있으면 관리자 1:1 에 [✅ 지급] 버튼)",
@@ -232,6 +251,7 @@ async def s_crk(c: PanelCtx) -> Screen:
             [B("💰 상품", f"m:in:{cid}:crkpz"), B("✏️ 줄 모양", f"m:in:{cid}:crkln")],
             [B("🏅 등수 그림", f"m:in:{cid}:crkic"), B(f"👤 이름: {cr.NAME_MODES[cfg.names].split(' ')[0]} ▸", f"m:crkm:{cid}")],
             [B("📝 머리말", f"m:in:{cid}:crkhd"), B("📝 꼬리말", f"m:in:{cid}:crkft")],
+            [B("🙋 .나 모양", f"m:in:{cid}:crkme")],
             [B(("✅" if cfg.no_admin else "❌") + " 관리자 빼기", f"m:crka:{cid}"),
              B(("✅" if cfg.yday else "❌") + " 어제 당첨자", f"m:crky:{cid}")],
             [B(f"🕛 시상식: {_hour(cfg.award)} ▸", f"m:crkw:{cid}"), B("📏 세는 기준", f"m:rp:{cid}")],
@@ -342,6 +362,10 @@ async def in_line(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     return await _set_tpl(c, msg, "line", cr.LINE_FIELDS, cr.LINE_MAX, need=("이름",))
 
 
+async def in_me(c: PanelCtx, msg: Message) -> tuple[bool, str]:
+    return await _set_tpl(c, msg, "me", cr.ME_FIELDS, cr.LINE_MAX, need=("횟수",))
+
+
 async def in_head(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     return await _set_tpl(c, msg, "head", cr.HEAD_FIELDS, cr.HEAD_MAX, can_clear=True)
 
@@ -377,7 +401,7 @@ async def in_icons(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 # 등록
 menu.register_hub(HubItem(54, "crk", "🏆 채팅 순위"))
 menu.register_screen("crk", s_crk)
-for _code in ("crkpz", "crkln", "crkic", "crkhd", "crkft"):
+for _code in ("crkpz", "crkln", "crkic", "crkhd", "crkft", "crkme"):
     menu.register_screen(_code, s_crk)
 for _code, _fn in (("crkp", r_period), ("crkn", r_top), ("crkm", r_names), ("crka", r_admin), ("crky", r_yday),
                    ("crkw", r_award), ("crkr", r_reset), ("crkv", r_preview), ("crkpost", r_post)):
@@ -389,6 +413,8 @@ menu.register_input("crkln", "✏️ 한 줄 모양을 보내 주세요. 칸: <c
                     "crk", in_line, s_crk)
 menu.register_input("crkic", "🏅 1등부터 등수 그림을 <b>띄어서</b> 보내 주세요 (움직이는 이모지 OK).\n예: <code>🥇 🥈 🥉 4️⃣ 5️⃣</code> · 처음으로 = <code>기본</code>",
                     "crk", in_icons, s_crk)
+menu.register_input("crkme", "🙋 <code>.나</code> 를 쳤을 때 나올 한 줄을 보내 주세요. 칸: <code>{이름}</code> <code>{등수}</code> <code>{횟수}</code> <code>{기간}</code>\n"
+                    "예: <code>{이름} 님 {기간} 채팅 {횟수}개 · {등수}위 🔥</code> · 처음으로 = <code>기본</code>", "crk", in_me, s_crk)
 menu.register_input("crkhd", "📝 머리말을 보내 주세요. 칸: <code>{기간}</code> <code>{날짜}</code>\n예: <code>🦊 {기간}의 채팅 순위\n📅 {날짜}</code>\n"
                     "지우려면 <code>없음</code> · 처음으로 = <code>기본</code>", "crk", in_head, s_crk)
 menu.register_input("crkft", f"📝 꼬리말을 보내 주세요 ({cr.FOOT_MAX}자 안). 예: <code>매일 자정 시상식 · 5글자 이상만 집계</code>\n"

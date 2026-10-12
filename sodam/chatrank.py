@@ -48,10 +48,11 @@ TOP_MIN, TOP_MAX = 3, 10
 PRIZE_MAX, LINE_MAX, HEAD_MAX, FOOT_MAX, ICON_MAX = 30, 120, 300, 600, 8
 LINE_FIELDS = ("등수", "이름", "횟수", "상품")
 HEAD_FIELDS = ("기간", "날짜")
+ME_FIELDS = ("이름", "등수", "횟수", "기간")
 ICONS = ("🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟")
 DEFAULT = {"period": "today", "top": 5, "prizes": [], "line": "{등수} {이름} — {횟수}회 {상품}", "icons": [],
            "head": "🏆 <b>{기간} 채팅 순위</b>\n📅 {날짜}", "foot": "", "names": "user", "no_admin": False,
-           "yday": True, "award": -1}
+           "yday": True, "award": -1, "me": "📊 {이름} 님 — {기간} 채팅 {횟수}회 · {등수}위"}
 CACHE_SEC = 30
 _CACHE: dict = {}
 _SEQ = itertools.count(1)
@@ -72,6 +73,7 @@ class Cfg:
     no_admin: bool = False
     yday: bool = True
     award: int = -1
+    me: str = DEFAULT["me"]
 
     def icon(self, i: int) -> str:
         return self.icons[i] if i < len(self.icons) else ICONS[i]
@@ -96,7 +98,7 @@ def load(raw: str | None) -> Cfg:
         c.top = d["top"]
     if isinstance(d.get("prizes"), list):
         c.prizes = [str(p)[:PRIZE_MAX] for p in d["prizes"][:TOP_MAX]]
-    for k in ("line", "head", "foot"):
+    for k in ("line", "head", "foot", "me"):
         if isinstance(d.get(k), str) and html_balanced(d[k]):
             setattr(c, k, d[k])
     if isinstance(d.get("icons"), list):
@@ -234,6 +236,13 @@ def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None
     if cfg.foot.strip():
         out += ["", cfg.foot]
     return "\n".join(out).strip()
+
+
+def me_html(cfg: Cfg, name: str, label: str, rank: int, n: int) -> str:
+    """.나 한 줄 (방장 틀). 기록이 없으면 정해진 한 줄."""
+    if not n:
+        return f"📊 {esc(name)} 님 — {esc(label)} 채팅 기록이 아직 없어요."
+    return fill(cfg.me, {"이름": esc(name), "등수": str(rank), "횟수": f"{n:,}", "기간": esc(label)})
 
 
 # ── 숫자 ──────────────────────────────────────────────────
