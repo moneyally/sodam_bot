@@ -65,14 +65,16 @@ async def board(svc, bot, chat_id: int, cfg: cr.Cfg | None = None, period: str |
     cfg = cfg or await cr.get(svc.db, chat_id)
     label, date, rows = await cr.standings(svc, chat_id, cfg, period, bot)
     yday, ydate = None, ""
-    if cfg.yday and (period or cfg.period) != "yesterday":
+    if cfg.yday and (period or cfg.period) not in ("yesterday", "lastweek"):
         ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
     mine = await cr.my_place(svc, chat_id, me, cfg, period) if me else None
-    return cr.render(cfg, label, date, [(cr.show_name(r, cfg.names), r["n"]) for r in rows], yday or None, ydate, mine)
+    return cr.render(cfg, label, date, [(cr.show_name(r, cfg.names), r["n"]) for r in rows], yday or None, ydate, mine,
+                     cr.winners_label(cfg))
 
 
 # ── 방 명령 ───────────────────────────────────────────────
-_PERIOD_WORDS = {"오늘": "today", "어제": "yesterday", "주간": "week", "이번주": "week", "월간": "month", "이번달": "month"}
+_PERIOD_WORDS = {"오늘": "today", "어제": "yesterday", "이번주": "thisweek", "금주": "thisweek", "지난주": "lastweek", "저번주": "lastweek",
+                 "주간": "week", "7일": "week", "월간": "month", "이번달": "month"}
 
 
 async def c_rank(ctx) -> None:
@@ -105,7 +107,7 @@ def register_commands() -> None:
     from .. import commands
     if any(c.fn is c_rank for c in commands.COMMANDS):
         return
-    for cmd in (commands.Cmd(("순위", "채팅순위", "채팅왕"), c_rank, usage="[오늘|어제|주간|월간]",
+    for cmd in (commands.Cmd(("순위", "채팅순위", "채팅왕"), c_rank, usage="[오늘|어제|이번주|지난주|주간|월간]",
                              help="방장이 꾸민 채팅 순위 (상품·어제 당첨자)", group="집계"),
                 commands.Cmd(("나", "내순위", "내채팅"), c_me, usage="[오늘|어제|주간|월간]",
                              help="내 채팅 수·등수", group="집계")):
@@ -130,20 +132,20 @@ async def app_data(svc, bot, chat_id: int, uid: int) -> dict:
            "me": {"rank": rank, "n": n}, "foot": html_plain(cfg.foot).strip()[:600], "yday": [], "ydate": ""}
     if cfg.yday and cfg.period != "yesterday":
         ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
-        out["ydate"] = ydate
+        out["ydate"], out["ylabel"] = ydate, cr.winners_label(cfg)
         out["yday"] = [{"rank": i + 1, "icon": html_plain(cfg.icon(i)), "name": name, "n": cnt, "prize": prize}
                        for i, name, cnt, prize in yday]
     return out
 
 
 # ── 시상식 ────────────────────────────────────────────────
-async def award(svc, bot, chat_id: int, cfg: cr.Cfg, day: str) -> bool:
-    """어제(day) 하루 순위를 방에 올리고 기록 + 상품 있는 등수는 관리자 1:1 지급 완료 버튼."""
-    _, _, rows = await cr.standings(svc, chat_id, cfg, "yesterday", bot)
+async def award(svc, bot, chat_id: int, cfg: cr.Cfg, day: str, period: str = "yesterday") -> bool:
+    """어제(매주면 지난 주 월~일) 순위를 방에 올리고 기록(day = 기록 열쇠) + 상품 있는 등수는 관리자 1:1 지급 완료 버튼."""
+    label, date, rows = await cr.standings(svc, chat_id, cfg, period, bot)
     if not rows:
         return False
     await cr.record_awards(svc.db, chat_id, day, cfg, rows)
-    html = "🎉 <b>시상식</b>\n" + cr.render(cfg, "어제", cr.short_date(day), [(cr.show_name(r, cfg.names), r["n"]) for r in rows])
+    html = "🎉 <b>시상식</b>\n" + cr.render(cfg, label, date, [(cr.show_name(r, cfg.names), r["n"]) for r in rows])
     try:
         await send_html(bot, chat_id, html, await room_buttons(svc, bot, chat_id))
     except TelegramError as e:
@@ -161,7 +163,7 @@ async def _notify_admins(svc, bot, chat_id: int, day: str, cfg: cr.Cfg, prized: 
         admins = []
     from ..subscription import chat_title
     title = await chat_title(svc, chat_id)
-    lines = [f"🏆 <b>채팅 순위 시상</b> — {esc(title)} ({cr.short_date(day)})"]
+    lines = [f"🏆 <b>채팅 순위 시상</b> — {esc(title)} ({cr.short_date(day.lstrip('w'))}{'~ 한 주' if day.startswith('w') else ''})"]
     lines += [f"{i + 1}등 {esc(cr.show_name(r, 'user'))} (ID {r['user_id']}) · {r['n']:,}회 — {esc(cfg.prize(i))}" for i, r in prized]
     lines.append("상품을 보낸 뒤 그 등수 버튼을 눌러 주세요.")
     btns = [B(f"✅ {i + 1}등 지급", f"rkp:{chat_id}:{day}:{i + 1}") for i, _ in prized]
@@ -178,20 +180,26 @@ async def _notify_admins(svc, bot, chat_id: int, day: str, cfg: cr.Cfg, prized: 
     return sent
 
 
+def due(cfg: cr.Cfg, now: datetime) -> bool:
+    if cfg.award == cr.WEEKLY:
+        return now.weekday() == 0 and now.hour == 0
+    return cfg.award == now.hour
+
+
 async def _award_tick(svc, bot) -> None:
     now = datetime.now(svc.cfg.tz)
     if now.hour not in cr.AWARD_HOURS:
         return
     for chat_id, cfg in await cr.award_rooms(svc.db):
-        if cfg.award != now.hour:
+        if not due(cfg, now):
             continue
-        day = cr.day_of(svc.cfg.tz, 1)
+        day, period = cr.award_key(svc.cfg.tz, cfg)
         if not await svc.paid_features(chat_id):
             continue
-        if not await persist.claim(svc.db, f"rkaward:{chat_id}:{day}", 2 * 86400):
+        if not await persist.claim(svc.db, f"rkaward:{chat_id}:{day}", 8 * 86400):
             continue
         try:
-            await award(svc, bot, chat_id, cfg, day)
+            await award(svc, bot, chat_id, cfg, day, period)
         except Exception:
             log.exception("chat rank award failed %s", chat_id)
 
@@ -227,7 +235,7 @@ def _next(seq, cur):
 
 
 def _hour(h: int) -> str:
-    return "끔" if h < 0 else f"매일 {h}시"
+    return cr.AWARD_LABEL.get(h, f"매일 {h}시")
 
 
 async def s_crk(c: PanelCtx) -> Screen:
@@ -244,7 +252,7 @@ async def s_crk(c: PanelCtx) -> Screen:
              f"<code>.나</code> 모양: <code>{esc(html_plain(cfg.me))}</code>",
              f"등수 그림: {esc(' '.join(html_plain(cfg.icon(i)) for i in range(cfg.top)))}",
              f"관리자 빼기: {'✅' if cfg.no_admin else '❌'} · 어제 당첨자 칸: {'✅' if cfg.yday else '❌'}",
-             f"🕛 시상식: <b>{_hour(cfg.award)}</b> (그 시각에 어제 하루 순위를 방에 올리고, 상품 있으면 관리자 1:1 에 [✅ 지급] 버튼)",
+             f"🕛 시상식: <b>{_hour(cfg.award)}</b> (매일 = 어제 하루 순위, 매주 월요일 0시 = 지난 주 월~일 순위를 방에 올리고, 상품 있으면 관리자 1:1 에 [✅ 지급] 버튼)",
              f"📏 세는 기준: {rule} (📊 리포트 화면에서 바꿔요)"]
     cid = c.cid
     rows = [[B(f"📅 기간: {cr.PERIODS[cfg.period][1]} ▸", f"m:crkp:{cid}"), B(f"🔢 {cfg.top}등까지 ▸", f"m:crkn:{cid}")],
@@ -273,7 +281,7 @@ async def _change(c: PanelCtx, toast: str, **kw) -> Screen:
 
 async def r_period(c: PanelCtx) -> Screen:
     cur = (await cr.get(c.svc.db, c.cid)).period
-    nxt = _next(cr.PERIODS, cur)
+    nxt = _next(cr.PERIOD_CHOICES, cur)
     return await _change(c, f"기간: {cr.PERIODS[nxt][1]}", period=nxt)
 
 

@@ -41,9 +41,13 @@ CREATE TABLE IF NOT EXISTS rank_awards (
 );
 """)
 
-PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "week": ("주간", "최근 7일"), "month": ("월간", "최근 30일")}
+PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "thisweek": ("이번주", "이번 주"), "week": ("주간", "최근 7일"),
+           "month": ("월간", "최근 30일"), "lastweek": ("지난주", "지난 주")}
+PERIOD_CHOICES = ("today", "yesterday", "thisweek", "week", "month")    # 방장이 고르는 것 (lastweek 는 시상식·.순위 지난주 용)
+WEEKLY = 100                                 # 시상식 '매주 월요일 0시' (지난 주 월~일 순위) — 고객 2026-10-12 '추첨은 월요일 자정'
+AWARD_LABEL = {-1: "끔", 0: "매일 0시", 9: "매일 9시", 12: "매일 12시", WEEKLY: "매주 월요일 0시"}
 NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "mask": "가리기 (sin***)"}
-AWARD_HOURS = (-1, 0, 9, 12)                 # 시상식 시각 (한국 시각, -1 = 끔)
+AWARD_HOURS = (-1, 0, 9, 12, WEEKLY)         # 시상식 (한국 시각, -1 = 끔, WEEKLY = 매주 월요일 0시)
 TOP_MIN, TOP_MAX = 3, 10
 PRIZE_MAX, LINE_MAX, HEAD_MAX, FOOT_MAX, ICON_MAX = 30, 120, 300, 600, 8
 LINE_FIELDS = ("등수", "이름", "횟수", "상품")
@@ -92,7 +96,7 @@ def load(raw: str | None) -> Cfg:
     except ValueError:
         d = {}
     c = Cfg()
-    if d.get("period") in PERIODS:
+    if d.get("period") in PERIOD_CHOICES:
         c.period = d["period"]
     if isinstance(d.get("top"), int) and TOP_MIN <= d["top"] <= TOP_MAX:
         c.top = d["top"]
@@ -220,7 +224,7 @@ def line_html(cfg: Cfg, i: int, name: str, n: int | None, prize: str | None = No
 
 
 def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None, yday_date: str = "",
-           me: tuple[int, int] | None = None) -> str:
+           me: tuple[int, int] | None = None, yday_label: str = "어제 당첨자") -> str:
     """rows = [(이름, 횟수)] 등수 순. yday = [(등수-1, 이름, 횟수, 상품)]. me = (내 등수, 횟수) — 1:1 만."""
     head = fill(cfg.head, {"기간": esc(label), "날짜": esc(date)})
     out = [head, ""] if head.strip() else []
@@ -231,7 +235,7 @@ def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None
     if me:
         out += ["", f"👤 나 — {me[0]}위 · {me[1]:,}회" if me[0] else "👤 나 — 아직 기록 없음"]
     if yday:
-        out += ["", f"🏆 <b>어제 당첨자</b> ({esc(yday_date)})"]
+        out += ["", f"🏆 <b>{esc(yday_label)}</b> ({esc(yday_date)})"]
         out += [line_html(cfg, i, name, n, prize) for i, name, n, prize in yday]
     if cfg.foot.strip():
         out += ["", cfg.foot]
@@ -254,11 +258,43 @@ def short_date(day: str) -> str:
     return f"{int(day[5:7])}/{int(day[8:10])}"
 
 
+def monday(tz, weeks_ago: int = 0, now: float | None = None):
+    d = datetime.fromtimestamp(now or time.time(), tz).date()
+    return d - timedelta(days=d.weekday() + 7 * weeks_ago)
+
+
+def span(key: str, tz, now: float | None = None) -> tuple[int, int | None, str]:
+    """기간 → (시작, 끝, 날짜 글). 이번 주 = 이번 월요일 0시부터 (매주 월요일 0시에 0부터 다시), 지난 주 = 지난 월~일."""
+    if key in ("thisweek", "lastweek"):
+        m = monday(tz, 1 if key == "lastweek" else 0, now)
+        start = datetime(m.year, m.month, m.day, tzinfo=tz)
+        until = int((start + timedelta(days=7)).timestamp()) if key == "lastweek" else None
+        return int(start.timestamp()), until, f"{short_date(m.isoformat())}~{short_date((m + timedelta(days=6)).isoformat())}"
+    since, until, _ = period_range(PERIODS[key][0], tz)
+    if key in ("week", "month"):
+        date = f"{short_date(day_of(tz, 6 if key == 'week' else 29))}~{short_date(day_of(tz))}"
+    else:
+        date = short_date(day_of(tz, 1 if key == "yesterday" else 0))
+    return since, until, date
+
+
+def weekly(cfg: "Cfg") -> bool:
+    """주 단위 방 (이번 주 순위 또는 매주 시상식) → '지난주 당첨자'."""
+    return cfg.period == "thisweek" or cfg.award == WEEKLY
+
+
+def award_key(tz, cfg: "Cfg", now: float | None = None) -> tuple[str, str]:
+    """(기록 열쇠, 순위 기간) — 매일 = 어제 날짜·yesterday, 매주 = 'w'+지난 월요일·lastweek (버튼 글에 ':' 없게)."""
+    if cfg.award == WEEKLY or (cfg.award < 0 and weekly(cfg)):
+        return "w" + monday(tz, 1, now).isoformat(), "lastweek"
+    return day_of(tz, 1, now), "yesterday"
+
+
 async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=None) -> tuple[str, str, list]:
     """(표시 이름, 날짜, [(row, 횟수)]) — 관리자 빼기면 텔레그램 관리자 목록으로 거름(봇이 모르면 안 거름)."""
     from . import stats
     key = period or cfg.period
-    since, until, label = period_range(PERIODS[key][0], svc.cfg.tz)
+    since, until, date = span(key, svc.cfg.tz)
     rule = await stats.min_chars(svc.db, chat_id)
     extra = 10 if cfg.no_admin else 0
     ck = (svc.db.__dict__.setdefault("_rank_tok", next(_SEQ)), chat_id, key, since, cfg.top + extra, rule)   # id() 는 시험에서 재사용됨
@@ -277,9 +313,6 @@ async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=
             admins = set()
         rows = [r for r in rows if r["user_id"] not in admins]
     rows = rows[:cfg.top]
-    date = short_date(day_of(svc.cfg.tz, 1 if key == "yesterday" else 0))
-    if key in ("week", "month"):
-        date = f"{short_date(day_of(svc.cfg.tz, 6 if key == 'week' else 29))}~{short_date(day_of(svc.cfg.tz))}"
     return PERIODS[key][1], date, rows
 
 
@@ -287,7 +320,7 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     """(내 등수, 횟수). 기록 없으면 (0, 0). 관리자 빼기는 등수에 반영 안 함 (대략)."""
     from . import stats
     from .db import count_filter
-    since, until, _ = period_range(PERIODS[period or cfg.period][0], svc.cfg.tz)
+    since, until, _ = span(period or cfg.period, svc.cfg.tz)
     end = until if until is not None else 1 << 62
     m = await stats.min_chars(svc.db, chat_id)
     mine = await svc.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
@@ -300,16 +333,20 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     return int(above["n"]) + 1, n
 
 
+def winners_label(cfg: Cfg) -> str:
+    return "지난주 당첨자" if weekly(cfg) else "어제 당첨자"
+
+
 async def yday_winners(svc, chat_id: int, cfg: Cfg, bot=None) -> tuple[str, list]:
-    """어제 당첨자: 시상식 기록이 있으면 그것, 없으면 어제 순위를 바로 셈 (상품은 지금 값)."""
-    day = day_of(svc.cfg.tz, 1)
-    rows = await svc.db._all("SELECT rank, name, n, prize FROM rank_awards WHERE chat_id=? AND day=? ORDER BY rank", (chat_id, day))
+    """어제(주 단위 방은 지난주) 당첨자: 시상식 기록이 있으면 그것, 없으면 그 기간 순위를 바로 셈 (상품은 지금 값)."""
+    key, period = award_key(svc.cfg.tz, cfg)
+    _, _, date = span(period, svc.cfg.tz)
+    rows = await svc.db._all("SELECT rank, name, n, prize FROM rank_awards WHERE chat_id=? AND day=? ORDER BY rank", (chat_id, key))
     if rows:
         # 기록엔 아이디로 남김(관리자 지급용) → 방에 보일 땐 지금 '가리기' 설정을 따름 (리뷰 2026-10-12)
-        return short_date(day), [(r["rank"] - 1, mask(r["name"]) if cfg.names == "mask" else r["name"], r["n"], r["prize"])
-                                 for r in rows]
-    _, _, live = await standings(svc, chat_id, cfg, "yesterday", bot)
-    return short_date(day), [(i, show_name(r, cfg.names), r["n"], cfg.prize(i)) for i, r in enumerate(live)]
+        return date, [(r["rank"] - 1, mask(r["name"]) if cfg.names == "mask" else r["name"], r["n"], r["prize"]) for r in rows]
+    _, _, live = await standings(svc, chat_id, cfg, period, bot)
+    return date, [(i, show_name(r, cfg.names), r["n"], cfg.prize(i)) for i, r in enumerate(live)]
 
 
 async def record_awards(db, chat_id: int, day: str, cfg: Cfg, rows: list) -> int:

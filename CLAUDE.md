@@ -654,9 +654,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 방장 화면 그룹 허브 🎁(m:bd) · 방 명령 `.혜택`(입구 버튼, 방마다 60초 1번) · AI 도구 benefit_menu · 1:1 메인 [🎁 혜택 메뉴](m:bdm, 켠 방 멤버에게만). 안내서 guide/brand-menu.md.
 
 ## 🏆 채팅 순위 꾸미기·시상식 (`chatrank.py`·`panels/chatrank.py`, tests/test_chatrank.py · 뮤테이션 19개, 2026-10-12 고객 'FOX 이벤트 봇처럼 · 하드코딩 없이')
-- 숫자는 소담이 기록에서(db.top_chatters + 📊 세는 기준 stats.min_chars), 모양은 방장 값(rank_rooms.cfg JSON): 기간 today/yesterday/week/month · 몇 등 3~10 ·
+- 숫자는 소담이 기록에서(db.top_chatters + 📊 세는 기준 stats.min_chars), 모양은 방장 값(rank_rooms.cfg JSON): 기간 today/yesterday/thisweek(월요일 0시부터 = 매주 0부터)/week(최근 7일)/month · 몇 등 3~10 ·
   등수별 상품 글(30자, 링크·@ X) · 줄 모양 `{등수} {이름} — {횟수}회 {상품}` · 등수 그림(띄어 쓴 이모지·움직이는 이모지) · 머리말 `{기간}{날짜}`·꼬리말 ·
-  이름 아이디/이름/가리기 · 관리자 빼기 · 어제 당첨자 칸 · 시상식 시각(-1/0/9/12시). 틀은 텔레그램 HTML 로(util.rich_html), 칸만 바꿈(clean_tpl 이 모르는 칸·링크·깨진 서식 거절).
+  이름 아이디/이름/가리기 · 관리자 빼기 · 어제(주 단위면 지난주) 당첨자 칸 · 시상식(-1/0/9/12시 = 어제, WEEKLY 100 = 매주 월요일 0시·지난 주 월~일, 기록 열쇠 'w'+월요일 — 백악관 '추첨은 월요일 자정'). 틀은 텔레그램 HTML 로(util.rich_html), 칸만 바꿈(clean_tpl 이 모르는 칸·링크·깨진 서식 거절).
 - 보이는 곳: 방 `.순위`(채팅순위·채팅왕, 방마다 20초 1번) · `.나`(내순위·내채팅, 한 사람 10초 1번, 방장 틀 me `{이름}{등수}{횟수}{기간}` — 고객 'FOX 처럼 .나 하면 채팅 몇 개') · 🎁 메뉴판 부품 'rank'(1:1, '👤 나 — N위') · 미니앱 🏆 칸 · 허브 🏆(m:crk). 글 아래 = 🎁 메뉴의 바로가기·문의 버튼(+혜택 메뉴 입구).
   움직이는 이모지가 거절되면 보통 이모지로 다시(send_html).
 - 시상식: 30초 틱, 그 시각에 (방,날짜) claim → 어제 하루 순위 방에 + rank_awards(INSERT OR IGNORE) + 상품 있는 등수만 관리자 1:1 [✅ N등 지급](rkp:<방>:<날짜>:<등수>, TG 관리자·한 번만). 상품은 방장이 직접.
