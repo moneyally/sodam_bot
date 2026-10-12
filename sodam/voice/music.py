@@ -152,6 +152,16 @@ def _blocked(msg: str) -> bool:
     return "sign in to confirm" in m or "not a bot" in m or "http error 429" in m or "po token" in m
 
 
+WAY_ROUNDS = 3                   # 우회 길을 번갈아 몇 바퀴 (막힘이 요청마다 무작위 — 2026-10-12 실측)
+WAY_GAP = 0.7                    # 다시 두드리기 전 쉬는 초
+
+
+def _way_retry(msg: str) -> bool:
+    """우회 길에서 다시 두드려 볼 오류: '봇이냐?'·받기 403·같은 영상이 길에 따라 '없음' (실측: 한 길은 없음, 다른 길은 됨)."""
+    m = msg.lower()
+    return _blocked(msg) or "http error 403" in m or "video is not available" in m
+
+
 ALT_TRACK = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A{}"
 SEARCH_N = 8                     # 기본 음원 검색 후보 수
 ALT_TRY = 4                      # 실제로 받아지는지 확인해 볼 후보 수 (DRM 잠긴 공식 음원 건너뛰기)
@@ -243,11 +253,17 @@ class Source:
         # 나가는 길(MUSIC_PROXY, 예: WARP socks5://127.0.0.1:40000 — 쉼표로 여러 개)이 있으면 쿠키 없이 그 길로 먼저 — 서버 IP 는
         # '봇이냐?'로 막혀도 그 길은 됨 (서버 실측 2026-10-08: 쿠키 없이 3곡 다 받음). 여러 길이면 지난번에 된 길부터, 안 되면 다음 길.
         # 길이 다 죽었거나 막히면 예전처럼 쿠키 → 쿠키 없이.
+        # '봇이냐?' 막힘은 요청마다 무작위 (서버 실측 2026-10-12: 같은 길·같은 곡 5번 → 2/5·4/5 성공) → 길을 번갈아 WAY_ROUNDS 바퀴.
+        # 다른 오류(없는 영상·지역 제한)면 다시 두드리지 않고 다음 단계로.
         start = self._way if self._way < len(ways) else 0
-        tries: list[tuple[str | None, str | None]] = [(None, ways[(start + i) % len(ways)]) for i in range(len(ways))] + \
+        tries: list[tuple[str | None, str | None]] = \
+            [(None, ways[(start + i) % len(ways)]) for i in range(len(ways) * WAY_ROUNDS)] + \
             [(c, None) for c in random.sample(jar, len(jar))] + [(None, None)]
         last = ""
-        for cookie, via in tries:
+        dead: set[str] = set()                    # 다시 두드려도 소용없는 길 (연결 안 됨·없는 영상 등) — 그 길만 건너뜀
+        for n, (cookie, via) in enumerate(tries):
+            if via and via in dead:
+                continue
             try:
                 with yt_dlp.YoutubeDL(self._opts(cookie, via, **extra)) as ydl:
                     got = fn(ydl)
@@ -257,7 +273,12 @@ class Source:
             except yt_dlp.utils.DownloadError as e:
                 last = str(e)
                 if via:
-                    log.info("%s 우회 길 실패 → 서버 IP 로: %s", where, _short(last, 200))
+                    again = _way_retry(last)
+                    if not again:
+                        dead.add(via)
+                    log.info("%s 우회 길 실패(%d) → %s: %s", where, n + 1, "다시" if again else "다른 길·서버 IP 로", _short(last, 160))
+                    if again:
+                        time.sleep(WAY_GAP)
                     continue
                 if not _blocked(last):
                     break

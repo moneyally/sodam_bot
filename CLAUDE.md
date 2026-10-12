@@ -839,6 +839,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   다른 프로그램 → 0번) → `voice/fetcher.py` ProcSource: Source 의 무거운 일은 자식 `python -m sodam.voice.fetcher` 2개(nice 5)가, 길이+pickle 로 주고받음,
   blocked_at 은 오갈 때마다 같이 → primary_ok 는 부모에서 바로, 300초 넘으면 자식 죽이고 새로. 끄기 MUSIC_PROC=0. 하네스: 가짜 노래 일꾼(10ms 박자 6,000조각)으로 조건 비교.
   ⑥ 우회 길 막힘은 잠깐씩 왔다 감 → 우회 길이 있으면 기본 음원 쉬는 시간 1시간 → 5분(PROXY_RETRY).
+  ⑦ (2026-10-12 '기본 음원 막혔다') '봇이냐?' 막힘은 **요청마다 무작위** (같은 길·같은 곡 5번 → 2/5·4/5) → `Source._run` 이 길을 번갈아 WAY_ROUNDS 3바퀴
+  (_way_retry: 봇이냐?·받기 403·'video is not available'), 다른 오류는 그 길만 dead. 쿠키 3개는 그날 전부 막힘(새 쿠키 필요).
   ③ 소리 줄로 보내는 곳은 `Worker._mic` 하나, 1초 120조각↑ 이면 '소리 조각 너무 많음' 기록 · ④ 우회 길 IPv4 만(소리 받기 403) · stereo=1 은 끔(의심).
 - **3차 (2026-10-09, tests/test_music_xfade.py · test_music.py, 뮤테이션 30여 개)**: ① 다음 곡을 미리 받고·크기 재고·풀어 둠(`Player._prefetch` → `_next`)
   → 넘어가거나 넘길 때 다시 안 엶(`_take_ready`) ② 곡마다 크기(LUFS, `Source.loudness` 가 fetcher 자식에서 ffmpeg ebur128, 메모 data/music/.loud/)
