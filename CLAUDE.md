@@ -646,12 +646,21 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 1:1 메뉴판 = ReplyKeyboardMarkup(is_persistent). 누른 글자는 `hooks.DM_TEXT_HOOKS`(handlers.on_private 의 menu.handle_input 다음)에서 정확히 같은 글자만 버튼으로.
   ↗ 바로가기 = KeyboardButton.web_app(https, t.me 는 글 버튼) · ≡ 메뉴 버튼 = setChatMenuButton(MenuButtonWebApp) 사람마다.
   채팅 긁기 = 같은 사진을 결과 카드로 editMessageMedia(has_spoiler 가림막) + 당첨이면 message_effect_id 🎉(1:1 만) + 당첨 스티커.
-- 미니앱 화면 = 애플풍(2026-10-12 오너): iOS 색·큰 제목·흐린 상단 바·세그먼트 탭·지갑 카드 복권·링 출석·뒤집는 운세·묶음 목록 픽, 텔레그램 밝기(colorScheme) 따라감.
+- 미니앱 화면 = TelegramUI(MIT) iOS 부품(Section·Cell·SegmentedControl·Banner·Snackbar) + 텔레그램 테마 색, 칸: 복권·출석·운세·🏆 순위·추천픽 (아래 🏆 채팅 순위).
 - 미니앱 = 봇 프로세스 안 asyncio 서버 127.0.0.1:8790(`hooks.STARTUP_HOOKS`, 딜러 봇 제외) ← Caddy `/app*`(update.sh diag_setup). 주소 = MINIAPP_URL 또는
   data/diag_setup.status 의 https 주소 + /app/?r=<코드>. initData 서명(HMAC 'WebAppData'·24시간·같은 이름 두 번 거절) 확인 뒤에만, 결과·출석은 서버 DB 가 정함(화면은 보여 주기만).
   API state/checkin/scratch(panels/brand.py 가 miniapp.register_api), 배경 f/bg/<코드>.jpg. 사람 분당 40·IP 분당 120, 머리·몸 16KB.
 - 복권 유효 기간 lotto_ticket_life 7d/day(그날 자정까지) — `lottery.valid_since`. 출석 처리 = `panels/lottery.checkin_info`(방·1:1·미니앱 공통).
 - 방장 화면 그룹 허브 🎁(m:bd) · 방 명령 `.혜택`(입구 버튼, 방마다 60초 1번) · AI 도구 benefit_menu · 1:1 메인 [🎁 혜택 메뉴](m:bdm, 켠 방 멤버에게만). 안내서 guide/brand-menu.md.
+
+## 🏆 채팅 순위 꾸미기·시상식 (`chatrank.py`·`panels/chatrank.py`, tests/test_chatrank.py · 뮤테이션 19개, 2026-10-12 고객 'FOX 이벤트 봇처럼 · 하드코딩 없이')
+- 숫자는 소담이 기록에서(db.top_chatters + 📊 세는 기준 stats.min_chars), 모양은 방장 값(rank_rooms.cfg JSON): 기간 today/yesterday/week/month · 몇 등 3~10 ·
+  등수별 상품 글(30자, 링크·@ X) · 줄 모양 `{등수} {이름} — {횟수}회 {상품}` · 등수 그림(띄어 쓴 이모지·움직이는 이모지) · 머리말 `{기간}{날짜}`·꼬리말 ·
+  이름 아이디/이름/가리기 · 관리자 빼기 · 어제 당첨자 칸 · 시상식 시각(-1/0/9/12시). 틀은 텔레그램 HTML 로(util.rich_html), 칸만 바꿈(clean_tpl 이 모르는 칸·링크·깨진 서식 거절).
+- 보이는 곳: 방 `.순위`(채팅순위·채팅왕, 방마다 20초 1번) · 🎁 메뉴판 부품 'rank'(1:1, '👤 나 — N위') · 미니앱 🏆 칸 · 허브 🏆(m:crk). 글 아래 = 🎁 메뉴의 바로가기·문의 버튼(+혜택 메뉴 입구).
+  움직이는 이모지가 거절되면 보통 이모지로 다시(send_html).
+- 시상식: 30초 틱, 그 시각에 (방,날짜) claim → 어제 하루 순위 방에 + rank_awards(INSERT OR IGNORE) + 상품 있는 등수만 관리자 1:1 [✅ N등 지급](rkp:<방>:<날짜>:<등수>, TG 관리자·한 번만). 상품은 방장이 직접.
+- 미니앱 디자인 = TelegramUI(github Telegram-Mini-Apps/TelegramUI, MIT) iOS 부품·색 토큰을 옮김 (--tg-theme-* = 사용자 텔레그램 테마). 방장 색은 브랜드 자리(복권 카드·링·상품 배지)에만.
 
 ## 🎬 AI 영상 만들기 (`video.py` 어댑터, `panels/videogen.py` 도구 make_video, tests/test_videogen.py · 뮤테이션 32개, 2026-09-30)
 - 오너 결정: 키는 오너가 직접, **방마다 한 주 6개**(video_weekly 0~50, 0=끔, 한국시간 월요일 0시 초기화 = counters (그 주 월요일 날짜, 방, 'video_week')),
