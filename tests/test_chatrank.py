@@ -145,6 +145,37 @@ async def room_command_posts_template_with_menu_buttons_and_is_rate_limited():
 
 
 @test
+async def me_command_shows_my_count_and_rank_in_room_template():
+    e = await setup([(A, 4), (B_, 2)])
+    from sodam.commands import CmdCtx, _INDEX
+    from sodam.permissions import Role
+    assert _INDEX["나"].fn is P.c_me and _INDEX["순위"].fn is P.c_rank, "고객이 쓰는 이름 그대로"
+    c = CmdCtx(e.svc, e.bot, FakeMsg(ROOM, B_, ".나", message_id=5), ROOM, B_, Role.MEMBER, [], "")
+    await P.c_me(c)
+    [(_, chat, text, kw)] = e.bot.named("send_message")
+    assert chat == ROOM and text == "📊 다라 님 — 오늘 채팅 2회 · 2위" and kw["reply_parameters"].message_id == 5, text
+    await P.c_me(c)
+    assert len(e.bot.named("send_message")) == 1, "한 사람 10초에 한 번"
+    ok, _ = await P.in_me(ctx(e), html_msg("{이름}님 {기간} {횟수}개 {등수}위 🔥"))
+    assert ok
+    c2 = CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".나 어제"), ROOM, A, Role.MEMBER, ["어제"], "어제")
+    await P.c_me(c2)
+    assert e.bot.named("send_message")[-1][2] == "📊 sin1n1 님 — 어제 채팅 기록이 아직 없어요."
+    c3 = CmdCtx(e.svc, e.bot, FakeMsg(ROOM, C, ".나"), ROOM, C, Role.MEMBER, [], "")
+    cr._CACHE.clear()
+    await P.c_me(c3)
+    assert "기록이 아직 없어요" in e.bot.named("send_message")[-1][2]
+    await e.db.log_message(ROOM, C.id, 999, "처음 쓴 글이에요", ts=int(time.time()))
+    c4 = CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".나"), ROOM, A, Role.MEMBER, [], "")
+    e.svc.db._write  # noqa
+    await e.db._write("DELETE FROM claims WHERE k LIKE 'crkme:%'")
+    await P.c_me(c4)
+    assert e.bot.named("send_message")[-1][2] == "sin1n1님 오늘 4개 1위 🔥", "방장이 바꾼 .나 모양"
+    ok, note = await P.in_me(ctx(e), html_msg("{이름} {등수}위"))
+    assert not ok and "횟수" in note
+
+
+@test
 async def custom_emoji_refused_is_resent_as_plain_emoji():
     class Picky(FakeBot):
         async def send_message(self, chat_id, text, **kw):
