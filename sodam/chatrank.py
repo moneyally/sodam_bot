@@ -78,6 +78,7 @@ class Cfg:
     yday: bool = True
     award: int = -1
     me: str = DEFAULT["me"]
+    reset_at: int = 0      # 채팅 수 초기화 시각 — 이 뒤 글만 셈 (글은 안 지움: AI 기억·검색·사칭 확인 기록 그대로). 0 = 안 함
 
     def icon(self, i: int) -> str:
         return self.icons[i] if i < len(self.icons) else ICONS[i]
@@ -112,6 +113,8 @@ def load(raw: str | None) -> Cfg:
     c.no_admin, c.yday = bool(d.get("no_admin", False)), bool(d.get("yday", True))
     if d.get("award") in AWARD_HOURS:
         c.award = d["award"]
+    if isinstance(d.get("reset_at"), int) and d["reset_at"] > 0:
+        c.reset_at = d["reset_at"]
     return c
 
 
@@ -295,6 +298,7 @@ async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=
     from . import stats
     key = period or cfg.period
     since, until, date = span(key, svc.cfg.tz)
+    since = max(since, cfg.reset_at)                   # 🔄 채팅 수 초기화 뒤 글만
     rule = await stats.min_chars(svc.db, chat_id)
     extra = 10 if cfg.no_admin else 0
     ck = (svc.db.__dict__.setdefault("_rank_tok", next(_SEQ)), chat_id, key, since, cfg.top + extra, rule)   # id() 는 시험에서 재사용됨
@@ -321,6 +325,7 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     from . import stats
     from .db import count_filter
     since, until, _ = span(period or cfg.period, svc.cfg.tz)
+    since = max(since, cfg.reset_at)
     end = until if until is not None else 1 << 62
     m = await stats.min_chars(svc.db, chat_id)
     mine = await svc.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "

@@ -340,6 +340,37 @@ async def weekly_mode_counts_from_monday_and_awards_last_week_on_monday_midnight
 
 
 @test
+async def reset_counts_only_from_now_and_can_be_undone():
+    """고객 2026-10-12 백악관 '채팅 수만 초기화돼요?' — 글은 안 지우고 그 뒤 글만 셈."""
+    e = await setup([(A, 4), (B_, 2)])
+    n_msgs = (await e.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=?", (ROOM,)))["n"]
+    sc = await P.r_zero_ask(ctx(e))
+    assert "0부터 다시" in sc.text and (await cr.get(e.db, ROOM)).reset_at == 0, "묻기만 (바로 안 바뀜)"
+    await P.r_zero(ctx(e))
+    cfg = await cr.get(e.db, ROOM)
+    assert cfg.reset_at > 0
+    _, _, rows = await cr.standings(e.svc, ROOM, cfg, None, e.bot)
+    assert rows == [] and await cr.my_place(e.svc, ROOM, A.id, cfg) == (0, 0), "초기화 뒤엔 0"
+    assert (await e.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=?", (ROOM,)))["n"] == n_msgs, "글은 그대로"
+    await e.db.log_message(ROOM, C.id, 950, "초기화 뒤 첫 글이에요", ts=int(time.time()) + 2)
+    cr._CACHE.clear()
+    _, _, rows = await cr.standings(e.svc, ROOM, cfg, None, e.bot)
+    assert [r["user_id"] for r in rows] == [C.id]
+    assert "초기화 취소" in str((await P.s_crk(ctx(e))).kb.to_dict())
+    await P.r_reset(ctx(e))
+    assert (await cr.get(e.db, ROOM)).reset_at == cfg.reset_at, "모양 처음으로 해도 초기화는 그대로"
+    await P.r_zero_undo(ctx(e))
+    cfg = await cr.get(e.db, ROOM)
+    _, _, rows = await cr.standings(e.svc, ROOM, cfg, None, e.bot)
+    assert cfg.reset_at == 0 and [r["user_id"] for r in rows][:2] == [A.id, B_.id], "취소하면 원래 숫자"
+    from sodam import tools
+    from sodam.permissions import Role
+    dm = tools.ToolCtx(e.svc, e.bot, ADMIN.id, ADMIN, Role.MEMBER, {})
+    out = await P.t_chat_rank(dm, {"action": "set", "reset": "now"})
+    assert "0부터 다시" in out and (await cr.get(e.db, ROOM)).reset_at > 0, "말로도 ('채팅 수 초기화해줘')"
+
+
+@test
 async def admin_sets_ranking_by_talking_in_dm_including_premium_emoji():
     """고객 2026-10-12: 1:1 에 '1등 5만원… 5글자 이상… 🥇🥈(움직이는 이모지)' 라고 말하면 그대로."""
     from sodam import tools
