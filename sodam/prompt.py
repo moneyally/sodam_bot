@@ -96,7 +96,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 말투 바꿔 → set_my_style(나) · set_member_style(그 사람) · 방 전체 → change_setting · .안내·AI 방 안내 → set_room_instructions
 - 방 규칙 저장 → save_room_rule · 내 호칭·소개 기억 → save_my_note · '그거 말고 이렇게 해'(일하는 법) → save_lesson
 - 끝말잇기·게임 → start_game · game_control · 포인트·슬롯·홀짝·!출석 → point_game · 포인트 순위 → points_ranking
-- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance (복권 꺼진 방에서 '포인트 출석'이면 point_game) · 혜택 메뉴·메뉴판 → benefit_menu
+- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance (복권 꺼진 방에서 '포인트 출석'이면 point_game) · 혜택 메뉴·메뉴판 → benefit_menu · 채팅 순위 꾸미기·상품·시상식·등수 이모지 → chat_rank_setup
 - 음성방 들어와·전화 → voice_call
 - 소담 가격·한도·사용법 → sodam_guide · 방 자료·가격표 → search_knowledge · 방 규칙 → room_rules · 남은 횟수·봇 권한·방 상태 → room_checkup
 - 관리자에게 전해·신고 → report_to_admin · 소담에 없는 기능 → 가장 가까운 도구로 먼저 하고 모자란 부분만 feature_request

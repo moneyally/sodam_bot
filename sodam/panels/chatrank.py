@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
@@ -430,3 +431,146 @@ menu.register_input("crkft", f"📝 꼬리말을 보내 주세요 ({cr.FOOT_MAX}
                     "crk", in_foot, s_crk)
 hooks.add_callback_handler("rkp", on_paid)
 hooks.add_tick_hook(_award_tick)
+
+
+# ── AI 도구: 말로 꾸미기 (고객 2026-10-12 백악관 — 1:1 에서 '1등 5만원… 5글자 이상… 🥇🥈' 처럼 말하면 그대로) ──
+AWARD_WORDS = {"off": -1, "daily0": 0, "daily9": 9, "daily12": 12, "weekly": cr.WEEKLY}
+
+
+def _custom_emoji_tags(msg) -> list[str]:
+    """요청 메시지의 움직이는 이모지(순서대로) — AI 는 그 숨은 번호를 못 옮기므로 코드가 메시지에서 직접."""
+    html = rich_html(msg) if msg is not None else None
+    return re.findall(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", html or "", re.S)
+
+
+async def t_chat_rank(ctx, a: dict) -> str:
+    from .. import tools
+    room, head = await tools.room_scope(ctx, a)
+    if room is None:
+        return head
+    cid, uid = room.chat_id, ctx.caller.id
+    try:
+        admin = await ctx.svc.perms.is_admin(ctx.bot, cid, uid)
+    except TelegramError:
+        admin = False
+    if not admin:
+        return head + "이 방 관리자만 채팅 순위 모양을 바꿀 수 있음. 관리자에게 부탁하라고 안내."
+    cfg = await cr.get(ctx.svc.db, cid)
+    if a.get("action") != "set":
+        return head + _summary(cfg, await ctx.svc.db.get_settings(cid))
+    done, bad = [], []
+
+    def tpl(key, fields, limit, need=()):
+        raw = a.get(key)
+        if raw is None:
+            return
+        raw = str(raw).strip()
+        if raw in ("", "없음") and key in ("head", "foot"):
+            setattr(cfg, key, "")
+            done.append(key)
+            return
+        try:
+            setattr(cfg, key, cr.clean_tpl(esc(raw), fields, limit, need))
+            done.append(key)
+        except ValueError as e:
+            bad.append(f"{key}: {e}")
+
+    if a.get("period") in cr.PERIOD_CHOICES:
+        cfg.period = a["period"]
+        done.append("period")
+    if isinstance(a.get("top"), int):
+        cfg.top = max(cr.TOP_MIN, min(cr.TOP_MAX, a["top"]))
+        done.append("top")
+    if isinstance(a.get("prizes"), list):
+        try:
+            cfg.prizes = cr.clean_prizes("\n".join(str(p) for p in a["prizes"]))
+            done.append("prizes")
+        except ValueError as e:
+            bad.append(f"prizes: {e}")
+    tags = _custom_emoji_tags(ctx.request_msg) if a.get("icons_from_message") else []
+    if tags:
+        cfg.icons = tags[:cr.TOP_MAX]
+        done.append(f"icons(움직이는 이모지 {len(cfg.icons)}개)")
+    elif a.get("icons"):
+        try:
+            cfg.icons = cr.clean_icons(esc(str(a["icons"])))
+            done.append("icons")
+        except ValueError as e:
+            bad.append(f"icons: {e}")
+    tpl("head", cr.HEAD_FIELDS, cr.HEAD_MAX)
+    tpl("foot", (), cr.FOOT_MAX)
+    tpl("line", cr.LINE_FIELDS, cr.LINE_MAX, ("이름",))
+    tpl("me", cr.ME_FIELDS, cr.LINE_MAX, ("횟수",))
+    if a.get("names") in cr.NAME_MODES:
+        cfg.names = a["names"]
+        done.append("names")
+    for k in ("no_admin", "yday"):
+        if isinstance(a.get(k), bool):
+            setattr(cfg, k, a[k])
+            done.append(k)
+    if a.get("award") in AWARD_WORDS:
+        cfg.award = AWARD_WORDS[a["award"]]
+        if cfg.award >= 0 and not await ctx.svc.paid_features(cid):
+            cfg.award = -1
+            bad.append("award: 이용 기간이 끝난 방이라 시상식은 못 켬")
+        else:
+            done.append("award")
+    await cr.save(ctx.svc.db, cid, cfg, uid)
+    if isinstance(a.get("min_chars"), int):
+        await ctx.svc.db.set_setting(cid, "chat_min_chars", max(0, min(50, a["min_chars"])))
+        done.append("min_chars")
+    if isinstance(a.get("no_repeat"), bool):
+        await ctx.svc.db.set_setting(cid, "chat_no_repeat", a["no_repeat"])
+        done.append("no_repeat")
+    await ctx.svc.db.log_mod(cid, uid, None, "setting", ("chat_rank(AI) " + ",".join(done))[:200])
+    out = head + (f"저장함: {', '.join(done)}." if done else "바뀐 것 없음.")
+    if bad:
+        out += " 못 넣은 것: " + " / ".join(bad) + " — 이유를 짧게 말하고 다시 보내 달라고 할 것."
+    if done and ctx.chat_id > 0:                          # 1:1 이면 실제 모양을 바로 보여 줌
+        try:
+            await send_html(ctx.bot, uid, "👀 <b>미리보기</b>\n\n" + await board(ctx.svc, ctx.bot, cid, me=uid))
+            out += " 1:1 에 실제 모양 미리보기를 보냈음 (그대로 맞는지 봐 달라고, 방에 올리려면 '.순위' 또는 🏆 화면 [📣 방에 올리기])."
+        except TelegramError:
+            pass
+    return out + "\n" + _summary(await cr.get(ctx.svc.db, cid), await ctx.svc.db.get_settings(cid))
+
+
+def _summary(cfg: cr.Cfg, s: dict) -> str:
+    return (f"[지금 설정] 기간 {cr.PERIODS[cfg.period][1]} · {cfg.top}등까지 · 상품 {cfg.prizes or '없음'} · "
+            f"등수 그림 {len(cfg.icons)}개(없으면 🥇🥈🥉…) · 제목 '{html_plain(cfg.head)[:60]}' · 꼬리말 '{html_plain(cfg.foot)[:80]}' · "
+            f"이름 {cr.NAME_MODES[cfg.names]} · 관리자 빼기 {cfg.no_admin} · 지난/어제 당첨자 칸 {cfg.yday} · 시상식 {_hour(cfg.award)} · "
+            f"{int(s.get('chat_min_chars') or 0)}글자 이상만(0=전부) · 도배 빼기 {bool(s.get('chat_no_repeat'))}")
+
+
+def _register_tool() -> None:
+    from .. import tools
+    from ..permissions import Role
+    tools.register_tool(tools.Tool(
+        "chat_rank_setup",
+        "채팅 순위(.순위·.나·시상식) 모양을 말로 꾸미기 — 관리자만. '1등 5만원…', '5글자 이상만', '매주 월요일 0시 추첨', '제목은 …', "
+        "'등수 이모지 🥇 🥈…', '관리자 빼줘'. action=show 지금 설정 / set 바꿀 것만 넣기. 1:1 이면 room(방 이름), 바꾼 뒤 실제 모양 미리보기를 1:1 로 보냄. "
+        "메시지에 움직이는 이모지가 있으면 icons_from_message=true (숨은 번호는 코드가 메시지에서 직접 가져감). "
+        "제목·꼬리말 칸: {기간} {날짜}. 상품은 보여 주기만 (지급은 관리자가 직접).",
+        {"action": {"type": "string", "enum": ["show", "set"]},
+         "room": {"type": "string", "description": "1:1 에서 방 이름"},
+         "period": {"type": "string", "enum": list(cr.PERIOD_CHOICES),
+                    "description": "today 오늘 · yesterday 어제 · thisweek 이번 주(월요일 0시부터, 매주 0부터 다시) · week 최근 7일 · month 최근 30일"},
+         "top": {"type": "integer", "description": "몇 등까지 3~10"},
+         "prizes": {"type": "array", "items": {"type": "string"}, "description": "1등부터 상품 글 (예: ['50,000원','40,000원'])"},
+         "icons": {"type": "string", "description": "보통 이모지 등수 그림, 띄어서 (예: '🥇 🥈 🥉 4️⃣ 5️⃣')"},
+         "icons_from_message": {"type": "boolean", "description": "요청 메시지에 움직이는(프리미엄) 이모지가 있으면 true"},
+         "head": {"type": "string", "description": "맨 위 제목 (줄바꿈 \\n, 칸 {기간} {날짜}, '없음' = 지우기)"},
+         "foot": {"type": "string", "description": "맨 아래 문구 ('없음' = 지우기)"},
+         "line": {"type": "string", "description": "한 줄 모양, 칸 {등수} {이름} {횟수} {상품} (이름 필수)"},
+         "me": {"type": "string", "description": ".나 한 줄, 칸 {이름} {등수} {횟수} {기간} (횟수 필수)"},
+         "names": {"type": "string", "enum": list(cr.NAME_MODES), "description": "user 아이디 · name 이름 · mask 가리기"},
+         "no_admin": {"type": "boolean", "description": "관리자를 순위에서 빼기"},
+         "yday": {"type": "boolean", "description": "어제(주 단위면 지난주) 당첨자 칸"},
+         "award": {"type": "string", "enum": list(AWARD_WORDS),
+                   "description": "시상식: off · daily0/daily9/daily12 매일(어제 순위) · weekly 매주 월요일 0시(지난 주 순위)"},
+         "min_chars": {"type": "integer", "description": "몇 글자 이상만 셀지 (0=전부, 띄어쓰기 빼고)"},
+         "no_repeat": {"type": "boolean", "description": "같은 글 10분 안 반복은 1번만"}},
+        ["action"], t_chat_rank, room_role=Role.ADMIN))
+
+
+_register_tool()
