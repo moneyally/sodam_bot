@@ -48,6 +48,8 @@ from .panels import lottery as _lottery  # noqa: E402
 _lottery.register_commands()    # .출석 · .복권 · .복권당첨 · .출석순위
 from .panels import brand as _brand  # noqa: E402
 _brand.register_commands()      # .혜택 (방 전용 1:1 메뉴 입구)
+from .panels import chatrank as _chatrank  # noqa: E402
+_chatrank.register_commands()   # .순위 (방장이 꾸민 채팅 순위)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다

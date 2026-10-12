@@ -289,6 +289,9 @@ async def press(svc, bot, user, room: brand.Room, b: dict) -> None:
             return
         sc = await route.handler(PanelCtx(svc, bot, uid, None, []))
         await menu.send_panel(svc, bot, uid, lambda: bot.send_message(uid, sc.text, parse_mode="HTML", reply_markup=sc.kb))
+    elif kind == "rank":
+        from .chatrank import dm_board
+        await dm_board(svc, bot, uid, room)
     elif kind == "app":
         url = app_url(svc, room)
         if url:
@@ -449,6 +452,13 @@ async def _state(svc, bot, room: brand.Room, user: dict) -> dict:
                                   "away_pct": sp_.get("away", 0) * 100 // n if n else 0})
         except Exception:
             log.exception("miniapp picks failed")
+    rank_out = None
+    if "rank" in kinds or "app" in kinds:
+        try:
+            from .chatrank import app_data
+            rank_out = await app_data(svc, bot, cid, uid)
+        except Exception:
+            log.exception("miniapp rank failed")
     c = room.colors
     bg = await svc.db._one("SELECT file FROM brand_images WHERE chat_id=? AND slot='bg'", (cid,))
     return {
@@ -458,8 +468,8 @@ async def _state(svc, bot, room: brand.Room, user: dict) -> dict:
         "tpl": {k: room.texts.get(k) or brand.TEXTS[k][1] for k in brand.TEXTS if brand.TEXTS[k][2]},
         "bg": f"f/bg/{room.code}.jpg?v={bg['file'][-14:-4]}" if bg else None,
         # 복권이 켜진 방은 복권 칸을 늘 넣음 (출석 카드의 ✋ 버튼이 &t=lotto 로 열기 때문 — 리뷰 2026-10-12)
-        "tabs": [k for k in ("lotto", "checkin", "fortune", "picks")
-                 if k in kinds or "app" in kinds or (k == "lotto" and s.get("lotto_enabled"))],
+        "tabs": [k for k in ("lotto", "checkin", "fortune", "rank", "picks")
+                 if (k in kinds or "app" in kinds or (k == "lotto" and s.get("lotto_enabled"))) and (k != "rank" or rank_out)],
         "lotto": {"on": bool(s.get("lotto_enabled")), "prize": str(s.get("lotto_prize", "")),
                   "left": await lottery.open_tickets(svc.db, cid, uid, life=s.get("lotto_ticket_life", "7d"), tz=tz)
                   if s.get("lotto_enabled") else 0,
@@ -469,6 +479,7 @@ async def _state(svc, bot, room: brand.Room, user: dict) -> dict:
         "fortune": {"grade": f["grade"], "overall": f["overall"], "money": f["money"], "love": f["love"], "health": f["health"],
                     "number": f["number"], "color": f["color"], "tip": f["tip"]},
         "picks": picks_out,
+        "rank": rank_out,
     }
 
 

@@ -71,7 +71,8 @@ EVAL = [("소담아 근데 너 결제하면 얼마야?", {"pricing", "payment"})
         ("뉴스 알림 켜는법", {"news"}), ("속보 알림 끄고 싶어", {"news"}), ("코인 뉴스도 받을 수 있어?", {"news"}), ("누가 만들었어", {"faq"}), ("modes", {"modes"}), ("ai-chat", {"ai-chat"})]
 # 관리자 말로 하는 관리 (tests/test_admin_nl.py, 2026-09-30)
 EVAL += [("혜택 메뉴 어떻게 켜", {"brand-menu"}), ("1:1 메뉴판 버튼 색 바꾸는법", {"brand-menu"}),
-         ("손으로 긁는 복권 미니앱 있어?", {"brand-menu", "attendance"})]
+         ("손으로 긁는 복권 미니앱 있어?", {"brand-menu", "attendance"}),
+         ("채팅 순위 상품 넣고 꾸미는 법", {"chat-rank"}), ("자정 시상식 어떻게 켜", {"chat-rank"})]
 EVAL += [("출석하면 복권 주는거 있어?", {"attendance"}), ("복권 당첨되면 경품 누가 줘", {"attendance"}), ("오늘 운세 봐주는거 있어?", {"attendance"}), ("오늘의 픽 어디서 봐", {"sports-picks"})]
 EVAL += [("승부예측 랭킹 같은거 있어?", {"sports-picks"}), ("경기 분석 해주는 기능 있어", {"sports-picks"}),
          ("패드립하면 자동으로 채금돼?", {"security"}), ("성희롱 하면 추방되게 할수있어", {"security"}),
