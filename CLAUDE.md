@@ -642,10 +642,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   `brand.usable` = 켜짐·이용 기간·멤버(DB members − member_left, 없으면 get_chat_member 로 한 번 더) 를 **쓸 때마다** 다시 확인. 기록은 원래 표 그대로 (방, 사람) 키.
 - 전부 방장 값(코드는 기본값만): 버튼 = 부품 PARTS(checkin·lotto·fortune·picks·alerts·app·link·contact·text) + 이름·색 style(danger/success/primary, Bot API 9.4)·
   넓이·버튼 앞 프리미엄 이모지(icon_custom_emoji_id — 봇 주인 프리미엄일 때만, 거절되면 `_icons_off` 로 빼고 다시) · 카드 글자 TEXTS({칸} 검사) · 색(묶음 + #RRGGBB) ·
-  그림(올리기 / AI 배경 하루 6장 brand_img, 글자는 AI 아니고 PIL) · 당첨 스티커(스티커 공방 레시피 STICKER_LOOKS, slot 'stk').
+  그림(올리기 / AI 배경 = 방 그림 한도 image_daily 와 같은 카운터, 글자는 AI 아니고 PIL) · 당첨 스티커(스티커 공방 레시피 STICKER_LOOKS, slot 'stk').
 - 1:1 메뉴판 = ReplyKeyboardMarkup(is_persistent). 누른 글자는 `hooks.DM_TEXT_HOOKS`(handlers.on_private 의 menu.handle_input 다음)에서 정확히 같은 글자만 버튼으로.
   ↗ 바로가기 = KeyboardButton.web_app(https, t.me 는 글 버튼) · ≡ 메뉴 버튼 = setChatMenuButton(MenuButtonWebApp) 사람마다.
   채팅 긁기 = 같은 사진을 결과 카드로 editMessageMedia(has_spoiler 가림막) + 당첨이면 message_effect_id 🎉(1:1 만) + 당첨 스티커.
+- 미니앱 화면 = 애플풍(2026-10-12 오너): iOS 색·큰 제목·흐린 상단 바·세그먼트 탭·지갑 카드 복권·링 출석·뒤집는 운세·묶음 목록 픽, 텔레그램 밝기(colorScheme) 따라감.
 - 미니앱 = 봇 프로세스 안 asyncio 서버 127.0.0.1:8790(`hooks.STARTUP_HOOKS`, 딜러 봇 제외) ← Caddy `/app*`(update.sh diag_setup). 주소 = MINIAPP_URL 또는
   data/diag_setup.status 의 https 주소 + /app/?r=<코드>. initData 서명(HMAC 'WebAppData'·24시간·같은 이름 두 번 거절) 확인 뒤에만, 결과·출석은 서버 DB 가 정함(화면은 보여 주기만).
   API state/checkin/scratch(panels/brand.py 가 miniapp.register_api), 배경 f/bg/<코드>.jpg. 사람 분당 40·IP 분당 120, 머리·몸 16KB.
