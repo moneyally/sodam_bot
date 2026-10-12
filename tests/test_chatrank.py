@@ -339,5 +339,31 @@ async def weekly_mode_counts_from_monday_and_awards_last_week_on_monday_midnight
     assert "지난주 당첨자" in html and "다라 — 9회 5만원" in html
 
 
+@test
+async def admin_sets_ranking_by_talking_in_dm_including_premium_emoji():
+    """고객 2026-10-12: 1:1 에 '1등 5만원… 5글자 이상… 🥇🥈(움직이는 이모지)' 라고 말하면 그대로."""
+    from sodam import tools
+    from sodam.permissions import Role
+    e = await setup([(A, 4), (B_, 2)])
+    req = FakeMsg(ADMIN.id, ADMIN, "1등 5만원 2등 4만원, 5글자 이상만, 매주 월요일 추첨 🔥 👑")
+    req.entities = (SimpleNamespace(type="custom_emoji"),)
+    req.text_html = '1등 5만원 2등 4만원, 5글자 이상만 <tg-emoji emoji-id="11">🔥</tg-emoji> <tg-emoji emoji-id="22">👑</tg-emoji>'
+    dm = tools.ToolCtx(e.svc, e.bot, ADMIN.id, ADMIN, Role.MEMBER, {}, request_msg=req)
+    out = await P.t_chat_rank(dm, {"action": "set", "prizes": ["5만원", "4만원"], "min_chars": 5, "award": "weekly",
+                                   "period": "thisweek", "icons_from_message": True, "head": "🏆 {기간} 채팅왕", "no_admin": True})
+    cfg = await cr.get(e.db, ROOM)
+    assert cfg.prizes == ["5만원", "4만원"] and cfg.award == cr.WEEKLY and cfg.period == "thisweek" and cfg.no_admin, out
+    assert cfg.icons == ['<tg-emoji emoji-id="11">🔥</tg-emoji>', '<tg-emoji emoji-id="22">👑</tg-emoji>'], "숨은 번호는 메시지에서"
+    assert cfg.head == "🏆 {기간} 채팅왕" and (await e.db.get_settings(ROOM))["chat_min_chars"] == 5
+    prev = [c for c in e.bot.named("send_message") if c[1] == ADMIN.id][-1][2]
+    assert prev.startswith("👀 <b>미리보기</b>") and "이번 주 채팅왕" in prev, "1:1 에 실제 모양"
+    out = await P.t_chat_rank(dm, {"action": "set", "head": "{닉네임} 순위", "prizes": ["t.me/+abc"]})
+    assert "못 넣은 것" in out and (await cr.get(e.db, ROOM)).head == "🏆 {기간} 채팅왕", "틀린 값은 안 들어감"
+    member = tools.ToolCtx(e.svc, e.bot, A.id, A, Role.MEMBER, {})
+    assert "관리자만" in await P.t_chat_rank(member, {"action": "set", "top": 3}) and (await cr.get(e.db, ROOM)).top == 5
+    assert "[지금 설정]" in await P.t_chat_rank(dm, {"action": "show"})
+    assert "chat_rank_setup" in tools._BY_NAME
+
+
 if __name__ == "__main__":
     run_all()
