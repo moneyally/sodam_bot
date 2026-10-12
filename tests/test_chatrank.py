@@ -303,5 +303,41 @@ async def award_tick_runs_once_per_room_per_day_at_the_chosen_hour():
     assert len(posts) == 1, "그 시각에 하루 한 번만"
 
 
+@test
+async def weekly_mode_counts_from_monday_and_awards_last_week_on_monday_midnight():
+    """고객 2026-10-12 (백악관): '추첨은 일주일에 한 번 월요일 자정 00시' + 매주 0부터 다시."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Seoul")
+    wed = datetime(2026, 10, 14, 15, 0, tzinfo=tz).timestamp()          # 수요일
+    since, until, date = cr.span("thisweek", tz, wed)
+    assert datetime.fromtimestamp(since, tz).strftime("%a %H") == "Mon 00" and until is None and date == "10/12~10/18"
+    since, until, date = cr.span("lastweek", tz, wed)
+    assert (datetime.fromtimestamp(since, tz).day, datetime.fromtimestamp(until, tz).day, date) == (5, 12, "10/5~10/11")
+    c = cr.Cfg(period="thisweek", award=cr.WEEKLY)
+    assert cr.award_key(tz, c, wed) == ("w2026-10-05", "lastweek") and cr.winners_label(c) == "지난주 당첨자"
+    assert P.due(c, datetime(2026, 10, 19, 0, 5, tzinfo=tz)) and not P.due(c, datetime(2026, 10, 20, 0, 5, tzinfo=tz)), "월요일 0시만"
+    assert not P.due(c, datetime(2026, 10, 19, 9, 0, tzinfo=tz))
+    assert cr.award_key(tz, cr.Cfg(award=0), wed)[1] == "yesterday" and P.due(cr.Cfg(award=0), datetime(2026, 10, 20, 0, 1, tzinfo=tz))
+    assert cr.load('{"period": "lastweek"}').period == "today", "방장이 고르는 기간은 PERIOD_CHOICES 만"
+    # 지난 주에 쓴 글은 이번 주 순위에 안 들어감 (= 매주 0부터)
+    e = await setup([(A, 3)])
+    last = int(cr.span("lastweek", e.svc.cfg.tz)[0]) + 3600
+    for i in range(9):
+        await e.db.log_message(ROOM, B_.id, 700 + i, f"지난주 글 {i}번째", ts=last + i)
+    wk = cr.Cfg(period="thisweek", award=cr.WEEKLY, prizes=["5만원"])
+    label, _, rows = await cr.standings(e.svc, ROOM, wk, None, e.bot)
+    assert label == "이번 주" and [r["user_id"] for r in rows] == [A.id]
+    key, period = cr.award_key(e.svc.cfg.tz, wk)
+    assert await P.award(e.svc, e.bot, ROOM, wk, key, period)
+    post = [c for c in e.bot.named("send_message") if c[1] == ROOM][-1][2]
+    assert "지난 주" in post and "다라 — 9회 5만원" in post, post
+    [dm] = [c for c in e.bot.named("send_message") if c[1] == ADMIN.id]
+    data = dm[3]["reply_markup"].inline_keyboard[0][0].callback_data
+    assert data == f"rkp:{ROOM}:{key}:1" and data.count(":") == 3, "날짜 열쇠에 ':' 없음 (버튼 쪼개기)"
+    html = await P.board(e.svc, e.bot, ROOM, wk)
+    assert "지난주 당첨자" in html and "다라 — 9회 5만원" in html
+
+
 if __name__ == "__main__":
     run_all()

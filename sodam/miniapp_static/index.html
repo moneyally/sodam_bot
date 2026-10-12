@@ -428,7 +428,7 @@ canvas.gone{opacity:0;pointer-events:none}
                   title: R.me.rank ? R.me.rank + "위" : "아직 기록 없음", sub: R.me.n ? num(R.me.n) + "회" : "채팅하면 순위에 올라요"});
     }
     if (R.yday && R.yday.length) {
-      const y = section(m, "어제 당첨자 · " + R.ydate);
+      const y = section(m, (R.ylabel || "어제 당첨자") + " · " + R.ydate);
       R.yday.forEach(r => cell(y, {before: rankAv(r), title: r.name, sub: r.n ? num(r.n) + "회" : "",
                                    after: r.prize ? el("span","badge gray", r.prize) : null}));
     }
