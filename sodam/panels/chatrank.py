@@ -255,6 +255,8 @@ async def s_crk(c: PanelCtx) -> Screen:
              f"관리자 빼기: {'✅' if cfg.no_admin else '❌'} · 어제 당첨자 칸: {'✅' if cfg.yday else '❌'}",
              f"🕛 시상식: <b>{_hour(cfg.award)}</b> (매일 = 어제 하루 순위, 매주 월요일 0시 = 지난 주 월~일 순위를 방에 올리고, 상품 있으면 관리자 1:1 에 [✅ 지급] 버튼)",
              f"📏 세는 기준: {rule} (📊 리포트 화면에서 바꿔요)"]
+    if cfg.reset_at:
+        lines.append(f"🔄 채팅 수 초기화: {datetime.fromtimestamp(cfg.reset_at, c.svc.cfg.tz):%m/%d %H:%M} 뒤 글만 셈 (대화 기록은 그대로)")
     cid = c.cid
     rows = [[B(f"📅 기간: {cr.PERIODS[cfg.period][1]} ▸", f"m:crkp:{cid}"), B(f"🔢 {cfg.top}등까지 ▸", f"m:crkn:{cid}")],
             [B("💰 상품", f"m:in:{cid}:crkpz"), B("✏️ 줄 모양", f"m:in:{cid}:crkln")],
@@ -265,6 +267,7 @@ async def s_crk(c: PanelCtx) -> Screen:
              B(("✅" if cfg.yday else "❌") + " 어제 당첨자", f"m:crky:{cid}")],
             [B(f"🕛 시상식: {_hour(cfg.award)} ▸", f"m:crkw:{cid}"), B("📏 세는 기준", f"m:rp:{cid}")],
             [B("👀 미리보기 (내 1:1)", f"m:crkv:{cid}"), B("📣 방에 올리기", f"m:crkpost:{cid}")],
+            [B("🔄 채팅 수 0부터 다시", f"m:crk0:{cid}")] + ([B("↩️ 초기화 취소", f"m:crk0x:{cid}")] if cfg.reset_at else []),
             [B("↩️ 처음 모양으로", f"m:crkr:{cid}")], menu._back(cid)]
     return Screen("\n".join(lines)[:3900], menu._kb(rows))
 
@@ -315,11 +318,32 @@ async def r_award(c: PanelCtx) -> Screen:
 
 async def r_reset(c: PanelCtx) -> Screen:
     old = await cr.get(c.svc.db, c.cid)
-    fresh = cr.Cfg(award=old.award)        # 시상식 시각은 그대로 (모양만 처음으로)
+    fresh = cr.Cfg(award=old.award, reset_at=old.reset_at)   # 시상식 시각·채팅 수 초기화는 그대로 (모양만 처음으로)
     await cr.save(c.svc.db, c.cid, fresh, c.uid)
     sc = await s_crk(c)
     sc.toast = "↩️ 처음 모양으로 돌렸어요 (상품·그림·머리말·꼬리말 지움)"
     sc.alert = True
+    return sc
+
+
+async def r_zero_ask(c: PanelCtx) -> Screen:
+    """초기화는 되돌릴 수 있지만 순위가 바로 바뀌니 한 번 더 묻기."""
+    text = ("🔄 <b>채팅 수를 0부터 다시 셀까요?</b>\n"
+            "지금부터 쓴 글만 <code>.순위</code> · <code>.나</code> · 시상식에 셈. 대화 기록·AI 기억·<code>.랭킹</code> 은 그대로예요.\n"
+            "잘못 눌렀으면 [↩️ 초기화 취소] 로 원래대로 돌아가요.")
+    return Screen(text, menu._kb([[B("✅ 0부터 다시", f"m:crk0y:{c.cid}"), B("취소", f"m:crk:{c.cid}")]]))
+
+
+async def r_zero(c: PanelCtx) -> Screen:
+    now = int(datetime.now(c.svc.cfg.tz).timestamp())
+    sc = await _change(c, "🔄 지금부터 0부터 다시 세요", reset_at=now)
+    cr._CACHE.clear()
+    return sc
+
+
+async def r_zero_undo(c: PanelCtx) -> Screen:
+    sc = await _change(c, "↩️ 초기화를 취소했어요 (원래 숫자)", reset_at=0)
+    cr._CACHE.clear()
     return sc
 
 
@@ -413,7 +437,8 @@ menu.register_screen("crk", s_crk)
 for _code in ("crkpz", "crkln", "crkic", "crkhd", "crkft", "crkme"):
     menu.register_screen(_code, s_crk)
 for _code, _fn in (("crkp", r_period), ("crkn", r_top), ("crkm", r_names), ("crka", r_admin), ("crky", r_yday),
-                   ("crkw", r_award), ("crkr", r_reset), ("crkv", r_preview), ("crkpost", r_post)):
+                   ("crkw", r_award), ("crkr", r_reset), ("crkv", r_preview), ("crkpost", r_post),
+                   ("crk0", r_zero_ask), ("crk0y", r_zero), ("crk0x", r_zero_undo)):
     menu.register_route(_code, Route(_fn, ADMIN))
 menu.register_input("crkpz", "💰 등수별 상품을 <b>한 줄에 하나씩</b> 1등부터 보내 주세요.\n예:\n<code>50,000원\n40,000원\n30,000원</code>\n"
                     f"(하나에 {cr.PRIZE_MAX}자 · 링크 X · 지우려면 <code>없음</code>)", "crk", in_prizes, s_crk)
@@ -508,6 +533,10 @@ async def t_chat_rank(ctx, a: dict) -> str:
         if isinstance(a.get(k), bool):
             setattr(cfg, k, a[k])
             done.append(k)
+    if a.get("reset") in ("now", "undo"):
+        cfg.reset_at = int(datetime.now(ctx.svc.cfg.tz).timestamp()) if a["reset"] == "now" else 0
+        cr._CACHE.clear()
+        done.append("채팅 수 0부터 다시" if cfg.reset_at else "초기화 취소")
     if a.get("award") in AWARD_WORDS:
         cfg.award = AWARD_WORDS[a["award"]]
         if cfg.award >= 0 and not await ctx.svc.paid_features(cid):
@@ -539,7 +568,8 @@ def _summary(cfg: cr.Cfg, s: dict) -> str:
     return (f"[지금 설정] 기간 {cr.PERIODS[cfg.period][1]} · {cfg.top}등까지 · 상품 {cfg.prizes or '없음'} · "
             f"등수 그림 {len(cfg.icons)}개(없으면 🥇🥈🥉…) · 제목 '{html_plain(cfg.head)[:60]}' · 꼬리말 '{html_plain(cfg.foot)[:80]}' · "
             f"이름 {cr.NAME_MODES[cfg.names]} · 관리자 빼기 {cfg.no_admin} · 지난/어제 당첨자 칸 {cfg.yday} · 시상식 {_hour(cfg.award)} · "
-            f"{int(s.get('chat_min_chars') or 0)}글자 이상만(0=전부) · 도배 빼기 {bool(s.get('chat_no_repeat'))}")
+            f"{int(s.get('chat_min_chars') or 0)}글자 이상만(0=전부) · 도배 빼기 {bool(s.get('chat_no_repeat'))} · "
+            f"채팅 수 초기화 {'있음' if cfg.reset_at else '없음'}")
 
 
 def _register_tool() -> None:
@@ -569,7 +599,9 @@ def _register_tool() -> None:
          "award": {"type": "string", "enum": list(AWARD_WORDS),
                    "description": "시상식: off · daily0/daily9/daily12 매일(어제 순위) · weekly 매주 월요일 0시(지난 주 순위)"},
          "min_chars": {"type": "integer", "description": "몇 글자 이상만 셀지 (0=전부, 띄어쓰기 빼고)"},
-         "no_repeat": {"type": "boolean", "description": "같은 글 10분 안 반복은 1번만"}},
+         "no_repeat": {"type": "boolean", "description": "같은 글 10분 안 반복은 1번만"},
+         "reset": {"type": "string", "enum": ["now", "undo"],
+                   "description": "now = 채팅 수만 지금부터 0부터 다시 (글·기억은 안 지움) · undo = 초기화 취소"}},
         ["action"], t_chat_rank, room_role=Role.ADMIN))
 
 
