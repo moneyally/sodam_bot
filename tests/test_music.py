@@ -757,6 +757,26 @@ def youtube_retries_next_cookie_only_when_blocked():
                 ("첫 길이 죽으면 쿠키보다 둘째 길 먼저", seen)
             seen.clear()
             assert y._run(first_dead) == "ok" and seen == [("socks5://127.0.0.1:40001", None)], ("다음엔 된 길부터", seen)
+            seen.clear()
+            music.WAY_GAP, flaky = 0, iter([True, True, True, False])   # '봇이냐?'는 요청마다 무작위 (2026-10-12 실측 2/5·4/5)
+
+            def random_block(ydl):
+                seen.append(ydl.opts.get("proxy"))
+                if next(flaky):
+                    raise DownloadError("ERROR: [youtube] x: Sign in to confirm you're not a bot")
+                return "ok"
+            assert y._run(random_block) == "ok" and len(seen) == 4 and all(seen), ("길을 번갈아 다시 — 쿠키·서버 IP 전에", seen)
+            seen.clear()
+
+            def gone_everywhere(ydl):
+                seen.append(ydl.opts.get("proxy"))
+                raise DownloadError("ERROR: [youtube] x: Private video")
+            try:
+                y._run(gone_everywhere)
+            except music.MusicError:
+                pass
+            assert seen.count("socks5://127.0.0.1:40000") == 1 and seen.count("socks5://127.0.0.1:40001") == 1, \
+                ("막힘이 아닌 오류는 길마다 한 번만", seen)
         finally:
             os.environ.pop("MUSIC_PROXY", None)
 
