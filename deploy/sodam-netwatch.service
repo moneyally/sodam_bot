@@ -1,0 +1,48 @@
+# /etc/systemd/system/sodam-netwatch.service — 📡 노래·통화 패킷 블랙박스 (sodam/voice/netwatch.py, CLAUDE.md '🎵 소담 뮤직봇').
+# 텔레그램 주소와 오가는 UDP 개수만 셈 (패킷 내용 안 봄) → data/netwatch/events.jsonl·ring.json → 봇 `.끊김` 이 읽어 판정.
+# 권한은 패킷 엿보기(CAP_NET_RAW) 하나만. 끄기: systemctl disable --now sodam-netwatch · deploy/update.sh netwatch_setup 이 설치.
+[Unit]
+Description=Sodam voice packet black box (Telegram UDP gaps)
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam.voice.netwatch /opt/sodam/data/netwatch
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=10
+Nice=10
+CPUWeight=20
+CPUQuota=25%
+MemoryMax=96M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-netwatch
+UMask=0027
+
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_PACKET AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

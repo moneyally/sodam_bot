@@ -283,6 +283,20 @@ sshws_setup() {
     fi
 }
 
+# 📡 패킷 블랙박스(sodam-netwatch): 텔레그램 음성 서버와 오가는 UDP 끊김 기록 (sodam/voice/netwatch.py). 실패해도 본체는 그대로.
+netwatch_setup() {
+    [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-netwatch.service" ] || return 0
+    if ! cmp -s "$APP_DIR/deploy/sodam-netwatch.service" "$UNIT_DIR/sodam-netwatch.service"; then
+        cp "$APP_DIR/deploy/sodam-netwatch.service" "$UNIT_DIR/" && $SYSTEMCTL daemon-reload
+    fi
+    $SYSTEMCTL is-enabled -q sodam-netwatch 2>/dev/null || $SYSTEMCTL enable -q sodam-netwatch
+    if $SYSTEMCTL restart sodam-netwatch; then
+        log "netwatch: 블랙박스 재시작"; report netwatch_setup.status "netwatch_ok"
+    else
+        log "netwatch: 시작 실패 (journalctl -u sodam-netwatch)"; report netwatch_setup.status "netwatch_fail 시작 실패"
+    fi
+}
+
 # 🧪 작업실(sodam-workshop): 격리 코드 실행 서버 (sodam/workshop/server.py). 실패해도 본체는 그대로.
 # venv 는 --copies (진짜 실행 파일이어야 AppArmor 프로필이 붙음 → user namespace 허용). 패키지는 목록이 바뀔 때만.
 WORKSHOP_DIR=${WORKSHOP_DIR:-/opt/sodam-sandbox}
@@ -407,6 +421,10 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
         && { ! $SYSTEMCTL is-active -q sodam-warp 2>/dev/null || { [ -f "$APP_DIR/deploy/sodam-warp2.service" ] && ! $SYSTEMCTL is-active -q sodam-warp2 2>/dev/null; }; }; then
         warp_setup
     fi
+    # 패킷 블랙박스가 안 떠 있으면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-netwatch.service" ] && ! $SYSTEMCTL is-active -q sodam-netwatch 2>/dev/null; then
+        netwatch_setup
+    fi
     # 작업실이 안 떠 있거나 마지막 점검이 실패면 다시 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] \
         && { ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null || ! grep -q ' workshop_ok' "$APP_DIR/data/workshop_setup.status" 2>/dev/null; }; then
@@ -496,6 +514,7 @@ if restart_and_verify "$VER"; then
     diag_setup
     sshws_setup
     warp_setup
+    netwatch_setup
     workshop_setup
     unit_setup
     exit 0
