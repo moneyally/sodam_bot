@@ -19,6 +19,7 @@ EXCLUDED: dict[str, str] = {
     "farewell_media_id": "퇴장 인사 사진·영상은 운영자가 넣음 (file_id)",
     "greet_copy": "글 복사 인사는 관리자 1:1 메뉴 ✏️ 인사 편집기에서만 (글을 전달해서 정함)",
     "greet_copy_snap": "글 복사 인사 사본은 인사 편집기에서 글을 정할 때 자동으로 저장됨",
+    "greet_html": "인사말 서식(인용·굵게)은 관리자 1:1 메뉴 ✏️ 인사 편집기에서 서식 넣어 보내면 자동으로 저장됨",
     "greet_buttons": "인사 URL 버튼은 관리자 1:1 메뉴 ✏️ 인사 편집기에서만",
     "farewell_buttons": "퇴장 인사 URL 버튼은 관리자 1:1 메뉴 👋 퇴장 인사에서만",
     "whitelist_domains": "허용 도메인은 edit_list 로 더하기·빼기 (통째로 바꾸면 기존 도메인이 사라짐)",
