@@ -451,6 +451,34 @@ async def c_top(ctx) -> None:
     await ctx.reply(await top_text(ctx.svc, ctx.chat_id, int(n.group(1)) if n else 30))
 
 
+async def c_glitch(ctx) -> None:
+    """.끊김 — 들은 사람이 끊긴 순간 침 → 패킷 블랙박스(voice/netwatch)로 '텔레그램 쪽인지 소담 쪽인지' 판정 + 기록 + 오너 1:1."""
+    from ..voice import glitch
+    if ctx.chat_id > 0:
+        return
+    sess = await ctx.svc.db._all("SELECT chat_id, start_ts FROM music_sessions WHERE end_ts IS NULL")
+    if not any(r["chat_id"] == ctx.chat_id for r in sess) and not await store.active_call(ctx.svc.db, ctx.chat_id):
+        await ctx.reply("🎧 지금 이 방에 소담 노래·음성이 안 나오고 있어요.")
+        return
+    if not await persist.claim(ctx.svc.db, f"glitch:{ctx.chat_id}", GLITCH_GAP):
+        await ctx.reply("🎧 방금 확인했어요. 1분 뒤에 다시 알려 주세요.")
+        return
+    ring, evs = await asyncio.to_thread(glitch.read, data_dir(ctx.svc) / "netwatch")
+    v = glitch.verdict(time.time(), ctx.chat_id, [(r["chat_id"], float(r["start_ts"])) for r in sess], ring, evs)
+    gid = await glitch.save(ctx.svc.db, ctx.chat_id, ctx.user.id, v)
+    msg = glitch.text(v, ctx.svc.cfg.tz)
+    await ctx.reply(msg)
+    title = ""
+    with contextlib.suppress(Exception):
+        title = (await ctx.svc.db._one("SELECT title FROM chats WHERE chat_id=?", (ctx.chat_id,)) or {})["title"] or ""
+    for oid in ctx.svc.cfg.owner_ids:
+        with contextlib.suppress(TelegramError):
+            await ctx.bot.send_message(oid, f"🎧 끊김 신고 #{gid} · {esc(title or str(ctx.chat_id))} · "
+                                            f"{esc(user_name(ctx.user))}\n{msg}", parse_mode="HTML")
+
+
+GLITCH_GAP = 60     # 방마다 .끊김 1분에 1번
+
 c_shuffle = _room("shuffle")
 c_clearq = _room("clear")
 c_loopq = _room("loopq")

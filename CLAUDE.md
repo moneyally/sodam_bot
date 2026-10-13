@@ -856,6 +856,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   재생 카드·음성채팅 제목 요청(Telethon)이 답을 안 줘 진행 담당이 붙잡힘 → 정리·다시 들어가기·새 신청 전부 막힘 (재시작으로 풂, 종료도 SIGKILL).
   `Player._say` ANNOUNCE_TIMEOUT 20초 · `Worker._vc_title` VC_TITLE_TIMEOUT 15초 · `Player.run` 은 멈춤(_done)과 진행 담당 중 먼저 끝나는 쪽 →
   멈췄으면 STOP_GRACE 5초 뒤 진행 담당을 끊음. 서버에 ffmpeg 풀기 프로세스가 몇 시간째 남아 있던 것(새는 Decoder)은 아직 원인 미확인.
+- **📡 끊김 블랙박스** (`voice/netwatch.py` systemd sodam-netwatch CAP_NET_RAW 만 · `voice/glitch.py` · `.끊김`/`.렉`, tests/test_music_glitch.py · 뮤테이션 11개, 2026-10-13 일루왕 '4초 멈춤 → 2배속, 한 곡 3번'): 손으로 잰 패킷 = 오너가 들은 14:08:02 에 **텔레그램 음성 서버 → 우리** 1.64초 끊김, 우리 보냄 빈틈 0, ping 손실 0·164ms → 텔레그램 쪽.
+  netwatch 가 텔레그램 주소(cidr)와 오가는 UDP 를 세서 들어옴 0.8초↑ 끊김(우리는 보냄) = tg_stall · 나감 0.5초↑(들어옴은 옴) = our_stall → data/netwatch/events.jsonl, 초당 개수 ring.json(5초). `.끊김` = 40초 안 사건으로 판정·music_glitch(7일)·오너 1:1, 통화 여럿이면 세션 시작 ↔ 주소 처음 본 시각으로 짝. update.sh netwatch_setup.
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·

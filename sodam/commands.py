@@ -1399,6 +1399,7 @@ COMMANDS: list[Cmd] = [
         group="🎵 뮤직봇"),
     Cmd(("가사", "lyrics"), _music("c_lyrics"), help="지금 곡 가사 (앞부분)", group="🎵 뮤직봇"),
     Cmd(("인기곡", "노래순위", "topsongs"), _music("c_top"), usage="[일수]", help="이 방 인기곡", group="🎵 뮤직봇"),
+    Cmd(("끊김", "렉", "끊겨"), _music("c_glitch"), help="노래가 끊긴 순간 치면 어디서 멈췄는지 확인", group="🎵 뮤직봇"),
     Cmd(("뉴스", "news", "세계뉴스"), c_news, usage="[세계|경제|기술|코인|스포츠]",
         help="여러 해외 언론이 함께 다룬 주요 뉴스 (방마다 10분에 1번)", group="뉴스"),
     Cmd(("말투도움말", "말투설명", "말투목록"), c_style_help, help="말투 종류·예시와 방 모드(욕 받아치기·19금)"),
