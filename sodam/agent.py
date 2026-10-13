@@ -69,6 +69,13 @@ _MAKERS = {"copy_sticker", "make_sticker"}
 MAKE_NOTE = ("검사: 만들어 달라는 요청인데 도구를 쓰지 않고 글자·기호·이모지 문자로 대신했습니다. 텔레그램에서 '이모지·이모티콘 만들어' 는 "
              "스티커를 만들라는 뜻입니다 — 답장한 스티커가 견본이면 copy_sticker (여러 개면 texts), 새로 그리면 make_sticker 를 "
              "지금 실제로 부르세요. 글자로 때우지 말 것.")
+# 웹 검색을 한 번만 하고 '자료가 없다·직접 확인하세요' 로 끝냄 (2026-10-13 #4595 오너 '검색해 주고 분석 자료 토대로 다시' →
+# 검색어 하나 길게 넣고 포기). 클로드처럼 낱말을 바꿔 다시 찾게 한 번만.
+_GAVE_UP = re.compile(r"(자료|정보|기록|결과|데이터|소식)[가이를은는도]?\s*(확인되지|확인이\s?안|확인\s?안|안\s?나와|없어|없습니다|없었|없네|"
+                      r"못\s?찾|찾지\s?못|부족|나오지\s?않)|직접\s?확인|확인해\s?보(세요|셔야|시는)")
+GAVE_UP_NOTE = ("검사: 웹 검색을 한 번만 하고 '자료가 없다·직접 확인하라'로 끝냈습니다. 보내기 전에 검색어를 바꿔 web_search 를 1~2번 더 하세요 — "
+                "짧은 핵심 낱말로(팀·사람 이름 + '최근 경기 결과'·'순위'·'부상'·'선발', 영어 이름도). "
+                "그래도 없으면 무엇을 찾아봤는지 말하고 찾은 사실만으로 답하세요.")
 # 답 첫머리에서 엉뚱한 사람을 부름 (일루왕 10/05: 루피가 '소담아' → '문의주세연님, 불렀죠?') — 보내기 전 코드 검사
 _VOCATIVE = re.compile(r"^\s*([^\s,!~?.]{2,20}?)\s*[,!~]")
 VOCATIVE_NOTE = ("검사: 답 첫머리에서 '{who}' 를 부르는데, 지금 말한 사람은 '{caller}' 이고 요청·답장·단서·도구 결과 어디에도 "
@@ -347,7 +354,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
 
 
 def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set, results: list[str],
-                 wrote: bool | None = None, act: bool = True) -> tuple[str, str]:
+                 wrote: bool | None = None, act: bool = True, searches: int = 0) -> tuple[str, str]:
     """(종류, 다시 물을 말) — 걸리는 게 없으면 ('', ''). '했다' 검사는 쓰기 도구를 안 불렀으면 (안내서 같은 조회만 했어도) 함
     (2026-10-05 일루왕: 안내서만 읽고 '23시55분에 불러드릴게요' → 예약 없음)."""
     if allowed and (not used and _CLAIM.search(text) or not (used if wrote is None else wrote) and _PROMISE.search(text)):
@@ -358,6 +365,8 @@ def _final_check(ctx: ToolCtx, text: str, request: str, used: bool, allowed: set
         return "refuse", REFUSE_NOTE
     if act and not used and allowed & _MAKERS and _MAKE_ASK.search(request or ""):   # 만들 도구가 꺼진 방이면 안 함
         return "make", MAKE_NOTE
+    if searches == 1 and "web_search" in allowed and _GAVE_UP.search(text):
+        return "gave_up", GAVE_UP_NOTE
     people = getattr(ctx, "room_people", None)
     if people:
         c = ctx.caller
@@ -520,7 +529,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 messages.append({"role": "assistant", "content": text})
                 continue
             if not checked and mode in ("call", "follow"):   # 보내기 전 코드 검사 (걸리면 한 번만 다시 — 추가 호출은 이때만)
-                kind, note = _final_check(ctx, text, request, used, allowed, results, wrote, act=lane != "banter")
+                kind, note = _final_check(ctx, text, request, used, allowed, results, wrote, act=lane != "banter",
+                                          searches=sum(1 for st in run.steps if st.get("tool") == "web_search"))
                 if note:
                     checked = True
                     run.event("check", kind=kind)

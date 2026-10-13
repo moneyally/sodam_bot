@@ -64,9 +64,10 @@ async def run_records_tool_steps_usage_and_cost():
     assert s["tool"] == "web_search" and s["args"] == "query=비트코인 시세" and s["result"].startswith("오늘 비트코인"), s
     # 토큰 = chat 2번 + 도구 안의 웹 검색 1번 (ContextVar 로 같은 실행에 잡힘)
     assert (r["tok_in"], r["tok_cached"], r["tok_out"]) == (2 * 2000 + 300, 2 * 1500, 2 * 100 + 100), dict(r)
-    want = 2 * costs.usd_micro("gpt-5.4", 2000, 1500, 100) + costs.usd_micro("gpt-5.4-mini", 300, 0, 100) + 10_000
+    # 웹 검색 = 큰 모델 (2026-10-13 — 작은 모델은 한 번 찾고 '직접 확인하세요'로 끝냄)
+    want = 2 * costs.usd_micro("gpt-5.4", 2000, 1500, 100) + costs.usd_micro("gpt-5.4", 300, 0, 100) + 10_000
     assert r["usd_micro"] == want and await svc.llm.usd_today(CHAT) == want and await svc.llm.usd_today() == want
-    assert r["models"] == "gpt-5.4×2,gpt-5.4-mini", r["models"]
+    assert r["models"] == "gpt-5.4×3", r["models"]
 
 
 @test

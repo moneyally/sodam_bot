@@ -472,6 +472,13 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   ETH 논문 AI 가 자동 생성한 안내 파일은 오히려 손해 → **서버 agent_runs 의 실제 요청→도구 짝(14일 754건)과 실패 사례로 사람이 고름**.
   도구 이름은 테스트가 실제 도구인지 검사, 2600자 넘으면 실패. 새 도구를 만들면 여기에 한 줄 (자주 쓰일 것만).
 
+## 🌐 웹 검색 = 클로드처럼 (`llm.web_search`·`_search`·`search_actions`, tests/test_web_search.py · 뮤테이션 11개, 2026-10-13 #4595)
+- 예전: 작은 모델(guard)·추론 없이 한 번 찾고 5줄 → 'KOVO 에서 직접 확인하세요'로 소담 포기. OpenAI 문서: 같은 검색 도구가 **추론 모델이면**
+  open_page(페이지 열기)·find_in_page 까지 하고 더 찾을지 스스로 정함(= 클로드 WebSearch+WebFetch). → 큰 모델(cfg.model, 바꾸려면 SEARCH_MODEL)·추론 low·
+  search_context_size high·user_location KR·include web_search_call.action.sources → 결과 끝 '(찾아본 곳: 도메인…)', 요금은 실제 검색 횟수만큼.
+  옵션을 API 가 거절하면 search_opts_off → 예전 모양. 보내기 전 검사 gave_up: 검색 1번 + '자료 없음·직접 확인' → 낱말 바꿔 다시 (agent.GAVE_UP_NOTE).
+  sports analysis '팀 기록 못 가져옴' → web_search 힌트. 검색 도구 설명 = 짧은 핵심 낱말, 부족하면 다시.
+
 ## AI 근거·대상 (tests/test_agent_grounding.py) · 봇 스킬 (`botskills.py`, tests/test_botskills.py)
 - `_resolve` 예전 이름·@아이디(지금 멤버만, 제재는 유일할 때만) · '걔/그 사람' = 답장 대상 또는 최근 말한 사람(addressee) ·
   숫자 검증(읽기 도구를 쓴 실행에서 결과에 없는 숫자면 한 번 다시) · 자료끼리 다르면 최신 기준+다름 표시 · `answer_sources`(직전 답 근거).
