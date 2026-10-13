@@ -262,7 +262,9 @@ class Round:
         """결과 애니메이션(GIF) 한 번 보내고 그 메시지를 live 로. 그리기·보내기 실패면 False (글자 연출로)."""
         try:
             gif = await asyncio.to_thread(make_gif)
-            self.live = await self.bot.send_animation(self.chat_id, animation=gif, caption=caption, parse_mode="HTML")
+            from .basic import gif_file                 # 이름표 없으면 텔레그램이 파일로 받음 (2026-10-14 실측)
+            self.live = await self.bot.send_animation(self.chat_id, animation=gif_file(gif, self.game), caption=caption,
+                                                      parse_mode="HTML")
         except Exception as e:
             log.warning("%s animation failed, text fallback: %r", self.game, e)
             return False

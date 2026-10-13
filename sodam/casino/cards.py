@@ -249,7 +249,9 @@ async def g_baccarat(ctx: Ctx) -> None:
     pl, bk = list(rd.player), list(rd.banker)                        # 카드가 한 장씩 놓이는 GIF → 끝나면 캡션이 결과
     await show_anim(ctx, lambda: cardimg.baccarat_gif(pl, bk, rd.winner, rd.pair("player"), rd.pair("banker")),
                     cardimg.baccarat_seconds(pl, bk), f"{_bac_head(name, pick, bet)}\n🃏 카드를 나눠요…",
-                    render_baccarat(rd, name, pick, bet, compact=True) + tail, frames, fallback_final=final)
+                    render_baccarat(rd, name, pick, bet, compact=True) + tail, frames, fallback_final=final,
+                    final_img=lambda: cardimg.png(cardimg.baccarat_frames(pl, bk, rd.winner, rd.pair("player"),
+                                                                          rd.pair("banker"))[-1][0]))
 
 
 # ── 버튼 게임 공통 ────────────────────────────────────────

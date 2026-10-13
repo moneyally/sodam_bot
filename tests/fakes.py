@@ -94,6 +94,10 @@ class FakeBot:
     async def edit_message_caption(self, chat_id=None, message_id=None, caption=None, **kw):
         self.calls.append(("edit_caption", chat_id, message_id, caption, kw))
 
+    async def edit_message_media(self, chat_id=None, message_id=None, media=None, **kw):
+        self.calls.append(("edit_media", chat_id, message_id, media, kw))
+        return True
+
     async def send_animation(self, chat_id, animation, caption=None, **kw):
         return await self._send_media("send_animation", chat_id, animation, caption, **kw)
 
