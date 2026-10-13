@@ -78,6 +78,13 @@ register_setting("greet_copy", [], "입장 인사 글 복사", render_fn=lambda 
 register_setting("greet_copy_snap", {}, "입장 인사 글 복사 (사본)",
                  render_fn=lambda v: "저장됨" if copy_snap({"greet_copy_snap": v}) else "(없음)")
 register_validator("greet_template", max_text(MAX_TEMPLATE))   # .설정변경·AI 도 편집기와 같은 한도
+# 인사말 서식 (인용·굵게·기울임·움직이는 이모지) = {"plain": 저장할 때 글자 틀, "html": 그 텔레그램 HTML}.
+# plain 이 지금 greet_template 과 같을 때만 씀 → .설정변경·AI 로 글자 틀을 바꾸면 서식은 자연히 안 씀.
+# 2026-10-14 black company 이사: '인용 상자 안에 닉네임·고유번호·가입일자' 인사 — 예전엔 msg.text 만 저장해서 서식이 버려졌음.
+register_setting("greet_html", {}, "입장 인사말 서식",
+                 render_fn=lambda v: "있음" if isinstance(v, dict) and v.get("html") else "(없음)")
+_EMOJI_TAG = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
+_CODE_IN_CODE = re.compile(r"<code>((?:<code>[^<]*</code>(?:, )?)+)</code>")
 
 
 # ── 검사 ──────────────────────────────────────────────────
@@ -167,13 +174,50 @@ def with_names(template: str, tag: bool = True) -> str:
     return template if "{names}" in template or not tag else "{names} " + template
 
 
-def fill(template: str, names_html: str, extra: dict[str, str] | None = None) -> str:
+def rich_template(s: dict) -> str | None:
+    """인사 편집기에서 서식 있게 넣은 인사말의 텔레그램 HTML (글자 틀이 그 뒤 바뀌었으면 None)."""
+    v = s.get("greet_html")
+    tpl = s.get("greet_template")
+    if tpl and isinstance(v, dict) and v.get("html") and v.get("plain") == tpl:
+        return str(v["html"])
+    return None
+
+
+def strip_custom(text_html: str) -> str:
+    """움직이는 이모지 → 보통 이모지 (봇 주인이 프리미엄이 아니라 거절될 때)."""
+    return _EMOJI_TAG.sub(lambda m: m.group(1), text_html or "")
+
+
+def fill(template: str, names_html: str, extra: dict[str, str] | None = None, html_tpl: str | None = None) -> str:
     """인사말(관리자·AI 가 쓴 글)은 이스케이프하고, 자리표시자에만 코드가 만든 값을 넣는다.
-    {names}·{name} 이름(멘션) · {id} 고유번호 · {username} @아이디 · {time} 들어온 시각 (extra 로 받은 값, 2026-10-07 백악관 요청)."""
+    {names}·{name} 이름(멘션) · {id} 고유번호 · {username} @아이디 · {time} 들어온 시각 (extra 로 받은 값, 2026-10-07 백악관 요청).
+    html_tpl = 편집기에서 서식 있게 넣은 틀 (텔레그램이 만든 HTML 이라 이스케이프 없이 칸만 바꿈)."""
+    if html_tpl is not None:
+        out = html_tpl.replace("{names}", names_html).replace("{name}", names_html)
+        for key, value in (extra or {}).items():
+            out = out.replace(key, value)
+        return _CODE_IN_CODE.sub(r"\1", out)    # 고정폭으로 감싼 {id} 안에 또 고정폭 → 텔레그램이 거절함
     out = esc(template).replace(esc("{names}"), names_html).replace(esc("{name}"), names_html)
     for key, value in (extra or {}).items():
         out = out.replace(esc(key), value)
     return out
+
+
+async def send_rich(send, text_html: str, plain_html: str) -> list:
+    """서식 인사: 텔레그램이 거절하면(움직이는 이모지·깨진 서식) 보통 이모지로 → 그래도 안 되면 글자만."""
+    tries = [text_html]
+    if strip_custom(text_html) != text_html:
+        tries.append(strip_custom(text_html))
+    if plain_html not in tries:
+        tries.append(plain_html)
+    for i, t in enumerate(tries):
+        try:
+            return await send(t)
+        except BadRequest as e:
+            if i == len(tries) - 1:
+                raise
+            log.info("서식 인사 거절 → 더 단순하게 다시: %s", e)
+    return []
 
 
 def fill_values(people: list[tuple[int, str, str | None]], when: str) -> dict[str, str]:
@@ -332,7 +376,10 @@ class Greeter:
         names = ", ".join(mention(uid, name) if tag else esc(name) for uid, name in people[:15])
         if len(people) > 15:
             names += f" 외 {len(people) - 15}분"
-        template = with_names(await self._template(chat_id, len(people)), tag)
+        raw = await self._template(chat_id, len(people))
+        rich = rich_template(s) if raw == s.get("greet_template") else None
+        template = with_names(raw, tag)
+        html_tpl = with_names(rich, tag) if rich else None
         extra = None
         if any(k in template for k in ("{id}", "{username}", "{time}")):
             rows = {r["user_id"]: r["username"] for r in await self.svc.db._all(
@@ -340,9 +387,11 @@ class Greeter:
                 [uid for uid, _ in people[:15]])}
             from datetime import datetime
             extra = fill_values([(uid, name, rows.get(uid)) for uid, name in people],
-                                datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d %H:%M"))
+                                datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d %H:%M:%S"))   # 초까지 (black company 견본 2026-10-14)
         try:
-            sent = await send_greeting(bot, chat_id, s, fill(template, names, extra), reply_to=reply_to, db=self.svc.db)
+            plain_html = fill(template, names, extra)
+            sent = await send_rich(lambda t: send_greeting(bot, chat_id, s, t, reply_to=reply_to, db=self.svc.db),
+                                   fill(template, names, extra, html_tpl) if html_tpl else plain_html, plain_html)
             # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
             plain = ", ".join(name for _, name in people[:15])
             await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),

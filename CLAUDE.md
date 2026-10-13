@@ -119,6 +119,9 @@
   그 사람 글에 답장으로 copy_message(원본 그대로: 서식·움직이는 이모지·사진·스티커·음성) → 원본 없으면 사본(rich_html + file_id, KINDS 는 mediastore).
   지우기 `.reply 취소 낱말`·`.답글취소`·메뉴 🗑·AI 도구 auto_reply(add = 요청이 답장한 글 또는 text). 같은 낱말 autoreply_gap 초(기본 30, DB 한 문장 차지)·
   한 사람 1분 5번(다른 낱말은 바로 — 10초 1번일 땐 '인사'→'공지' 연달아 친 게 씹혔음, 2026-10-10 뉴월드)·방 하루 200·방 50개. 명령어·! 게임과 같은 낱말 거절. handlers 에서 명령 다음·게임/AI 앞. 명령 등록은 handlers 가 import 뒤 register_commands(순환 import).
+- **✨ 인사말 서식** (`greet.rich_template`·`fill(html_tpl=)`·`send_rich`, tests/test_greet_editor.py rich_* · 뮤테이션 7개, 2026-10-14 black company 이사 '인용 상자 인사'):
+  편집기 in_text 가 `util.rich_html` 로 서식 HTML 을 greet_html {plain, html} 에 (plain 이 지금 greet_template 과 같을 때만 씀 — .설정변경·AI 로 바꾸면 자동으로 글자 틀).
+  칸은 HTML 에서 바로 바꿈(값은 esc), `<code>{id}</code>` 겹침 정리, 텔레그램 거절이면 움직이는 이모지 → 보통 이모지 → 글자 틀 순서로 다시. {time} 은 초까지.
 - 대량 입장 방어(`raid.py`): 60초 10명 → 30분 방어. raid_action captcha(전원 캡차, 기본)/kick(안내 없이 내보내기, 끝나면 수 보고),
   입장 검사 훅 `hooks.add_member_join_hook`.
 - 스팸 명단(`cas.py`): CAS + lols 동시 조회, 한 곳이라도 등록이면 차단, 조회 실패는 등록 아님(캐시 안 함).

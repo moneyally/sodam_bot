@@ -455,5 +455,77 @@ async def parse_buttons_rules():
         assert parse_buttons(raw)[1], raw
 
 
+# ── 서식 있는 인사말 (인용·굵게·기울임·움직이는 이모지) — 2026-10-14 black company 이사 ──
+RICH_TEXT = "👑 시그니처 소통방\n✨ 환영합니다!\n닉네임 : {names} ({username})\n고유번호 : {id}\n가입일자 : {time}"
+RICH_HTML = ("<b>👑 시그니처 소통방</b>\n<blockquote>✨ <b>환영합니다!</b>\n닉네임 : {names} ({username})\n"
+             "고유번호 : <code>{id}</code>\n가입일자 : {time}</blockquote>")
+
+
+def rich_msg(text=RICH_TEXT, html=RICH_HTML):
+    return SimpleNamespace(text=text, caption=None, text_html=html,
+                           entities=(SimpleNamespace(type="bold"), SimpleNamespace(type="blockquote")))
+
+
+async def save_rich(svc, bot, msg=None):
+    from sodam.panels import greet as pg
+    c = SimpleNamespace(svc=svc, cid=CHAT, uid=1, bot=bot)
+    return await pg.in_text(c, msg or rich_msg())
+
+
+@test
+async def rich_template_keeps_quote_and_fills_fields():
+    db, svc, bot, _ = await setup()
+    ok, note = await save_rich(svc, bot)
+    assert ok and "서식" in note, note
+    s = await db.get_settings(CHAT)
+    assert s["greet_template"] == RICH_TEXT and s["greet_html"]["html"] == RICH_HTML
+    await db.upsert_user(fake_user(20, "헤안", "Gjsjid3991"))
+    await greet(svc, bot, [(20, "헤안")])
+    text = bot.named("send_message")[-1][2]
+    assert "<blockquote>" in text and "<b>👑 시그니처 소통방</b>" in text, text
+    assert '<a href="tg://user?id=20">헤안</a> (@Gjsjid3991)' in text, text
+    assert "<code>20</code>" in text and "<code><code>" not in text, text      # 고정폭 안에 고정폭 겹치지 않게
+    assert "{time}" not in text and "{id}" not in text
+
+
+@test
+async def rich_template_ignored_after_plain_change_and_values_escaped():
+    db, svc, bot, _ = await setup()
+    await save_rich(svc, bot)
+    await greet(svc, bot, [(21, "<i>해커</i>")])
+    text = bot.named("send_message")[-1][2]
+    assert "&lt;i&gt;해커&lt;/i&gt;" in text and "<i>해커</i>" not in text, text   # 이름 속 태그는 글자로
+    await db.set_setting(CHAT, "greet_template", "{names} 반가워요")                # .설정변경·AI 로 글자 틀 바뀜
+    await greet(svc, bot, [(22, "신입")])
+    assert "<blockquote>" not in bot.named("send_message")[-1][2]
+
+
+@test
+async def rich_rejected_falls_back_to_plain_emoji_then_text():
+    db, svc, bot, _ = await setup()
+    html = RICH_HTML.replace("👑", '<tg-emoji emoji-id="5368324170671202286">👑</tg-emoji>', 1)
+    await save_rich(svc, bot, rich_msg(html=html))
+    real, tried = bot.send_message, []
+
+    async def picky(chat_id, text, **kw):
+        tried.append(text)
+        if "<tg-emoji" in text:
+            raise BadRequest("Document_invalid")       # 봇 주인이 프리미엄 아님
+        return await real(chat_id, text, **kw)
+    bot.send_message = picky
+    await greet(svc, bot, [(23, "신입")])
+    assert len(tried) == 2 and "<tg-emoji" in tried[0] and "<tg-emoji" not in tried[1] and "<blockquote>" in tried[1]
+
+
+@test
+async def plain_text_input_clears_old_format():
+    db, svc, bot, _ = await setup()
+    await save_rich(svc, bot)
+    from sodam.panels import greet as pg
+    plain = SimpleNamespace(text="{names} 어서 와요", caption=None, text_html="{names} 어서 와요", entities=())
+    await pg.in_text(SimpleNamespace(svc=svc, cid=CHAT, uid=1, bot=bot), plain)
+    assert (await db.get_settings(CHAT))["greet_html"] == {}
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

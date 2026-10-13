@@ -16,9 +16,10 @@ from telegram.error import TelegramError
 
 from .. import mediastore, menu
 from ..greet import (FALLBACKS, MAX_BUTTONS, MAX_TEMPLATE, MEDIA_TYPES, button_rows, clean_buttons, copy_of, copy_snap,
-                     fill, media_of, parse_buttons, send_greeting, send_snap, snapshot_of, with_names)
+                     fill, media_of, parse_buttons, rich_template, send_greeting, send_rich, send_snap, snapshot_of,
+                     with_names)
 from ..menu import B, HubItem, PanelCtx, Route, Screen
-from ..util import esc, josa, mention, user_name
+from ..util import esc, html_balanced, josa, mention, rich_html, user_name
 
 PARTS = {"t": "📄 인사말", "m": "🖼 미디어", "b": "🔗 URL 버튼", "c": "📋 글 복사 인사"}
 MEDIA_OBJ = {"photo": "사진을", "video": "영상을", "animation": "GIF를"}
@@ -94,7 +95,9 @@ async def s_editor(c: PanelCtx) -> Screen:
 async def s_text(c: PanelCtx) -> Screen:
     tpl = (await c.svc.db.get_settings(c.cid))["greet_template"]
     if tpl:
-        text = (f"📄 <b>인사말</b> ({len(tpl)}자)\n\n<blockquote>{esc(tpl)}</blockquote>\n\n"
+        text = (f"📄 <b>인사말</b> ({len(tpl)}자)"
+                + (" · ✨ 서식 있음 (인용·굵게 등 그대로)" if rich_template(await c.svc.db.get_settings(c.cid)) else "")
+                + f"\n\n<blockquote>{esc(tpl)}</blockquote>\n\n"
                 "<code>{names}</code> 자리에 새 멤버 이름(멘션)이 들어가요. "
                 "<code>{username}</code> @아이디 · <code>{id}</code> 고유번호 · <code>{time}</code> 들어온 시각도 돼요.")
     else:
@@ -175,8 +178,13 @@ async def r_view(c: PanelCtx) -> Screen:
         tpl = FALLBACKS[0] if ai else s["greet_template"]
         tag = bool(s["greet_mention"])
         name = await _admin_name(c)
-        sent = await send_greeting(c.bot, c.uid, s, fill(with_names(tpl, tag), mention(c.uid, name) if tag else esc(name)),
-                                   close, db=c.svc.db)
+        who = mention(c.uid, name) if tag else esc(name)
+        demo = {"{id}": f"<code>{c.uid}</code>", "{username}": esc("@" + c.user.username) if getattr(c, "user", None)
+                and getattr(c.user, "username", None) else "@아이디", "{time}": "2026-01-01 12:00"}
+        rich = None if ai else rich_template(s)
+        plain_html = fill(with_names(tpl, tag), who, demo)
+        sent = await send_rich(lambda t: send_greeting(c.bot, c.uid, s, t, close, db=c.svc.db),
+                               fill(with_names(tpl, tag), who, demo, with_names(rich, tag)) if rich else plain_html, plain_html)
         toast = "1:1 로 미리보기를 보냈어요 👇" + (" (AI 인사는 매번 달라서 예시 문구로 보여드려요)" if ai else "")
     ids.extend(m.message_id for m in sent)
     return Screen(None, toast=toast)
@@ -227,8 +235,17 @@ async def in_text(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         return False, "인사말은 글자로 보내주세요."
     if len(tpl) > MAX_TEMPLATE:
         return False, f"인사말은 {MAX_TEMPLATE}자까지예요. (보낸 글: {len(tpl)}자)"
-    await _save(c, f"greet_template={tpl[:80]}", greet_template=tpl)
+    try:
+        rich = rich_html(msg)
+    except (AttributeError, TypeError):
+        rich = None
+    if rich and not html_balanced(rich):
+        rich = None
+    await _save(c, f"greet_template={tpl[:80]}", greet_template=tpl,
+                greet_html={"plain": tpl, "html": rich.strip()} if rich else {})
     extra = "" if "{names}" in tpl else "\n(<code>{names}</code> 가 없어서 이름은 맨 앞에 붙여요)"
+    if rich:
+        extra += "\n✨ 인용·굵게 같은 서식도 그대로 나가요."
     return True, "✅ 인사말을 저장했어요." + extra
 
 
