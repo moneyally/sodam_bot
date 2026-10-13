@@ -60,13 +60,13 @@ async def usd_recorded_globally_and_per_room():
     # gpt-5.4: 400×2.5 + 600×0.25 + 100×15 = 2650 마이크로달러
     assert await db.counter(day, 0, costs.USD) == 2650
     assert await db.counter(day, CHAT, costs.ROOM_USD) == 2650 and await llm.usd_today(CHAT) == 2650
-    await llm.web_search("뉴스", CHAT)          # mini 토큰 요금 + 검색 1번 $0.01
+    await llm.web_search("뉴스", CHAT)          # 검색 = 큰 모델 토큰 요금 + 검색 1번 $0.01 (2026-10-13 작은 모델 → 큰 모델)
     mini = costs.usd_micro("gpt-5.4-mini", 1000, 600, 100)
-    assert await db.counter(day, CHAT, costs.ROOM_USD) == 2650 + mini + 10_000
-    assert await llm.usd_today() == 2650 + mini + 10_000
+    assert await db.counter(day, CHAT, costs.ROOM_USD) == 2650 + 2650 + 10_000
+    assert await llm.usd_today() == 2650 + 2650 + 10_000
     await llm.json("s", "u")                   # 방 지정 없는 호출은 전체에만
-    assert await llm.usd_today() == 2650 + 2 * mini + 10_000
-    assert await db.counter(day, CHAT, costs.ROOM_USD) == 2650 + mini + 10_000
+    assert await llm.usd_today() == 2650 + 2650 + mini + 10_000
+    assert await db.counter(day, CHAT, costs.ROOM_USD) == 2650 + 2650 + 10_000
 
 
 @test

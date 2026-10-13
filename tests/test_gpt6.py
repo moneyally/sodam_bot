@@ -157,11 +157,11 @@ async def cache_writes_are_billed_at_125_percent():
 
 
 @test
-async def web_search_falls_back_when_guard_model_rejected():
-    llm, _ = await llm_with(fail=[_err(NotFoundError, "model gpt-6-luna not found", 404, "model_not_found")])
-    llm.cfg = dataclasses.replace(llm.cfg, guard_model="gpt-6-luna")
+async def web_search_falls_back_when_model_rejected():
+    llm, _ = await llm_with(fail=[_err(NotFoundError, "model gpt-6-sol not found", 404, "model_not_found")])
+    llm.cfg = dataclasses.replace(llm.cfg, model="gpt-6-sol")       # 검색 = 큰 모델 (2026-10-13)
     out = await llm.web_search("날씨")
-    assert [k["model"] for k in llm.client.resp] == ["gpt-6-luna", "gpt-5.4-mini"] and out == ""
+    assert [k["model"] for k in llm.client.resp] == ["gpt-6-sol", "gpt-5.4"] and out == ""
 
 
 @test

@@ -544,6 +544,10 @@ async def t_sports(ctx: ToolCtx, a: dict) -> str:
             from .sports import fmt as sports_fmt
             text = "\n".join(html_plain(f"{sports_fmt.tag(g)} {sports_fmt.line(g, with_date=True)}") for g in games[:6])
             text += "\n(위 점수·시각은 한국 시각, 경기 데이터 그대로 — 이걸로 답할 것)"
+    if action == "analysis" and "못 가져옴" in text and _BY_NAME.get("web_search"):
+        # 기록 없는 대회(V리그 여자 등) — '자료 없음'으로 끝내지 말고 검색으로 (2026-10-13 #4595)
+        text += ("\n→ 이 대회 기록은 도구에 없음. web_search 로 두 팀 각각 '팀 이름 최근 경기 결과'·'두 팀 상대 전적'을 짧게 따로 찾아 "
+                 "찾은 사실(날짜·점수)로 분석할 것.")
     if "못 찾았" in text and _BY_NAME.get("web_search") and action not in ("alert", "my_alerts", "unalert"):
         # 국가대표·없는 리그 — 포기 말고 다음 길 (서버 실수 #2160·#2231·#2395·#2462). 시각은 꼭 한국 시각으로 (현지 시각 오보 2026-10-11)
         text += (f"\n→ 스포츠 도구엔 없음. web_search 로 '{query or '경기'} 경기 일정 결과' 를 찾아 답하되, 경기 시각은 한국 시각(KST)으로 바꿔 말하고 "
@@ -1297,7 +1301,9 @@ TOOLS: list[Tool] = [
           "mode": {"type": "string", "enum": ["new", "edit"]},
           "photo_of": {"type": "string", "description": "이 방 멤버 프사를 원본으로 (이름·@아이디·ID). 있으면 edit"}},
          ["prompt", "mode"], t_make_image, setting="image_daily"),
-    Tool("web_search", "최신 뉴스·사실 확인이 필요할 때 웹을 검색한다. 방 기록 질문에는 쓰지 않는다.",
+    Tool("web_search", "최신 뉴스·사실·경기 기록 확인이 필요할 때 웹을 검색한다 (검색 담당이 페이지까지 열어 확인). "
+         "query 는 짧은 핵심 낱말 (예: '흥국생명 최근 경기 결과', '흥국생명 IBK 상대 전적') — 날짜·여러 질문을 한 줄에 몰아넣지 말 것. "
+         "부족하면 낱말을 바꿔 다시 부를 것. 방 기록 질문에는 쓰지 않는다.",
          {"query": {"type": "string"}}, ["query"], t_web_search),
     Tool("sports", "스포츠 경기 일정·스코어·진행 중 경기·리그 순위·팀 최근/다음 경기를 조회한다 (배당·베팅 정보 없음). "
          "query 는 리그(EPL·라리가·챔스·FA컵·MLS·리가MX·사우디·K리그·J리그·MLB·KBO·WBC·NBA·WNBA·KBL·NHL·NFL·F1·PGA·ATP·UFC·"

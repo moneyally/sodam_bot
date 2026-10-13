@@ -38,11 +38,12 @@ async def tokens_recorded_per_model():
     await llm.web_search("뉴스")
     day = llm._today()
     g = {r["key"]: r["n"] for r in await db._all("SELECT key, n FROM counters WHERE day=? AND chat_id=0", (day,))}
-    assert g["m:gpt-5.4:in"] == 1000 and g["m:gpt-5.4:cached"] == 600 and g["m:gpt-5.4:out"] == 100, g
-    assert g["m:gpt-5.4:calls"] == 1 and g["m:gpt-5.4-mini:calls"] == 2 and g["web_search_calls"] == 1, g
+    # 검색은 큰 모델 (2026-10-13) → gpt-5.4 가 대화 1 + 검색 1
+    assert g["m:gpt-5.4:in"] == 2000 and g["m:gpt-5.4:cached"] == 1200 and g["m:gpt-5.4:out"] == 200, g
+    assert g["m:gpt-5.4:calls"] == 2 and g["m:gpt-5.4-mini:calls"] == 1 and g["web_search_calls"] == 1, g
     m = costs.by_model(g)
-    # gpt-5.4: 400×2.5 + 600×0.25 + 100×15 = 1000+150+1500 = 2650 / 1M
-    assert abs(m["gpt-5.4"]["usd"] - 0.00265) < 1e-9, m
+    # gpt-5.4: (400×2.5 + 600×0.25 + 100×15) × 2 = 2650 × 2 / 1M
+    assert abs(m["gpt-5.4"]["usd"] - 0.0053) < 1e-9, m
 
 
 @test
