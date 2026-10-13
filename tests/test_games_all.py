@@ -111,8 +111,11 @@ async def baccarat_gif_shows_the_real_cards_one_by_one():
     svc, bot, (u,) = await setup()
     K.fix("♠2", "♥3", "♦3", "♣9", "♠8", "♥4")               # 플 2,3 → 5 → 3번째 8 = 3 · 뱅 3,9 = 2 → 4 받음 = 6 → 뱅 승
     msg = await K.cmd(svc, bot, u, "!바카라 1000 뱅")
-    (_, _, gif, spin, _kw), = bot.named("send_animation")
-    assert "카드를 나눠요" in spin and not msg.replies                # 글자 연출 없음 (GIF 1 + 캡션 1)
+    (_, _, gif_in, spin, _kw), = bot.named("send_animation")
+    assert "카드를 나눠요" in spin and not msg.replies                # 글자 연출 없음 (GIF 1 + 결과 1)
+    # 이름표 없는 bytes 면 텔레그램이 'application.octet-stream' 파일로 받음 (2026-10-14 블랙컴퍼니 실측)
+    assert gif_in.filename.endswith(".gif") and gif_in.mimetype == "image/gif", (gif_in.filename, gif_in.mimetype)
+    gif = gif_in.input_file_content
     fr = [f.convert("RGB") for f in ImageSequence.Iterator(Image.open(io.BytesIO(gif)))]
     assert len(fr) == 1 + 2 * 6 + 1, len(fr)                          # 빈 판 → 6장 (뒷면→앞면) → 결과
     assert is_felt(fr[0].getpixel(center(0, 0, 2)))                    # 처음엔 빈 자리
@@ -121,7 +124,13 @@ async def baccarat_gif_shows_the_real_cards_one_by_one():
     check_row(last, 0, K.cs("♠2", "♦3", "♠8"))
     check_row(last, 1, K.cs("♥3", "♣9", "♥4"))
     assert gold_ring(last, 1) and not gold_ring(last, 0)               # 승자(뱅커) 줄 강조
-    cap = bot.named("edit_caption")[-1][3]
+    # 끝나면 GIF(되풀이 → 다시 빈 테이블)를 결과 카드 사진으로 바꿔 둠 — 첨부 표시가 없으면 텔레그램이 'media not found' 로 거절
+    (_, _, _, media, _), = bot.named("edit_media")
+    assert media.media.attach_name and media.media.filename.endswith(".png"), media.media.filename
+    still = Image.open(io.BytesIO(media.media.input_file_content)).convert("RGB")
+    check_row(still, 0, K.cs("♠2", "♦3", "♠8"))
+    assert gold_ring(still, 1)
+    cap = media.caption
     assert "뱅커 승" in cap and "(플 3 : 6 뱅)" in cap and "+950P" in cap and "「" not in cap
     assert await core.balance(svc.db, CHAT, u.id) == 10_950
     await K.ledger_ok(svc, [u])

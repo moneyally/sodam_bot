@@ -39,10 +39,17 @@ def anim_gap() -> float:
 
 
 def photo_file(data: bytes) -> InputFile:
-    """사진 bytes → 파일 이름 붙여서. 이름 없는 bytes 를 editMessageMedia 로 바꾸면 텔레그램이 사진 대신
-    'application.octet-stream' 문서로 보여 줌 (실제 2026-10-07 얼라이드 바카라 결과)."""
+    """사진 bytes → 파일 이름 + 첨부 표시(attach). 2026-10-14 서버 실측 (python-telegram-bot 21 원본 _requestparameter):
+    이미 만든 InputFile 은 InputMediaPhoto 가 attach 를 다시 안 붙여서, attach 없이 넘기면 editMessageMedia 가
+    'Can't parse inputmedia: media not found' 로 거절 → 그림이 안 바뀌고 처음 화면(빈 테이블)이 그대로 남았음."""
     ext = "png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "jpg"
-    return InputFile(data, filename=f"card.{ext}")
+    return InputFile(data, filename=f"card.{ext}", attach=True)
+
+
+def gif_file(data: bytes, name: str = "game") -> InputFile:
+    """GIF bytes → '.gif' 이름표. 이름 없이 send_animation 하면 텔레그램이 움직이는 그림이 아니라
+    'application.octet-stream' 파일로 받음 (2026-10-14 블랙컴퍼니 바카라, 서버 실측 — 파일을 열면 첫 장면 = 빈 테이블)."""
+    return InputFile(data, filename=f"{name}.gif")
 
 
 def _secs(e: RetryAfter) -> float:
@@ -86,12 +93,13 @@ async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False,
 
 
 async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, fallback: list[str],
-                    fallback_final: str | None = None) -> None:
+                    fallback_final: str | None = None, final_img=None) -> None:
     """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로
-    (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌)."""
+    (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌).
+    final_img = 끝난 뒤 남길 결과 그림(bytes 를 돌려주는 함수) — GIF 는 되풀이돼서 다시 빈 테이블부터 보이니 사진으로 바꿔 둠."""
     try:
         gif = await asyncio.to_thread(make_gif)          # 약 1초: 그리는 동안 다른 메시지 처리가 멈추지 않게
-        sent = await ctx.bot.send_animation(ctx.chat_id, animation=gif, caption=spin, parse_mode="HTML",
+        sent = await ctx.bot.send_animation(ctx.chat_id, animation=gif_file(gif), caption=spin, parse_mode="HTML",
                                             reply_parameters=ReplyParameters(ctx.msg.message_id,
                                                                              allow_sending_without_reply=True))
     except Exception as e:                              # Pillow 없음·그리기 실패·텔레그램 오류
@@ -99,6 +107,14 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
         await show(ctx, fallback, fallback_final or final)
         return
     await sleep(moving_s)
+    still = None
+    if final_img is not None:
+        try:
+            still = await asyncio.to_thread(final_img)
+        except Exception as e:                          # 그리기 실패 → 캡션만 결과로
+            log.warning("final image failed: %r", e)
+    if still is not None and await edit_live(ctx.bot, ctx.chat_id, sent.message_id, final, final=True, media=still):
+        return
     if not await edit_live(ctx.bot, ctx.chat_id, sent.message_id, final, final=True, caption=True):
         try:                                            # 결과만은 꼭: 새 메시지로
             await ctx.reply(final)

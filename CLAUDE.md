@@ -293,6 +293,11 @@
 - 카드 그림 = 영국식 52장 PNG(sodam/data_files/cards, Dmitry Fomin **CC0** — LICENSE.md, Wikimedia), 뒷면은 코드가 그림. 한 장 ~0.1초·JPEG ~100KB.
   그림이 없거나 사진이 안 되면 글자 공개. 위키미디어는 작업 환경 IP 에 429 → 서버에서 받아 옴.
 
+## 🖼 게임 그림이 '파일'로 가던 것 (2026-10-14 블랙컴퍼니 '!바카라 = application.octet-stream, 열면 빈 테이블', 서버 실측·PTB 21 원본 대조)
+- GIF 를 이름표 없는 bytes 로 send_animation → 텔레그램이 파일(application.octet-stream)로 받음 → `basic.gif_file` ('.gif' 이름표) — 바카라·룰렛·사다리·그래프·경마 공통.
+- `basic.photo_file` 에 attach=True 필수: 이미 만든 InputFile 은 InputMediaPhoto 가 attach 를 안 붙여서 editMessageMedia 가 'media not found' 로 거절.
+- 혼자 `!바카라` 는 GIF 가 끝나면 결과 카드 사진으로 바꿔 둠 (`show_anim(final_img=)`, GIF 는 되풀이돼 다시 빈 테이블부터 보였음). tests/fakes FakeBot.edit_message_media 기록.
+
 ## 게임 돈·안정성 (2026-09-27 심층 감사 수정, tests/test_fix_games_audit.py · 뮤테이션 23개)
 - 열린 베팅 = DB `casino_open`(방·사람별 합계): `debit('bet:')` 이 같은 트랜잭션에서 더하고, 정산·환불은 `credit(..., close=베팅)` 으로
   지급과 함께 뺀다 (`settle` 이 자동으로). **새 게임도 베팅은 take_bet, 끝은 settle 또는 credit(close=) — 안 닫으면 재시작 때 환불(=포인트 생김).**
