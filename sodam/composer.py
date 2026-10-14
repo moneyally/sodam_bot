@@ -18,11 +18,11 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOpti
 from telegram.error import BadRequest
 
 from . import mediastore, persist
-from .db import register_schema
+from .db import register_columns, register_schema
 
 TEXT_LIMIT, CAPTION_LIMIT = 4096, 1024
 MAX_ROWS, MAX_COLS, LABEL_MAX, URL_MAX = 8, 3, 40, 512
-MEDIA = {"photo": "사진", "video": "영상"}
+MEDIA = {"photo": "사진", "video": "영상", "animation": "움짤(GIF)"}
 DRAFT_KEEP = 7 * 86400      # 손 놓은 초안은 7일 뒤 정리
 MAX_DRAFTS = 10             # 한 사람이 들고 있는 초안 (예약된 글 제외)
 
@@ -42,9 +42,12 @@ CREATE TABLE IF NOT EXISTS composer_drafts (
     source     TEXT NOT NULL DEFAULT 'manual',  -- manual / ai
     state      TEXT NOT NULL DEFAULT 'draft',   -- draft / posting / posted / scheduled
     rev        INTEGER NOT NULL DEFAULT 0,
-    updated    INTEGER NOT NULL
+    updated    INTEGER NOT NULL,
+    pin        INTEGER NOT NULL DEFAULT 0,    -- 올리면서 고정
+    msg_id     INTEGER                        -- 그룹방에 올린 글 번호 (🎛 버튼 메뉴: 나중에 고치기)
 );
 """)
+register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER"})
 
 
 class HtmlError(ValueError):
@@ -211,7 +214,9 @@ async def create(db, uid: int, target: int, **fields) -> int:
     cols = ["user_id", "target", "updated", *fields]
 
     def run(c):
-        c.execute("DELETE FROM composer_drafts WHERE state IN ('draft','posted') AND updated<?", (now - DRAFT_KEEP,))
+        # 그룹방에 올린 버튼 메뉴(msg_id 있음)는 나중에 고칠 수 있게 남김
+        c.execute("DELETE FROM composer_drafts WHERE (state='draft' OR state='posted' AND msg_id IS NULL) AND updated<?",
+                  (now - DRAFT_KEEP,))
         c.execute("DELETE FROM composer_drafts WHERE id IN (SELECT id FROM composer_drafts WHERE user_id=? AND "
                   "state='draft' ORDER BY updated DESC LIMIT -1 OFFSET ?)", (uid, MAX_DRAFTS - 1))
         return c.execute(f"INSERT INTO composer_drafts({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
@@ -243,7 +248,7 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
     kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d)),
               disable_notification=bool(d["silent"] if silent is None else silent))
     body = d["body"] or None
-    if d["media_type"] in ("photo", "video") and d["media_id"]:
+    if d["media_type"] in MEDIA and d["media_id"]:
         # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
         return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
     return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)

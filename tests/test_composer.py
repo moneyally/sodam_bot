@@ -224,5 +224,70 @@ async def edit_posted_message():
     assert len(w.sent_to(CH)) == 1                                        # 고치기는 새 글을 안 올림
 
 
+@test
+async def room_button_menu_post_pin_edit():
+    """🎛 버튼 메뉴: 그룹방에도 올림 + 고정 + 움짤 + 올린 뒤 고치기. 방 텔레그램 관리자만."""
+    from channel_world import ROOM
+    from types import SimpleNamespace
+    w = await World().open()
+    q = await w.press(BOSS, f"m:g:{ROOM}")
+    assert f"m:rmc:{ROOM}" in [b.callback_data for r in q.kb.inline_keyboard for b in r]   # 그룹 허브에 입구
+    q = await w.press(SUB, f"m:rmc:{ROOM}:n")                              # 이 방 관리자가 아님
+    assert q.answers[0][1] and not q.edits
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    d = await composer.get(w.db, did)
+    assert d["target"] == ROOM and d["pin"] == 1 and "🗓️ 예약" not in str(q.kb)   # 방은 기본 고정, 예약은 채널만
+    await w.press(BOSS, f"m:cp:{did}:m")
+    await w.say(BOSS, None, animation=SimpleNamespace(file_id="G1"))       # 움짤(GIF) 받음
+    await composer.update(w.db, did, body="<b>메뉴</b>",
+                          buttons=json.dumps([[{"t": "공식채널", "u": "https://t.me/boss_news/5"}]]))
+    assert (await composer.get(w.db, did))["media_type"] == "animation"
+    qs = await asyncio.gather(*[w.press(BOSS, f"m:cp:{did}:go1") for _ in range(2)])
+    posts = w.sent_to(ROOM, kinds=("send_animation",))
+    assert len(posts) == 1 and posts[0][2] == "G1" and posts[0][4]["reply_markup"].inline_keyboard[0][0].url == "https://t.me/boss_news/5"
+    pins = w.bot.named("pin")
+    assert len(pins) == 1 and pins[0][1] == ROOM and sum("고정했어요" in (x.edits[-1] if x.edits else "") for x in qs) == 1
+    d = await composer.get(w.db, did)
+    assert d["state"] == "posted" and d["msg_id"]
+    # 올린 메뉴 고치기 → 방 글을 그 자리에서 (새 글 X)
+    q = await w.press(BOSS, f"m:rmc:{ROOM}")
+    assert f"m:rmc:{ROOM}:e:{did}" in [b.callback_data for r in q.kb.inline_keyboard for b in r]
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:e:{did}")
+    eid = int(q.kb.inline_keyboard[0][0].callback_data.split(":")[2])
+    await composer.update(w.db, eid, buttons=json.dumps([[{"t": "문의", "u": "https://t.me/boss"}]]))
+    await w.press(BOSS, f"m:cp:{eid}:sv")
+    caps = w.bot.named("edit_caption")
+    assert len(caps) == 1 and caps[0][1] == ROOM and caps[0][2] == d["msg_id"]
+    assert caps[0][4]["reply_markup"].inline_keyboard[0][0].text == "문의" and len(w.sent_to(ROOM, kinds=("send_animation",))) == 1
+    left = await w.db._all("SELECT id FROM composer_drafts WHERE target=? AND state='posted'", (ROOM,))
+    assert [r["id"] for r in left] == [eid]                                 # 최신판 하나만 목록에
+
+
+@test
+async def pin_refused_still_posts_and_copy_to_channel():
+    from channel_world import ROOM
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="안내", buttons=json.dumps([[{"t": "A", "u": "https://a.com"}]]))
+
+    async def no_pin(*a, **k):
+        from telegram.error import BadRequest
+        raise BadRequest("Not enough rights to manage pinned messages in the chat")
+    w.bot.pin_chat_message = no_pin
+    q = await w.press(BOSS, f"m:cp:{did}:go1")
+    assert len(w.sent_to(ROOM)) == 1 and "고정은 못 했어요" in q.edits[-1]      # 고정 못 해도 글은 올라감
+    q = await w.press(BOSS, f"m:cp:{did}:cpy")                             # 같은 글 채널에도
+    assert f"m:cp:{did}:cp2:{CH}" in [b.callback_data for r in q.kb.inline_keyboard for b in r]
+    q = await w.press(SUB, f"m:cp:{did}:cp2:{CH}")                         # 남의 초안은 못 복사
+    assert q.answers[0][1]
+    q = await w.press(BOSS, f"m:cp:{did}:cp2:{CH}")
+    nid = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    n, o = await composer.get(w.db, nid), await composer.get(w.db, did)
+    assert n["target"] == CH and n["state"] == "draft" and composer.buttons(n) == composer.buttons(o) and n["body"] == "안내"
+    assert o["state"] == "posted" and o["target"] == ROOM                    # 원본은 그대로
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
