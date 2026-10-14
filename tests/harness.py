@@ -216,6 +216,9 @@ async def press(svc, bot, uid, data) -> HQuery:
     return q
 
 
+_DRAFT_ID = re.compile(r"^(m:cp:)\d+")
+
+
 async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
     who = PERSONAS[uid]
     seen: set[str] = set()
@@ -224,9 +227,10 @@ async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
     queue = deque(starts)
     while queue and rep.presses < MAX_PRESSES:
         data = queue.popleft()
-        if data in seen:
+        key = _DRAFT_ID.sub(r"\1#", data)   # 편집기 초안 번호는 누를 때마다 새로 생김 → 같은 버튼으로 셈
+        if key in seen:
             continue
-        seen.add(data)
+        seen.add(key)
         svc.menu_limiter._hits.clear()  # 크롤러는 레이트리밋 대상이 아님
         before_sent = len(bot.calls)
         try:
@@ -257,7 +261,7 @@ async def crawl_as(svc, bot, uid, rep: Report, starts: list[str]) -> None:
                 cd = b.callback_data
                 if cd and cd.startswith("m:"):
                     shown.setdefault(cd, b.text or "")
-                if cd and cd.startswith("m:") and cd not in seen:
+                if cd and cd.startswith("m:") and _DRAFT_ID.sub(r"\1#", cd) not in seen:
                     if len(cd.split(":")) > 2 and menu.CID_RE.fullmatch(cd.split(":")[2] or "x"):
                         rep.scoped_seen.setdefault(cd, who)
                     queue.append(cd)

@@ -436,6 +436,10 @@
 - 편집기: 허용 HTML(b,i,u,s,code,pre,a,blockquote,tg-spoiler)만, 깨진 태그는 위치와 함께 거절, 텔레그램 서식 글은 자동 변환. URL 버튼 줄 편집.
   초안은 DB(재시작 OK), 올리기·수정은 DB 차지로 한 번만. 예약은 announce 시각 형식. AI `channel_draft`(1:1, 버튼 눌러야 올라감)·`channel_posts`(방, 읽기).
 - 요금: 예약·AI 초안·방 알림은 이용 중인 방에 연결된 채널 1개(방당). 지금 올리기·가입 신청·구독자 추이는 무료. 방 예약공지는 아직 옛 마법사.
+- **🎛 버튼 메뉴 (리모컨)** (그룹 허브 m:rmc, TG_ADMIN, 2026-10-15 손님 '리모컨처럼'): 같은 편집기가 **그룹방**도 대상(target = 방, 등록 채널이 아니면 방) —
+  사진·영상·**움짤(GIF, MEDIA animation)** + 글 + URL 버튼, 📌 올리고 고정(composer_drafts.pin, 방 기본 켬, 고정 실패해도 글은 올림),
+  방에 올린 글 번호 msg_id 를 남겨 m:rmc:<방>:e:<초안> 로 고치면 그 자리에서 수정(옛 판 지움, 7일 정리 대상 아님). 예약은 채널만.
+  [📤 다른 방·채널에도](cp:…:cpy → cp2:<대상>) = 내가 TG 관리자인 채널·방에 초안 복사 (원본 그대로). tests/test_composer.py room_* · 뮤테이션 4개.
 ## 🔧 MTProto 헬퍼 (`mtproto.py`, `panels/mtproto.py`, tests/test_mtproto.py·test_namehist_mtproto.py)
 - .env MTPROTO_API_ID/HASH(비밀, 템플릿엔 빈칸). ① 봇 토큰 세션(receive_updates=False): 참가자 명단·@아이디 조회 → 이름 기록 전체 멤버 순찰(12시간마다, 첫 발견은 알림 없음).
   ② 사람 계정(선택, `tools/mtproto_login.py` 서버 터미널에서만): 채널 조회수 30분 1번. **클라우드 컨테이너에선 MTProto(TCP) 가 프록시에 막혀 연결 안 됨 → VPS 에서만.**

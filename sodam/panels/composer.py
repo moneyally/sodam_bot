@@ -14,6 +14,7 @@ AI 도구 channel_draft(channel, topic) = AI 가 본문을 쓴 초안 + 이 화�
 from __future__ import annotations
 
 import json
+import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
@@ -36,32 +37,66 @@ def _kb(rows) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([r for r in rows if r])
 
 
+# ── 올릴 곳: 등록 채널 또는 소담이 있는 그룹방 (🎛 버튼 메뉴) ─────────────
+async def _dest(svc, target: int) -> tuple[object, str]:
+    """(채널 줄 또는 None=그룹방, 보일 이름 '📢 채널' / '💬 방')."""
+    ch = await channel.get(svc.db, target)
+    if ch:
+        return ch, f"📢 <b>{esc(ch['title'])}</b>"
+    return None, f"💬 <b>{esc(await menu.chat_title(svc, target))}</b>"
+
+
+def _back(ch, target: int) -> InlineKeyboardButton:
+    return B("⬅️ 채널", f"m:ch:{target}") if ch else B("⬅️ 버튼 메뉴", f"m:rmc:{target}")
+
+
+def _new(ch, target: int) -> InlineKeyboardButton:
+    return B("✍️ 새 글", f"m:chn:{target}") if ch else B("✍️ 새 버튼 메뉴", f"m:rmc:{target}:n")
+
+
+def room_link(chat_id: int, msg_id: int) -> str | None:
+    s = str(chat_id)
+    return f"https://t.me/c/{s.removeprefix('-100')}/{msg_id}" if s.startswith("-100") else None
+
+
+async def _pin(bot, chat_id: int, msg_id: int, d) -> str:
+    """📌 올리고 고정. 고정 못 해도 글은 그대로 (안내 한 줄)."""
+    if not d["pin"]:
+        return ""
+    try:
+        await bot.pin_chat_message(chat_id, msg_id, disable_notification=bool(d["silent"]))
+    except TelegramError:
+        return "\n📌 고정은 못 했어요 — 소담에게 '메시지 고정' 권한을 주거나 직접 고정해 주세요."
+    return "\n📌 고정했어요."
+
+
 async def _load(c: PanelCtx, did) -> tuple[object, Screen | None]:
     d = await composer.get(c.svc.db, did) if isinstance(did, int) else None
     if not d:
-        return None, Screen(None, toast="없어진 글이에요. 📢 내 채널에서 다시 열어주세요.", alert=True)
+        return None, Screen(None, toast="없어진 글이에요. 메뉴에서 다시 열어주세요.", alert=True)
     if d["user_id"] != c.uid:
         return None, Screen(None, toast="다른 관리자가 쓰고 있는 글이에요.", alert=True)
-    if not await channel.is_manager(c.svc, c.bot, d["target"], c.uid):
-        return None, Screen(None, toast="이 채널의 관리자만 쓸 수 있어요.", alert=True)
+    if not await channel.is_manager(c.svc, c.bot, d["target"], c.uid):   # 채널·방 둘 다: 지금 텔레그램 관리자 또는 오너
+        return None, Screen(None, toast="이 채널·방의 관리자만 쓸 수 있어요.", alert=True)
     return d, None
 
 
 # ── 편집 화면 ─────────────────────────────────────────────
 async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
-    did, ch = d["id"], await channel.get(c.svc.db, d["target"])
-    title = esc(ch["title"]) if ch else str(d["target"])
-    back = B("⬅️ 채널", f"m:ch:{d['target']}")
+    did = d["id"]
+    ch, title = await _dest(c.svc, d["target"])
+    back = _back(ch, d["target"])
     if d["state"] == "scheduled":
-        return Screen(f"🗓️ 예약된 글이에요 → 📢 <b>{title}</b>\n바꾸거나 취소하려면 🗓️ 예약 글에서.",
+        return Screen(f"🗓️ 예약된 글이에요 → {title}\n바꾸거나 취소하려면 🗓️ 예약 글에서.",
                       _kb([[B("🗓️ 예약 글", f"m:chs:{d['target']}")], [back]]))
     if d["state"] != "draft":
-        return Screen(f"✅ 이미 올린 글이에요 → 📢 <b>{title}</b>", _kb([[B("✍️ 새 글", f"m:chn:{d['target']}")], [back]]))
+        return Screen(f"✅ 이미 올린 글이에요 → {title}",
+                      _kb([[B("📤 다른 방·채널에도", cp(did, "cpy"))], [_new(ch, d["target"])], [back]]))
     edit, rows_ = bool(d["edit_of"]), composer.buttons(d)
     n = sum(map(len, rows_))
     head = "✏️ <b>올린 글 고치기</b>" if edit else ("🤖 <b>AI 초안</b>" if d["source"] == "ai" else "✍️ <b>새 글</b>")
     text = composer.plain(d["body"])
-    lines = [f"{head} → 📢 <b>{title}</b>", "",
+    lines = [f"{head} → {title}", "",
              f"<blockquote>{esc(text[:300])}{'…' if len(text) > 300 else ''}</blockquote>" if text.strip() else "본문: 아직 없어요",
              f"📝 {composer.utf16_len(text)}/{composer.limit_of(d)}자 · 🖼 {composer.MEDIA.get(d['media_type'], '없음')} · "
              f"🔘 버튼 {n}개" + (f" ({len(rows_)}줄)" if n else "")]
@@ -69,16 +104,20 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
         lines.append(f"🔗 링크 미리보기 {'켬' if d['preview'] else '끔'}")
     if not edit:
         lines.append("🔕 조용히 보내기 (알림 없이)" if d["silent"] else "🔔 알림과 함께 보내기")
+        lines.append("📌 올리면서 고정해요" if d["pin"] else "📌 고정 안 함")
     if note:
         lines += ["", note]
-    rows = [[B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상", cp(did, "m"))]),
+    go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
+    rows = [[B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상·움짤", cp(did, "m"))]),
             [B("🗑 사진·영상 빼기", cp(did, "mx"))] if d["media_type"] and not edit else [],
             [B("➕ 버튼", cp(did, "ba"))] + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else []),
             ([] if d["media_type"] else [B("🔗 미리보기 끄기" if d["preview"] else "🔗 미리보기 켜기",
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
+            [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1))],
             [B("👀 미리보기 (1:1)", cp(did, "pr"))],
-            [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else [B("📤 지금 올리기", cp(did, "go")), B("🗓️ 예약", cp(did, "sc"))],
+            [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
+            [B("📤 다른 방·채널에도", cp(did, "cpy"))] if not edit and (d["body"] or d["media_type"]) else [],
             [B("🗑 버리기", cp(did, "del")), back]]
     return Screen("\n".join(lines), _kb(rows))
 
@@ -157,7 +196,9 @@ async def _post(c: PanelCtx, d) -> Screen:
     ch = await channel.get(c.svc.db, d["target"])
     if not d["body"] and not d["media_type"]:
         return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
-    if not ch or not ch["active"]:
+    if not ch:
+        return await _post_room(c, d)
+    if not ch["active"]:
         return Screen(None, toast="소담이 이 채널 관리자가 아니라 올릴 수 없어요. 채널에서 다시 관리자로 넣어주세요.", alert=True)
     if not ch["can_post"]:
         return Screen(None, toast="소담에게 채널 '글 올리기' 권한이 없어요.\n채널 → 관리자 → 소담 에서 켠 뒤 다시 눌러주세요.", alert=True)
@@ -172,15 +213,68 @@ async def _post(c: PanelCtx, d) -> Screen:
         return await s_compose(c, await composer.get(c.svc.db, d["id"]), f"❌ 올리지 못했어요: {esc(e.message[:200])}")
     await composer.claim(c.svc.db, d["id"], "posting", "posted")
     await c.svc.db.log_mod(ch["chat_id"], c.uid, None, "channel_post", f"#{sent.message_id}")
-    return Screen(f"✅ 📢 <b>{esc(ch['title'])}</b> 에 올렸어요!",
+    pinned = await _pin(c.bot, ch["chat_id"], sent.message_id, d)
+    return Screen(f"✅ 📢 <b>{esc(ch['title'])}</b> 에 올렸어요!{pinned}",
                   _kb([[InlineKeyboardButton("👀 채널에서 보기", url=channel.post_link(ch, sent.message_id))],
+                       [B("📤 다른 방·채널에도", cp(d["id"], "cpy"))],
                        [B("✍️ 새 글", f"m:chn:{ch['chat_id']}"), B("⬅️ 채널", f"m:ch:{ch['chat_id']}")]]),
                   toast="올렸어요!")
 
 
+async def _post_room(c: PanelCtx, d) -> Screen:
+    """🎛 그룹방에 버튼 메뉴 올리기 (+ 고정). 올린 글 번호를 남겨 나중에 고치기."""
+    cid, db = d["target"], c.svc.db
+    if not await db.has_chat(cid):
+        return Screen(None, toast="소담이 없는 방이에요.", alert=True)
+    if not await channel.is_manager(c.svc, c.bot, cid, c.uid, fresh=True):
+        return Screen(None, toast="지금은 이 방 관리자가 아니라서 올릴 수 없어요.", alert=True)
+    if not await composer.claim(db, d["id"], "draft", "posting"):
+        return Screen(None, toast="이미 올렸거나 올리는 중이에요.")
+    try:
+        sent = await composer.send(c.bot, cid, d)
+    except TelegramError as e:
+        await composer.claim(db, d["id"], "posting", "draft")
+        return await s_compose(c, await composer.get(db, d["id"]), f"❌ 올리지 못했어요: {esc(e.message[:200])}")
+    await db.atomic(lambda x: x.execute("UPDATE composer_drafts SET state='posted', msg_id=?, updated=? WHERE id=?",
+                                        (sent.message_id, int(time.time()), d["id"])))
+    await db.log_mod(cid, c.uid, None, "menu_post", f"#{sent.message_id}")
+    pinned = await _pin(c.bot, cid, sent.message_id, d)
+    _, title = await _dest(c.svc, cid)
+    link = room_link(cid, sent.message_id)
+    return Screen(f"✅ {title} 에 올렸어요!{pinned}\n고칠 땐 ⚙️ 방 설정 → 🎛 버튼 메뉴 → 올린 메뉴에서 — 방 글이 바로 바뀌어요.",
+                  _kb([[InlineKeyboardButton("👀 방에서 보기", url=link)] if link else [],
+                       [B("📤 다른 방·채널에도", cp(d["id"], "cpy"))],
+                       [_new(None, cid), _back(None, cid)]]), toast="올렸어요!")
+
+
+async def _save_room_edit(c: PanelCtx, d) -> Screen:
+    """올린 버튼 메뉴 고치기: 방 글을 그 자리에서 수정 → 이 초안이 그 메뉴의 최신판 (옛 판은 지움)."""
+    cid, db = d["target"], c.svc.db
+    if not await channel.is_manager(c.svc, c.bot, cid, c.uid, fresh=True):
+        return Screen(None, toast="지금은 이 방 관리자가 아니라서 고칠 수 없어요.", alert=True)
+    if not await composer.claim(db, d["id"], "draft", "posting"):
+        return Screen(None, toast="이미 저장했어요.")
+    try:
+        await composer.edit(c.bot, cid, d["edit_of"], d)
+    except TelegramError as e:
+        await composer.claim(db, d["id"], "posting", "draft")
+        return await s_compose(c, await composer.get(db, d["id"]), f"❌ 고치지 못했어요: {esc(e.message[:200])}")
+
+    def done(x):
+        x.execute("DELETE FROM composer_drafts WHERE target=? AND msg_id=? AND state='posted' AND id<>?",
+                  (cid, d["edit_of"], d["id"]))
+        x.execute("UPDATE composer_drafts SET state='posted', msg_id=?, edit_of=NULL WHERE id=?", (d["edit_of"], d["id"]))
+    await db.atomic(done)
+    link = room_link(cid, d["edit_of"])
+    return Screen("✅ 고친 내용을 방 글에 반영했어요.",
+                  _kb([[InlineKeyboardButton("👀 방에서 보기", url=link)] if link else [], [_back(None, cid)]]), toast="저장했어요")
+
+
 async def _save_edit(c: PanelCtx, d) -> Screen:
     ch = await channel.get(c.svc.db, d["target"])
-    if not ch or not ch["active"] or not ch["can_post"]:
+    if not ch:
+        return await _save_room_edit(c, d)
+    if not ch["active"] or not ch["can_post"]:
         return Screen(None, toast="소담이 이 채널에 글을 올리거나 고칠 수 없는 상태예요. 🔧 헬퍼 상태를 확인해 주세요.", alert=True)
     if not await channel.is_manager(c.svc, c.bot, ch["chat_id"], c.uid, fresh=True):
         return Screen(None, toast="지금은 이 채널 관리자가 아니라서 고칠 수 없어요.", alert=True)
@@ -205,12 +299,16 @@ async def r_cp(c: PanelCtx) -> Screen:
         return deny
     act, a = c.arg(1), c.args[2:]
     did, db = d["id"], c.svc.db
+    if act == "cpy":
+        return await s_copy(c, d)
+    if act == "cp2":
+        return await _copy_to(c, d, to_int(a[0] if a else ""))
     if act and d["state"] != "draft":
         return await s_compose(c, d)
     if act == "b":
         return _ask(c, d, "cpb", BODY_HELP)
     if act == "m":
-        return _ask(c, d, "cpm", "🖼 올릴 <b>사진이나 영상</b> 하나를 보내주세요. (설명은 ✏️ 본문에서)")
+        return _ask(c, d, "cpm", "🖼 올릴 <b>사진·영상·움짤(GIF)</b> 하나를 보내주세요. (설명은 ✏️ 본문에서)")
     if act == "mx":
         await composer.update(db, did, media_type=None, media_id=None)
     elif act == "ba":
@@ -243,8 +341,8 @@ async def r_cp(c: PanelCtx) -> Screen:
         if not await composer.update(db, did, rev, buttons=json.dumps(rows, ensure_ascii=False)):
             return s_buttons(await composer.get(db, did), "화면이 바뀌어서 다시 보여드려요.")
         return s_buttons(await composer.get(db, did), "🗑 지웠어요." if op == "x" else "옮겼어요.")
-    elif act in ("pv", "sl") and a[:1] in (["0"], ["1"]):
-        await composer.update(db, did, **{"preview" if act == "pv" else "silent": int(a[0])})
+    elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
+        await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
     elif act == "pr":
         if not d["body"] and not d["media_type"]:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
@@ -259,9 +357,9 @@ async def r_cp(c: PanelCtx) -> Screen:
     elif act == "go":
         if not d["body"] and not d["media_type"]:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
-        ch = await channel.get(db, d["target"])
-        return Screen(f"📤 📢 <b>{esc(ch['title'] if ch else '')}</b> 에 지금 올릴까요?"
-                      + ("\n🔕 알림 없이 올려요." if d["silent"] else ""),
+        _, title = await _dest(c.svc, d["target"])
+        return Screen(f"📤 {title} 에 지금 올릴까요?"
+                      + ("\n🔕 알림 없이 올려요." if d["silent"] else "") + ("\n📌 올리면서 고정해요." if d["pin"] else ""),
                       _kb([[B("✅ 올리기", cp(did, "go1")), B("⬅️ 돌아가기", cp(did))]]))
     elif act == "go1":
         return await _post(c, d)
@@ -281,8 +379,47 @@ async def r_cp(c: PanelCtx) -> Screen:
         return Screen("🗑 이 글을 버릴까요? (되돌릴 수 없어요)", _kb([[B("🗑 버리기", cp(did, "del1")), B("⬅️ 돌아가기", cp(did))]]))
     elif act == "del1":
         await composer.remove(db, did)
-        return Screen("🗑 버렸어요.", _kb([[B("✍️ 새 글", f"m:chn:{d['target']}"), B("⬅️ 채널", f"m:ch:{d['target']}")]]))
+        ch, _ = await _dest(c.svc, d["target"])
+        return Screen("🗑 버렸어요.", _kb([[_new(ch, d["target"]), _back(ch, d["target"])]]))
     return await s_compose(c, await composer.get(db, did) or d)
+
+
+# ── 📤 같은 글 다른 방·채널에도 ─────────────────────────
+COPY_MAX = 8   # 채널·방 각각 몇 개까지 보여 줄지
+COPY_FIELDS = ("body", "media_type", "media_id", "buttons", "preview", "silent", "pin")
+
+
+async def _places(c: PanelCtx, skip: int) -> list[tuple[int, str]]:
+    """내가 지금 올릴 수 있는 곳: 관리하는 등록 채널 + 텔레그램 관리자인 그룹방 (지금 대상 빼고)."""
+    chans = [(r["chat_id"], f"📢 {r['title']}") for r in await channel.mine(c.svc, c.bot, c.uid)
+             if r["active"] and r["chat_id"] != skip][:COPY_MAX]
+    rooms = []
+    for cid, title in await menu.admin_groups(c.svc, c.bot, c.uid):
+        if cid != skip and len(rooms) < COPY_MAX and await channel.is_manager(c.svc, c.bot, cid, c.uid):
+            rooms.append((cid, f"💬 {title}"))
+    return chans + rooms
+
+
+async def s_copy(c: PanelCtx, d) -> Screen:
+    places = await _places(c, d["target"])
+    if not places:
+        return Screen(None, toast="올릴 수 있는 다른 채널·방이 없어요. (텔레그램 관리자인 곳만)", alert=True)
+    kb = [[B(t[:30], cp(d["id"], "cp2", cid))] for cid, t in places]
+    return Screen("📤 이 글(그림·글·버튼 그대로)을 <b>어디에</b> 복사할까요?\n복사본은 새 초안으로 열려요 — 확인하고 올리면 돼요.",
+                  _kb(kb + [[B("⬅️ 돌아가기", cp(d["id"]))]]))
+
+
+async def _copy_to(c: PanelCtx, d, target: int | None) -> Screen:
+    if target is None or target == d["target"] or not await channel.is_manager(c.svc, c.bot, target, c.uid, fresh=True):
+        return Screen(None, toast="거기엔 올릴 수 없어요 (그곳 관리자만).", alert=True)
+    if not await channel.get(c.svc.db, target) and not await c.svc.db.has_chat(target):
+        return Screen(None, toast="소담이 없는 곳이에요.", alert=True)
+    same = await c.svc.db._one(   # 같은 곳에 이미 복사해 둔 초안이 있으면 그걸 (연타해도 하나)
+        "SELECT id FROM composer_drafts WHERE user_id=? AND target=? AND state='draft' AND edit_of IS NULL "
+        "AND body=? AND media_id IS ? AND buttons=?", (c.uid, target, d["body"], d["media_id"], d["buttons"]))
+    if same:
+        return await s_compose(c, await composer.get(c.svc.db, same["id"]))
+    return await new_draft(c, target, **{k: d[k] for k in COPY_FIELDS})
 
 
 # ── 글자 입력 ─────────────────────────────────────────────
@@ -417,6 +554,47 @@ async def edit_draft(c: PanelCtx, ch, msg_row) -> Screen:
     snap = json.loads(msg_row["draft"])
     return await new_draft(c, ch["chat_id"], edit_of=msg_row["msg_id"],
                            **{k: snap.get(k) for k in ("body", "media_type", "media_id", "buttons", "preview")})
+
+
+# ── 🎛 버튼 메뉴 (리모컨) — 그룹 허브: 그림·글·링크 버튼 글을 이 방에 올리고 고정, 올린 뒤 고치기 ──
+async def s_rmc(c: PanelCtx) -> Screen:
+    """m:rmc:<방> 목록 · :n 새 메뉴 · :e:<초안> 올린 메뉴 고치기 (텔레그램 관리자만, 누를 때마다 확인)."""
+    cid, db, act = c.cid, c.svc.db, c.arg(0)
+    if act == "n":   # 손대지 않은 빈 초안이 있으면 그걸 (누를 때마다 빈 초안이 쌓이지 않게)
+        empty = await db._one("SELECT id FROM composer_drafts WHERE user_id=? AND target=? AND state='draft' AND edit_of IS NULL "
+                              "AND body='' AND media_type IS NULL AND buttons='[]' ORDER BY id DESC LIMIT 1", (c.uid, cid))
+        return await s_compose(c, await composer.get(db, empty["id"])) if empty else await new_draft(c, cid, pin=1)
+    if act == "e":
+        row = await db._one("SELECT * FROM composer_drafts WHERE id=? AND target=? AND state='posted' AND msg_id IS NOT NULL",
+                            (to_int(c.arg(1)) or 0, cid))
+        if not row:
+            return Screen(None, toast="없어진 메뉴예요.", alert=True)
+        mine = await db._one("SELECT id FROM composer_drafts WHERE user_id=? AND target=? AND edit_of=? AND state='draft'",
+                             (c.uid, cid, row["msg_id"]))
+        if mine:
+            return await s_compose(c, await composer.get(db, mine["id"]))
+        return await new_draft(c, cid, edit_of=row["msg_id"],
+                               **{k: row[k] for k in ("body", "media_type", "media_id", "buttons", "preview")})
+    draft = await db._one("SELECT id FROM composer_drafts WHERE user_id=? AND target=? AND state='draft' AND edit_of IS NULL "
+                          "ORDER BY updated DESC LIMIT 1", (c.uid, cid))
+    posted = await db._all("SELECT id, body, media_type, msg_id FROM composer_drafts WHERE target=? AND state='posted' "
+                           "AND msg_id IS NOT NULL ORDER BY updated DESC LIMIT 6", (cid,))
+    lines = [f"🎛 <b>버튼 메뉴 (리모컨)</b> — 💬 {esc(await menu.chat_title(c.svc, cid))}",
+             "사진·움짤 + 글 + 링크 버튼(최대 8줄 × 3개)을 이 방에 올리고 📌 고정해요.",
+             "올린 뒤 아래 목록에서 고치면 방에 있는 글이 바로 바뀌어요.",
+             "채널에도 똑같이 걸려면 편집 화면의 [📤 다른 방·채널에도]."]
+    if posted:
+        lines += ["", "<b>올린 메뉴</b>"]
+    kb = [[B("✍️ 새 버튼 메뉴", f"m:rmc:{cid}:n")],
+          [B("📝 쓰던 메뉴 이어서", cp(draft["id"]))] if draft else []]
+    for r in posted:
+        head = " ".join(composer.plain(r["body"] or "").split())[:22] or f"({composer.MEDIA.get(r['media_type'], '그림')})"
+        kb.append([B(f"✏️ {head}", f"m:rmc:{cid}:e:{r['id']}")])
+    return Screen("\n".join(lines), _kb(kb + [[B("⬅️ 뒤로", f"m:g:{cid}")]]))
+
+
+menu.register_hub(menu.HubItem(49, "rmc", "🎛 버튼 메뉴 (리모컨)", TG_ADMIN))
+menu.register_screen("rmc", s_rmc, need=TG_ADMIN, fresh=True)
 
 
 for _kind, _fn in (("cpb", in_body), ("cpm", in_media), ("cpl", in_label), ("cpu", in_url), ("cpw", in_when)):
