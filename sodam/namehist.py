@@ -462,8 +462,25 @@ async def mt_sweep(svc, bot) -> int:
     return 0
 
 
+async def _keep_known_usernames(db, people: list) -> None:
+    """순찰(MTProto)이 @아이디를 빈칸으로 줘도 '지웠다'로 보지 않음 — 아는 아이디를 그대로 둠.
+    MTProto 는 아이디를 가린 채(아이디 여러 개·보이기 설정) 줄 때가 있어서, 지운 건 그 사람이 말할 때 봇 API 로만 기록한다."""
+    blank = [u.id for u in people if not u.username]
+    known: dict[int, str] = {}
+    for i in range(0, len(blank), 500):
+        part = blank[i:i + 500]
+        rows = await db._all("SELECT user_id, username FROM name_history WHERE id IN (SELECT MAX(id) FROM name_history "
+                             f"WHERE user_id IN ({','.join('?' * len(part))}) GROUP BY user_id) "
+                             "AND username IS NOT NULL AND username<>''", tuple(part))
+        known.update({r["user_id"]: r["username"] for r in rows})
+    for u in people:
+        if not u.username and u.id in known:
+            u.username = known[u.id]
+
+
 async def _apply_members(svc, bot, chat_id: int, members: list[dict], diff: dict) -> None:
     people = [_person(m) for m in members if not (m["is_bot"] or m["deleted"] or m["min"])]
+    await _keep_known_usernames(svc.db, people)
     changes = await record_many(svc.db, people)
     gone = [m["id"] for m in diff["left"] if not m["is_bot"]]
     ts = now()

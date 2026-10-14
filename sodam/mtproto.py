@@ -129,7 +129,9 @@ def _user(u) -> dict:
     names = [x.username for x in (getattr(u, "usernames", None) or ()) if getattr(x, "active", True) and x.username]
     if u.username and u.username not in names:
         names.insert(0, u.username)
-    return {"id": u.id, "first_name": u.first_name or "", "last_name": u.last_name or "", "username": u.username or "",
+    # 아이디가 여러 개(Fragment 등)인 사람은 MTProto 가 username 을 비우고 usernames 에만 줌 → 봇 API 처럼 첫 번째 활성 아이디로
+    # (2026-10-15 블랙컴퍼니 '우주코인 OTC': 순찰 때마다 @아이디가 '지워짐'→'다시 생김' 으로 잘못 기록·알림)
+    return {"id": u.id, "first_name": u.first_name or "", "last_name": u.last_name or "", "username": u.username or (names[0] if names else ""),
             "is_bot": bool(u.bot), "deleted": bool(getattr(u, "deleted", False)), "min": bool(getattr(u, "min", False)),
             "status": kind, "was_online": was,
             "photo": photo is not None and type(photo).__name__ != "UserProfilePhotoEmpty",

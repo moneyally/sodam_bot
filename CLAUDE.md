@@ -441,6 +441,7 @@
   방에 올린 글 번호 msg_id 를 남겨 m:rmc:<방>:e:<초안> 로 고치면 그 자리에서 수정(옛 판 지움, 7일 정리 대상 아님). 예약은 채널만.
   [📤 다른 방·채널에도](cp:…:cpy → cp2:<대상>) = 내가 TG 관리자인 채널·방에 초안 복사 (원본 그대로). tests/test_composer.py room_* · 뮤테이션 4개.
 ## 🔧 MTProto 헬퍼 (`mtproto.py`, `panels/mtproto.py`, tests/test_mtproto.py·test_namehist_mtproto.py)
+- **순찰이 @아이디를 빈칸으로 줘도 '지움' 아님** (2026-10-15 블랙컴퍼니 '우주코인 OTC' 순찰마다 @아이디 지워짐↔생김 알림): `mtproto._user` 는 아이디 여러 개(Fragment)면 usernames 첫 번째, `namehist._keep_known_usernames` 는 빈칸이면 마지막 기록 아이디 유지 — 아이디 지움은 그 사람이 말할 때 봇 API 로만. test_namehist_mtproto sweep_blank_username_*.
 - .env MTPROTO_API_ID/HASH(비밀, 템플릿엔 빈칸). ① 봇 토큰 세션(receive_updates=False): 참가자 명단·@아이디 조회 → 이름 기록 전체 멤버 순찰(12시간마다, 첫 발견은 알림 없음).
   ② 사람 계정(선택, `tools/mtproto_login.py` 서버 터미널에서만): 채널 조회수 30분 1번. **클라우드 컨테이너에선 MTProto(TCP) 가 프록시에 막혀 연결 안 됨 → VPS 에서만.**
 ## 👋 퇴장 인사 (`farewell.py`, `panels/farewell.py`, tests/test_farewell.py)

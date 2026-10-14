@@ -68,6 +68,25 @@ async def sweep_records_silent_members_without_first_sight_notice():
     assert len(notices(bot)) == 1 and len(await namehist.history(db, 10)) == 2
 
 
+@test
+async def sweep_blank_username_is_not_a_removal():
+    """2026-10-15 블랙컴퍼니 '우주코인 OTC': 순찰이 @아이디를 빈칸으로 읽어 '지워짐 → 다시 생김' 을 반복 기록·알림.
+    ① 아이디가 여러 개(Fragment)면 usernames 첫 번째로 ② 그래도 빈칸이면 아는 아이디 그대로 (지운 건 봇 API 로만)."""
+    U = lambda n: SimpleNamespace(username=n, active=True)   # noqa: E731
+    db, svc, bot = await world([(20, "우주코인 OTC", None), (21, "조용이", None)],
+                               )
+    svc.mtproto.bot.client.extra = {20: {"usernames": [U("woojoocoin"), U("woojoo2")]}}
+    await namehist.record(db, SimpleNamespace(id=20, first_name="우주코인 OTC", last_name=None, username="woojoocoin", is_bot=False))
+    await namehist.record(db, SimpleNamespace(id=21, first_name="조용이", last_name=None, username="quiet", is_bot=False))
+    for _ in range(2):
+        await namehist.mt_sweep(svc, bot)
+        await past(db, "name_mt_scan", CH, namehist.MT_EVERY + 1)
+    assert not notices(bot), notices(bot)
+    assert [r["username"] for r in await namehist.history(db, 20)] == ["woojoocoin"]
+    assert [r["username"] for r in await namehist.history(db, 21)] == ["quiet"]
+    assert (await db._one("SELECT username FROM users WHERE user_id=21"))["username"] == "quiet"
+
+
 # ── 2. 방마다 12시간 1번 · 시간당 요청 상한 · 관리자 아닌 방 건너뜀 ─
 @test
 async def sweep_throttle_per_group_and_hourly_cap():
