@@ -496,7 +496,13 @@ async def rate_limit_media_budget_per_room():
         await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
     assert RL.media_ok(bot, -1001)
     await lim.process_request(send, (), {}, "editMessageMedia", {"chat_id": -1001}, None)
+    assert RL.media_ok(bot, -1001), "결과 사진 바꾸기는 움짤 수에 안 셈"
+    await lim.process_request(send, (), {}, "sendAnimation", {"chat_id": -1001}, None)
     assert not RL.media_ok(bot, -1001) and RL.media_ok(bot, -1002)
+    assert RL.photo_ok(bot, -1001), "움짤이 막혀도 결과 카드 사진은 됨"
+    for _ in range(RL.PHOTO_PER_MIN):
+        await lim.process_request(send, (), {}, "sendPhoto", {"chat_id": -1001}, None)
+    assert not RL.photo_ok(bot, -1001)
 
 
 @test

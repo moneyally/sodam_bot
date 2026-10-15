@@ -19,7 +19,7 @@ from datetime import timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
-from ..ratelimit import busy, media_ok
+from ..ratelimit import busy, media_ok, photo_ok
 from ..util import esc, user_name
 from . import Ctx, anim, register, register_callback
 from .anim import REDS, WHEEL
@@ -99,13 +99,21 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
     (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌).
     final_img = 끝난 뒤 남길 결과 그림(bytes 를 돌려주는 함수) — GIF 는 되풀이돼서 다시 빈 테이블부터 보이니 사진으로 바꿔 둠."""
     if not media_ok(ctx.bot, ctx.chat_id):
-        # 이 방에 그림·움짤을 많이 올렸거나 막혔던 방 → 파일 없이 글자 결과 한 번 (텔레그램은 새 파일 올리기를 더 빨리 막음)
+        # 이 방에 움짤을 많이 올렸거나 막혔던 방 → 움짤 대신 결과 카드 사진 한 장 (큰 움짤 올리기가 막힘의 원인), 사진도 많으면 글자
+        reply = ReplyParameters(ctx.msg.message_id, allow_sending_without_reply=True)
+        if final_img is not None and photo_ok(ctx.bot, ctx.chat_id):
+            try:
+                still = await asyncio.to_thread(final_img)
+                await ctx.bot.send_photo(ctx.chat_id, photo=InputFile(still, filename="result.jpg"), caption=final,
+                                         parse_mode="HTML", reply_parameters=reply)
+                return
+            except Exception as e:
+                log.warning("result photo failed: %r", e)
         try:
             await ctx.reply(fallback_final or final)
-            return
         except TelegramError as e:
             log.warning("text result failed: %s", e)
-            return
+        return
     if busy(ctx.bot, ctx.chat_id):
         # 방에 보낼 글이 밀림 → 움짤+결과 수정(2번) 대신 결과를 담은 한 번. 텔레그램이 방을 막는 것 방지 (2026-10-15 벳띵)
         reply = ReplyParameters(ctx.msg.message_id, allow_sending_without_reply=True)
