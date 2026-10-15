@@ -8,6 +8,7 @@ PTB 기본 AIORateLimiter 는 어느 요청이든 429(RetryAfter)를 받으면 �
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
 import time
@@ -44,6 +45,7 @@ class ChatRateLimiter(AIORateLimiter):
         self._slow_until: dict[int | str, float] = {}   # 그룹 → 이 시각까지 느린 속도
         self._slow_now: set = set()                      # 지금 느린 제한기를 쓰는 그룹
         self._waiting: dict[int | str, int] = {}         # 그룹 → 지금 보내려고 줄 선 요청 수
+        self._sent: dict[int | str, collections.deque] = {}  # 그룹 → 최근 1분 보낸 시각 (막힐 때 몇 개였는지 기록용)
 
     def backlog(self, group_id) -> int:
         return self._waiting.get(group_id, 0)
@@ -77,7 +79,7 @@ class ChatRateLimiter(AIORateLimiter):
             return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args, limit=False)
         self._waiting[chat_id] = self._waiting.get(chat_id, 0) + 1
         try:
-            return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args)
+            return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args, endpoint=endpoint)
         finally:
             left = self._waiting.get(chat_id, 1) - 1
             if left > 0:
@@ -85,12 +87,15 @@ class ChatRateLimiter(AIORateLimiter):
             else:
                 self._waiting.pop(chat_id, None)
 
-    async def _group_request(self, chat_id, callback, args, kwargs, data, rate_limit_args, limit=True):
+    async def _group_request(self, chat_id, callback, args, kwargs, data, rate_limit_args, limit=True, endpoint=""):
         max_retries = rate_limit_args or self._max_retries
         for i in range(max_retries + 1):
             wait = self._chat_until.get(chat_id, 0.0) - time.monotonic()
             if wait > 0 and limit:
                 await asyncio.sleep(wait)
+            if limit:
+                sent = self._sent.setdefault(chat_id, collections.deque(maxlen=200))
+                sent.append(time.monotonic())
             try:
                 return await self._run_request(chat=True, group=chat_id if limit else False,
                                                allow_paid_broadcast=data.get("allow_paid_broadcast", False),
@@ -108,7 +113,9 @@ class ChatRateLimiter(AIORateLimiter):
                 if len(self._chat_until) > 5000:
                     self._chat_until = {k: v for k, v in self._chat_until.items() if v > now}
                     self._slow_until = {k: v for k, v in self._slow_until.items() if v > now}
-                log.info("방 %s 전송 한도: %.1f초 그 방만 쉼 · %d분 동안 천천히", chat_id, secs, SLOW_SEC // 60)
+                last = sum(1 for t in self._sent.get(chat_id, ()) if t > now - 60)
+                log.info("방 %s 전송 한도: %.1f초 그 방만 쉼 · %d분 동안 천천히 (요청 %s · 직전 1분 보냄 %d개 · 줄 %d)",
+                         chat_id, secs, SLOW_SEC // 60, endpoint, last, self.backlog(chat_id))
                 if i == max_retries:
                     raise
         return None
