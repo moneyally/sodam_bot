@@ -704,12 +704,46 @@ async def t_greet(ctx: ToolCtx, a: dict) -> str:
     return result
 
 
+# 이름이 아니라 역할로 부르는 말 → 텔레그램 관리자 목록에서 찾음 (2026-10-16 전국 소통방 '소담아 소유자 호출해' → '소유자'라는 사람을 찾다 실패)
+ROLE_OWNER = re.compile(r"^(방\s*)?(소유자|방장|주인|오너|owner|creator|대표|만든\s*사람)(님)?$", re.I)
+ROLE_ADMINS = re.compile(r"^(모든\s*|전체\s*)?(관리자|운영진|어드민|admin)(들|님들|님|분들)?(\s*(전부|다|모두))?$", re.I)
+
+
+async def _role_people(ctx: ToolCtx, name: str) -> list[tuple[int, str]] | None:
+    """'소유자·방장' = 방 만든 사람, '관리자들·운영진' = 사람 관리자 전부(최대 5). 역할 말이 아니면 None."""
+    n = name.strip().lstrip("@")
+    want_owner, want_admins = bool(ROLE_OWNER.match(n)), bool(ROLE_ADMINS.match(n))
+    if not (want_owner or want_admins) or ctx.chat_id >= 0:
+        return None
+    try:
+        admins = await ctx.bot.get_chat_administrators(ctx.chat_id)
+    except Exception as e:                      # 권한·연결 문제 → 역할로 못 찾음 (빈 목록)
+        log.info("role mention admins failed: %r", e)
+        return []
+    out = []
+    for m in admins:
+        u = m.user
+        if u.is_bot or (want_owner and m.status != "creator"):
+            continue
+        out.append((u.id, display_name(u.first_name, u.last_name, u.username)))
+    return out[:5]
+
+
 async def t_mention(ctx: ToolCtx, a: dict) -> str:
     """특정 사람을 태그(멘션)해서 그 사람에게 말하기 — 인사가 아님 (실제 2026-10-03 일루왕: '토이든님 태그해서 플 뱅 골라줘' 를
     greet_members 로 해서 '반갑습니다' 인사가 나감)."""
     names = [str(n) for n in (a.get("names") or [])][:5]
     found, missing = [], []
     for n in names:
+        role = await _role_people(ctx, n)
+        if role is not None:
+            if not role:
+                missing.append(n + "(익명 소유자이거나 관리자 목록을 못 봄)")
+            for uid, nm in role:
+                if (uid, nm) not in ctx.mentions:
+                    ctx.mentions.append((uid, nm))
+                found.append(nm)
+            continue
         row, err = await _resolve(ctx, n)
         if err:
             missing.append(n)
@@ -1337,7 +1371,8 @@ TOOLS: list[Tool] = [
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_greet),
     Tool("mention_members", "특정 사람(1~5명)을 태그(멘션)해서 그 사람에게 말할 때. 예: 'OO님 태그해서 플 뱅 골라줘', 'OO 불러서 응원해 줘', "
-         "'OO한테 물어봐'. 인사가 아님 (인사는 greet_members). 방 전체는 mention_all.",
+         "'OO한테 물어봐'. '소유자·방장 호출해' 는 names=['소유자'], '관리자들 불러' 는 names=['관리자'] 그대로 (코드가 텔레그램에서 찾음). "
+         "인사가 아님 (인사는 greet_members). 방 전체는 mention_all.",
          {"names": {"type": "array", "items": {"type": "string"}, "description": "@username 또는 이름"}},
          ["names"], t_mention),
     Tool("start_game", "방에서 끝말잇기를 시작한다. '끝말잇기' = 아무나 먼저 치는 사람이 이어가며 봇과 대결, "

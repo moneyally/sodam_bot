@@ -202,6 +202,7 @@
   오너 도구(owner_*·grant_lookup, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
   오너 1:1 카드: 오너만 누름, [실행+방에 안내]/[실행만]/[취소], 방 안내는 정해진 문구+사유.
+- **역할로 태그** (`tools._role_people`, tests/test_mention_roles.py, 2026-10-16 전국 소통방 '소담아 소유자 호출해' → '소유자'라는 사람을 찾다 실패): mention_members names 가 소유자·방장·주인·오너면 get_chat_administrators 의 creator, 관리자(들)·운영진이면 사람 관리자 전부(5명).
 - 자동 입장 인사 뒤 10분 안의 AI 인사 요청은 중복으로 봄. 제3자(신입)에게 하는 인사는 방 기본 말투.
 
 - **👑 오너 1:1 말로 운영** (`panels/ownertools.py`, tests/test_owner_nl.py, 2026-09-30): owner_grant_days(1~365일, 실행은
