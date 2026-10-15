@@ -29,7 +29,7 @@ from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, cardimg, register, register_callback
 from .basic import edit_live, show, show_anim
 from .board import record
-from .core import OPEN_CHECKS, SWEEPS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet
+from .core import OPEN_CHECKS, SWEEPS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet, tilt, lose_pct, tilt_pick
 
 SUITS = "♠♥♦♣"
 RANKS = {1: "A", 11: "J", 12: "Q", 13: "K"}
@@ -234,7 +234,7 @@ async def g_baccarat(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "baccarat")
     if bet is None:
         return
-    rd = deal_baccarat(make_shoe(8))
+    rd = await tilt(ctx.svc.db, lambda: deal_baccarat(make_shoe(8)), lambda r: bac_payout(r, pick, bet) < bet)
     await record(ctx.svc.db, ctx.chat_id, "baccarat",                # 🖼 그림장: P/B/T + 페어(p·b)
                  rd.winner[0].upper() + ("p" if rd.pair("player") else "") + ("b" if rd.pair("banker") else ""))
     payout = bac_payout(rd, pick, bet)
@@ -476,6 +476,21 @@ def dealer_play(dealer: list[Card], shoe: Shoe) -> None:
         dealer.append(shoe.draw())
 
 
+def _bj_dealer_draw(h) -> tuple[list[Card], "Shoe"]:
+    """숨긴 카드를 슈에 되돌리고 새로 뽑아 딜러를 끝까지 진행한 결과 (원래 슈는 안 건드림). 블랙잭이 되는 숨긴 카드는 제외."""
+    up, hole = h.dealer
+    shoe = Shoe.__new__(Shoe)
+    shoe.cards, shoe.randbelow = list(h.shoe.cards) + [hole], h.shoe.randbelow
+    while True:
+        c = shoe.draw()
+        if not is_blackjack([up, c]):
+            break
+        shoe.cards.append(c)
+    d = [up, c]
+    dealer_play(d, shoe)
+    return d, shoe
+
+
 def bj_payout(player: list[Card], dealer: list[Card], bet: int) -> tuple[int, str]:
     """(받을 돈(원금 포함), 결과 문구). bet 은 더블이면 두 배 된 금액."""
     pb, db_ = is_blackjack(player), is_blackjack(dealer)
@@ -557,6 +572,10 @@ async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False, bg:
     _finish(h)
     dealer_turn = bj_total(h.player) <= 21 and not is_blackjack(h.player)
     if dealer_turn:
+        pct = await lose_pct(h.ctx.svc.db)
+        if pct and len(h.dealer) == 2:                               # 🎚 난이도: 숨긴 카드부터 다시 (딜러 블랙잭은 처음에 이미 아님)
+            h.dealer, h.shoe = tilt_pick(pct, lambda: _bj_dealer_draw(h),
+                                         lambda r: bj_payout(h.player, r[0], h.bet)[0] < h.bet)
         dealer_play(h.dealer, h.shoe)                                # 다시 정산할 때도 이미 17 이상이라 그대로
     payout, verdict = bj_payout(h.player, h.dealer, h.bet)
     bal = await _settle_hand(h, payout, "blackjack")                 # 정산 먼저 (연출이 실패해도 돈은 끝)
@@ -735,9 +754,17 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
     mult = mh if act == "h" else ml
     if not mult:
         return "그쪽은 고를 수 없어요 (나올 카드가 없거나 맞혀도 손해)."
-    nxt = h.shoe.draw()
     prev = h.card
-    ok = nxt.rank > prev.rank if act == "h" else nxt.rank < prev.rank
+    win = (lambda c: c.rank > prev.rank) if act == "h" else (lambda c: c.rank < prev.rank)
+    pct = await lose_pct(h.ctx.svc.db)
+    if pct:                                           # 🎚 난이도: 다음 카드를 지는 쪽으로 기울임
+        cards = h.shoe.cards
+        i = tilt_pick(pct, lambda: h.shoe.randbelow(len(cards)), lambda j: not win(cards[j]))
+        cards[i], cards[-1] = cards[-1], cards[i]
+        nxt = cards.pop()
+    else:
+        nxt = h.shoe.draw()
+    ok = win(nxt)
     h.history.append(prev)
     h.card = nxt
     pick = "하이" if act == "h" else "로우"

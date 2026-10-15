@@ -24,7 +24,7 @@ from ..util import esc, user_name
 from . import Ctx, anim, register, register_callback
 from .anim import REDS, WHEEL
 from .board import record
-from .core import balance, credit, finish, fmt, guarded, handoff, rng, settle_text, split_bet, take_bet
+from .core import balance, credit, finish, fmt, guarded, handoff, rng, settle_text, split_bet, take_bet, tilt
 
 log = logging.getLogger(__name__)
 
@@ -363,7 +363,7 @@ async def spin_roulette(ctx: Ctx, amount: int | None, pick: str) -> None:
     bet = await take_bet(ctx, amount, "roulette")
     if bet is None:
         return
-    n = rng(37)
+    n = await tilt(ctx.svc.db, lambda: rng(37), lambda v: roulette_win(v, pick) == 0)
     await record(ctx.svc.db, ctx.chat_id, "roulette", str(n))
     mult = roulette_win(n, pick)
     payout = bet * mult
@@ -514,7 +514,7 @@ async def g_ladder(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "ladder")
     if bet is None:
         return
-    result = LADDER[rng(4)]
+    result = await tilt(ctx.svc.db, lambda: LADDER[rng(4)], lambda r: ladder_payout(r, pick) == 0)
     await record(ctx.svc.db, ctx.chat_id, "ladder", "".join(map(str, result)))
     payout = int(bet * ladder_payout(result, pick))
     _, tail = await settle_text(ctx, "ladder", bet, payout)         # 정산 먼저 → 연출은 보여주기만
