@@ -48,7 +48,7 @@ def rate_limiter_attached_to_bot():
     app = main_mod.build_app(cfg(str(d / "t.db")), DB(str(d / "t.db")))
     rl = app.bot.rate_limiter
     assert isinstance(rl, AIORateLimiter), rl
-    assert rl._base_limiter.max_rate == 25 and rl._group_max_rate == 18 and rl._max_retries == 2
+    assert rl._base_limiter.max_rate == 25 and rl._group_max_rate == 12 and rl._max_retries == 2
 
 
 @test

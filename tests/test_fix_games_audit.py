@@ -460,6 +460,27 @@ async def rate_limit_room_does_not_burst():
 
 
 @test
+async def rate_limit_only_counts_posts():
+    """'입력 중'·지우기·멤버 확인은 방 글 한도에 안 셈 → 여럿이 부른 방(뉴월드 2026-10-16)에서 답이 1~2분 밀리던 것."""
+    from sodam.ratelimit import GROUP_BURST, posts
+    assert posts("sendMessage") and posts("editMessageMedia") and posts("copyMessage") and posts("sendPhoto")
+    assert not posts("sendChatAction") and not posts("deleteMessage") and not posts("getChatMember")
+    lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=12, group_time_period=60, max_retries=0)
+    sent = []
+
+    async def send():
+        sent.append(time.monotonic())
+        return True
+    t = time.monotonic()
+    for ep in ["sendChatAction"] * 6 + ["deleteMessage"] * 4 + ["getChatMember"] * 4:
+        await lim.process_request(send, (), {}, ep, {"chat_id": -1001}, None)
+    for _ in range(GROUP_BURST):
+        await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
+    assert sent[-1] - t < 0.3, "글 아닌 요청이 답 자리를 먹으면 안 됨"
+    assert lim.backlog(-1001) == 0
+
+
+@test
 async def rate_limit_room_slows_after_429():
     """429 를 받은 방은 한동안 절반 속도·한 번에 1개 → 거듭 걸려 몇 분씩 막히는 것 방지. 다른 방은 그대로."""
     from sodam import ratelimit as RL
