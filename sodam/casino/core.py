@@ -327,6 +327,52 @@ def rng(n: int) -> int:
     return secrets.randbelow(n)
 
 
+# ── 🎚 게임 난이도 (오너 결정 2026-10-16 '10판 중 8판 지게') ──────────────
+# chat_state(0, LOSE_KEY) = 손님이 질 확률 목표 % (0 = 원래대로). 원래 지는 확률이 이미 그 이상인 판(숫자 한 개 베팅 등)은 안 건드림 —
+# 이길 확률을 올리는 일은 없음 (×36 칸을 20% 맞히게 되면 거꾸로 퍼 줌).
+LOSE_KEY = "casino_lose_pct"
+TILT_SAMPLE = 400            # 원래 지는 확률을 재는 표본 수
+_lose = {"pct": 0, "at": -1e9}
+
+
+async def lose_pct(db) -> int:
+    if time.monotonic() - _lose["at"] > 30:
+        try:
+            v = int(await db.get_state(0, LOSE_KEY, 0) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        _lose.update(pct=max(0, min(95, v)), at=time.monotonic())
+    return _lose["pct"]
+
+
+def cached_lose_pct() -> int:
+    """동기 코드(판 만들 때)용 — 마지막으로 읽은 값."""
+    return _lose["pct"]
+
+
+def tilt_pick(pct: int, draw: Callable, lost: Callable):
+    """draw() 로 결과를 뽑되 손님이 질 확률(lost)이 pct% 가 되게 기울임.
+    원래 지는 확률 q 를 표본으로 재고, 이긴 결과가 나오면 f = (p−q)/(1−q) 확률로 지는 결과를 다시 뽑음 → 전체 지는 확률 = p."""
+    r = draw()
+    p = pct / 100
+    if p <= 0 or lost(r):
+        return r
+    q = sum(1 for _ in range(TILT_SAMPLE) if lost(draw())) / TILT_SAMPLE
+    if q >= p or q >= 1:
+        return r
+    if secrets.randbelow(10_000) >= int((p - q) / (1 - q) * 10_000):
+        return r
+    for _ in range(2000):
+        r2 = draw()
+        if lost(r2):
+            return r2
+    return r
+
+
+async def tilt(db, draw: Callable, lost: Callable):
+    return tilt_pick(await lose_pct(db), draw, lost)
+
+
 # ── 잠깐 보이는 답장 ──────────────────────────────────────
 async def _delete_later(bot, chat_id: int, message_id: int, secs: float, db=None) -> None:
     try:
