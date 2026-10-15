@@ -28,6 +28,9 @@ def _seconds(e: RetryAfter) -> float:
 GROUP_BURST = 3   # 한 방에 한꺼번에 나가도 되는 수 (나머지는 고르게 나눠 보냄)
 SLOW_SEC = 600    # 429 를 받은 방은 10분 동안 조금 느리게·한 번에 1개 (텔레그램은 거듭 걸리면 막는 시간을 늘림)
 SLOW_FACTOR = 0.75  # 0.5 는 너무 느려 게임 결과가 몇 분씩 밀렸음 (2026-10-15 벳띵 '렉')
+MEDIA_PER_MIN = 4  # 한 방에 1분 동안 올리는 새 그림·움짤 수 상한 — 넘으면 게임은 글자 결과로 (2026-10-16: 막힐 때마다 sendAnimation,
+                   # 벳띵은 직전 1분 1개만 보냈는데도 130초 막힘 → 글 수보다 '새 파일 올리기'가 걸림)
+MEDIA_ENDPOINTS = ("sendanimation", "sendphoto", "senddocument", "sendvideo", "editmessagemedia", "sendmediagroup")
 BUSY_AT = 2       # 이 방에서 줄 선 요청이 이만큼이면 '바쁨' → 게임은 연출 없이 결과 한 번에 (casino.basic.show_anim)
 
 
@@ -45,10 +48,15 @@ class ChatRateLimiter(AIORateLimiter):
         self._slow_until: dict[int | str, float] = {}   # 그룹 → 이 시각까지 느린 속도
         self._slow_now: set = set()                      # 지금 느린 제한기를 쓰는 그룹
         self._waiting: dict[int | str, int] = {}         # 그룹 → 지금 보내려고 줄 선 요청 수
+        self._media: dict[int | str, collections.deque] = {}  # 그룹 → 최근 그림·움짤 올린 시각
         self._sent: dict[int | str, collections.deque] = {}  # 그룹 → 최근 1분 보낸 시각 (막힐 때 몇 개였는지 기록용)
 
     def backlog(self, group_id) -> int:
         return self._waiting.get(group_id, 0)
+
+    def media_recent(self, group_id, secs: float = 60) -> int:
+        now = time.monotonic()
+        return sum(1 for t in self._media.get(group_id, ()) if t > now - secs)
 
     def slow(self, group_id) -> bool:
         return self._slow_until.get(group_id, 0.0) > time.monotonic()
@@ -96,6 +104,8 @@ class ChatRateLimiter(AIORateLimiter):
             if limit:
                 sent = self._sent.setdefault(chat_id, collections.deque(maxlen=200))
                 sent.append(time.monotonic())
+                if str(endpoint).lower() in MEDIA_ENDPOINTS:
+                    self._media.setdefault(chat_id, collections.deque(maxlen=50)).append(time.monotonic())
             try:
                 return await self._run_request(chat=True, group=chat_id if limit else False,
                                                allow_paid_broadcast=data.get("allow_paid_broadcast", False),
@@ -128,3 +138,11 @@ def busy(bot, chat_id) -> bool:
         return False
     return lim.backlog(chat_id) >= BUSY_AT or lim.slow(chat_id)
 
+
+
+def media_ok(bot, chat_id) -> bool:
+    """이 방에 지금 그림·움짤을 올려도 되나 — 막혔던 방(slow)이거나 1분에 MEDIA_PER_MIN 개 넘게 올렸으면 False (게임은 글자 결과로)."""
+    lim = getattr(bot, "rate_limiter", None)
+    if not isinstance(lim, ChatRateLimiter):
+        return True
+    return not lim.slow(chat_id) and lim.media_recent(chat_id) < MEDIA_PER_MIN

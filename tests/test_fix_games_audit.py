@@ -481,6 +481,25 @@ async def rate_limit_only_counts_posts():
 
 
 @test
+async def rate_limit_media_budget_per_room():
+    """1분에 그림·움짤 MEDIA_PER_MIN 개 넘게 올린 방은 media_ok False (게임은 글자 결과) — 다른 방·글은 그대로 (2026-10-16 벳띵)."""
+    from types import SimpleNamespace
+    from sodam import ratelimit as RL
+    lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=600, group_time_period=60, max_retries=0)
+    bot = SimpleNamespace(rate_limiter=lim)
+
+    async def send():
+        return True
+    for _ in range(RL.MEDIA_PER_MIN - 1):
+        await lim.process_request(send, (), {}, "sendAnimation", {"chat_id": -1001}, None)
+    for _ in range(5):
+        await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
+    assert RL.media_ok(bot, -1001)
+    await lim.process_request(send, (), {}, "editMessageMedia", {"chat_id": -1001}, None)
+    assert not RL.media_ok(bot, -1001) and RL.media_ok(bot, -1002)
+
+
+@test
 async def rate_limit_room_slows_after_429():
     """429 를 받은 방은 한동안 절반 속도·한 번에 1개 → 거듭 걸려 몇 분씩 막히는 것 방지. 다른 방은 그대로."""
     from sodam import ratelimit as RL
