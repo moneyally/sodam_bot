@@ -136,11 +136,44 @@ async def bailout_settles_expired_hand_first():
     await K.cmd(svc, bot, u, "!블랙잭 올인")
     C.HANDS[("bj", K.CHAT, u.id)].expires = 0
     msg = await K.cmd(svc, bot, u, "!파산")
-    assert "지원금" in msg.replies[-1], msg.replies
+    assert "리필" in msg.replies[-1], msg.replies
     assert await core.balance(svc.db, K.CHAT, u.id) == core.BAILOUT_POINTS
     for task in list(C._BG):
         task.cancel()
     K.unfix()
+
+
+async def _zero(svc, u):
+    await svc.db._write("UPDATE members SET points=0 WHERE chat_id=? AND user_id=?", (K.CHAT, u.id))
+
+
+@test
+async def refill_amount_and_daily_limit_are_room_settings():
+    """2026-10-15 벳띵 '0포인트 되면 !리필 로 500만': 금액·하루 횟수는 방 설정, 0 = 제한 없음."""
+    svc, bot, (u,) = await K.setup()
+    await svc.db.set_setting(K.CHAT, "casino_refill_points", 5_000_000)
+    await svc.db.set_setting(K.CHAT, "casino_refill_per_day", 0)
+    for _ in range(3):                                         # 제한 없음 → 바닥날 때마다
+        await _zero(svc, u)
+        msg = await K.cmd(svc, bot, u, "!리필")
+        assert "리필" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == 5_000_000, msg.replies
+    msg = await K.cmd(svc, bot, u, "!리필")                     # 잔액 있으면 안 됨
+    assert "미만일 때만" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == 5_000_000
+    await svc.db.set_setting(K.CHAT, "casino_refill_per_day", 2)
+    await _zero(svc, u)
+    msg = await K.cmd(svc, bot, u, "!리필")                     # 오늘 이미 3번 → 2번 한도 넘음
+    assert "하루 2번" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == 0, msg.replies
+
+
+@test
+async def refill_old_day_value_counts_as_one():
+    """예전 기록 last_bailout='날짜' 는 오늘 1번 받은 것으로 (하루 1번 방은 그대로 막힘)."""
+    svc, bot, (u,) = await K.setup()
+    await svc.db._write("UPDATE casino_accounts SET last_bailout=? WHERE chat_id=? AND user_id=?",
+                        (core.today(svc), K.CHAT, u.id))
+    await _zero(svc, u)
+    msg = await K.cmd(svc, bot, u, "!파산")
+    assert "하루 한 번" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == 0, msg.replies
 
 
 @test

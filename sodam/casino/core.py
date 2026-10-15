@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS casino_open (
 register_setting("casino_enabled", True, "포인트 게임(! 명령)")
 register_setting("casino_max_bet", 100_000, "포인트 게임 최대 베팅", range_=(100, 100_000_000))
 register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # 방마다 (얼라이드 '3분' 요청 2026-10-06)
+# !파산·!리필 (2026-10-15 벳띵 '0포인트 되면 500만 채워 주는 !리필'): 금액·하루 횟수(0 = 제한 없음)를 방마다
+register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
+register_setting("casino_refill_per_day", 1, "파산 구제(!리필) 하루 횟수 (0=제한 없음)", range_=(0, 1000))
 
 START_POINTS = 10_000
 MIN_BET = 100
@@ -449,10 +452,19 @@ async def c_daily(ctx: Ctx) -> None:
     await ctx.reply(f"📅 출석 완료! <b>+{fmt(DAILY_POINTS)}</b> · 잔액 {fmt(bal)}")
 
 
+def _refills_today(day: str) -> tuple[str, tuple]:
+    """last_bailout = '날짜#횟수' (예전 값 '날짜' 는 1번으로 셈) → 오늘 받은 횟수 SQL 식."""
+    return ("(CASE WHEN last_bailout=? THEN 1 WHEN last_bailout LIKE ? THEN CAST(substr(last_bailout, ?) AS INTEGER) ELSE 0 END)",
+            (day, day + "#%", len(day) + 2))
+
+
 async def c_bailout(ctx: Ctx) -> None:
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
+    s = await db.get_settings(cid)
+    amount = int(s.get("casino_refill_points") or BAILOUT_POINTS)
+    per_day = int(s.get("casino_refill_per_day") or 0)
     if await balance(db, cid, uid) >= MIN_BET:
-        await ctx.reply(f"파산 구제는 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. <code>!채굴</code> 해보세요!")
+        await ctx.reply(f"리필은 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. <code>!채굴</code> 해보세요!")
         return
     for sweep in SWEEPS:                   # 시간 지난 판은 먼저 정산 (자리 비운 판이 구제를 영영 막지 않게)
         await sweep()
@@ -460,20 +472,25 @@ async def c_bailout(ctx: Ctx) -> None:
         await ctx.reply("🆘 진행 중인 판이 끝난 뒤에 해주세요.")
         return
     day = today(ctx.svc)
-    bal = await credit(db, cid, uid, BAILOUT_POINTS, "bailout", (   # 잔액·열린 베팅·하루 1번을 지급과 한 문장에서 다시 확인
-        "UPDATE casino_accounts SET last_bailout=? WHERE chat_id=? AND user_id=? AND last_bailout<>? "   # (위 확인과 지급 사이에
+    cnt, cnt_args = _refills_today(day)
+    bal = await credit(db, cid, uid, amount, "bailout", (   # 잔액·열린 베팅·하루 횟수를 지급과 한 문장에서 다시 확인
+        f"UPDATE casino_accounts SET last_bailout=? || '#' || ({cnt} + 1) WHERE chat_id=? AND user_id=? "
+        f"AND (? = 0 OR {cnt} < ?) "                                                                     # (위 확인과 지급 사이에
         "AND (SELECT COALESCE(MAX(points), 0) FROM members WHERE chat_id=? AND user_id=?) < ? "          #  당첨금이 들어오면 거절)
         "AND NOT EXISTS (SELECT 1 FROM casino_open WHERE chat_id=? AND user_id=? AND amount>0)",
-        (day, cid, uid, day, cid, uid, MIN_BET, cid, uid)))
+        (day, *cnt_args, cid, uid, per_day, *cnt_args, per_day, cid, uid, MIN_BET, cid, uid)))
     if bal is None:
-        if (await account(db, cid, uid))["last_bailout"] == day:
-            await ctx.reply("🆘 파산 구제는 하루 한 번이에요. <code>!채굴</code> 로 다시 일어서요!")
+        used = (await db._one(f"SELECT {cnt} AS n FROM casino_accounts WHERE chat_id=? AND user_id=?",
+                              (*cnt_args, cid, uid)) or {"n": 0})["n"]
+        if per_day and used >= per_day:
+            times = "한 번" if per_day == 1 else f"{per_day}번"
+            await ctx.reply(f"🆘 리필은 하루 {times}이에요. <code>!채굴</code> 로 다시 일어서요!")
         elif await balance(db, cid, uid) >= MIN_BET:
-            await ctx.reply(f"파산 구제는 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. 방금 포인트가 들어왔어요!")
+            await ctx.reply(f"리필은 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. 방금 포인트가 들어왔어요!")
         else:
             await ctx.reply("🆘 진행 중인 판이 끝난 뒤에 해주세요.")
         return
-    await ctx.reply(f"🆘 파산 구제 지원금 <b>+{fmt(BAILOUT_POINTS)}</b> · 잔액 {fmt(bal)}\n다시 가보자고요 💪")
+    await ctx.reply(f"🆘 리필 지원금 <b>+{fmt(amount)}</b> · 잔액 {fmt(bal)}\n다시 가보자고요 💪")
 
 
 async def c_wallet(ctx: Ctx) -> None:
@@ -517,5 +534,5 @@ register(("채굴", "mine", "캐기"), c_mine, help="포인트 캐기 (방 설�
 register(("출석", "daily"), c_daily, help=f"하루 한 번 {fmt(DAILY_POINTS)}", group="시작")
 register(("지갑", "잔액", "돈", "wallet"), c_wallet, help="내 포인트·순위", group="시작")
 register(("순위", "랭킹", "부자", "rank"), c_rank, help="방 포인트 부자 순위", group="시작", needs_account=False)
-register(("파산", "구제"), c_bailout, help=f"잔액 바닥이면 하루 한 번 {fmt(BAILOUT_POINTS)}", group="시작")
+register(("파산", "리필", "구제", "refill"), c_bailout, help="잔액 바닥이면 리필 (!리필 · 금액·하루 횟수는 방 설정)", group="시작")
 register(("도움", "게임", "help", "명령어"), c_help, help="이 목록", group="시작", needs_account=False)
