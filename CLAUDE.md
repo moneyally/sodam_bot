@@ -620,7 +620,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   글꼴에 없는 글자면 다 있는 글꼴로 자동(둥근·귀여운 글꼴은 흔한 2,350자만), 이모지는 거절. 글자·도형은 MAX_LIGHT 8 따로(MAX_LAYERS 6 은 무거운 것만).
   피사체 자리·크기 = motion keyframes 한 점. 정지 스티커는 마지막 장면 한 장만 그림(build last_only, 7초→4초).
   **run_code 연계**: 코드가 `src_*.png` 로 저장한 그림은 방에 안 올리고 ctx.image(다음 make_sticker·make_profile_video 원본) ·
-  그룹방 run_code 는 room_read 를 켜지만 make_sticker·make_profile_video 는 `tools.MAKE_AFTER_READ` 로 허용(결과가 그림 한 장뿐). 안내서 `guide/sticker.md`.
+  그룹방 run_code 는 room_read 를 켜지만 make_sticker·make_profile_video 는 `tools.MAKE_AFTER_READ` 로 허용(결과가 그림 한 장뿐). **tainted 뒤에도 허용** (2026-10-15 벳블리 '내 아이디 넣어 움프' → lookup_user 뒤 '보안 제한', test_runcode make_tools_allowed_after_tainted_lookup). 안내서 `guide/sticker.md`.
 - **스티커 따라 만들기** (2026-10-07 실측 대한동구 루피 2번 실패): ① 원본 고치기 16초+렌더로 그룹 25초 상한에 걸려 경고 고칠 기회 없이 버림 →
   만들기 도구(agent.MAKES: make_image·make_sticker·make_profile_video·run_code)를 쓴 실행은 MEDIA_DEADLINE 90초 ·
   redraw(그림 AI 값 냄) 뒤엔 가벼운 경고(자막 겹침)는 보내고 HARD_WARN(잘림·구멍·하얗게·까맣게·요란)만 고치게 ②
