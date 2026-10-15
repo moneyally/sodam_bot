@@ -464,6 +464,7 @@ async def rate_limit_room_slows_after_429():
     """429 를 받은 방은 한동안 절반 속도·한 번에 1개 → 거듭 걸려 몇 분씩 막히는 것 방지. 다른 방은 그대로."""
     from sodam import ratelimit as RL
     lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=12, group_time_period=60, max_retries=1)
+    slow_rate = 12 * RL.SLOW_FACTOR
     hit = [1]
 
     async def send():
@@ -473,12 +474,36 @@ async def rate_limit_room_slows_after_429():
         return True
     assert await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
     g = lim._get_group_limiter(-1001)
-    assert lim.slow(-1001) and g.max_rate == 1 and abs(g.time_period - 60 / 6) < 1e-6, (g.max_rate, g.time_period)
+    assert lim.slow(-1001) and g.max_rate == 1 and abs(g.time_period - 60 / slow_rate) < 1e-6, (g.max_rate, g.time_period)
     other = lim._get_group_limiter(-1002)
     assert other.max_rate == RL.GROUP_BURST and not lim.slow(-1002)
     lim._slow_until[-1001] = 0                                  # 시간이 지나면 원래 속도로
     g = lim._get_group_limiter(-1001)
     assert g.max_rate == RL.GROUP_BURST and abs(g.time_period - 60 * RL.GROUP_BURST / 12) < 1e-6
+
+
+
+@test
+async def busy_room_game_sends_result_once():
+    """방에 보낼 글이 밀렸거나 막혔던 방이면 바카라는 움짤+수정(2번) 대신 결과 그림 한 장(1번)."""
+    from sodam import ratelimit as RL
+    svc, bot, (u,) = await K.setup()
+    lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=12, max_retries=0)
+    bot.rate_limiter = lim
+    lim._slow_until[K.CHAT] = time.monotonic() + 60
+    assert RL.busy(bot, K.CHAT)
+    n = len(bot.calls)
+    msg = await K.cmd(svc, bot, u, "!바카라 1000 플")
+    new = [c[0] for c in bot.calls[n:]]
+    sends = sum(c.startswith("send_") for c in new) + len(msg.replies)   # 그림(bot)이든 글자 답(msg)이든
+    assert sends == 1, (new, msg.replies)
+    assert not [c for c in new if c.startswith("edit")], new
+    lim._slow_until[K.CHAT] = 0                                  # 안 바쁘면 원래대로 연출(고치기)
+    core._last_bet.clear()                                       # 연속 베팅 간격(2초) 건너뜀
+    n = len(bot.calls)
+    await K.cmd(svc, bot, u, "!바카라 1000 플")
+    assert [c for c in bot.calls[n:] if c[0].startswith("edit")], bot.calls[n:]
+    await K.ledger_ok(svc, [u])
 
 
 if __name__ == "__main__":

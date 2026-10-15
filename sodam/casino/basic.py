@@ -19,6 +19,7 @@ from datetime import timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, ReplyParameters
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
+from ..ratelimit import busy
 from ..util import esc, user_name
 from . import Ctx, anim, register, register_callback
 from .anim import REDS, WHEEL
@@ -97,6 +98,21 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
     """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로
     (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌).
     final_img = 끝난 뒤 남길 결과 그림(bytes 를 돌려주는 함수) — GIF 는 되풀이돼서 다시 빈 테이블부터 보이니 사진으로 바꿔 둠."""
+    if busy(ctx.bot, ctx.chat_id):
+        # 방에 보낼 글이 밀림 → 움짤+결과 수정(2번) 대신 결과를 담은 한 번. 텔레그램이 방을 막는 것 방지 (2026-10-15 벳띵)
+        reply = ReplyParameters(ctx.msg.message_id, allow_sending_without_reply=True)
+        try:
+            if final_img is not None:
+                still = await asyncio.to_thread(final_img)
+                await ctx.bot.send_photo(ctx.chat_id, photo=InputFile(still, filename="result.jpg"), caption=final,
+                                         parse_mode="HTML", reply_parameters=reply)
+            else:                                       # 움짤은 결과에서 멈추니 캡션만 처음부터 결과로
+                gif = await asyncio.to_thread(make_gif)
+                await ctx.bot.send_animation(ctx.chat_id, animation=gif_file(gif), caption=final, parse_mode="HTML",
+                                             reply_parameters=reply)
+            return
+        except Exception as e:                          # 그리기·보내기 실패 → 원래 길로
+            log.warning("busy result send failed: %r", e)
     try:
         gif = await asyncio.to_thread(make_gif)          # 약 1초: 그리는 동안 다른 메시지 처리가 멈추지 않게
         sent = await ctx.bot.send_animation(ctx.chat_id, animation=gif_file(gif), caption=spin, parse_mode="HTML",
@@ -123,7 +139,10 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
 
 
 async def show(ctx: Ctx, frames: list[str], final: str) -> None:
-    """frames[0] 을 답장으로 보내고 anim_gap() 마다 frames[1:] → final 로 고친다. 정산은 부르기 전에 끝낼 것."""
+    """frames[0] 을 답장으로 보내고 anim_gap() 마다 frames[1:] → final 로 고친다. 정산은 부르기 전에 끝낼 것.
+    방에 보낼 글이 밀렸으면(ratelimit.busy) 중간 화면 없이 결과 한 번."""
+    if busy(ctx.bot, ctx.chat_id):
+        frames = []
     try:
         sent = await ctx.reply(frames[0] if frames else final)
     except TelegramError as e:

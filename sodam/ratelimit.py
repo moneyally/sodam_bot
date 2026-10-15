@@ -25,8 +25,9 @@ def _seconds(e: RetryAfter) -> float:
 
 
 GROUP_BURST = 3   # 한 방에 한꺼번에 나가도 되는 수 (나머지는 고르게 나눠 보냄)
-SLOW_SEC = 900    # 429 를 받은 방은 15분 동안 절반 속도·한 번에 1개 (텔레그램은 거듭 걸리면 막는 시간을 늘림)
-SLOW_FACTOR = 0.5
+SLOW_SEC = 600    # 429 를 받은 방은 10분 동안 조금 느리게·한 번에 1개 (텔레그램은 거듭 걸리면 막는 시간을 늘림)
+SLOW_FACTOR = 0.75  # 0.5 는 너무 느려 게임 결과가 몇 분씩 밀렸음 (2026-10-15 벳띵 '렉')
+BUSY_AT = 2       # 이 방에서 줄 선 요청이 이만큼이면 '바쁨' → 게임은 연출 없이 결과 한 번에 (casino.basic.show_anim)
 
 
 class ChatRateLimiter(AIORateLimiter):
@@ -35,6 +36,10 @@ class ChatRateLimiter(AIORateLimiter):
         self._chat_until: dict[int | str, float] = {}   # 그룹 → 이 시각(monotonic)까지 그 방만 쉼
         self._slow_until: dict[int | str, float] = {}   # 그룹 → 이 시각까지 느린 속도
         self._slow_now: set = set()                      # 지금 느린 제한기를 쓰는 그룹
+        self._waiting: dict[int | str, int] = {}         # 그룹 → 지금 보내려고 줄 선 요청 수
+
+    def backlog(self, group_id) -> int:
+        return self._waiting.get(group_id, 0)
 
     def slow(self, group_id) -> bool:
         return self._slow_until.get(group_id, 0.0) > time.monotonic()
@@ -61,6 +66,17 @@ class ChatRateLimiter(AIORateLimiter):
             chat_id = int(chat_id)
         if not ((isinstance(chat_id, int) and chat_id < 0) or isinstance(chat_id, str)):
             return await super().process_request(callback, args, kwargs, endpoint, data, rate_limit_args)
+        self._waiting[chat_id] = self._waiting.get(chat_id, 0) + 1
+        try:
+            return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args)
+        finally:
+            left = self._waiting.get(chat_id, 1) - 1
+            if left > 0:
+                self._waiting[chat_id] = left
+            else:
+                self._waiting.pop(chat_id, None)
+
+    async def _group_request(self, chat_id, callback, args, kwargs, data, rate_limit_args):
         max_retries = rate_limit_args or self._max_retries
         for i in range(max_retries + 1):
             wait = self._chat_until.get(chat_id, 0.0) - time.monotonic()
@@ -82,3 +98,12 @@ class ChatRateLimiter(AIORateLimiter):
                 if i == max_retries:
                     raise
         return None
+
+
+def busy(bot, chat_id) -> bool:
+    """이 방에 보낼 글이 밀려 있거나(줄 BUSY_AT↑) 막혔던 방이면 True — 게임이 글 수를 줄이는 데 씀."""
+    lim = getattr(bot, "rate_limiter", None)
+    if not isinstance(lim, ChatRateLimiter):
+        return False
+    return lim.backlog(chat_id) >= BUSY_AT or lim.slow(chat_id)
+
