@@ -51,6 +51,8 @@ FATAL = {"ChatAdminRequiredError", "GroupcallForbiddenError", "UserBannedInChann
          "ChatForbiddenError", "FloodWaitError", "ValueError", "TimeoutError"}   # 영상 빼고 다시 해도 소용없는 것
 PLAY_TIMEOUT = 30          # play() 가 연결을 무한정 기다리지 않게
 HEALTH_EVERY = 300         # 도우미 세션 살아 있는지 (세션 폐기·연결 끊김 알아채기)
+REVOKED = ("AuthKeyUnregisteredError", "SessionRevokedError", "UserDeactivatedError", "UserDeactivatedBanError",
+           "SessionExpiredError", "AuthKeyDuplicatedError")   # 도우미 로그인이 풀린 오류 (다시 연결해야 함)
 
 
 def err_code(e: BaseException) -> str:
@@ -539,6 +541,8 @@ class Worker:
         except Exception as e:
             log.warning("음성 일 %s 실패: %s", kind, e)
             ok, res = False, f"error:{type(e).__name__}"
+            if type(e).__name__ in REVOKED or isinstance(e, ConnectionError):
+                self._health_at = -1e9          # 세션이 풀렸을 수 있음 → 5분 기다리지 말고 다음 차례에 바로 확인
         await store.finish(self.db, job["id"], ok, res)
 
     async def _run_job(self, job: dict) -> None:
@@ -590,10 +594,14 @@ class Worker:
         try:
             if not self.client.is_connected():
                 await self.client.connect()
+            # is_user_authorized 는 처음 확인한 값을 기억해서 나중에 세션이 풀려도 계속 True 라 실제로 한 번 물어봄
+            # (2026-10-15 블랙컴퍼니: 도우미 세션 폐기 뒤에도 '연결됨' 으로 남아 노래 신청이 조용히 실패)
+            from telethon.tl.functions.updates import GetStateRequest
+            await self.client(GetStateRequest())
             if await self.client.is_user_authorized():
                 return
         except Exception as e:
-            if type(e).__name__ not in ("AuthKeyUnregisteredError", "SessionRevokedError", "UserDeactivatedError"):
+            if type(e).__name__ not in REVOKED:
                 log.warning("도우미 상태 확인 실패(다음에 다시): %s", e)
                 return
         log.warning("도우미 세션이 풀렸어요 — 🎙 에서 다시 연결")
@@ -602,6 +610,9 @@ class Worker:
         await self._stop_music("logout")
         self.client = self.calls = None
         await self.db.set_state(0, store.ASSISTANT_KEY, None)
+        await self._alert_owners("🎙 <b>음성 도우미 계정 로그인이 풀렸어요</b>\n"
+                                 "다른 기기에서 '모든 세션 종료'를 눌렀거나 텔레그램이 세션을 끊었어요. "
+                                 "그동안 노래·음성채팅이 안 돼요.\n소담 1:1 /start → 🎙 에서 다시 연결해 주세요.")
 
     async def shutdown(self) -> None:
         """SIGTERM(배포·재시작): 통화마다 나가기 → 방에 유령 참가자가 안 남음. 노래는 위치를 남기고 다시 켜지면 이어서."""

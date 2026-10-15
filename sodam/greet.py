@@ -26,7 +26,7 @@ from .llm import BudgetExceeded
 from .prompt import system_prompt
 from .security import filter_output
 from .settings import max_text, register_setting, register_validator
-from .util import esc, mention, send_retry
+from .util import esc, html_plain, mention, send_retry
 
 if TYPE_CHECKING:
     from .services import Services
@@ -392,10 +392,9 @@ class Greeter:
             plain_html = fill(template, names, extra)
             sent = await send_rich(lambda t: send_greeting(bot, chat_id, s, t, reply_to=reply_to, db=self.svc.db),
                                    fill(template, names, extra, html_tpl) if html_tpl else plain_html, plain_html)
-            # 대화 기록(AI 맥락)엔 {names} 자리표시자 대신 실제 이름으로
-            plain = ", ".join(name for _, name in people[:15])
-            await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, template.replace("{names}", plain),
-                                          is_bot=True)
+            # 대화 기록(AI 맥락)엔 자리표시자 대신 실제로 나간 글 ({id}·{username}·{time} 도 — 예전엔 {names} 만 바꿔
+            # 기록에 '{username}' 이 그대로 남았음, 2026-10-15 블랙컴퍼니)
+            await self.svc.db.log_message(chat_id, bot.id, sent[-1].message_id, html_plain(plain_html), is_bot=True)
         except TelegramError as e:
             log.warning("greet send failed: %s", e)
             for uid, _ in people:           # 못 보냈으면 AI 인사까지 막지 않게

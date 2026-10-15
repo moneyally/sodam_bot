@@ -775,6 +775,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   끼어들기 = 우리 줄에 소담 소리 있을 때 큰 소리 0.3초(소리 길이로 셈) → 줄만 비움 · 받아쓰기 조각 1.2초 끊기면 한 줄 · '부를 때만'은 지시문뿐 ·
   인사 = session.started 뒤 instructions.append · 소리는 started 뒤(3.11 wait_for 는 취소를 삼켜 asyncio.timeout 씀) · **조용해도 분당 $0.05** →
   idle 60초가 중요 · 요금 = usage.seconds(누적) + 백엔드 토큰. 켜기 전 실제 통화로 확인할 것(끼어들기·여럿·부를 때만).
+- **도우미 세션 풀림 알아채기** (2026-10-15 @Sodam_bot2 해킹: 13:28 이름 '.'·@아이디 삭제·방 전부 나감 → 13:33 모든 세션 종료, tests/test_voice.py health_asks_*):
+  텔레손 is_user_authorized 는 처음 값을 기억해 계속 True → 노래 신청 join 이 ConnectionError 로 조용히 실패하고 소담은 '고장 아님'.
+  `Worker.health` 가 GetStateRequest 로 실제 확인(REVOKED 오류 이름들), 일감이 REVOKED·ConnectionError 로 실패하면 다음 차례에 바로 확인 → 표시 지우고 오너 1:1 알림.
 - 봇 계정은 통화(phone.*) 불가 → 음악봇처럼 **도우미 사람 계정** 1개가 음성채팅에 들어감.
   오너 메인 🎙(m:vc) 에서 연결: 전화번호 → 코드(**띄어서** — 그대로 보내면 텔레그램이 무효화) → 2단계 비번. 입력 메시지는 바로 지우고 값은 voice_jobs 로만(처리 즉시 payload 지움).
   세션 data/voice_assistant.session(0600). 개인 계정 말고 전용 번호 새 계정.

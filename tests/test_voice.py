@@ -644,6 +644,36 @@ async def health_clears_revoked_assistant():
 
 
 @test
+async def health_asks_telegram_even_if_authorized_was_cached():
+    """2026-10-15 블랙컴퍼니: 다른 기기에서 세션을 끊었는데 is_user_authorized 는 기억한 True →
+    '연결됨' 으로 남아 노래 신청(join)이 ConnectionError 로 조용히 실패. 실제 요청으로 확인 + 오너 알림."""
+    db, w, client = await logged_in_worker()
+    client.is_connected = lambda: True
+
+    async def yes():
+        return True
+    client.is_user_authorized = yes
+    SessionRevokedError = type("SessionRevokedError", (Exception,), {})
+
+    async def revoked(req):
+        raise SessionRevokedError("The authorization has been invalidated")
+    client.__class__ = type("C", (FakeClient,), {"__call__": lambda self, req: revoked(req)})
+    sent = []
+
+    class Bot:
+        async def send_message(self, uid, text, **kw):
+            sent.append((uid, text))
+    w.bot = Bot()
+    w.cfg = SimpleNamespace(owner_ids=(77,))
+    import time as _t
+    w._health_at = _t.monotonic()                 # 정기 확인은 방금 했음 → 실패한 일감이 바로 확인을 당겨야 함
+    assert (await run_job(db, w, "join", {"username": "publicroom"}))["result"].startswith("error:")
+    await w.step()
+    assert not await store.assistant(db) and w.client is None
+    assert sent and sent[0][0] == 77 and "로그인이 풀렸" in sent[0][1]
+
+
+@test
 async def abandoned_login_disconnects_old_client():
     db, w, client = await make_worker()[:3] if False else (await make_worker())[:3]
     dis = []
