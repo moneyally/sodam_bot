@@ -24,10 +24,24 @@ def _seconds(e: RetryAfter) -> float:
     return ra.total_seconds() if isinstance(ra, timedelta) else float(ra)
 
 
+GROUP_BURST = 3   # 한 방에 한꺼번에 나가도 되는 수 (나머지는 고르게 나눠 보냄)
+
+
 class ChatRateLimiter(AIORateLimiter):
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self._chat_until: dict[int | str, float] = {}   # 그룹 → 이 시각(monotonic)까지 그 방만 쉼
+
+    def _get_group_limiter(self, group_id):
+        """PTB 기본은 '분당 18' 을 한꺼번에 18개까지 몰아 보내게 둠 → 게임이 몰리면 몇 초 안에 18개가 나가
+        텔레그램이 그 방을 2~3분씩 막음 (2026-10-15 벳띵 19:15 212초·19:32 137초, 방 전체 먹통).
+        같은 평균(분당 group_max_rate)을 지키되 한 번에 GROUP_BURST 개까지만 → 나머지는 3초쯤 간격으로 줄 세움."""
+        if group_id not in self._group_limiters and self._group_max_rate:
+            from aiolimiter import AsyncLimiter
+            burst = min(GROUP_BURST, self._group_max_rate)
+            self._group_limiters[group_id] = AsyncLimiter(
+                max_rate=burst, time_period=self._group_time_period * burst / self._group_max_rate)
+        return super()._get_group_limiter(group_id)
 
     async def process_request(self, callback, args, kwargs, endpoint, data, rate_limit_args):
         chat_id = data.get("chat_id")
