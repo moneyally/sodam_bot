@@ -1543,8 +1543,10 @@ async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
     # 2중 검사: 목록에서 숨겼더라도 실행 직전에 다시 확인
     if not tool or tool not in available(ctx.role, ctx.settings, ctx.chat_id > 0):
         return "이 도구는 지금 사용할 수 없음 (권한 없음)."
-    if (ctx.tainted or (ctx.bot_tainted and name != "bot_command")) and name not in READ_ONLY:   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
-        return "방 기록을 읽은 답변에서는 이 도구를 못 씀 (보안). 필요하면 오너가 따로 다시 요청하라고 안내할 것."
+    if ((ctx.tainted or (ctx.bot_tainted and name != "bot_command")) and name not in READ_ONLY
+            and name not in MAKE_AFTER_READ):   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
+        # 만들기(스티커·움프)는 요청자 앞에 그림 한 장뿐이라 허용 — '내 아이디 넣어 움프' 에서 lookup_user 뒤 막히던 것 (2026-10-15 벳블리)
+        return "방 기록을 읽은 답변에서는 이 도구를 못 씀 (보안). 필요하면 요청한 사람이 따로 한 번 더 말해 달라고 짧게 안내할 것."
     if ctx.room_read and name not in READ_ONLY and name not in CARD_GATED and name not in MAKE_AFTER_READ:
         return ROOM_READ_REFUSED
     try:

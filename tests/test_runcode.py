@@ -78,6 +78,19 @@ async def src_image_becomes_sticker_source_not_posted():
 
 
 @test
+async def make_tools_allowed_after_tainted_lookup():
+    """'이 사진에 내 아이디 넣어 움프' → lookup_user(이름 = 멤버 글 → tainted) 뒤 make_profile_video 가 '보안'으로 막히던 것
+    (2026-10-15 벳블리 #5977). 만들기는 그림 한 장뿐이라 허용, 다른 쓰기는 그대로 막힘."""
+    svc, bot = await _setup()
+    _, c = await run(svc, bot, ADMIN, Role.ADMIN, "print(1)")
+    c.tainted = True
+    res = await tools.execute("make_sticker", json.dumps({"spec": {"recipe": "없는레시피"}}), c)
+    assert "보안" not in res and "spec 오류" in res, res
+    res = await tools.execute("change_setting", json.dumps({"key": "ai_enabled", "value": "off"}), c)
+    assert "보안" in res, res
+
+
+@test
 async def members_need_the_room_switch_and_never_see_text():
     svc, bot = await _setup()
     out, _ = await run(svc, bot, MEMBER, Role.MEMBER, "print(1)")
