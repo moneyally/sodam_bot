@@ -310,7 +310,7 @@
 - 멀티: 경마는 정산 먼저 → 경주 GIF · 그래프는 차트가 방에 뜬 뒤부터 배수 오름(그 전 !스톱 = '곧 출발') · 꽝도 pay(p, 0) 으로 닫음 ·
   🎫 참가 확인은 출발 때 deleteMessages 한 번 · TICK 4초 · 🛑 팝업은 html.unescape.
 - 전송 제한기 `sodam/ratelimit.py` ChatRateLimiter: 그룹 429 는 그 방만 쉼 (PTB 기본은 봇 전체 멈춤 → 한 방 게임이 다른 방까지 멈춤).
-  **몰아 보내기 막기** (2026-10-15 벳띵 500만포·최대 300만 뒤 게임 폭주 → 텔레그램이 방을 212초·137초 막아 '먹통'): 방마다 분당 18 평균은 그대로, 한 번에 GROUP_BURST 3개까지만 → 나머지는 ~3초 간격 줄 (`_get_group_limiter`). tests/test_fix_games_audit.py rate_limit_room_does_not_burst.
+  **몰아 보내기 막기** (2026-10-15 벳띵 500만포·최대 300만 뒤 게임 폭주 → 텔레그램이 방을 212초·137초 막아 '먹통'): 방마다 분당 12 평균(RATE_LIMIT, 18 에서도 또 막힘), 한 번에 GROUP_BURST 3개까지만 → 나머지는 ~3초 간격 줄 (`_get_group_limiter`). tests/test_fix_games_audit.py rate_limit_room_does_not_burst.
 - 끝말잇기: on_text 가 예상 못 한 오류면 게임 종료(방이 '게임 중'으로 묶이지 않게) · stale = (지난 문제, 방금 사람 말) 로 늦은 답 🙈,
   thinking 은 소담이 말이 올라갈 때까지 · 차례 안내는 pace 뒤 그때 차례로(seq, 머리글 합침), 타이머는 안내 직전 ·
   차례 모드 버튼 `wc:j:<gid>`/`wc:go:<gid>` (지난 판 버튼 거절).
@@ -638,6 +638,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   only_text(글자뿐인 스티커) = 그림 AI 없이 빈 캔버스에 견본 값으로 · 답장 없이 '이걸로' = 15분 안 만든 정지 스티커 ·
   보내기 전 검사 make(agent._MAKE_ASK): '이모지·스티커 만들어' 에 도구 없이 ⓪① 글자로 때우면 한 번 더.
 - 채굴 간격 = 방 설정 mine_minutes(1~60분, 기본 10, `casino.core.mine_cooldown`) — 얼라이드 '3분' 요청.
+- **!리필 = !파산** (2026-10-15 벳띵): 금액 casino_refill_points(기본 3,000)·하루 횟수 casino_refill_per_day(기본 1, 0=제한 없음) 방 설정. last_bailout = '날짜#횟수'(예전 '날짜' = 1번), 지급 UPDATE 한 문장에서 횟수·잔액·열린 베팅 다시 확인.
 
 ## 🧩 이모지 공방 = 타일 이모지 견본 받기 → 클로드가 제작 (`emojilab.py`, `tools/emoji_pack.py`, tests/test_emojilab.py · 뮤테이션 5개, 2026-10-10 오너)
 - 오너가 소담 1:1 에 프리미엄 커스텀 이모지(긴 배너를 100×100 조각으로 나눠 이어 치는 '제휴업체' 같은 것)를 보내면 — 2개↑(이모지 뺀 글 40자 안) 또는

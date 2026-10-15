@@ -31,7 +31,7 @@ from .sports import Sports
 from .util import esc
 
 # 텔레그램 전송 한도: 전체 초당 30·같은 방 분당 20 이 공식 한도 → 여유를 두고 25·18, RetryAfter 는 2번까지 기다렸다 재시도
-RATE_LIMIT = dict(overall_max_rate=25, overall_time_period=1, group_max_rate=18, group_time_period=60, max_retries=2)
+RATE_LIMIT = dict(overall_max_rate=25, overall_time_period=1, group_max_rate=12, group_time_period=60, max_retries=2)
 HEARTBEAT_SEC = 30          # data/heartbeat 파일 갱신 주기 (systemd 헬스체크가 mtime 을 봄, deploy/README.md)
 POLL_STALE = 120           # getUpdates 는 30초마다 돌아옴 → 2분 넘게 안 돌아오면 받기(폴링)가 멈춘 것
 ERROR_NOTIFY_GAP = 10 * 60  # 같은 종류 예외는 10분에 1번만 오너에게
