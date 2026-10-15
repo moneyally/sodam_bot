@@ -459,5 +459,27 @@ async def rate_limit_room_does_not_burst():
     assert sent[GROUP_BURST] - t > 1.5, "그다음은 기다려야 함 (몰아 보내기 X)"
 
 
+@test
+async def rate_limit_room_slows_after_429():
+    """429 를 받은 방은 한동안 절반 속도·한 번에 1개 → 거듭 걸려 몇 분씩 막히는 것 방지. 다른 방은 그대로."""
+    from sodam import ratelimit as RL
+    lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=12, group_time_period=60, max_retries=1)
+    hit = [1]
+
+    async def send():
+        if hit:
+            hit.pop()
+            raise RetryAfter(0.05)
+        return True
+    assert await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
+    g = lim._get_group_limiter(-1001)
+    assert lim.slow(-1001) and g.max_rate == 1 and abs(g.time_period - 60 / 6) < 1e-6, (g.max_rate, g.time_period)
+    other = lim._get_group_limiter(-1002)
+    assert other.max_rate == RL.GROUP_BURST and not lim.slow(-1002)
+    lim._slow_until[-1001] = 0                                  # 시간이 지나면 원래 속도로
+    g = lim._get_group_limiter(-1001)
+    assert g.max_rate == RL.GROUP_BURST and abs(g.time_period - 60 * RL.GROUP_BURST / 12) < 1e-6
+
+
 if __name__ == "__main__":
     run_all()
