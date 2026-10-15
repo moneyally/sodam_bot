@@ -405,5 +405,26 @@ async def rate_limit_pause_only_that_room():
     assert await ta == "a"
 
 
+@test
+async def rate_limit_room_does_not_burst():
+    """분당 18 이라도 한꺼번에 18개를 몰아 보내면 텔레그램이 그 방을 2~3분 막음 (2026-10-15 벳띵) →
+    한 번에 GROUP_BURST 개까지만, 나머지는 고르게."""
+    from sodam.ratelimit import GROUP_BURST
+    lim = ChatRateLimiter(overall_max_rate=0, group_max_rate=18, group_time_period=60, max_retries=0)
+    g = lim._get_group_limiter(-1001)
+    assert g.max_rate == GROUP_BURST <= 3, g.max_rate
+    assert abs(g.time_period - 60 * GROUP_BURST / 18) < 1e-6
+    sent = []
+
+    async def send():
+        sent.append(time.monotonic())
+        return True
+    t = time.monotonic()
+    for _ in range(GROUP_BURST + 1):
+        await lim.process_request(send, (), {}, "sendMessage", {"chat_id": -1001}, None)
+    assert sent[GROUP_BURST - 1] - t < 0.3, "처음 몇 개는 바로"
+    assert sent[GROUP_BURST] - t > 1.5, "그다음은 기다려야 함 (몰아 보내기 X)"
+
+
 if __name__ == "__main__":
     run_all()
