@@ -30,6 +30,13 @@ SLOW_FACTOR = 0.75  # 0.5 는 너무 느려 게임 결과가 몇 분씩 밀렸�
 BUSY_AT = 2       # 이 방에서 줄 선 요청이 이만큼이면 '바쁨' → 게임은 연출 없이 결과 한 번에 (casino.basic.show_anim)
 
 
+def posts(endpoint) -> bool:
+    """방에 글이 생기거나 바뀌는 요청만 방 한도(분당 약 20)에 셈. '입력 중' 표시·글 지우기·멤버 확인·제재는 안 셈 —
+    PTB 기본은 chat_id 만 있으면 다 세서, 여럿이 부른 뉴월드에서 '입력 중'(4초마다)이 줄을 차지해 답이 1~2분 밀렸음 (2026-10-16)."""
+    e = str(endpoint or "").lower()
+    return e != "sendchataction" and e.startswith(("send", "copymessage", "forwardmessage", "edit"))
+
+
 class ChatRateLimiter(AIORateLimiter):
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
@@ -66,6 +73,8 @@ class ChatRateLimiter(AIORateLimiter):
             chat_id = int(chat_id)
         if not ((isinstance(chat_id, int) and chat_id < 0) or isinstance(chat_id, str)):
             return await super().process_request(callback, args, kwargs, endpoint, data, rate_limit_args)
+        if not posts(endpoint):
+            return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args, limit=False)
         self._waiting[chat_id] = self._waiting.get(chat_id, 0) + 1
         try:
             return await self._group_request(chat_id, callback, args, kwargs, data, rate_limit_args)
@@ -76,18 +85,23 @@ class ChatRateLimiter(AIORateLimiter):
             else:
                 self._waiting.pop(chat_id, None)
 
-    async def _group_request(self, chat_id, callback, args, kwargs, data, rate_limit_args):
+    async def _group_request(self, chat_id, callback, args, kwargs, data, rate_limit_args, limit=True):
         max_retries = rate_limit_args or self._max_retries
         for i in range(max_retries + 1):
             wait = self._chat_until.get(chat_id, 0.0) - time.monotonic()
-            if wait > 0:
+            if wait > 0 and limit:
                 await asyncio.sleep(wait)
             try:
-                return await self._run_request(chat=True, group=chat_id,
+                return await self._run_request(chat=True, group=chat_id if limit else False,
                                                allow_paid_broadcast=data.get("allow_paid_broadcast", False),
                                                callback=callback, args=args, kwargs=kwargs)
             except RetryAfter as e:
                 secs = _seconds(e) + 0.1
+                if not limit:   # 글 아닌 요청의 429 는 방 글 한도가 아님 → 이 요청만 기다렸다 다시
+                    if i == max_retries:
+                        raise
+                    await asyncio.sleep(secs)
+                    continue
                 now = time.monotonic()
                 self._chat_until[chat_id] = max(self._chat_until.get(chat_id, 0.0), now + secs)
                 self._slow_until[chat_id] = now + secs + SLOW_SEC   # 마지막 재시도여도 이 방은 천천히
