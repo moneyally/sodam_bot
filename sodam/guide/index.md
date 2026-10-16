@@ -31,6 +31,7 @@ type: index
 
 ## 방 관리
 - [캡차·스팸·경고·제재](security.md)
+- [로봇 인증 (가입 신청)](robot-check.md): 가입 신청한 사람에게 1:1 숫자 그림 → 맞히면 바로 승인
 - [사람 찾기·이름 기록](lookup.md)
 - [예약공지·알람·하루 요약](schedule.md)
 - [태그 알림·알림 규칙](alerts.md)
