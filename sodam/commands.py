@@ -71,8 +71,8 @@ async def _target(ctx: CmdCtx, *, sanction: bool = True) -> tuple[int, str, list
     else:
         await ctx.reply("대상 메시지에 답장하거나 @username 을 적어주세요.")
         return None
-    if sanction and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
-        await ctx.reply("관리자나 봇은 제재할 수 없어요.")
+    if sanction and (why := await ctx.svc.perms.shield(ctx.bot, ctx.chat_id, ctx.user.id, uid)):
+        await ctx.reply(why)
         return None
     return uid, name, rest
 

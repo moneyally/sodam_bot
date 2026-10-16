@@ -112,8 +112,8 @@ async def _resolve(ctx: ToolCtx, name: str, *, for_sanction: bool = False):
         names = ", ".join(f"{display_name(r['first_name'], r['last_name'], r['username'])}({r['user_id']})" for r in rows[:5])
         return None, (f"같은 이름이 여러 명이에요{' (예전 이름 기준)' if former else ''}: {names}. ID로 다시 지정해주세요.")
     row = rows[0]
-    if for_sanction and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, row["user_id"]):
-        return None, "관리자나 봇은 제재할 수 없어요."
+    if for_sanction and (why := await ctx.svc.perms.shield(ctx.bot, ctx.chat_id, ctx.caller.id, row["user_id"])):
+        return None, why
     if former:
         note = f"('{name}' 은 예전 이름 {former[row['user_id']]} → 지금 {_row_name(row)} (ID {row['user_id']}))"
         if note not in ctx.name_notes:
@@ -952,8 +952,8 @@ async def _do_sanction(ctx: ToolCtx, kind: str, targets: list, reason: str, minu
     act = PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes, extra=tuple(targets[1:]))
     lines, done = [], []
     for uid, name in targets:
-        if spec.punitive and await ctx.svc.perms.protected(ctx.bot, ctx.chat_id, uid):
-            lines.append(f"{name}: 관리자라서 제재 안 함")
+        if spec.punitive and (why := await ctx.svc.perms.shield(ctx.bot, ctx.chat_id, ctx.caller.id, uid)):
+            lines.append(f"{name}: {why}")
             continue
         try:
             ok, line = await spec.run(ctx.svc, ctx.bot, ctx.chat_id, uid, name, ctx.caller.id, act)

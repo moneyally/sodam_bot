@@ -264,6 +264,25 @@ class Permissions:
         """제재할 수 없는 대상 (오너·관리자·봇 자신)."""
         return user_id == bot.id or await self.is_admin(bot, chat_id, user_id)
 
+    async def shield(self, bot: Bot, chat_id: int, actor_id: int, user_id: int) -> str | None:
+        """actor 가 user 를 제재할 수 없으면 그 이유, 되면 None.
+        오너 우선권 (오너 결정 2026-10-16, 방 설정 owner_override 기본 켬): 오너는 다른 방 관리자에게도 경고·제재.
+        방장(creator)·봇·다른 오너는 그대로 보호. 뮤트·밴은 텔레그램이 허락할 때만 (moderation.Moderator._unadmin)."""
+        if not await self.protected(bot, chat_id, user_id):
+            return None
+        owners = await self.owners()
+        if user_id == bot.id or actor_id not in owners or user_id in owners:
+            return "관리자나 봇은 제재할 수 없어요."
+        if not (await self.db.get_settings(chat_id)).get("owner_override", True):
+            return "이 방은 오너 우선권이 꺼져 있어서 관리자는 제재할 수 없어요."
+        try:
+            status = getattr(await bot.get_chat_member(chat_id, user_id), "status", "")
+        except TelegramError:
+            return "관리자나 봇은 제재할 수 없어요."
+        if status == "creator":
+            return "방장은 텔레그램에서 아무도 제재할 수 없어요."
+        return None
+
     # ── 세부 권한 (사용자 차단·메시지 삭제) ────────────────
     async def _tg_right(self, bot: Bot, chat_id: int, user_id: int, right: str) -> bool | None:
         """텔레그램 관리자면 그 권한이 있는지, 관리자가 아니면 None."""
