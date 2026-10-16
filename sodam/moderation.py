@@ -126,7 +126,7 @@ class Moderator:
     async def _unadmin(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
         """관리자는 텔레그램이 뮤트·밴을 거절함 → 소담이 임명한 관리자(can_be_edited)면 먼저 강등, 아니면 AdminLocked.
         여기까지 오는 관리자는 오너 우선권(permissions.shield)으로 허락된 경우뿐."""
-        if user_id not in await self.perms.telegram_admins(bot, chat_id):
+        if not await self.perms.is_admin(bot, chat_id, user_id):   # 보통 멤버(대부분)는 텔레그램 조회 없이 바로
             return
         m = await bot.get_chat_member(chat_id, user_id)
         status = getattr(m, "status", "")
