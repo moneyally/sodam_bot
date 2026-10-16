@@ -253,7 +253,7 @@ async def g_baccarat(ctx: Ctx) -> None:
     bet = await take_bet(ctx, amount, "baccarat")
     if bet is None:
         return
-    rd = await tilt(ctx.svc.db, lambda: deal_baccarat(make_shoe(8)), lambda r: bac_payout(r, pick, bet) < bet)
+    rd = await tilt(ctx.svc.db, lambda: deal_baccarat(make_shoe(8)), lambda r: bac_payout(r, pick, bet) < bet, ctx.chat_id)
     await record(ctx.svc.db, ctx.chat_id, "baccarat",                # 🖼 그림장: P/B/T + 페어(p·b)
                  rd.winner[0].upper() + ("p" if rd.pair("player") else "") + ("b" if rd.pair("banker") else ""))
     payout = bac_payout(rd, pick, bet)
@@ -591,7 +591,7 @@ async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False, bg:
     _finish(h)
     dealer_turn = bj_total(h.player) <= 21 and not is_blackjack(h.player)
     if dealer_turn:
-        pct = await lose_pct(h.ctx.svc.db)
+        pct = await lose_pct(h.ctx.svc.db, h.ctx.chat_id)
         if pct and len(h.dealer) == 2:                               # 🎚 난이도: 숨긴 카드부터 다시 (딜러 블랙잭은 처음에 이미 아님)
             h.dealer, h.shoe = tilt_pick(pct, lambda: _bj_dealer_draw(h),
                                          lambda r: bj_payout(h.player, r[0], h.bet)[0] < h.bet)
@@ -775,7 +775,7 @@ async def _hl_act(h: Hand, act: str, q) -> str | None:
         return "그쪽은 고를 수 없어요 (나올 카드가 없거나 맞혀도 손해)."
     prev = h.card
     win = (lambda c: c.rank > prev.rank) if act == "h" else (lambda c: c.rank < prev.rank)
-    pct = await lose_pct(h.ctx.svc.db)
+    pct = await lose_pct(h.ctx.svc.db, h.ctx.chat_id)
     if pct:                                           # 🎚 난이도: 다음 카드를 지는 쪽으로 기울임
         cards = h.shoe.cards
         i = tilt_pick(pct, lambda: h.shoe.randbelow(len(cards)), lambda j: not win(cards[j]))
