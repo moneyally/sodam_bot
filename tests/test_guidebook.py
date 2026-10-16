@@ -82,6 +82,8 @@ EVAL += [("승부예측 랭킹 같은거 있어?", {"sports-picks"}), ("경기 �
 EVAL += [("소담아 노래 틀어줄 수 있어?", {"music"}), ("대기열 어떻게 봐", {"music"}), ("유튜브링크로도 돼?", {"music"}),
          ("다음곡 넘기는법", {"music"}), ("노래 자동재생 돼?", {"music"}), ("지금 노래 가사 볼 수 있어?", {"music"}),
          ("노래 인기곡 순위 보는 법", {"music"})]
+# 🤖 로봇 인증 (tests/test_robotcheck.py, 2026-10-16 뉴월드 '입요 넣기 전에 로봇 인증')
+EVAL += [("입요 넣기 전에 로봇이 아닙니다 인증 되나요", {"robot-check"}), ("가입 신청하면 숫자 인증하게 할수있어?", {"robot-check"})]
 # 💬 자동 답글 (tests/test_autoreply.py, 2026-10-09 NASA 방)
 EVAL += [(".reply 는 뭐로 하나요", {"autoreply"}), ("공지 치면 공지 나오게 할수있어?", {"autoreply"}),
          ("자동답글 지우는법", {"autoreply"})]
