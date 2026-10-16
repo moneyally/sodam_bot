@@ -370,7 +370,13 @@ def cached_lose_pct(chat_id: int | None = None) -> int:
 
 
 def difficulty_label(pct: int) -> str:
+    """관리자·오너 화면용 (숫자)."""
     return "공정 (원래 확률)" if pct <= 0 else f"손님이 질 확률 약 {pct}%"
+
+
+def difficulty_name(pct: int) -> str:
+    """손님에게 보이는 단계 이름 (숫자 없이, 2026-10-17 오너) — 이름은 실제 세기 순서 그대로."""
+    return "공정" if pct <= 0 else "조금 어려움" if pct <= 60 else "어려움" if pct <= 70 else "매우 어려움"
 
 
 def tilt_pick(pct: int, draw: Callable, lost: Callable):
@@ -596,14 +602,14 @@ async def c_rank(ctx: Ctx) -> None:
 async def c_help(ctx: Ctx) -> None:
     from . import help_text
     pct = await lose_pct(ctx.svc.db, ctx.chat_id)
-    await ctx.reply(help_text() + f"\n\n🎚 이 방 게임 난이도: {difficulty_label(pct)} (<code>!난이도</code>)")
+    await ctx.reply(help_text() + f"\n\n🎚 이 방 게임 난이도: {difficulty_name(pct)} (<code>!난이도</code>)")
 
 
 async def c_difficulty(ctx: Ctx) -> None:
     """🎚 이 방 난이도를 손님에게 그대로 보여 줌 (2026-10-17 — 방마다 바꿀 수 있게 하면서 숨기지 않기)."""
     pct = await lose_pct(ctx.svc.db, ctx.chat_id)
-    await ctx.reply(f"🎚 이 방 게임 난이도: <b>{difficulty_label(pct)}</b>\n"
-                    "룰렛·사다리·바카라·블랙잭·하이로우·그래프에 적용돼요. 배당은 그대로예요. 방 관리자가 정해요.")
+    await ctx.reply(f"🎚 이 방 게임 난이도: <b>{difficulty_name(pct)}</b>\n"
+                    "단계: 공정 · 조금 어려움 · 어려움 · 매우 어려움 (방 관리자가 정해요)")
 
 
 register(("가입", "join"), c_join, help=f"게임 가입 ({fmt(START_POINTS)} 지급)", group="시작", needs_account=False)

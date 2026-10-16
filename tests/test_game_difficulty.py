@@ -85,10 +85,10 @@ async def guests_can_see_room_difficulty():
     svc, bot, (u,) = await setup()
     await fresh(svc, 80)
     msg = await cmd(svc, bot, u, "!난이도")
-    assert "80%" in msg.replies[-1]
+    assert "매우 어려움" in msg.replies[-1] and "%" not in msg.replies[-1], "손님에겐 숫자 없이 단계 이름"
     await svc.db.set_setting(CHAT, "casino_difficulty", "60")
     msg = await cmd(svc, bot, u, "!난이도")
-    assert "60%" in msg.replies[-1], "이 방 값"
+    assert "<b>조금 어려움</b>" in msg.replies[-1], "이 방 값"
     await svc.db.set_setting(CHAT, "casino_difficulty", "0")
     msg = await cmd(svc, bot, u, "!도움")
     assert "공정" in msg.replies[-1]

@@ -31,7 +31,7 @@ async def s_room(c: PanelCtx) -> Screen:
              "",
              "• 공정 = 원래 확률 · 60/70/80% = 손님이 그만큼 짐",
              "• 룰렛·사다리·바카라(혼자)·블랙잭·하이로우·그래프에 적용 (주사위·슬롯·경마·회차 바카라는 그대로)",
-             "• 손님은 <code>!난이도</code> 로 이 방 난이도를 볼 수 있어요"]
+             "• 손님은 <code>!난이도</code> 로 단계 이름만 봐요 (공정 · 조금 어려움 · 어려움 · 매우 어려움, 숫자 X)"]
     rows = [menu._preset_row(s, c.cid, "casino_difficulty"), menu._back(c.cid)]
     return Screen("\n".join(lines), menu._kb(rows))
 
@@ -58,7 +58,7 @@ async def s_owner(c: PanelCtx) -> Screen:
              "방 설정이 '오너 기본'인 방은 전부 이 값을 따라요.",
              "방마다 따로 정한 방: " + (", ".join(f"{_name(k)} {n}곳" for k, n in sorted(own.items())) if own else "없음"),
              "",
-             "손님은 <code>!난이도</code> 로 자기 방 난이도를 볼 수 있어요."]
+             "손님은 <code>!난이도</code> 로 단계 이름만 봐요 (숫자 X)."]
     btns = [B(("● " if str(g) == lv else "") + _name(lv), f"m:gdo:{lv}") for lv in LEVELS]
     return Screen("\n".join(lines), menu._kb([btns, [B("⬅️ 처음으로", "m:home")]]),
                   toast=f"전체 기본을 {_name(v)} 로 바꿨어요" if v in LEVELS else None)
