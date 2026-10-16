@@ -203,6 +203,10 @@
   오너 도구(owner_*·grant_lookup, where=owner_dm)는 오너의 1:1 에서만. 없는 도구로는 '된다'고 못 함 (프롬프트 규칙 8).
 - 제재는 확인 카드 한 장에 최대 5명(names). 봇에게 그 방 '사용자 차단' 권한이 없으면 카드 없이 이유를 돌려줌.
   오너 1:1 카드: 오너만 누름, [실행+방에 안내]/[실행만]/[취소], 방 안내는 정해진 문구+사유.
+- **👑 오너 우선권** (`permissions.shield`·`moderation.Moderator._unadmin`, 방 설정 owner_override 기본 켬, tests/test_owner_override.py · 뮤테이션 5개, 2026-10-16 오너 '타 방에서도 오너면 관리자 경고·밴'):
+  관리자 보호 검사는 전부 `perms.shield(bot, chat, actor, target)` (명령 _target·AI _resolve·_do_sanction·카드 누를 때) — 오너는 관리자에게도 경고(DB 기록이라 됨),
+  방장·봇·다른 오너는 늘 보호, 오너 아닌 관리자는 예전처럼 막힘. 뮤트·밴·내보내기는 관리자면 `_unadmin`: 소담이 임명한 관리자(can_be_edited)만 강등 뒤 실행,
+  남이 임명한 관리자는 AdminLocked('방장(또는 임명한 사람)만') — 텔레그램 제한 (블랙컴퍼니 관리자 26명 전원 can_be_edited False 실측). 경고 누적 뮤트·밴도 같은 안내.
 - **역할로 태그** (`tools._role_people`, tests/test_mention_roles.py, 2026-10-16 전국 소통방 '소담아 소유자 호출해' → '소유자'라는 사람을 찾다 실패): mention_members names 가 소유자·방장·주인·오너면 get_chat_administrators 의 creator, 관리자(들)·운영진이면 사람 관리자 전부(5명).
 - 자동 입장 인사 뒤 10분 안의 AI 인사 요청은 중복으로 봄. 제3자(신입)에게 하는 인사는 방 기본 말투.
 

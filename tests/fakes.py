@@ -175,7 +175,12 @@ class FakeBot:
                                    can_delete_messages=ok, can_restrict_members=ok, is_member=True,
                                    can_post_messages=ok, can_edit_messages=ok, can_invite_users=ok)   # 채널 권한
         status = getattr(self, "member_status", {}).get((chat_id, user_id), "member")
-        return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left")
+        editable = (chat_id, user_id) in getattr(self, "editable_admins", set())   # 봇이 임명한 관리자 (can_be_edited)
+        return SimpleNamespace(status=status, user=SimpleNamespace(id=user_id), is_member=status != "left",
+                               can_be_edited=editable)
+
+    async def promote_chat_member(self, chat_id, user_id, **rights):
+        self.calls.append(("promote", chat_id, user_id, rights))
 
 
 class FakeMsg:
@@ -231,6 +236,13 @@ class FakePerms:
 
     async def protected(self, bot, chat_id, uid):
         return uid in self.admins or uid == bot.id
+
+    async def telegram_admins(self, bot, chat_id):
+        return set(self.admins)
+
+    from sodam.permissions import Permissions as _P
+    shield = _P.shield          # 오너 우선권 판단은 진짜 코드 그대로 (protected·owners·settings 는 위 가짜 값)
+    del _P
 
     async def is_admin(self, bot, chat_id, uid):
         return uid in self.admins or uid in self.owner_ids

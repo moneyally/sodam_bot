@@ -1130,8 +1130,8 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     by, lines, done = esc(user_name(q.from_user)), [], []
     for uid, name in action.targets:
         who = mention(uid, name)
-        if kind.punitive and await svc.perms.protected(bot, action.chat_id, uid):  # 버튼이 떠 있는 동안 관리자가 됐을 수도
-            lines.append(f"⛔ {who}님은 관리자라서 제재할 수 없어요.")
+        if kind.punitive and (why := await svc.perms.shield(bot, action.chat_id, presser, uid)):  # 버튼이 떠 있는 동안 관리자가 됐을 수도
+            lines.append(f"⛔ {who}님: {esc(why)}")
             continue
         try:
             ok, line = await kind.run(svc, bot, action.chat_id, uid, name, presser, action)

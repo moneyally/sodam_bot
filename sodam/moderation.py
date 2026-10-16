@@ -56,6 +56,8 @@ register_setting("forward_filter", "newbie", "전달(포워드) 메시지 막기
                  choice_labels={"off": "허용", "newbie": "신규 입장자만 막기", "all": "전부 막기"})
 # 홍보 @아이디(채널·다른 그룹·봇) 막기: 관리자가 허락한 홍보일 수도 있어서 선택 사항 (기본 꺼짐, 🔒 종류별 잠금 화면)
 register_setting("promo_mentions", False, "홍보 @아이디 막기 (채널·그룹·봇)")
+# 오너 우선권 (2026-10-16 오너 '타 방에서도 오너면 관리자에게 경고·밴'): permissions.shield · Moderator._unadmin
+register_setting("owner_override", True, "오너는 관리자에게도 경고·제재")
 KIND_NOTICE_GAP = 600  # 잠긴 종류·전달 안내는 같은 사람에게 10분에 한 번
 MENTION_CACHE = 86400  # @아이디가 채널·그룹인지 조회 결과 보관(초)
 
@@ -101,6 +103,13 @@ class StillBanned(TelegramError):
         super().__init__("밴된 사람이라 밴은 그대로 뒀어요 (풀려면 .밴해제)")
 
 
+class AdminLocked(BadRequest):
+    """관리자라 텔레그램이 뮤트·밴을 막음 — 그 관리자를 임명한 사람·방장만 내릴 수 있음 (can_be_edited False)."""
+
+
+ADMIN_LOCKED = "텔레그램 제한: 다른 관리자가 임명한 관리자라 방장(또는 임명한 사람)만 내릴 수 있어요. 경고는 돼요."
+
+
 class Moderator:
     def __init__(self, cfg: Config, db: DB, perms: Permissions):
         self.cfg = cfg
@@ -114,8 +123,29 @@ class Moderator:
         self._chat_kind: dict[str, tuple[float, bool]] = {}   # @아이디 → (조회 시각, 채널·그룹인지)
 
     # ── 제재 실행 ─────────────────────────────────────────
+    async def _unadmin(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
+        """관리자는 텔레그램이 뮤트·밴을 거절함 → 소담이 임명한 관리자(can_be_edited)면 먼저 강등, 아니면 AdminLocked.
+        여기까지 오는 관리자는 오너 우선권(permissions.shield)으로 허락된 경우뿐."""
+        if not await self.perms.is_admin(bot, chat_id, user_id):   # 보통 멤버(대부분)는 텔레그램 조회 없이 바로
+            return
+        m = await bot.get_chat_member(chat_id, user_id)
+        status = getattr(m, "status", "")
+        if status == "creator":
+            raise AdminLocked("방장은 텔레그램에서 아무도 제재할 수 없어요.")
+        if status != "administrator":
+            return
+        if not getattr(m, "can_be_edited", False):
+            raise AdminLocked(ADMIN_LOCKED)
+        await bot.promote_chat_member(chat_id, user_id, can_manage_chat=False, can_delete_messages=False,
+                                      can_manage_video_chats=False, can_restrict_members=False,
+                                      can_promote_members=False, can_change_info=False, can_invite_users=False,
+                                      can_pin_messages=False)
+        self.perms.forget(chat_id)
+        await self.db.log_mod(chat_id, actor_id, user_id, "demote", "오너 우선권 — 제재 전 관리자 해제")
+
     async def mute(self, bot: Bot, chat_id: int, user_id: int, minutes: int | None,
                    actor_id: int | None, reason: str) -> None:
+        await self._unadmin(bot, chat_id, user_id, actor_id)
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes) if minutes else None
         await bot.restrict_chat_member(chat_id, user_id, ChatPermissions.no_permissions(), until_date=until)
         await self.db.log_mod(chat_id, actor_id, user_id, "mute",
@@ -155,6 +185,7 @@ class Moderator:
         await self.db.log_mod(chat_id, actor_id, None, "unlock")
 
     async def ban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
+        await self._unadmin(bot, chat_id, user_id, actor_id)
         await bot.ban_chat_member(chat_id, user_id)
         await self.db.log_mod(chat_id, actor_id, user_id, "ban", reason)
 
@@ -169,6 +200,7 @@ class Moderator:
                 await self.db.set_state(chat_id, ALLOW_KEY.format(user_id), 1)
 
     async def kick(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
+        await self._unadmin(bot, chat_id, user_id, actor_id)
         await bot.ban_chat_member(chat_id, user_id)
         await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
         await self.db.log_mod(chat_id, actor_id, user_id, "kick", reason)
@@ -195,6 +227,8 @@ class Moderator:
             else:
                 left = s["warn_mute_at"] - count
                 text += f"\n(앞으로 {left}회 더 받으면 채팅 금지)"
+        except AdminLocked as e:      # 오너가 관리자에게 준 경고 — 기록은 남고 뮤트·밴만 텔레그램이 막음
+            text += f"\n({esc(e.message)})"
         except TelegramError as e:
             log.warning("escalation failed: %s", e)
             text += "\n(봇 권한이 부족해서 제재는 못 했어요)"
