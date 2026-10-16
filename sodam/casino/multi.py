@@ -66,11 +66,11 @@ AUTO_MIN, AUTO_MAX = 101, CRASH_CAP
 CRASH_NATURAL_LOSS = 0.5
 
 
-def crash_point(rand=None) -> int:
+def crash_point(rand=None, chat_id: int | None = None) -> int:
     """터지는 지점(센트). P(터짐 ≥ x) = 0.97/x → 어떤 지점에서 내려도 기대 환급 97%."""
     if _crash_override is not None:
         return _crash_override
-    p = core.cached_lose_pct() / 100            # 🎚 난이도: 판을 열 때(봉인 전) 일찍 터지는 판을 섞음 — 원래 2x 에서 내리면 지는 확률 ≈ 0.5
+    p = core.cached_lose_pct(chat_id) / 100            # 🎚 난이도: 판을 열 때(봉인 전) 일찍 터지는 판을 섞음 — 원래 2x 에서 내리면 지는 확률 ≈ 0.5
     if p > CRASH_NATURAL_LOSS and (rand or _rand)(10_000) < int((p - CRASH_NATURAL_LOSS) / (1 - CRASH_NATURAL_LOSS) * 10_000):
         return 100 + (rand or _rand)(30)        # 1.00x ~ 1.29x 에서 터짐
     e = 1 << 52
@@ -469,7 +469,7 @@ class CrashRound(Round):
 
     def __init__(self, ctx: Ctx):
         super().__init__(ctx)
-        self.crash = crash_point()
+        self.crash = crash_point(chat_id=ctx.chat_id)
         self.seal(fx(self.crash))
         self.start = 0.0               # 차트가 방에 뜬 시각 (0 = 아직 안 뜸 → 스톱 안 받음)
         self.hist: list[int] = [100]   # 화면 갱신 때마다의 배수 (차트용)
@@ -596,7 +596,7 @@ async def g_crash(ctx: Ctx) -> None:
         if not AUTO_MIN <= auto <= AUTO_MAX:
             await ctx.reply(f"자동 내리기 배수는 1.01 ~ {AUTO_MAX // 100} 사이로 적어주세요. 예: <code>!그래프 1000 2.5</code>")
             return
-    await core.lose_pct(ctx.svc.db)              # 🎚 판 만들 때 쓸 값 새로 읽기
+    await core.lose_pct(ctx.svc.db, ctx.chat_id)   # 🎚 판 만들 때 쓸 이 방 값 새로 읽기
     await _join(ctx, CrashRound, amount, auto, f" (자동 {fx(auto)})" if auto else "")
 
 

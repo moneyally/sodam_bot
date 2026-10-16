@@ -335,7 +335,15 @@ TILT_SAMPLE = 400            # 원래 지는 확률을 재는 표본 수
 _lose = {"pct": 0, "at": -1e9}
 
 
-async def lose_pct(db) -> int:
+# 🎚 방마다 난이도 (2026-10-17 오너): owner = 오너 전체 기본(chat_state 0 casino_lose_pct) 따름, 0 = 공정(원래 확률)
+DIFFICULTY = {"owner": "오너 기본", "0": "공정", "60": "60%", "70": "70%", "80": "80%"}
+register_setting("casino_difficulty", "owner", "게임 난이도 (손님이 질 확률)",
+                 choices={**{k: k for k in DIFFICULTY}, **{v: k for k, v in DIFFICULTY.items()}, "기본": "owner", "fair": "0"},
+                 choice_labels=DIFFICULTY)
+_room_pct: dict[int, int] = {}
+
+
+async def global_lose_pct(db) -> int:
     if time.monotonic() - _lose["at"] > 30:
         try:
             v = int(await db.get_state(0, LOSE_KEY, 0) or 0)
@@ -345,9 +353,24 @@ async def lose_pct(db) -> int:
     return _lose["pct"]
 
 
-def cached_lose_pct() -> int:
-    """동기 코드(판 만들 때)용 — 마지막으로 읽은 값."""
-    return _lose["pct"]
+async def lose_pct(db, chat_id: int | None = None) -> int:
+    """손님이 질 확률 목표 %. 방 설정 casino_difficulty 가 owner(기본)면 오너 전체 기본, 아니면 그 값."""
+    pct = await global_lose_pct(db)
+    if chat_id is not None:
+        v = str((await db.get_settings(chat_id)).get("casino_difficulty") or "owner")
+        if v != "owner" and v.isdecimal():
+            pct = max(0, min(95, int(v)))
+        _room_pct[chat_id] = pct
+    return pct
+
+
+def cached_lose_pct(chat_id: int | None = None) -> int:
+    """동기 코드(판 만들 때)용 — 그 방에서 마지막으로 읽은 값."""
+    return _room_pct.get(chat_id, _lose["pct"]) if chat_id is not None else _lose["pct"]
+
+
+def difficulty_label(pct: int) -> str:
+    return "공정 (원래 확률)" if pct <= 0 else f"손님이 질 확률 약 {pct}%"
 
 
 def tilt_pick(pct: int, draw: Callable, lost: Callable):
@@ -369,8 +392,8 @@ def tilt_pick(pct: int, draw: Callable, lost: Callable):
     return r
 
 
-async def tilt(db, draw: Callable, lost: Callable):
-    return tilt_pick(await lose_pct(db), draw, lost)
+async def tilt(db, draw: Callable, lost: Callable, chat_id: int | None = None):
+    return tilt_pick(await lose_pct(db, chat_id), draw, lost)
 
 
 # ── 잠깐 보이는 답장 ──────────────────────────────────────
@@ -572,7 +595,15 @@ async def c_rank(ctx: Ctx) -> None:
 
 async def c_help(ctx: Ctx) -> None:
     from . import help_text
-    await ctx.reply(help_text())
+    pct = await lose_pct(ctx.svc.db, ctx.chat_id)
+    await ctx.reply(help_text() + f"\n\n🎚 이 방 게임 난이도: {difficulty_label(pct)} (<code>!난이도</code>)")
+
+
+async def c_difficulty(ctx: Ctx) -> None:
+    """🎚 이 방 난이도를 손님에게 그대로 보여 줌 (2026-10-17 — 방마다 바꿀 수 있게 하면서 숨기지 않기)."""
+    pct = await lose_pct(ctx.svc.db, ctx.chat_id)
+    await ctx.reply(f"🎚 이 방 게임 난이도: <b>{difficulty_label(pct)}</b>\n"
+                    "룰렛·사다리·바카라·블랙잭·하이로우·그래프에 적용돼요. 배당은 그대로예요. 방 관리자가 정해요.")
 
 
 register(("가입", "join"), c_join, help=f"게임 가입 ({fmt(START_POINTS)} 지급)", group="시작", needs_account=False)
@@ -582,3 +613,4 @@ register(("지갑", "잔액", "돈", "wallet"), c_wallet, help="내 포인트·�
 register(("순위", "랭킹", "부자", "rank"), c_rank, help="방 포인트 부자 순위", group="시작", needs_account=False)
 register(("파산", "리필", "구제", "refill"), c_bailout, help="잔액 바닥이면 리필 (!리필 · 금액·하루 횟수는 방 설정)", group="시작")
 register(("도움", "게임", "help", "명령어"), c_help, help="이 목록", group="시작", needs_account=False)
+register(("난이도", "확률"), c_difficulty, help="이 방 게임 난이도", group="시작", needs_account=False)

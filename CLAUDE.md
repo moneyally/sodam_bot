@@ -652,6 +652,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   원래 지는 확률 q 를 표본으로 재고 이긴 결과면 (p−q)/(1−q) 확률로 지는 결과를 다시 뽑음 → 지는 확률 = p. 이길 확률은 절대 안 올림(숫자 한 칸 등 그대로).
   룰렛·사다리·바카라(혼자)·블랙잭(스탠드 때 딜러 숨긴 카드부터 다시)·하이로우(다음 카드)·그래프(봉인 전 1.00~1.29x 일찍 터짐 섞기). 경마·회차 바카라는 봉인이 먼저라 그대로(경마는 원래 80% 짐),
   주사위·홀짝·슬롯·스포츠는 텔레그램이 정해서 아직 그대로.
+  **방마다 난이도** (2026-10-17 오너, `panels/gamediff.py`, tests/test_game_difficulty.py · 뮤테이션 5개): 방 설정 casino_difficulty owner(기본 = 오너 전체 값 따름)/0 공정/60/70/80 —
+  그룹 허브 🎚 m:gdr(관리자 프리셋) · 오너 메인 🎚 m:gdo(전체 기본 = chat_state 0 casino_lose_pct, 2026-10-17 기준 80) · `lose_pct(db, chat_id)`·`tilt(..., chat_id)`·`cached_lose_pct(chat_id)` 로 방 값.
+  **숨기지 않음**: 손님은 `!난이도`·`!도움` 끝 줄에서 이 방 난이도를 봄 (배당표는 그대로).
 - **바카라 페어 최대 베팅** 방 설정 casino_pair_max_bet(기본 50만, 0=일반 최대와 같음, `cards.pair_cap_ok` — 혼자 !바카라·!회차 둘 다, 돈 빼기 전에 거절). 2026-10-16 벳띵: 300만×13 = 3,900만이 하루 6번 → 1억. tests/test_pair_cap.py.
 - **!리필 = !파산** (2026-10-15 벳띵): 금액 casino_refill_points(기본 3,000)·하루 횟수 casino_refill_per_day(기본 1, 0=제한 없음) 방 설정. last_bailout = '날짜#횟수'(예전 '날짜' = 1번), 지급 UPDATE 한 문장에서 횟수·잔액·열린 베팅 다시 확인.
 
