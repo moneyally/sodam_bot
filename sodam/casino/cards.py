@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 from telegram.error import TelegramError
 
+from ..settings import register_setting
 from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, cardimg, register, register_callback
 from .basic import edit_live, show, show_anim
@@ -165,6 +166,22 @@ BAC_PICKS = {"플": "player", "플레이어": "player", "p": "player", "player":
 BAC_LABEL = {"player": "플레이어", "banker": "뱅커", "tie": "타이", "ppair": "플레이어 페어", "bpair": "뱅커 페어"}
 
 
+PAIRS = ("ppair", "bpair")
+# 페어(×13)는 한 판에 크게 튀는 칸 — 일반 최대 베팅과 따로 상한 (2026-10-16 벳띵: 300만×13 = 3,900만이 하루 6번 → 1억)
+register_setting("casino_pair_max_bet", 500_000, "바카라 페어 최대 베팅 (0=일반 최대와 같음)", range_=(0, 100_000_000))
+
+
+async def pair_cap_ok(ctx: Ctx, pick: str, amount: int | None) -> bool:
+    """페어 칸이면 방 설정 페어 상한을 넘는지 먼저 봄 (넘으면 안내하고 False — 돈은 안 건드림)."""
+    if pick not in PAIRS or amount is None:
+        return True
+    cap = (await ctx.svc.db.get_settings(ctx.chat_id))["casino_pair_max_bet"]
+    if cap and amount > cap:
+        await ctx.reply(f"페어는 한 판 최대 {fmt(cap)}까지 걸 수 있어요.")
+        return False
+    return True
+
+
 def bac_payout(rd: BacRound, pick: str, bet: int) -> int:
     if pick in ("ppair", "bpair"):
         return bet * BAC_PAY[pick] // 100 if rd.pair("player" if pick == "ppair" else "banker") else 0
@@ -230,6 +247,8 @@ async def g_baccarat(ctx: Ctx) -> None:
     pick = next((BAC_PICKS[a.lower()] for a in rest if a.lower() in BAC_PICKS), None)
     if pick is None:
         await ctx.reply(BAC_USAGE + f"\n내 잔액: <b>{fmt(bal)}</b>")
+        return
+    if not await pair_cap_ok(ctx, pick, amount):
         return
     bet = await take_bet(ctx, amount, "baccarat")
     if bet is None:

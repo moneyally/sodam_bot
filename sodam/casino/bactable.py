@@ -19,7 +19,7 @@ from telegram.error import BadRequest, RetryAfter, TelegramError
 from . import Ctx, cardart, register
 from .basic import photo_file
 from .board import record
-from .cards import BAC_LABEL, BAC_PICKS, BacRound, cards_str, deal_baccarat, make_shoe
+from .cards import BAC_LABEL, BAC_PICKS, BacRound, cards_str, deal_baccarat, make_shoe, pair_cap_ok
 from .cards import bac_payout as payout_of
 from .core import balance, fmt, split_bet
 from .dealer import line as dealer_line
@@ -163,6 +163,8 @@ async def g_bactable(ctx: Ctx) -> None:
     pick = next((BAC_PICKS[a.lower()] for a in rest if a.lower() in BAC_PICKS), None)
     if pick is None:
         await ctx.reply(USAGE + f"\n내 잔액: <b>{fmt(bal)}</b>")
+        return
+    if not await pair_cap_ok(ctx, pick, amount):
         return
     await _join(ctx, BacTableRound, amount, PICKS.index(pick), f" → {BAC_LABEL[pick]}")
 
