@@ -240,10 +240,25 @@ async def follow_up_detection_in_room():
 
 
 @test
-async def follow_up_stops_after_three_in_a_row():
+async def follow_up_default_allows_ten_in_a_row():
     old = fast_timers()
     try:
         r = await room()
+        r.llm.script = [reply(f"답 {i}") for i in range(11)]
+        await r.say(ALICE, "소담아 질문 있어")
+        for i in range(10):
+            assert (await r.say(ALICE, f"그럼 {i}번은요?")).replies, i
+        assert not (await r.say(ALICE, "그럼 열한째는요?")).replies       # 연속 10번 후엔 이름을 불러야 함
+        assert r.llm.script == []
+    finally:
+        restore_timers(old)
+
+
+@test
+async def follow_up_stops_after_three_in_a_row():
+    old = fast_timers()
+    try:
+        r = await room(ai_follow_max=3)
         r.llm.script = [reply(f"답 {i}") for i in range(4)]
         await r.say(ALICE, "소담아 질문 있어")
         for q in ("그럼 첫째는요?", "그럼 둘째는요?", "그럼 셋째는요?"):
