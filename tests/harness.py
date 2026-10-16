@@ -54,6 +54,14 @@ class HarnessPerms:
     async def protected(self, bot, cid, uid):
         return uid == bot.id or await self.is_admin(bot, cid, uid)
 
+    async def shield(self, bot, cid, actor, uid):
+        """실제 Permissions.shield 와 같은 규칙 (방 설정 owner_override 는 기본 켬으로 봄)."""
+        if not await self.protected(bot, cid, uid):
+            return None
+        if uid == bot.id or actor not in await self.owners() or uid in await self.owners():
+            return "관리자나 봇은 제재할 수 없어요."
+        return None
+
     async def role(self, bot, cid, uid):
         from sodam.permissions import Role
         if uid == OWNER:
