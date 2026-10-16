@@ -7,6 +7,8 @@ from .settings import register_setting
 register_setting("ai_memory", True, "AI 멤버 기억")                   # 멤버가 자기 얘기한 것 기억
 register_setting("ai_room_memory", True, "AI 방 흐름 기억")            # 방 대화 흐름 요약
 register_setting("ai_follow_up", True, "이름 없이 이어 말하기")         # 방금 대화한 사람이 이어서 물으면 호출어 없이 답
+# 이름 안 부르고 연달아 이어 말할 수 있는 횟수 (2026-10-16 오너 '태그 걸리면 1회 말고 10회로', 예전 3 고정)
+register_setting("ai_follow_max", 10, "이름 없이 이어 말하기 최대 횟수", range_=(1, 30))
 register_setting("ai_comeback", "wit", "욕 받아치기",                  # 소담이 욕받이가 되지 않게 (오너 요청 2026-09-29)
                  choices={"wit": "wit", "센스": "wit", "욕없이": "wit", "mirror": "mirror", "똑같이": "mirror", "욕으로": "mirror"},
                  choice_labels={"wit": "센스로 받아치기(욕 없이)", "mirror": "똑같이 욕으로"})

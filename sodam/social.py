@@ -5,7 +5,7 @@
 이어 말하기 (ai_follow_up, 기본 켜짐)
   봇이 가장 최근에 답한 상대가 3분 안에, 그 사이 다른 사람이 말하지 않았을 때, 질문·요청·이어지는 말로
   다시 말하면 호출어 없이도 답한다. 맞장구('ㅋㅋ', '감사합니다')·'다들 …'·다른 사람 답장/멘션은 제외,
-  호출어 없이 연속 3번까지만.
+  호출어 없이 연속 ai_follow_max 번까지만 (기본 10).
 
 끼어들기 (ai_chime_in, 기본 꺼짐)
   일반 멤버의 질문이 활발한 방에 올라왔는데 3분 동안 아무도 반응하지 않았을 때, 또는 아침 인사(하루 1번).
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 FOLLOW_WINDOW = 180      # 봇 답 이후 이 시간(초) 안에 이어 말하면 이어 말하기
-MAX_FOLLOWS = 3          # 호출어 없이 연속 이어 말하기 최대 횟수
+MAX_FOLLOWS = 10         # 호출어 없이 연속 이어 말하기 최대 횟수 (방 설정 ai_follow_max 가 없을 때)
 CHIME_WAIT = 180         # 질문 후 아무도 답하지 않는지 기다리는 시간(초)
 MORNING_WAIT = 40        # 아침 인사 후 기다리는 시간(초)
 CHIME_ACTIVE_WINDOW = 1800
@@ -111,9 +111,10 @@ async def follow_up(svc: Services, bot, msg, text: str) -> tuple[bool, str]:
         (chat_id, last["ts"], user.id))
     if others["n"]:
         return False, ""  # 그 사이 다른 사람이 끼어들었으면 대화가 넘어간 것
+    cap = int(s.get("ai_follow_max") or MAX_FOLLOWS)
     recent = await svc.db._all("SELECT user_id, via FROM ai_turns WHERE chat_id=? ORDER BY id DESC LIMIT ?",
-                               (chat_id, MAX_FOLLOWS))
-    if len(recent) >= MAX_FOLLOWS and all(r["via"] == "follow" and r["user_id"] == user.id for r in recent):
+                               (chat_id, cap))
+    if len(recent) >= cap and all(r["via"] == "follow" and r["user_id"] == user.id for r in recent):
         return False, ""
     return True, t
 
