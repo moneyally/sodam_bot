@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
-from .. import persist
+from .. import persist, ratelimit
 from ..db import now, register_schema
 from ..settings import register_setting
 from ..util import esc, mention, user_name
@@ -60,6 +60,7 @@ register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # �
 # !파산·!리필 (2026-10-15 벳띵 '0포인트 되면 500만 채워 주는 !리필'): 금액·하루 횟수(0 = 제한 없음)를 방마다
 register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
 register_setting("casino_join_points", 10_000, "!가입 선물 금액", range_=(100, 100_000_000))
+register_setting("casino_bet_gap", 2, "같은 사람 게임 간격(초)", range_=(1, 120))
 register_setting("casino_refill_per_day", 1, "파산 구제(!리필) 하루 횟수 (0=제한 없음)", range_=(0, 1000))
 
 START_POINTS = 10_000
@@ -78,7 +79,10 @@ MINE_JACKPOT_ODDS = 50         # 1/50 확률 💎 대박 광맥 ×10
 MINE_STREAK_MAX = 10           # 연속 채굴(1시간 안에 다시) 보너스 최대 +10%×10
 DAILY_POINTS = 5_000
 BAILOUT_POINTS = 3_000         # 잔액 MIN_BET 미만일 때 하루 1번
-BET_GAP = 2.0                  # 같은 사람 연속 베팅 최소 간격(초) — 방 도배 방지
+BET_GAP = 2.0                  # 같은 사람 연속 베팅 최소 간격(초) — 방 도배 방지 (방 설정 casino_bet_gap 이 우선)
+OVERLOAD_AT = 6                # 이 방에 보낼 글이 이만큼 밀렸으면 새 판을 안 받음 (텔레그램 방 1분 20개 한도 — 받으면 결과가 몇 분씩 밀림)
+OVERLOAD_NOTE_SEC = 60         # '방이 바빠요' 안내는 방마다 이 간격에 한 번 (안내도 글 한 개)
+_overload_note: dict[int, float] = {}
 _last_bet: dict[tuple[int, int], float] = {}
 GATE_QUIET = 600               # 꺼진 방·이용 기간 아닌 방 안내는 방당 10분에 한 번 (나머지 ! 명령은 조용히)
 TEMP_SECS = 20                 # 잠깐 보이고 지워지는 답장 (참가 확인 등)
@@ -254,13 +258,45 @@ def split_bet(args: list[str], bal: int) -> tuple[int | None, list[str]]:
     return n, args[:i] + args[i + 1:]
 
 
+async def _react(ctx: Ctx, emoji: str) -> None:
+    try:
+        await ctx.bot.set_message_reaction(ctx.chat_id, ctx.msg.message_id, emoji)
+    except Exception:
+        pass
+
+
+async def _overloaded(ctx: Ctx, t: float) -> bool:
+    """보낼 글이 OVERLOAD_AT 개↑ 밀린 방이면 새 판을 안 받음 (돈도 안 뺌) — 반응 🙈 + 방마다 1분에 한 번 안내.
+    2026-10-17 블랙컴퍼니 이벤트 대비: 서버는 남는데 텔레그램이 방에 1분 20개만 받아서, 받아 두면 결과가 몇 분 뒤에 나감."""
+    lim = getattr(ctx.bot, "rate_limiter", None)
+    if not isinstance(lim, ratelimit.ChatRateLimiter) or lim.backlog(ctx.chat_id) < OVERLOAD_AT:
+        return False
+    await _react(ctx, "🙈")
+    if t - _overload_note.get(ctx.chat_id, 0) >= OVERLOAD_NOTE_SEC:
+        _overload_note[ctx.chat_id] = t
+        try:
+            await ctx.reply("🚦 지금 방에 결과가 밀려 있어서 이 판은 안 받았어요 (포인트 안 빠짐). 결과 나간 뒤 다시 해 주세요!")
+        except Exception:
+            pass
+    return True
+
+
 async def take_bet(ctx: Ctx, amount: int | None, game: str) -> int | None:
     """베팅 검사 + 차감. 실패하면 안내하고 None."""
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
     key, t = (cid, uid), time.monotonic()
+    if await _overloaded(ctx, t):
+        return None
+    try:
+        gap = float((await db.get_settings(cid)).get("casino_bet_gap") or BET_GAP)
+    except (TypeError, ValueError):
+        gap = BET_GAP
     prev = _last_bet.get(key, 0)
-    if t - prev < BET_GAP:
-        await ctx.reply("⏳ 조금만 천천히! (2초에 한 번)")
+    if t - prev < gap:
+        if ratelimit.busy(ctx.bot, cid):   # 밀린 방엔 안내 글 대신 반응만 (안내도 방 한도를 먹음)
+            await _react(ctx, "🙈")
+        else:
+            await ctx.reply(f"⏳ 조금만 천천히! ({gap:g}초에 한 번)")
         return None
     _last_bet[key] = t                     # await 전에 (동시에 온 두 판이 둘 다 간격 검사를 지나지 않게)
     if len(_last_bet) > 5000:
