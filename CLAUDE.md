@@ -184,6 +184,9 @@
   그 밖=내가 있는 방(겹방)·관리 방·이 방, 오너가 grant_lookup 으로 전체 권한 줄 수 있음(chat_state 0 lookup_trusted, 2026-09-30부터 오너 1:1 확인 카드), 모르는 ID 는 bot.get_chat 한 번, tainted) · room_checkup(관리자, 설정 요약·이용 기간·오늘 한도 %·봇 권한 빠진 것·24h AI 문제, 금액 X) ·
   **닮은 계정(사칭 확인)**: lookup_user 결과에 같은 방 사람 중 이 사람이 쓴 이름과 같은 이름(name_key)·@아이디 1~2글자 차이 계정을 처음 본 날 순으로
   (`checkup.lookalikes`, 2026-10-07 백악관 'allhistory 조회' → 대화 검색만 했던 것. 문주 @Amxjdjl 을 @Amxjdjl1·@Amxjdj1 이 따라 함). 지도에 'allhistory·사칭'.
+  **기록에 없는 @아이디는 텔레그램에 직접** (2026-10-17 일루왕 '@PANDAREMIT_1 고유번호' → '본 적 없음'이었는데 실제론 이름·아이디 바꾼 백악관 멤버):
+  `_resolve_who` 가 DB·예전 아이디 다음 `namehist.resolve_remote`(MTProto contacts.resolveUsername, 사람당 1분 3번·시간당 상한) — '@' 없어도 숫자·밑줄 섞인 아이디 모양이면. tests/test_namehist_mtproto.py ai_lookup_*.
+  결과에 '텔레그램:' 한 줄 (`checkup._telegram_line` = mtproto.full_user 1시간 캐시): 사람/봇·프리미엄·접속·🌐 데이터센터(`mtproto.dc_text`, 프사의 dc_id — DC1·3 마이애미, 2·4 암스테르담, 5 싱가포르)·프사·SCAM/FAKE. `.프로필` 카드에도 데이터센터.
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
 - **📘 소담 공식 안내서** (`sodam/guide/*.md` 19개 + `panels/guidebook.py` 도구 sodam_guide, tests/test_guidebook.py · 뮤테이션 8개, 2026-09-29 —

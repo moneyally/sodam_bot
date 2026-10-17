@@ -105,6 +105,12 @@ def make_client(session: str, api_id: int, api_hash: str):
 STATUS_KIND = {"UserStatusOnline": "online", "UserStatusOffline": "offline", "UserStatusRecently": "recently",
                "UserStatusLastWeek": "last_week", "UserStatusLastMonth": "last_month"}
 EXACT, ROUGH = ("online", "offline"), ("recently", "last_week", "last_month")
+DC_PLACE = {1: "미국 마이애미", 2: "네덜란드 암스테르담", 3: "미국 마이애미", 4: "네덜란드 암스테르담", 5: "싱가포르"}
+
+
+def dc_text(dc) -> str:
+    """'DC5 (싱가포르)' · 모르면 ''."""
+    return f"DC{dc} ({DC_PLACE[dc]})" if dc in DC_PLACE else (f"DC{dc}" if dc else "")
 
 
 def _status(st) -> tuple[str, int | None]:
@@ -135,6 +141,7 @@ def _user(u) -> dict:
             "is_bot": bool(u.bot), "deleted": bool(getattr(u, "deleted", False)), "min": bool(getattr(u, "min", False)),
             "status": kind, "was_online": was,
             "photo": photo is not None and type(photo).__name__ != "UserProfilePhotoEmpty",
+            "dc": getattr(photo, "dc_id", None),   # 데이터센터 = 프사가 저장된 곳 (프사 없으면 모름)
             "scam": bool(getattr(u, "scam", False)), "fake": bool(getattr(u, "fake", False)),
             "premium": bool(getattr(u, "premium", False)), "usernames": names}
 

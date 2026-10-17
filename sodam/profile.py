@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from . import accountage, insight
 from .cleanup import clip, status_text
+from .mtproto import dc_text
 from .util import display_name, esc, fmt_time
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ def card_html(uid: int, p: dict, tz, room_title: str = "") -> str:
               f"🟢 접속: {esc(status_text(u.get('status', 'unknown'), u.get('was_online'), tz))}",
               f"⭐ 프리미엄 {'예' if u.get('premium') else '아니오'} · 🖼 프사 {'있음' if u.get('photo') else '없음'}"
               f" · 👥 소담과 같이 있는 방 {int(tg.get('common_chats') or 0)}개"]
+        if dc_text(u.get("dc")):
+            L.append(f"🌐 데이터센터 {dc_text(u.get('dc'))}")
     if p["tg_note"]:
         L.append(f"<i>{esc(p['tg_note'])}</i>")
     L += ["", "<b>📋 이 방 기록 (소담)</b>" + (f" · {esc(clip(room_title, 30))}" if room_title else "")]

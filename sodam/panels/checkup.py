@@ -48,8 +48,14 @@ async def _resolve_who(ctx: ToolCtx, who: str) -> tuple[int | None, str]:
         uid = await namehist.find_by_old_username(ctx.svc.db, None, name)
         if uid:
             return uid, "(예전 아이디로 찾음)"
+        # 기록에 없는 아이디 → 텔레그램에 직접 물어봄 (MTProto contacts.resolveUsername, 2026-10-17 일루왕 '@PANDAREMIT_1 고유번호'
+        # → '본 적 없는 아이디'로 끝났는데 실제론 이름·아이디를 바꾼 백악관 멤버였음). '@' 가 없어도 숫자·밑줄 섞인 아이디 모양이면.
+        if at or re.search(r"[\d_]", name):
+            uid, _ = await namehist.resolve_remote(ctx.svc, "@" + name, ctx.caller.id)
+            if uid:
+                return uid, "(소담 기록엔 없던 아이디 · 텔레그램에서 방금 확인)"
         if at:
-            return None, f"@{name} 은 소담이 본 적 없는 아이디."
+            return None, f"@{name} 은 소담이 본 적 없고 텔레그램에서도 사람 계정으로 안 나오는 아이디 (없는 아이디·채널·그룹일 수 있음)."
         # '@' 없는 영어 낱말('Major')은 아이디가 아니면 이름으로 다시 찾음 (예전엔 '본 적 없는 아이디'로 끝남)
     if ctx.chat_id < 0:
         row, err = await tools._resolve(ctx, who)
@@ -171,9 +177,40 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
         except TelegramError:
             return f"ID {uid}: 소담이 본 적 없고 텔레그램도 알려주지 않음 (봇과 대화한 적 없는 사람)."
     cur = f"{display_name(row['first_name'], row['last_name'], None)}" + (f" @{row['username']}" if row["username"] else " (아이디 없음)")
+    tg = await _telegram_line(ctx, uid, row["username"] or "")
     hist = _strip_html(await namehist.history_text(db, uid, ctx.svc.cfg.tz)) if not remote else ""
     look = await lookalikes(db, uid, ctx.svc.cfg.tz) if not remote else ""
-    return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), hist, look, await _seen_rooms(ctx, uid)) if x)
+    return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), tg, hist, look, await _seen_rooms(ctx, uid)) if x)
+
+
+async def _telegram_line(ctx: ToolCtx, uid: int, username: str) -> str:
+    """텔레그램이 주는 계정 정보 한 줄 (MTProto users.getFullUser, 1시간 캐시): 종류·프리미엄·접속·데이터센터·프사·딱지.
+    2026-10-17 오너 — 다른 조회 봇이 보여 주는 칸 그대로. 헬퍼 꺼짐·못 받음이면 빈 줄."""
+    mt = getattr(ctx.svc, "mtproto", None)
+    if mt is None or not getattr(mt, "enabled", False):
+        return ""
+    try:
+        tg = await mt.full_user(uid, username)
+    except Exception:   # 덤 정보 — 실패해도 조회 결과는 그대로
+        return ""
+    u = (tg or {}).get("user") or {}
+    if not u:
+        return ""
+    from ..cleanup import status_text
+    from ..mtproto import dc_text
+    bits = ["🤖 봇" if u.get("is_bot") else "👤 사람"]
+    if u.get("deleted"):
+        bits.append("🪦 탈퇴 계정")
+    bits.append("⭐ 프리미엄" if u.get("premium") else "프리미엄 아님")
+    bits.append(status_text(u.get("status", "unknown"), u.get("was_online"), ctx.svc.cfg.tz))
+    if dc_text(u.get("dc")):
+        bits.append("🌐 " + dc_text(u.get("dc")))
+    bits.append("🖼 프사 있음" if u.get("photo") else "프사 없음")
+    if u.get("scam"):
+        bits.append("⚠️ 텔레그램 SCAM 표시")
+    if u.get("fake"):
+        bits.append("⚠️ 텔레그램 FAKE 표시")
+    return "텔레그램: " + " · ".join(bits)
 
 
 async def t_grant_lookup(ctx: ToolCtx, a: dict) -> str:
