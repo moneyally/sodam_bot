@@ -109,6 +109,21 @@ async def join_gift_follows_room_setting():
 
 
 @test
+async def text_only_room_sends_result_without_animation():
+    svc, bot, host, guest, admin = await world()
+    await core.credit(svc.db, CHAT, guest.id, 10_000_000, "owner_grant")
+    await svc.db.set_setting(CHAT, "casino_game_visual", "text")
+    bot.calls.clear()
+    m = await cmd(svc, bot, guest, "!룰렛 1000 빨강")
+    assert not bot.named("send_animation") and not bot.named("send_photo"), "글만 방은 움짤·사진 없음"
+    assert m.replies, "결과는 글로"
+    await svc.db.set_setting(CHAT, "casino_game_visual", "full")
+    bot.calls.clear()
+    await cmd(svc, bot, guest, "!룰렛 1000 빨강")
+    assert bot.named("send_animation"), "full 은 예전처럼 움짤"
+
+
+@test
 async def overloaded_room_refuses_new_games_without_taking_points():
     from sodam import ratelimit
     svc, bot, host, guest, admin = await world()
