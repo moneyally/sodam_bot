@@ -663,6 +663,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   그룹 허브 🎚 m:gdr(관리자 프리셋) · 오너 메인 🎚 m:gdo(전체 기본 = chat_state 0 casino_lose_pct, 2026-10-17 기준 80) · `lose_pct(db, chat_id)`·`tilt(..., chat_id)`·`cached_lose_pct(chat_id)` 로 방 값.
   **숨기지 않음**: 손님은 `!난이도`·`!도움` 끝 줄에서 단계 이름만 봄 (`core.difficulty_name` 공정·조금 어려움·어려움·매우 어려움, 숫자 X — 오너 2026-10-17). 배당표는 그대로.
 - **바카라 페어 최대 베팅** 방 설정 casino_pair_max_bet(기본 50만, 0=일반 최대와 같음, `cards.pair_cap_ok` — 혼자 !바카라·!회차 둘 다, 돈 빼기 전에 거절). 2026-10-16 벳띵: 300만×13 = 3,900만이 하루 6번 → 1억. tests/test_pair_cap.py.
+- **🎉 포인트 이벤트** (`casino/event.py`, tests/test_casino_event.py · 뮤테이션 5개, 2026-10-17 블랙컴퍼니 '토끼 퀴즈 정답자 리필 · 12~3시 제일 많이 딴 사람'):
+  `!진행자 @아이디|답장`(may 관리자, 방 설정 casino_hosts) · `!지급 @아이디|답장 금액` = 진행자·관리자가 **자기 잔액에서** 옮김(새 포인트 X, 원장 pay_out/pay_in, 한 db.atomic) —
+  멤버끼리 송금은 여전히 없음 · `!이벤트 00:00 03:00 10억 바카라`(관리자, casino_event '시작,끝,목표[,게임]', 끝<시작이면 다음 날) · `!이벤트순위` = 그 시간 bet/win/refund 순수익만(지급·리필 제외), 목표 이상만 등수. 금액 '1억'·'3천만' 읽음(core._AMOUNT).
 - **!리필 = !파산** (2026-10-15 벳띵): 금액 casino_refill_points(기본 3,000)·하루 횟수 casino_refill_per_day(기본 1, 0=제한 없음) 방 설정. last_bailout = '날짜#횟수'(예전 '날짜' = 1번), 지급 UPDATE 한 문장에서 횟수·잔액·열린 베팅 다시 확인.
 
 ## 🧩 이모지 공방 = 타일 이모지 견본 받기 → 클로드가 제작 (`emojilab.py`, `tools/emoji_pack.py`, tests/test_emojilab.py · 뮤테이션 5개, 2026-10-10 오너)
