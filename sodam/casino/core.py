@@ -218,7 +218,7 @@ async def guarded(ctx: Ctx, fn) -> None:
 
 
 # ── 베팅 금액 ─────────────────────────────────────────────
-_AMOUNT = re.compile(r"^(\d{1,12})(만|천|k|K)?$")
+_AMOUNT = re.compile(r"^(\d{1,12})(억|천만|만|천|k|K)?$")
 
 
 def parse_amount(raw: str, bal: int) -> int | None:
@@ -231,7 +231,7 @@ def parse_amount(raw: str, bal: int) -> int | None:
     m = _AMOUNT.match(raw)
     if not m:
         return None
-    n = int(m.group(1)) * {"만": 10_000, "천": 1_000, "k": 1_000, "K": 1_000}.get(m.group(2) or "", 1)
+    n = int(m.group(1)) * {"억": 100_000_000, "천만": 10_000_000, "만": 10_000, "천": 1_000, "k": 1_000, "K": 1_000}.get(m.group(2) or "", 1)
     return n
 
 
