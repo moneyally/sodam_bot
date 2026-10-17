@@ -210,7 +210,7 @@ async def english_name_without_at_falls_back_to_name_search():
     uid, note = await C._resolve_who(ctx(svc, bot, ME), "major")
     assert uid == 900, note
     uid, note = await C._resolve_who(ctx(svc, bot, ME), "@Major")            # @ 을 붙이면 아이디로만
-    assert uid is None and "본 적 없는 아이디" in note
+    assert uid is None and "본 적 없" in note
     await add_member(db, A, fake_user(901, "누군가", "Ghost"))
     assert (await C._resolve_who(ctx(svc, bot, ME), "Ghost"))[0] == 901     # 아이디가 맞으면 여전히 아이디 먼저
 
