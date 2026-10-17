@@ -93,11 +93,26 @@ async def edit_live(bot, chat_id, message_id, text: str, *, final: bool = False,
     return False
 
 
+async def text_only(ctx: Ctx) -> bool:
+    """이 방 게임 결과를 글만 보낼지 — 방 설정 casino_game_visual='text' (사람 몰리는 이벤트에서 움짤이 1분 20개 한도를 먹어 방이 막힘).
+    2026-10-18 블랙컴퍼니 이벤트: !바카라 가 한 판마다 움짤 → 1분 10개 → 텔레그램이 방을 196초 막음."""
+    try:
+        return (await ctx.svc.db.get_settings(ctx.chat_id)).get("casino_game_visual") == "text"
+    except Exception:
+        return False
+
+
 async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, fallback: list[str],
                     fallback_final: str | None = None, final_img=None) -> None:
     """결과 애니메이션(GIF) 한 번 + 끝나면 캡션을 결과로. 그리기·보내기가 안 되면 글자 연출(show)로
     (fallback_final: 글자 연출의 마지막 화면이 캡션과 다를 때 — 바카라는 캡션엔 카드 글자를 뺌).
     final_img = 끝난 뒤 남길 결과 그림(bytes 를 돌려주는 함수) — GIF 는 되풀이돼서 다시 빈 테이블부터 보이니 사진으로 바꿔 둠."""
+    if await text_only(ctx):                       # 방이 '글만' → 움짤·사진 없이 결과 한 줄 (몰릴 때 방이 막히는 것 방지)
+        try:
+            await ctx.reply(fallback_final or final)
+        except TelegramError as e:
+            log.warning("text-only result failed: %s", e)
+        return
     if not media_ok(ctx.bot, ctx.chat_id):
         # 이 방에 움짤을 많이 올렸거나 막혔던 방 → 움짤 대신 결과 카드 사진 한 장 (큰 움짤 올리기가 막힘의 원인), 사진도 많으면 글자
         reply = ReplyParameters(ctx.msg.message_id, allow_sending_without_reply=True)
@@ -157,7 +172,7 @@ async def show_anim(ctx: Ctx, make_gif, moving_s: float, spin: str, final: str, 
 async def show(ctx: Ctx, frames: list[str], final: str) -> None:
     """frames[0] 을 답장으로 보내고 anim_gap() 마다 frames[1:] → final 로 고친다. 정산은 부르기 전에 끝낼 것.
     방에 보낼 글이 밀렸으면(ratelimit.busy) 중간 화면 없이 결과 한 번."""
-    if busy(ctx.bot, ctx.chat_id):
+    if busy(ctx.bot, ctx.chat_id) or await text_only(ctx):   # '글만' 방·밀린 방 = 중간 화면 없이 결과 한 번
         frames = []
     try:
         sent = await ctx.reply(frames[0] if frames else final)

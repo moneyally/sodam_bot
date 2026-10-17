@@ -61,6 +61,8 @@ register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # �
 register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
 register_setting("casino_join_points", 10_000, "!가입 선물 금액", range_=(100, 100_000_000))
 register_setting("casino_bet_gap", 2, "같은 사람 게임 간격(초)", range_=(1, 120))
+register_setting("casino_game_visual", "full", "게임 결과 연출",
+                 choices={"full": "움짤·연출", "text": "글만 (몰릴 때)"})
 register_setting("casino_refill_per_day", 1, "파산 구제(!리필) 하루 횟수 (0=제한 없음)", range_=(0, 1000))
 
 START_POINTS = 10_000
