@@ -96,6 +96,19 @@ async def event_rank_counts_only_game_profit_inside_window():
 
 
 @test
+async def join_gift_follows_room_setting():
+    from types import SimpleNamespace
+    from test_casino_core import A, CHAT as C2, FakeMsg, setup as core_setup
+    db, svc, bot, ctx = await core_setup()
+    m = FakeMsg(C2, A, "!가입")
+    m.chat, m.sender_chat = SimpleNamespace(id=C2, title="S", type="supergroup"), None
+    await db.set_setting(C2, "casino_join_points", 5_000_000)
+    await casino.dispatch(svc, bot, m, C2, A, 0, "!가입")
+    assert await core.balance(db, C2, A.id) == 5_000_000, "방 설정 가입 선물"
+    assert await core.join_points(db, C2 + 1) == core.START_POINTS, "다른 방은 기본"
+
+
+@test
 async def plan_rolls_to_next_day_and_handles_midnight():
     tz = datetime.now().astimezone().tzinfo
     now = datetime(2026, 10, 17, 20, 50, tzinfo=tz)
