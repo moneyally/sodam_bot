@@ -666,6 +666,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **🎉 포인트 이벤트** (`casino/event.py`, tests/test_casino_event.py · 뮤테이션 5개, 2026-10-17 블랙컴퍼니 '토끼 퀴즈 정답자 리필 · 12~3시 제일 많이 딴 사람'):
   `!진행자 @아이디|답장`(may 관리자, 방 설정 casino_hosts) · `!지급 @아이디|답장 금액` = 진행자·관리자가 **자기 잔액에서** 옮김(새 포인트 X, 원장 pay_out/pay_in, 한 db.atomic) —
   멤버끼리 송금은 여전히 없음 · `!이벤트 00:00 03:00 10억 바카라`(관리자, casino_event '시작,끝,목표[,게임]', 끝<시작이면 다음 날) · `!이벤트순위` = 그 시간 bet/win/refund 순수익만(지급·리필 제외), 목표 이상만 등수. 금액 '1억'·'3천만' 읽음(core._AMOUNT).
+- **밀린 방은 새 판 안 받음** (`core._overloaded`, 2026-10-17 블랙컴퍼니 이벤트): 서버 CPU 0.2인데 텔레그램이 방에 1분 20개만 받음 → 보낼 글이 OVERLOAD_AT 6개↑ 밀리면 포인트 안 빼고 🙈 반응 + 방마다 1분 1번 안내 · 같은 사람 간격 방 설정 casino_bet_gap(기본 2초). 카프카·레디스는 이 한도를 못 바꿈.
 - **가입 선물** 방 설정 casino_join_points(기본 1만 = core.START_POINTS, `core.join_points`) — 2026-10-17 블랙컴퍼니 이벤트 500만.
 - **!리필 = !파산** (2026-10-15 벳띵): 금액 casino_refill_points(기본 3,000)·하루 횟수 casino_refill_per_day(기본 1, 0=제한 없음) 방 설정. last_bailout = '날짜#횟수'(예전 '날짜' = 1번), 지급 UPDATE 한 문장에서 횟수·잔액·열린 베팅 다시 확인.
 

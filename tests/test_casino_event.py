@@ -109,6 +109,30 @@ async def join_gift_follows_room_setting():
 
 
 @test
+async def overloaded_room_refuses_new_games_without_taking_points():
+    from sodam import ratelimit
+    svc, bot, host, guest, admin = await world()
+    lim = ratelimit.ChatRateLimiter()
+    bot.rate_limiter = lim
+    lim._waiting[CHAT] = core.OVERLOAD_AT
+    core._overload_note.clear()
+    before = await core.balance(svc.db, CHAT, guest.id)
+    m = await cmd(svc, bot, guest, "!바카라 1000 플")
+    assert await core.balance(svc.db, CHAT, guest.id) == before, "밀린 방은 판을 안 받고 포인트도 안 뺌"
+    assert any("밀려" in r for r in m.replies), m.replies
+    m = await cmd(svc, bot, guest, "!바카라 1000 플")
+    assert not m.replies, "안내는 방마다 1분에 한 번"
+    lim._waiting[CHAT] = 0
+    await svc.db.set_setting(CHAT, "casino_bet_gap", 30)
+    await cmd(svc, bot, guest, "!바카라 1000 플")
+    bets = await svc.db._all("SELECT 1 FROM casino_ledger WHERE user_id=? AND reason LIKE 'bet:%'", (guest.id,))
+    assert len(bets) == 1, "밀림 풀리면 다시 받음 (밀렸을 땐 0판)"
+    m2 = Msg(CHAT, guest, "!바카라 1000 플")
+    assert await casino.dispatch(svc, bot, m2, CHAT, guest, None, "!바카라 1000 플")
+    assert "30초에 한 번" in m2.replies[-1], m2.replies
+
+
+@test
 async def plan_rolls_to_next_day_and_handles_midnight():
     tz = datetime.now().astimezone().tzinfo
     now = datetime(2026, 10, 17, 20, 50, tzinfo=tz)
