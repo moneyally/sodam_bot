@@ -104,7 +104,7 @@ async def participants_mapping():
     svc, mt = await world(members=[(10, "민지", "minji"), (11, None, None, True)])
     assert mt.bot.connected and mt.bot.me == "@sodambot"
     got = await mt.participants(CH, limit=50)
-    base = {"last_name": "", "deleted": False, "min": False, "status": "unknown", "was_online": None, "photo": False,
+    base = {"last_name": "", "deleted": False, "min": False, "status": "unknown", "was_online": None, "photo": False, "dc": None,
             "scam": False, "fake": False, "premium": False}
     assert got == [{"id": 10, "first_name": "민지", "username": "minji", "is_bot": False, "usernames": ["minji"], **base},
                    {"id": 11, "first_name": "", "username": "", "is_bot": True, "usernames": [], **base}], got

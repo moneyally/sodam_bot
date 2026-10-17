@@ -251,12 +251,18 @@ async def resolve_known_person_new_username():
 async def ai_lookup_resolves_unknown_username_via_telegram():
     from sodam.panels import checkup
     from sodam.tools import ToolCtx
-    db, svc, bot = await world()
+    from telethon.tl.types import UserStatusRecently
+    panda = (8621093253, "판다리밋", "PANDAREMIT_1")
+    db, svc, bot = await world(members=[panda])
     await namehist.record(db, fake_user(8621093253, "無形", "pepeobba"))         # 예전 이름·아이디로만 기록된 사람
-    svc.mtproto.bot.client.usernames = {"pandaremit_1": (8621093253, "판다리밋", "PANDAREMIT_1")}
+    cl = svc.mtproto.bot.client
+    cl.usernames = {"pandaremit_1": panda}
+    cl.full[8621093253] = {"about": ""}
+    cl.extra[8621093253] = {"premium": True, "status": UserStatusRecently(), "photo": SimpleNamespace(dc_id=5)}
     ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {})
     out = await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1"})
     assert "8621093253" in out and "판다리밋" in out and "텔레그램에서 방금 확인" in out, out
+    assert "⭐ 프리미엄" in out and "DC5 (싱가포르)" in out and "최근 접속" in out and "🖼 프사 있음" in out, out
     assert "pepeobba" in out, "예전 아이디 기록도 같이"
     out = await checkup.t_lookup_user(ToolCtx(svc, bot, CH, fake_user(6, "남"), Role.MEMBER, {}), {"who": "PANDAREMIT_1"})
     assert "8621093253" in out, "'@' 없이 써도 아이디 모양(숫자·밑줄)이면"
