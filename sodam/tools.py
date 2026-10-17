@@ -897,6 +897,53 @@ async def _sanction_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
     return list(rows.values()), None
 
 
+async def _outside_one(ctx: ToolCtx, name: str) -> tuple[dict | None, str | None]:
+    """이 방에 없는 사람 미리 밴·공동 차단 (2026-10-17 오너 '8964041288 밴하고 공동차단' → 방 멤버가 아니라 '못 찾음').
+    숫자 ID 그대로 · @아이디 = 소담 기록 한 명 또는 텔레그램 직접 조회(namehist.resolve_remote). 이름만으로는 안 함 (엉뚱한 사람 방지)."""
+    q = name.strip().lstrip("@")
+    uid = int(q) if re.fullmatch(r"\d{5,15}", q) else None
+    db = ctx.svc.db
+    if uid is None and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", q):
+        rows = await db._all("SELECT user_id FROM users WHERE username=? COLLATE NOCASE LIMIT 2", (q,))
+        if len(rows) == 1:
+            uid = rows[0]["user_id"]
+        elif not rows:
+            from . import namehist   # namehist → tools 순환 피함
+            uid, _ = await namehist.resolve_remote(ctx.svc, "@" + q, ctx.caller.id)
+    if not uid:
+        return None, None
+    row = await db._one("SELECT user_id, first_name, last_name, username FROM users WHERE user_id=?", (uid,))
+    row = dict(row) if row else {"user_id": uid, "first_name": f"ID {uid}", "last_name": None, "username": None}
+    if why := await ctx.svc.perms.shield(ctx.bot, ctx.chat_id, ctx.caller.id, uid):
+        return None, why
+    if uid == ctx.bot.id or uid in await ctx.svc.perms.owners():
+        return None, "봇·운영자는 밴할 수 없어요."
+    return row, None
+
+
+async def _ban_targets(ctx: ToolCtx, a: dict) -> tuple[list, str | None]:
+    """밴·공동 차단: 방 멤버로 못 찾으면 숫자 ID·@아이디로 방 밖 사람도 (텔레그램은 안 들어온 사람도 미리 밴 됨)."""
+    raw = [str(x) for x in (a.get("names") or [])] or ([str(a["name"])] if a.get("name") else [])
+    names = list(dict.fromkeys(n.strip() for n in raw if n.strip()))
+    if not names:
+        return [], "대상 이름이 없음. 누구인지 물어볼 것."
+    if len(names) > MAX_TARGETS:
+        return [], f"한 번에 최대 {MAX_TARGETS}명까지만 제재할 수 있음. 나눠서 요청해 달라고 안내할 것."
+    rows, errors = {}, []
+    for n in names:
+        row, err = await _resolve(ctx, n, for_sanction=True)
+        if row is None and err and "찾을 수 없어요" in err:
+            out, why = await _outside_one(ctx, n)
+            row, err = (out, None) if out else (None, why or err)
+        if err:
+            errors.append(f"{n}: {err}")
+        else:
+            rows[row["user_id"]] = row
+    if errors:
+        return [], "확인 버튼을 보내지 않았음. " + " / ".join(errors) + REFUSE_SAY
+    return list(rows.values()), None
+
+
 async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, card_chat: int | None = None,
                         room_title: str = "", resolver=None) -> str:
     """제재는 AI 가 바로 하지 않고 확인 버튼만 띄운다 (대화에 숨은 지시로 제재되는 것 방지). 실행은 handlers._confirm_action.
@@ -1123,7 +1170,15 @@ async def t_unmute(ctx: ToolCtx, a: dict) -> str:
 
 
 async def t_ban(ctx: ToolCtx, a: dict) -> str:
-    return await _ask_sanction(ctx, "ban", a)
+    return await _ask_sanction(ctx, "ban", a, resolver=_ban_targets)
+
+
+async def t_fedban(ctx: ToolCtx, a: dict) -> str:
+    if not await ctx.svc.paid_features(ctx.chat_id):
+        return "공동 차단 명단은 이용 기간 중인 방에서만 올릴 수 있음. 그대로 짧게 안내할 것."
+    if not str(a.get("reason", "")).strip():
+        return "사유가 꼭 필요함 (명단은 다른 방에도 알려짐). 사유를 물어볼 것."
+    return await _ask_sanction(ctx, "fedban", a, resolver=_ban_targets)
 
 
 async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
@@ -1399,6 +1454,10 @@ TOOLS: list[Tool] = [
     Tool("ban_member", "[관리자] 멤버를 밴(영구 추방)한다 — 밴을 풀기 전엔 다시 못 들어옴 (확인 버튼 한 장). '밴·영구 차단·다시 못 오게' 일 때만. "
          "그냥 '내보내·강퇴·킥'(다시 들어올 수 있음)은 kick_member. 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_ban, Role.ADMIN, where="room"),
+    Tool("fedban_member", "[관리자] 공동 차단 명단(소담 쓰는 모든 방이 같이 보는 사기·스팸 명단)에 올리고 이 방에서 밴한다 (확인 버튼 한 장). "
+         "'공동 차단·공동차단 목록·블랙리스트 등재' 일 때. 이 방에 없는 사람도 숫자 ID·@아이디면 됨. " + WHO_HINT,
+         {**NAMES_PARAM, "reason": {"type": "string", "description": "사유 (다른 방 관리자에게도 보임)"}},
+         ["names", "reason"], t_fedban, Role.ADMIN, where="room"),
     Tool("set_member_style", "[관리자] 특정 멤버 한 사람에게 쓸 봇 말투를 바꾼다 ('기본' 이면 방 기본으로).",
          {"name": {"type": "string", "description": "@username, 이름, 또는 ID (<addressee_hints> 의 그대로)"},
           "style": {"type": "string", "enum": [s.label for s in STYLES.values()] + ["기본"]}},
@@ -1544,7 +1603,7 @@ READ_ONLY = {"owner_rooms", "owner_room_log", "my_rooms", "chat_stats", "search_
 ROOM_TEXT = frozenset({"read_chat", "search_chat", "member_info", "member_profile", "channel_posts"})
 # room_read 여도 되는 쓰기 = 효과 전에 요청자 확인 카드가 반드시 뜨는 도구 ('싸운 두 명 뮤트해' → read_chat 으로 대상 찾기는 그대로).
 # '오늘은 확인 생략'이 있는 도구(schedule_task·alert_rule·bot_command)는 카드 없이 실행될 수 있어서 넣지 않음.
-CARD_GATED = frozenset({"warn_member", "mute_member", "unmute_member", "ban_member", "kick_member", "member_action",
+CARD_GATED = frozenset({"warn_member", "mute_member", "unmute_member", "ban_member", "fedban_member", "kick_member", "member_action",
                         "mention_all", "room_control", "set_room_instructions", "save_room_rule", "owner_sanction",
                         "manage_schedule", "member_cleanup", "ask_choice",
                         "stop_tag_all"})   # 멈추기 = 해가 없는 쪽 (숨은 지시로 불려도 태그가 멈출 뿐)

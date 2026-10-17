@@ -236,6 +236,40 @@ async def kick_is_rejoinable_and_ban_is_labelled_permanent():
     assert "영구" in ban and "kick_member" in ban and "내보낸다" not in ban
 
 
+@test
+async def ban_and_fedban_reach_people_outside_the_room():
+    """2026-10-17 오너 '8964041288 밴하고 공동차단목록에 등재' → 이 방 멤버가 아니라 '못 찾음' + 공동 차단 도구 없음."""
+    from sodam import fedban
+    db, svc, bot = await setup()
+    svc.paid_features = lambda cid: _true()
+    out = await run(ctx(svc, bot), "ban_member", names=["8964041288"], reason="회원 빼가기")
+    assert "확인 버튼을 보냈음" in out and "8964041288" in last_card(bot)[2], out
+    await confirm(svc, bot)
+    assert ("ban", A, 8964041288) in bot.calls, bot.calls
+    svc.pending.clear()
+    out = await run(ctx(svc, bot), "ban_member", names=["@scammer50"], reason="사기")     # 방엔 없고 기록에만 있는 @아이디
+    assert "확인 버튼을 보냈음" in out and "먹튀왕" in last_card(bot)[2], out
+    svc.pending.clear()
+    out = await run(ctx(svc, bot), "ban_member", names=["먹튀왕"], reason="사기")          # 이름만으론 방 밖 사람 X
+    assert "찾을 수 없어요" in out and not svc.pending, out
+    out = await run(ctx(svc, bot), "ban_member", names=[str(OWNER)], reason="x")           # 운영자 보호
+    assert not svc.pending, out
+    out = await run(ctx(svc, bot), "fedban_member", names=["8964041288"], reason="")
+    assert "사유" in out and not svc.pending, out
+    out = await run(ctx(svc, bot), "fedban_member", names=["8964041288"], reason="회원 빼가기 계정")
+    assert "확인 버튼을 보냈음" in out and "공동 차단" in last_card(bot)[2], out
+    assert not await fedban.lookup(db, 8964041288), "누르기 전엔 안 올라감"
+    q = await confirm(svc, bot)
+    assert await fedban.lookup(db, 8964041288) and "공동 차단 명단" in q.edits[-1], q.edits
+    svc.pending.clear()
+    out = await run(ctx(svc, bot, uid=WEAK), "fedban_member", names=["@user21"], reason="x")   # 차단 권한 없는 관리자
+    assert NO_RIGHT in out and not svc.pending, out
+
+
+async def _true():
+    return True
+
+
 # ── ④ 푸는 조치 (확인 카드) ──────────────────────────────────
 @test
 async def unban_finds_banned_people_who_are_not_in_the_room():

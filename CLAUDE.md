@@ -101,6 +101,8 @@
 - 제재(밴·뮤트·경고·잠금·캡차 승인)는 텔레그램 **'사용자 차단' 권한**이 있는 관리자만 (`permissions.may/can`, 권한은 chat_admin_rights 에 캐시).
   봇관리자는 지정한 사람(mod_log 'bot_admin' 추가 기록)이 그 권한을 가진 TG 관리자이거나 오너일 때만 (위임).
 - 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
+  AI 도구 `fedban_member`(관리자·확인 카드, modactions 'fedban' = fedban.add) · **밴·공동 차단은 방 밖 사람도** (`tools._ban_targets`/`_outside_one`:
+  방 멤버로 못 찾으면 숫자 ID 그대로·@아이디는 users 한 명 또는 resolve_remote, 이름만으론 X, shield·운영자 보호) — 2026-10-17 일루왕 오너 '8964041288 밴+공동차단' → '못 찾음'. tests/test_admin_nl.py ban_and_fedban_*.
 - 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),
   홍보 @아이디 막기는 선택(기본 꺼짐, promo_mentions) — 켜면 채널·그룹(getChat 조회)·bot 아이디만 (사람 아이디는 조회 불가라 허용 — 말 안 한 멤버 태그 오탐 방지).
 - **강제 추가 막기**(`addguard.py`, tests/test_add_guard.py, 2026-10-07 백악관이 '연락처 강제 추가 → 스팸 신고'로 Chat_restricted):

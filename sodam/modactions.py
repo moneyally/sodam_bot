@@ -40,6 +40,14 @@ async def _ban(svc, bot, cid, uid, name, by, act):
     return True, f"🚫 {mention(uid, name)}님을 밴(영구 추방)했어요. 다시 들어오려면 밴 해제가 필요해요."
 
 
+async def _fedban(svc, bot, cid, uid, name, by, act):
+    from . import fedban   # fedban → … 순환 피함
+    if await svc.perms.protected(bot, cid, uid):
+        return False, f"{mention(uid, name)}: 관리자·봇·운영자는 공동 차단 명단에 올릴 수 없어요."
+    text = await fedban.add(svc, bot, cid, uid, name, act.reason, by)
+    return text.startswith("🛡️"), text
+
+
 async def _kick(svc, bot, cid, uid, name, by, act):
     await svc.mod.kick(bot, cid, uid, by, act.reason)
     return True, f"👢 {mention(uid, name)}님을 내보냈어요 (다시 들어올 수 있어요)."
@@ -100,6 +108,7 @@ KINDS: dict[str, Kind] = {
     "mute": Kind("채팅 금지", "채팅 금지", True, True, _mute),
     "ban": Kind("밴(영구 추방)", "밴(영구 추방)", True, True, _ban),
     "kick": Kind("내보내기(재입장 가능)", "내보내기", True, True, _kick),
+    "fedban": Kind("공동 차단 명단 + 밴", "공동 차단 명단 등록·밴", True, True, _fedban),
     "unban": Kind("밴 해제", "밴 해제", False, True, _unban),
     "unwarn": Kind("경고 1회 취소", "경고 취소", False, False, _unwarn),
     "resetwarns": Kind("경고 전부 지우기", "경고 초기화", False, False, _resetwarns),
