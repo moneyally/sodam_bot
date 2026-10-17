@@ -277,6 +277,10 @@ async def ai_lookup_resolves_unknown_username_via_telegram():
     ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {}, request_msg=req)
     await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1", "show": False})
     assert not ctx.quiet, "중간 단계(show=false)는 카드 없이"
+    vibe = FakeMsg(CH, fake_user(5, "누구"), "소담아 요즘 방 분위기 어때", message_id=322)
+    ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {}, request_msg=vibe)
+    await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1"})
+    assert not ctx.quiet, "사람 찾기 요청이 아니면 show 를 안 줘도 카드 없이 (분위기 묻다 찾은 건 X)"
     assert "pepeobba" in out, "예전 아이디 기록도 같이"
     out = await checkup.t_lookup_user(ToolCtx(svc, bot, CH, fake_user(6, "남"), Role.MEMBER, {}), {"who": "PANDAREMIT_1"})
     assert "8621093253" in out, "'@' 없이 써도 아이디 모양(숫자·밑줄)이면"

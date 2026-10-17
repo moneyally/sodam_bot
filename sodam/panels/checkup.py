@@ -25,6 +25,8 @@ from ..permissions import Role
 from ..tools import Tool, ToolCtx
 from ..util import display_name, name_key
 
+_LOOKUP_ASK = re.compile(r"누구|누군|조회|아이디|고유\s*번호|ID|id\b|찾아|정보|프로필|프사|사칭|닮은|기록|이름|lookup|allhistory|@\w", re.I)
+
 MAX_ROOMS = 15
 RECENT_MAX = 60
 KEY_SETTINGS = ("style", "ai_comeback", "ai_spicy", "ai_follow_up", "ai_chime_in", "ai_memory", "voice_who", "voice_reply",
@@ -184,8 +186,12 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
     rooms = await _seen_rooms(ctx, uid)
     text = "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), _telegram_line(ctx, tg), hist, look, rooms) if x)
     # 조회 카드를 방에 그대로 (2026-10-17 오너 '다른 조회 봇처럼' — AI 가 답을 줄이며 텔레그램 정보 줄을 버리던 것).
-    # 다른 일의 중간 단계면 AI 가 show=false.
-    if a.get("show", True) is not False and ctx.request_msg is not None:
+    # 다른 일의 중간 단계면 AI 가 show=false. show 를 안 주면 요청이 '누구·조회·아이디' 같은 사람 찾기일 때만 (분위기 묻다가 찾은 건 X).
+    show = a.get("show")
+    if show is None:
+        req = ctx.request_msg
+        show = bool(_LOOKUP_ASK.search((getattr(req, "text", None) or getattr(req, "caption", None) or "") if req else ""))
+    if show and ctx.request_msg is not None:
         card = _card(ctx, uid, name, row["username"], tg, remote or note, hist, look, rooms)
         req_id = getattr(ctx.request_msg, "message_id", None)
         try:

@@ -187,7 +187,7 @@
   **기록에 없는 @아이디는 텔레그램에 직접** (2026-10-17 일루왕 '@PANDAREMIT_1 고유번호' → '본 적 없음'이었는데 실제론 이름·아이디 바꾼 백악관 멤버):
   `_resolve_who` 가 DB·예전 아이디 다음 `namehist.resolve_remote`(MTProto contacts.resolveUsername, 사람당 1분 3번·시간당 상한) — '@' 없어도 숫자·밑줄 섞인 아이디 모양이면. tests/test_namehist_mtproto.py ai_lookup_*.
   결과에 '텔레그램:' 한 줄 (`checkup._telegram_line` = mtproto.full_user 1시간 캐시): 사람/봇·프리미엄·접속·🌐 데이터센터(`mtproto.dc_text`, 프사의 dc_id — DC1·3 마이애미, 2·4 암스테르담, 5 싱가포르)·프사·SCAM/FAKE. `.프로필` 카드에도 데이터센터.
-  **조회 카드를 방에 그대로** (같은 날 일루왕: 도구는 텔레그램 줄을 가져왔는데 AI 가 '번호·아이디만' 답하며 버림): lookup_user show(기본 true)면 `checkup._card` HTML 을
+  **조회 카드를 방에 그대로** (같은 날 일루왕: 도구는 텔레그램 줄을 가져왔는데 AI 가 '번호·아이디만' 답하며 버림): lookup_user show(안 주면 요청 글이 누구·조회·아이디 같은 사람 찾기일 때만 — `checkup._LOOKUP_ASK`, 분위기 묻다 찾은 건 X)면 `checkup._card` HTML 을
   요청 메시지에 답장으로 올리고 ctx.quiet · agent.SHOW_TERMINAL+SHOW_DEFAULT 로 다음 AI 호출 없음. 다른 일의 중간 단계면 AI 가 show=false.
   owner_server_status / owner_room_view(settings|recent|ai_runs|voice, 오너 1:1). 전부 read_only·정해진 조회만. 프롬프트 규칙 8: 딱 맞는 도구가
   없어도 비슷한 도구로 먼저 시도 → 안 되면 기능 요청.
