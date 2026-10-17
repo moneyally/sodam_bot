@@ -263,6 +263,20 @@ async def ai_lookup_resolves_unknown_username_via_telegram():
     out = await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1"})
     assert "8621093253" in out and "판다리밋" in out and "텔레그램에서 방금 확인" in out, out
     assert "⭐ 프리미엄" in out and "DC5 (싱가포르)" in out and "최근 접속" in out and "🖼 프사 있음" in out, out
+    # 방에서 물으면 조회 카드를 방에 그대로 (AI 가 답을 줄이며 텔레그램 정보를 버리던 것 — 2026-10-17 일루왕)
+    req = FakeMsg(CH, fake_user(5, "누구"), "소담아 @PANDAREMIT_1 고유번호 뭐야", message_id=321)
+    ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {}, request_msg=req)
+    out = await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1"})
+    [card] = [c for c in bot.named("send_message") if c[1] == CH and "조회 결과" in c[2]]
+    assert "<code>8621093253</code>" in card[2] and "데이터센터: DC5 (싱가포르)" in card[2] and "⭐ 프리미엄" in card[2], card[2]
+    assert card[3]["reply_parameters"].message_id == 321 and ctx.quiet and "따로 답하지 않는다" in out
+    from types import SimpleNamespace as NS
+    from sodam import agent
+    call = lambda args: NS(function=NS(name="lookup_user", arguments=args))   # noqa: E731
+    assert agent._terminal(call('{"who": "x"}')) and not agent._terminal(call('{"who": "x", "show": false}'))
+    ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {}, request_msg=req)
+    await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1", "show": False})
+    assert not ctx.quiet, "중간 단계(show=false)는 카드 없이"
     assert "pepeobba" in out, "예전 아이디 기록도 같이"
     out = await checkup.t_lookup_user(ToolCtx(svc, bot, CH, fake_user(6, "남"), Role.MEMBER, {}), {"who": "PANDAREMIT_1"})
     assert "8621093253" in out, "'@' 없이 써도 아이디 모양(숫자·밑줄)이면"
