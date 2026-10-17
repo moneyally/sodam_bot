@@ -59,9 +59,18 @@ register_setting("casino_max_bet", 100_000, "포인트 게임 최대 베팅", ra
 register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # 방마다 (얼라이드 '3분' 요청 2026-10-06)
 # !파산·!리필 (2026-10-15 벳띵 '0포인트 되면 500만 채워 주는 !리필'): 금액·하루 횟수(0 = 제한 없음)를 방마다
 register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
+register_setting("casino_join_points", 10_000, "!가입 선물 금액", range_=(100, 100_000_000))
 register_setting("casino_refill_per_day", 1, "파산 구제(!리필) 하루 횟수 (0=제한 없음)", range_=(0, 1000))
 
 START_POINTS = 10_000
+
+
+async def join_points(db, chat_id: int) -> int:
+    """이 방 !가입 선물 — 설정 casino_join_points (2026-10-17 블랙컴퍼니 이벤트 '가입하면 500만')."""
+    try:
+        return int((await db.get_settings(chat_id)).get("casino_join_points") or START_POINTS)
+    except (TypeError, ValueError):
+        return START_POINTS
 MIN_BET = 100
 MINE_COOLDOWN = 600            # 채굴 기본 10분마다 — 방 설정 mine_minutes 가 우선 (mine_cooldown)
 MINE_MIN, MINE_MAX = 200, 1_000
@@ -458,7 +467,7 @@ async def gate(ctx: Ctx, cmd: CasinoCmd) -> str | None:
     if not await ctx.svc.paid_features(ctx.chat_id):
         return ROOM_UNPAID
     if cmd.needs_account and not await account(ctx.svc.db, ctx.chat_id, ctx.user.id):
-        return f"{mention(ctx.user.id, user_name(ctx.user))}님, 먼저 <code>!가입</code> 해주세요! (가입하면 {fmt(START_POINTS)} 지급)"
+        return f"{mention(ctx.user.id, user_name(ctx.user))}님, 먼저 <code>!가입</code> 해주세요! (가입하면 {fmt(await join_points(ctx.svc.db, ctx.chat_id))} 지급)"
     return None
 
 
@@ -474,10 +483,11 @@ async def c_join(ctx: Ctx) -> None:
     if cur.rowcount != 1:  # 동시에 두 번 누른 경우
         return
     await db.touch_member(cid, uid)
-    bal = await credit(db, cid, uid, START_POINTS, "join")
+    gift = await join_points(db, cid)
+    bal = await credit(db, cid, uid, gift, "join")
     n = (await db._one("SELECT COUNT(*) AS n FROM casino_accounts WHERE chat_id=?", (cid,)))["n"]
     await ctx.reply(f"🎉 {mention(uid, user_name(ctx.user))}님 가입 완료! (이 방 {n}번째)\n"
-                    f"가입 선물 <b>{fmt(START_POINTS)}</b> · 잔액 {fmt(bal)}\n\n"
+                    f"가입 선물 <b>{fmt(gift)}</b> · 잔액 {fmt(bal)}\n\n"
                     f"⛏ <code>!채굴</code> {await mine_cooldown(db, cid) // 60}분마다 포인트 캐기 · 📅 <code>!출석</code> 하루 한 번\n"
                     "🎰 게임 목록은 <code>!도움</code>")
 
@@ -612,7 +622,7 @@ async def c_difficulty(ctx: Ctx) -> None:
                     "단계: 공정 · 조금 어려움 · 어려움 · 매우 어려움 (방 관리자가 정해요)")
 
 
-register(("가입", "join"), c_join, help=f"게임 가입 ({fmt(START_POINTS)} 지급)", group="시작", needs_account=False)
+register(("가입", "join"), c_join, help="게임 가입 (가입 선물 지급)", group="시작", needs_account=False)
 register(("채굴", "mine", "캐기"), c_mine, help="포인트 캐기 (방 설정 간격, 기본 10분 · 가끔 💎 ×10)", group="시작")
 register(("출석", "daily"), c_daily, help=f"하루 한 번 {fmt(DAILY_POINTS)}", group="시작")
 register(("지갑", "잔액", "돈", "wallet"), c_wallet, help="내 포인트·순위", group="시작")
