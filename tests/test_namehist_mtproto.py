@@ -246,6 +246,24 @@ async def resolve_known_person_new_username():
     assert not bot.named("send_message")
 
 
+# ── 7. AI 사람 찾기(lookup_user)도 기록에 없는 @아이디는 텔레그램에 직접 물어봄 (2026-10-17 일루왕 '@PANDAREMIT_1 고유번호') ─
+@test
+async def ai_lookup_resolves_unknown_username_via_telegram():
+    from sodam.panels import checkup
+    from sodam.tools import ToolCtx
+    db, svc, bot = await world()
+    await namehist.record(db, fake_user(8621093253, "無形", "pepeobba"))         # 예전 이름·아이디로만 기록된 사람
+    svc.mtproto.bot.client.usernames = {"pandaremit_1": (8621093253, "판다리밋", "PANDAREMIT_1")}
+    ctx = ToolCtx(svc, bot, CH, fake_user(5, "누구"), Role.MEMBER, {})
+    out = await checkup.t_lookup_user(ctx, {"who": "@PANDAREMIT_1"})
+    assert "8621093253" in out and "판다리밋" in out and "텔레그램에서 방금 확인" in out, out
+    assert "pepeobba" in out, "예전 아이디 기록도 같이"
+    out = await checkup.t_lookup_user(ToolCtx(svc, bot, CH, fake_user(6, "남"), Role.MEMBER, {}), {"who": "PANDAREMIT_1"})
+    assert "8621093253" in out, "'@' 없이 써도 아이디 모양(숫자·밑줄)이면"
+    out = await checkup.t_lookup_user(ToolCtx(svc, bot, CH, fake_user(7, "남"), Role.MEMBER, {}), {"who": "@nobody_here"})
+    assert "텔레그램에서도" in out, out
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if asyncio.run(run_all()) else 0)

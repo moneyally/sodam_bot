@@ -48,8 +48,14 @@ async def _resolve_who(ctx: ToolCtx, who: str) -> tuple[int | None, str]:
         uid = await namehist.find_by_old_username(ctx.svc.db, None, name)
         if uid:
             return uid, "(예전 아이디로 찾음)"
+        # 기록에 없는 아이디 → 텔레그램에 직접 물어봄 (MTProto contacts.resolveUsername, 2026-10-17 일루왕 '@PANDAREMIT_1 고유번호'
+        # → '본 적 없는 아이디'로 끝났는데 실제론 이름·아이디를 바꾼 백악관 멤버였음). '@' 가 없어도 숫자·밑줄 섞인 아이디 모양이면.
+        if at or re.search(r"[\d_]", name):
+            uid, _ = await namehist.resolve_remote(ctx.svc, "@" + name, ctx.caller.id)
+            if uid:
+                return uid, "(소담 기록엔 없던 아이디 · 텔레그램에서 방금 확인)"
         if at:
-            return None, f"@{name} 은 소담이 본 적 없는 아이디."
+            return None, f"@{name} 은 소담이 본 적 없고 텔레그램에서도 사람 계정으로 안 나오는 아이디 (없는 아이디·채널·그룹일 수 있음)."
         # '@' 없는 영어 낱말('Major')은 아이디가 아니면 이름으로 다시 찾음 (예전엔 '본 적 없는 아이디'로 끝남)
     if ctx.chat_id < 0:
         row, err = await tools._resolve(ctx, who)
