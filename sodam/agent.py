@@ -428,7 +428,8 @@ class _Escalate(Exception):
 # 결과를 도구가 방에 직접 올리는 도구 (ctx.quiet = AI 답은 안 보냄). 한 라운드가 이것들뿐이면 다음 AI 호출은 버려질 답만 쓰니
 # 부르지 않음 (서버 14일: 끝말잇기 24·음성방 20·영상 34·선택지 16·포인트 9번 — 매번 1번씩 헛호출).
 TERMINAL = frozenset({"start_game", "game_control", "point_game", "voice_call", "make_video", "ask_choice", "copy_sticker"})
-SHOW_TERMINAL = frozenset({"chat_stats"})   # show=true(표를 방에 그대로 올림)일 때만 끝 도구
+SHOW_TERMINAL = frozenset({"chat_stats", "lookup_user"})   # show=true(표·카드를 방에 그대로 올림)일 때만 끝 도구
+SHOW_DEFAULT = frozenset({"lookup_user"})   # show 를 안 주면 true (조회 카드가 기본)
 ACTION_TERMINAL = {"attendance": {"checkin", "scratch", "fortune"}}   # 이 action 일 때만 결과를 방에 직접 올림
 
 
@@ -443,7 +444,7 @@ def _terminal(c) -> bool:
             return False
         if name in ACTION_TERMINAL:
             return args.get("action") in ACTION_TERMINAL[name]
-        return bool(args.get("show"))
+        return bool(args.get("show", name in SHOW_DEFAULT))
     return False
 LIGHT_MAX_STEPS = 3    # 작은 모델은 도구 라운드 3번까지 (길게 찾으면 올려 보낸 큰 모델의 시간·요금을 먹음)
 DONE_NOTE = ("(이미 한 일) 이 요청에서 방금 이미 실행한 도구: {tools}. 같은 일을 다시 하지 말고 남은 일만 한다.")

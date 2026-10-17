@@ -25,6 +25,8 @@ from ..permissions import Role
 from ..tools import Tool, ToolCtx
 from ..util import display_name, name_key
 
+_LOOKUP_ASK = re.compile(r"누구|누군|조회|아이디|고유\s*번호|ID|id\b|찾아|정보|프로필|프사|사칭|닮은|기록|이름|lookup|allhistory|@\w", re.I)
+
 MAX_ROOMS = 15
 RECENT_MAX = 60
 KEY_SETTINGS = ("style", "ai_comeback", "ai_spicy", "ai_follow_up", "ai_chime_in", "ai_memory", "voice_who", "voice_reply",
@@ -176,41 +178,90 @@ async def t_lookup_user(ctx: ToolCtx, a: dict) -> str:
             remote = " (소담 기록엔 없음 · 텔레그램에서 방금 확인)"
         except TelegramError:
             return f"ID {uid}: 소담이 본 적 없고 텔레그램도 알려주지 않음 (봇과 대화한 적 없는 사람)."
-    cur = f"{display_name(row['first_name'], row['last_name'], None)}" + (f" @{row['username']}" if row["username"] else " (아이디 없음)")
-    tg = await _telegram_line(ctx, uid, row["username"] or "")
+    name = display_name(row["first_name"], row["last_name"], None)
+    cur = name + (f" @{row['username']}" if row["username"] else " (아이디 없음)")
+    tg = await _telegram_info(ctx, uid, row["username"] or "")
     hist = _strip_html(await namehist.history_text(db, uid, ctx.svc.cfg.tz)) if not remote else ""
     look = await lookalikes(db, uid, ctx.svc.cfg.tz) if not remote else ""
-    return "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), tg, hist, look, await _seen_rooms(ctx, uid)) if x)
+    rooms = await _seen_rooms(ctx, uid)
+    text = "\n".join(x for x in (f"ID {uid} → 지금 {cur}{remote} {note}".strip(), _telegram_line(ctx, tg), hist, look, rooms) if x)
+    # 조회 카드를 방에 그대로 (2026-10-17 오너 '다른 조회 봇처럼' — AI 가 답을 줄이며 텔레그램 정보 줄을 버리던 것).
+    # 다른 일의 중간 단계면 AI 가 show=false. show 를 안 주면 요청이 '누구·조회·아이디' 같은 사람 찾기일 때만 (분위기 묻다가 찾은 건 X).
+    show = a.get("show")
+    if show is None:
+        req = ctx.request_msg
+        show = bool(_LOOKUP_ASK.search((getattr(req, "text", None) or getattr(req, "caption", None) or "") if req else ""))
+    if show and ctx.request_msg is not None:
+        card = _card(ctx, uid, name, row["username"], tg, remote or note, hist, look, rooms)
+        req_id = getattr(ctx.request_msg, "message_id", None)
+        try:
+            from telegram import ReplyParameters
+            sent = await ctx.bot.send_message(ctx.chat_id, card, parse_mode="HTML",
+                                              reply_parameters=ReplyParameters(req_id, allow_sending_without_reply=True)
+                                              if req_id else None)
+        except TelegramError:
+            return text                              # 카드를 못 올리면 예전처럼 AI 가 답
+        try:
+            await db.log_message(ctx.chat_id, ctx.bot.id, getattr(sent, "message_id", None), _strip_html(card), is_bot=True)
+        except Exception:
+            pass
+        ctx.quiet = True
+        return "조회 카드를 방에 그대로 올렸음 (따로 답하지 않는다). 카드 내용:\n" + text
+    return text
 
 
-async def _telegram_line(ctx: ToolCtx, uid: int, username: str) -> str:
-    """텔레그램이 주는 계정 정보 한 줄 (MTProto users.getFullUser, 1시간 캐시): 종류·프리미엄·접속·데이터센터·프사·딱지.
-    2026-10-17 오너 — 다른 조회 봇이 보여 주는 칸 그대로. 헬퍼 꺼짐·못 받음이면 빈 줄."""
+async def _telegram_info(ctx: ToolCtx, uid: int, username: str) -> dict:
+    """텔레그램이 주는 계정 정보 (MTProto users.getFullUser, 1시간 캐시). 헬퍼 꺼짐·못 받음이면 {}."""
     mt = getattr(ctx.svc, "mtproto", None)
     if mt is None or not getattr(mt, "enabled", False):
-        return ""
+        return {}
     try:
         tg = await mt.full_user(uid, username)
     except Exception:   # 덤 정보 — 실패해도 조회 결과는 그대로
-        return ""
-    u = (tg or {}).get("user") or {}
-    if not u:
-        return ""
+        return {}
+    return (tg or {}).get("user") or {}
+
+
+def _tg_bits(ctx: ToolCtx, u: dict) -> dict:
     from ..cleanup import status_text
     from ..mtproto import dc_text
-    bits = ["🤖 봇" if u.get("is_bot") else "👤 사람"]
-    if u.get("deleted"):
-        bits.append("🪦 탈퇴 계정")
-    bits.append("⭐ 프리미엄" if u.get("premium") else "프리미엄 아님")
-    bits.append(status_text(u.get("status", "unknown"), u.get("was_online"), ctx.svc.cfg.tz))
-    if dc_text(u.get("dc")):
-        bits.append("🌐 " + dc_text(u.get("dc")))
-    bits.append("🖼 프사 있음" if u.get("photo") else "프사 없음")
-    if u.get("scam"):
-        bits.append("⚠️ 텔레그램 SCAM 표시")
-    if u.get("fake"):
-        bits.append("⚠️ 텔레그램 FAKE 표시")
+    marks = [m for k, m in (("deleted", "🪦 탈퇴 계정"), ("scam", "⚠️ 텔레그램 SCAM 표시"), ("fake", "⚠️ 텔레그램 FAKE 표시")) if u.get(k)]
+    return {"kind": "🤖 봇" if u.get("is_bot") else "👤 사람", "premium": "⭐ 프리미엄" if u.get("premium") else "프리미엄 아님",
+            "seen": status_text(u.get("status", "unknown"), u.get("was_online"), ctx.svc.cfg.tz),
+            "dc": dc_text(u.get("dc")), "photo": "있음" if u.get("photo") else "없음", "marks": marks}
+
+
+def _telegram_line(ctx: ToolCtx, u: dict) -> str:
+    """텔레그램 정보 한 줄: 종류·프리미엄·접속·데이터센터·프사·딱지 (2026-10-17 오너 — 다른 조회 봇이 보여 주는 칸)."""
+    if not u:
+        return ""
+    b = _tg_bits(ctx, u)
+    bits = [b["kind"], *b["marks"], b["premium"], b["seen"]] + (["🌐 " + b["dc"]] if b["dc"] else []) + [f"🖼 프사 {b['photo']}"]
     return "텔레그램: " + " · ".join(bits)
+
+
+def _card(ctx: ToolCtx, uid: int, name: str, username: str | None, u: dict, note: str, hist: str, look: str, rooms: str) -> str:
+    """방에 올리는 조회 카드 (HTML, 이름·기록은 멤버가 정한 글이라 전부 esc)."""
+    from ..util import esc
+    L = ["🔎 <b>조회 결과</b>", f"🆔 ID: <code>{uid}</code>"]
+    if u:
+        b = _tg_bits(ctx, u)
+        L.append(f"{b['kind']} · {b['premium']}")
+        L += [m for m in b["marks"]]
+    L.append(f"📛 이름: {esc(name[:60]) or '(없음)'}")
+    L.append(f"🔗 아이디: @{esc(username)}" if username else "🔗 아이디: 없음")
+    if u:
+        L.append(f"🟢 접속: {esc(b['seen'])}")
+        if b["dc"]:
+            L.append(f"🌐 데이터센터: {esc(b['dc'])}")
+        L.append(f"🖼 프사: {b['photo']}")
+    if note:
+        L.append(f"<i>{esc(note.strip())}</i>")
+    for part in (hist, look, rooms):
+        if part:
+            part = part if len(part) <= 900 else part[:899] + "…"
+            L += ["", esc(part)]
+    return "\n".join(L)
 
 
 async def t_grant_lookup(ctx: ToolCtx, a: dict) -> str:
@@ -389,8 +440,10 @@ ROOM = {"type": "string", "description": "방 이름(일부) 또는 방 ID"}
 CHECKUP_TOOLS = [
     (Tool("lookup_user", "숫자 ID·@아이디·이름으로 사람 찾기: 지금 이름·@아이디, 이름·아이디 변경 기록(allhistory), 같은 이름·비슷한 "
           "아이디를 쓰는 다른 계정(사칭 확인), 본 방(권한 따라). '7647564988 누구야?', '@abc 예전 이름 뭐야?', '이름 뭐로 바꿨는지', "
-          "'누구 사칭이야?' 같은 질문에. 대상을 안 말했으면 답장한 사람.",
-          {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"}}, ["who"], t_lookup_user), True),
+          "'누구 사칭이야?' 같은 질문에. 대상을 안 말했으면 답장한 사람. 결과는 조회 카드로 방에 바로 올라감(따로 답 안 함) — "
+          "다른 일의 중간 단계로 찾을 때만 show=false.",
+          {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
+           "show": {"type": "boolean", "description": "기본 true = 카드를 방에 올림. 중간 단계면 false"}}, ["who"], t_lookup_user), True),
     (Tool("grant_lookup", "[오너] 사람 찾기에서 모든 방을 볼 수 있는 권한을 특정 사람에게 주거나(on=true) 뺀다(on=false). "
           "'○○한테 사람 찾기 전체 권한 줘'. 이 1:1 에 확인 버튼을 보냄 (오너가 눌러야 저장).", {"who": {"type": "string", "description": "숫자 ID, @아이디, 또는 이름"},
                                                  "on": {"type": "boolean"}}, ["who"], t_grant_lookup, Role.OWNER, where="owner_dm"), False),
