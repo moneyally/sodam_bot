@@ -50,6 +50,8 @@ from .panels import brand as _brand  # noqa: E402
 _brand.register_commands()      # .혜택 (방 전용 1:1 메뉴 입구)
 from .panels import chatrank as _chatrank  # noqa: E402
 _chatrank.register_commands()   # .순위 (방장이 꾸민 채팅 순위)
+from . import rates as _rates  # noqa: E402
+_rates.register_commands()      # .시세 · .환율 (USDT↔원 실시간)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다
