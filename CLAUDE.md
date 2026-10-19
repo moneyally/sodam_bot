@@ -100,7 +100,8 @@
 - 버그 수정은 뮤테이션 검증: 고친 줄을 되돌리면 그 테스트가 FAIL 해야 함 (tests/test_fix_*.py).
 - 제재(밴·뮤트·경고·잠금·캡차 승인)는 텔레그램 **'사용자 차단' 권한**이 있는 관리자만 (`permissions.may/can`, 권한은 chat_admin_rights 에 캐시).
   봇관리자는 지정한 사람(mod_log 'bot_admin' 추가 기록)이 그 권한을 가진 TG 관리자이거나 오너일 때만 (위임).
-- 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
+- 공동 차단 명단(`fedban.py`): 방별 모드 끔/알림(기본)/**warn 경고(방에 공개 수배 카드)**/자동밴, 올리기는 이용 기간 중인 방·하루 20명, 오너만 완전 삭제.
+  **🚨 수배(박제) 조회** (tests/test_wanted.py · 뮤테이션 5개, 2026-10-19 오너 '제임스·@jb_wanted_bot처럼'): fedban_entries.no 수배번호 + fedban_reports evidence/media_*/by_name(답장한 박제 원글, `capture_evidence`·`register_columns`). `.공동차단`(별칭 .박제·.수배)에 답장하면 원글 저장(AI 도구 fedban_member 는 `stash_evidence`). **누구나 조회** `.조회 @·ID·#수배번호·답장`(c_lookup) / AI 도구 `scam_lookup`(read_only·누구나) → 그룹방에 `post_wanted_card` 공개 카드(콜백 prefix `wnt` = hooks.add_callback_handler, [📄 원글 보기]↔[🔙 접기] edit_message_text 제자리 교체 **누구나**, [🖼 원본 보기] mediastore.send 누구나, [🚫 밴]/[🙈 무시] may 권한 재확인). warn=카드만·ban=밴+카드. **원글은 출력 필터 없이 그대로**(오너 결정, 링크·지갑·@ 안 가림). 외부 사이트 긁기는 안 함(오너 방·데이터 한정). 안내서 guide/wanted.md.
   AI 도구 `fedban_member`(관리자·확인 카드, modactions 'fedban' = fedban.add) · **밴·공동 차단은 방 밖 사람도** (`tools._ban_targets`/`_outside_one`:
   방 멤버로 못 찾으면 숫자 ID 그대로·@아이디는 users 한 명 또는 resolve_remote, 이름만으론 X, shield·운영자 보호) — 2026-10-17 일루왕 오너 '8964041288 밴+공동차단' → '못 찾음'. tests/test_admin_nl.py ban_and_fedban_*.
 - 스팸: 수정된 메시지 재검사, 전달은 기본 '신규 입장자만 막기', 종류별 잠금(`LOCK_KINDS`, 기본 전부 허용),

@@ -1060,7 +1060,46 @@ async def c_fedban(ctx: CmdCtx) -> None:
     if not reason:
         await ctx.reply("사유를 꼭 적어주세요. 예: <code>.공동차단 @아이디 코인 사기 DM</code>")
         return
-    await ctx.reply(await fedban.add(svc, ctx.bot, ctx.chat_id, uid, name, reason, ctx.user.id))
+    ev, mk, mid = fedban.capture_evidence(ctx.msg.reply_to_message)   # 답장이면 그 박제 원글을 증거로
+    await ctx.reply(await fedban.add(svc, ctx.bot, ctx.chat_id, uid, name, reason, ctx.user.id,
+                                     evidence=ev, media_kind=mk, media_id=mid, by_name=name))
+
+
+async def c_lookup(ctx: CmdCtx) -> None:
+    """.조회 @아이디|숫자ID|#수배번호|답장 → 공동 차단(수배) 명단 조회. 누구나. 명단에 있으면 방에 수배 카드."""
+    svc = ctx.svc
+    arg = ctx.args[0] if ctx.args else ""
+    reply = ctx.msg.reply_to_message
+    uid = None
+    if reply and reply.from_user and not reply.from_user.is_bot:
+        uid = reply.from_user.id
+    elif arg.startswith("#") and to_int(arg[1:]):
+        uid = await fedban.by_number(svc.db, to_int(arg[1:]))
+        if not uid:
+            await ctx.reply("그 수배번호는 없어요.")
+            return
+    elif arg:
+        n = to_int(arg)
+        if n and n > 0 and not await svc.db.find_members(ctx.chat_id, arg):
+            uid = n
+        else:
+            rows = await svc.db.find_members(ctx.chat_id, arg)
+            if len(rows) > 1:
+                await ctx.reply("같은 이름이 여러 명이에요. @아이디나 숫자 ID로 조회해주세요.")
+                return
+            if rows:
+                uid = rows[0]["user_id"]
+    if not uid:
+        await ctx.reply("조회할 사람을 <code>@아이디</code>·숫자ID·<code>#수배번호</code>로 적거나, 그 사람 글에 답장해주세요.")
+        return
+    info = await fedban.lookup(svc.db, uid)
+    if not info:
+        await ctx.reply(f"✅ <code>{uid}</code> 는 공동 차단(수배) 명단에 없는 계정이에요.")
+        return
+    name = info.get("by_name") or info["name"]
+    if not await fedban.post_wanted_card(svc, ctx.bot, ctx.chat_id, uid, name, info,
+                                         reply_to=ctx.msg.message_id, force=True):
+        await ctx.reply("수배 카드를 지금 못 올렸어요. 잠시 뒤 다시 해주세요.")
 
 
 async def c_ai(ctx: CmdCtx) -> None:
@@ -1449,8 +1488,11 @@ COMMANDS: list[Cmd] = [
     Cmd(("리포트", "report"), c_report, Role.ADMIN, help="오늘 집계 리포트", group="관리자"),
     Cmd(("전체태그", "tagall"), c_tagall, Role.ADMIN, usage="[할 말]",
         help="방 전체 멤버를 5명씩 태그 (확인 카드 · 6시간에 한 번)", group="관리자"),
-    Cmd(("공동차단", "fedban"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
-        help="사기·스팸 계정을 여러 방 공동 차단 명단에 올리고 이 방에서 내보내기", group="관리자", right="restrict"),
+    Cmd(("공동차단", "fedban", "박제", "수배"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
+        help="사기·스팸 계정을 여러 방 공동 차단(수배) 명단에 올리고 이 방에서 내보내기 (박제 원글에 답장하면 원글도 저장)",
+        group="관리자", right="restrict"),
+    Cmd(("조회", "수배조회", "lookup"), c_lookup, Role.MEMBER, usage="@아이디|ID|#수배번호|답장",
+        help="공동 차단(수배) 명단에 있는지·박제 원글 보기 (누구나)", group="일반", dm_ok=True),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),
     Cmd(("봇프사", "botpic"), c_botpic, Role.OWNER, usage="(영상·사진에 답장) | 원래대로",
         help="소담 프로필을 움직이는 영상·사진으로 (1:1)", group="오너", dm_ok=True),

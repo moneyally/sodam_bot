@@ -14,7 +14,7 @@ from ..permissions import may, no_right_text
 from ..subscription import chat_title
 from ..util import esc, fmt_time, to_int
 
-MODE_PRESETS = [("off", "끔"), ("alert", "🔔 알림"), ("ban", "🚫 자동 밴")]
+MODE_PRESETS = [("off", "끔"), ("alert", "🔔 알림"), ("warn", "📣 경고 띄우기"), ("ban", "🚫 자동 밴")]
 LIST_N = 10
 
 
@@ -27,9 +27,12 @@ async def s_fb(c: PanelCtx) -> Screen:
              "명단에 있는 사람이 이 방에 들어오거나 처음 말하면:",
              "• 끔: 아무것도 안 해요",
              "• 🔔 알림: 텔레그램 관리자님들 1:1 로 알려드려요 ([밴] [무시] 버튼)",
-             "• 🚫 자동 밴: 바로 내보내고 방에 잠깐 안내해요 (이용 기간 중인 방만)",
+             "• 📣 경고 띄우기: 방에 공개 수배 카드를 올려요 (사유·박제 원글 보기·밴 버튼)",
+             "• 🚫 자동 밴: 바로 내보내고 방에 수배 카드를 올려요 (이용 기간 중인 방만)",
              "",
-             f"지금: <b>{esc(fedban.MODES.get(mode, mode))}</b>"]
+             f"지금: <b>{esc(fedban.MODES.get(mode, mode))}</b>",
+             "",
+             "누구나 조회: 방에서 <code>.조회 @아이디</code>·<code>.조회 #수배번호</code> 또는 그 사람 글에 답장"]
     if mode == "ban" and not paid:
         lines.append("⚠️ 이용 기간이 끝나서 지금은 자동 밴 대신 알림으로 동작해요.")
     lines += ["", f"명단 전체: {await fedban.total(c.svc.db)}명",
@@ -49,7 +52,8 @@ async def s_fbl(c: PanelCtx) -> Screen:
     btns = []
     for r in items:
         mine = await fedban.room_reported(db, c.cid, r["user_id"])
-        lines.append(f"• {esc(r['name'][:30])} (<code>{r['user_id']}</code>) · 방 {r['rooms']}곳 · "
+        tag = f"🚨#{r['no']} " if r["no"] else ""
+        lines.append(f"• {tag}{esc(r['name'][:30])} (<code>{r['user_id']}</code>) · 방 {r['rooms']}곳 · "
                      f"{fmt_time(r['last_ts'], c.svc.cfg.tz)}\n  사유: {esc((r['reason'] or '')[:60])}"
                      + (" · <i>이 방이 올림</i>" if mine else ""))
         label = r["name"][:16]
