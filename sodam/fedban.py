@@ -14,34 +14,43 @@ import time
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
-from . import free, hooks, incidents
-from .db import register_schema
-from .permissions import Role
+from . import free, hooks, incidents, mediastore, persist
+from .db import register_columns, register_schema
+from .permissions import Role, may
 from .settings import register_setting
 from .util import esc, mention, post_temp
 
 log = logging.getLogger(__name__)
 
 DAILY_LIMIT = 20
-MODES = {"off": "끔", "alert": "관리자에게 알림", "ban": "자동 밴"}
+# 수배 카드 같은 사람·같은 방 다시 띄우는 간격 (초)
+CARD_GAP = 600
+MEDIA_KINDS = ("photo", "video", "animation", "document")
+MODES = {"off": "끔", "alert": "관리자에게 알림", "warn": "방에 경고 띄우기", "ban": "자동 밴"}
 register_setting("fedban_mode", "alert", "공동 차단 명단",
-                 choices={"off": "off", "끔": "off", "alert": "alert", "알림": "alert", "ban": "ban", "자동밴": "ban",
-                          "밴": "ban"},
+                 choices={"off": "off", "끔": "off", "alert": "alert", "알림": "alert",
+                          "warn": "warn", "경고": "warn", "수배": "warn",
+                          "ban": "ban", "자동밴": "ban", "밴": "ban"},
                  render_fn=lambda v: MODES.get(v, str(v)))
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS fedban_entries (
     user_id INTEGER PRIMARY KEY,
     name    TEXT NOT NULL,
-    ts      INTEGER NOT NULL
+    ts      INTEGER NOT NULL,
+    no      INTEGER
 );
 CREATE TABLE IF NOT EXISTS fedban_reports (
-    user_id INTEGER NOT NULL,
-    chat_id INTEGER NOT NULL,
-    reason  TEXT NOT NULL,
-    ts      INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    chat_id    INTEGER NOT NULL,
+    reason     TEXT NOT NULL,
+    ts         INTEGER NOT NULL,
+    evidence   TEXT,
+    media_kind TEXT,
+    media_id   TEXT,
+    by_name    TEXT,
     PRIMARY KEY (user_id, chat_id)
 );
 CREATE INDEX IF NOT EXISTS fedban_reports_chat ON fedban_reports(chat_id, ts);
@@ -53,6 +62,9 @@ CREATE TABLE IF NOT EXISTS fedban_seen (
     PRIMARY KEY (chat_id, user_id)
 );
 """, migrate={"fedban_reports": "composite", "fedban_seen": "composite"})
+# 예전 DB 에도 수배번호·원글(박제 증거) 칸 추가
+register_columns("fedban_entries", {"no": "INTEGER"})
+register_columns("fedban_reports", {"evidence": "TEXT", "media_kind": "TEXT", "media_id": "TEXT", "by_name": "TEXT"})
 
 USAGE = ("🛡️ <b>공동 차단 명단</b>\n"
          "사기·스팸 계정을 올리면 소담을 쓰는 다른 방에 들어올 때 관리자에게 알려드려요 (방 설정에 따라 자동 밴).\n"
@@ -74,22 +86,34 @@ async def _listed(db) -> frozenset[int]:
 
 
 async def lookup(db, user_id: int) -> dict | None:
-    """명단에 있으면 {name, rooms, reasons(최근 3개)}."""
+    """명단에 있으면 {name, no(수배번호), rooms, reasons(최근 3개), chats, first_ts,
+    원글: evidence/media_kind/media_id(가장 최근 신고), by_name}."""
     if user_id not in await _listed(db):
         return None
-    entry = await db._one("SELECT name FROM fedban_entries WHERE user_id=?", (user_id,))
+    entry = await db._one("SELECT name, no FROM fedban_entries WHERE user_id=?", (user_id,))
     if not entry:
         return None
-    reps = await db._all("SELECT chat_id, reason FROM fedban_reports WHERE user_id=? ORDER BY ts DESC", (user_id,))
+    reps = await db._all("SELECT chat_id, reason, ts, evidence, media_kind, media_id, by_name "
+                         "FROM fedban_reports WHERE user_id=? ORDER BY ts DESC", (user_id,))
     if not reps:
         return None
-    return {"name": entry["name"], "rooms": len(reps), "reasons": [r["reason"] for r in reps[:3]],
-            "chats": [r["chat_id"] for r in reps]}
+    ev = next((r for r in reps if r["evidence"] or r["media_id"]), reps[0])   # 원글 있는 가장 최근 신고
+    return {"name": entry["name"], "no": entry["no"], "rooms": len(reps),
+            "reasons": [r["reason"] for r in reps[:3]], "chats": [r["chat_id"] for r in reps],
+            "first_ts": min(r["ts"] for r in reps),
+            "evidence": ev["evidence"], "media_kind": ev["media_kind"], "media_id": ev["media_id"],
+            "by_name": ev["by_name"] or entry["name"]}
+
+
+async def by_number(db, no: int) -> int | None:
+    """수배번호 → user_id."""
+    row = await db._one("SELECT user_id FROM fedban_entries WHERE no=?", (no,))
+    return row["user_id"] if row else None
 
 
 async def recent(db, limit: int = 15) -> list:
     return await db._all(
-        "SELECT e.user_id, e.name, COUNT(r.chat_id) AS rooms, MAX(r.ts) AS last_ts, "
+        "SELECT e.user_id, e.name, e.no, COUNT(r.chat_id) AS rooms, MAX(r.ts) AS last_ts, "
         "(SELECT reason FROM fedban_reports x WHERE x.user_id=e.user_id ORDER BY x.ts DESC LIMIT 1) AS reason "
         "FROM fedban_entries e JOIN fedban_reports r ON r.user_id=e.user_id "
         "GROUP BY e.user_id ORDER BY last_ts DESC LIMIT ?", (limit,))
@@ -109,23 +133,63 @@ def _day(svc) -> str:
 
 
 # ── 올리기 · 빼기 ─────────────────────────────────────────
-async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, actor_id: int) -> str:
+# 원글(박제 증거) 임시 보관 — AI 도구(t_fedban)가 확인 카드 전에 담아두면 add 가 꺼내 씀 (명령 경로는 직접 넘김)
+_PENDING_EV: dict[tuple, dict] = {}
+
+
+def stash_evidence(chat_id: int, user_id: int, evidence=None, media_kind=None, media_id=None) -> None:
+    if evidence or media_id:
+        _PENDING_EV[(chat_id, user_id)] = {"evidence": (evidence or None),
+                                           "media_kind": media_kind, "media_id": media_id}
+
+
+def capture_evidence(reply_msg):
+    """박제 원글(답장한 메시지) → (evidence_html, media_kind, media_id). 없으면 (None, None, None)."""
+    if reply_msg is None:
+        return None, None, None
+    from .util import rich_html
+    text = rich_html(reply_msg) or getattr(reply_msg, "text", None) or getattr(reply_msg, "caption", None)
+    kind = media_id = None
+    for k in MEDIA_KINDS:
+        fid = mediastore.new_file_id(reply_msg, k)
+        if fid:
+            kind, media_id = k, fid
+            break
+    return (text[:3000] if text else None), kind, media_id
+
+
+async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, actor_id: int,
+              evidence=None, media_kind=None, media_id=None, by_name=None) -> str:
     """명단에 올리고 이 방에서 밴. 권한·대상 확인(관리자·봇·운영자 제외)은 부르는 쪽(commands.c_fedban)에서.
-    돌려주는 값 = 방에 보낼 안내문."""
+    evidence/media_* = 박제 원글(답장한 글). 돌려주는 값 = 방에 보낼 안내문."""
     db = svc.db
     if not await svc.paid_features(chat_id):
         return NOT_PAID
     day = _day(svc)
     if await db.counter(day, chat_id, "fedban_add") >= DAILY_LIMIT:
         return f"공동 차단 명단엔 한 방에서 하루 {DAILY_LIMIT}명까지 올릴 수 있어요. 내일 다시 해주세요."
+    if evidence is None and media_id is None:           # AI 도구가 미리 담아둔 원글 꺼내기
+        stashed = _PENDING_EV.pop((chat_id, user_id), None)
+        if stashed:
+            evidence, media_kind, media_id = stashed["evidence"], stashed["media_kind"], stashed["media_id"]
     reason, now = reason.strip()[:200], int(time.time())
     await db.bump(day, chat_id, "fedban_add")
     await db._write("INSERT INTO fedban_entries(user_id, name, ts) VALUES(?, ?, ?) "
                     "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name", (user_id, name[:64], now))
+    # 수배번호: 새로 등재된 계정만 부여 (기존 번호는 유지)
+    await db._write("UPDATE fedban_entries SET no=(SELECT COALESCE(MAX(no), 0) + 1 FROM fedban_entries) "
+                    "WHERE user_id=? AND no IS NULL", (user_id,))
     db.uncache(LISTED)
-    await db._write("INSERT INTO fedban_reports(user_id, chat_id, reason, ts) VALUES(?, ?, ?, ?) "
-                    "ON CONFLICT(user_id, chat_id) DO UPDATE SET reason=excluded.reason, ts=excluded.ts",
-                    (user_id, chat_id, reason, now))
+    await db._write("INSERT INTO fedban_reports(user_id, chat_id, reason, ts, evidence, media_kind, media_id, by_name) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, chat_id) DO UPDATE SET reason=excluded.reason, ts=excluded.ts, "
+                    "evidence=COALESCE(excluded.evidence, fedban_reports.evidence), "
+                    "media_kind=COALESCE(excluded.media_kind, fedban_reports.media_kind), "
+                    "media_id=COALESCE(excluded.media_id, fedban_reports.media_id), "
+                    "by_name=COALESCE(excluded.by_name, fedban_reports.by_name)",
+                    (user_id, chat_id, reason, now, (evidence or None), media_kind, media_id, (by_name or name)[:64]))
+    if media_id and media_kind:
+        mediastore.remember_soon(bot, db, media_kind, media_id)
     await db.log_mod(chat_id, actor_id, user_id, "fedban", reason)
     info = await lookup(db, user_id)
     try:
@@ -185,6 +249,150 @@ def alert_kb(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
                                   InlineKeyboardButton("무시", callback_data=f"m:fbx:{chat_id}:{user_id}:i")]])
 
 
+# ── 공개 수배 카드 (방에 직접 올림 + 버튼으로 원글 펼침/접기) ──────────────
+def _wanted_date(ts, tz) -> str:
+    try:
+        return datetime.fromtimestamp(ts, tz).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def wanted_card_text(info: dict, name: str, user_id: int, *, expanded: bool, tz=None, banned: bool = False) -> str:
+    """수배 카드 본문. expanded=False 요약 / True 요약+원글 전문. 필터 없이 그대로(오너 결정)."""
+    no = info.get("no")
+    head = f"🚨 <b>수배 #{no}</b>" if no else "🚨 <b>공동 차단 명단 계정</b>"
+    reasons = "\n".join(f"• {esc(r[:120])}" for r in info["reasons"])
+    lines = [head,
+             f"{esc(name)} (ID <code>{user_id}</code>)",
+             f"🏷 사유:\n{reasons}",
+             f"📍 {info['rooms']}곳에서 신고" + (f" · 📅 {_wanted_date(info['first_ts'], tz)}" if tz else "")]
+    if banned:
+        lines.append("🚫 <b>이 방에서 내보냈어요.</b>")
+    else:
+        lines.append("⚠️ 거래·입장 시 주의하세요.")
+    if expanded:
+        ev = info.get("evidence")
+        lines.append("─────────────")
+        if ev:
+            lines.append("📄 <b>박제 원글</b>:\n" + ev)   # 원글은 이미 HTML (rich_html) 또는 평문 — 그대로
+        if info.get("media_id"):
+            lines.append("🖼 원본 사진/영상은 아래 버튼으로 볼 수 있어요.")
+        if not ev and not info.get("media_id"):
+            lines.append("(저장된 원글이 없어요)")
+    return "\n".join(lines)
+
+
+def wanted_kb(user_id: int, *, expanded: bool, has_media: bool, banned: bool = False,
+              has_evidence: bool = True) -> InlineKeyboardMarkup:
+    rows = []
+    top = []
+    if has_evidence or has_media:
+        if expanded:
+            top.append(InlineKeyboardButton("🔙 접기", callback_data=f"wnt:close:{user_id}"))
+        else:
+            top.append(InlineKeyboardButton("📄 원글 보기", callback_data=f"wnt:open:{user_id}"))
+    if has_media:
+        top.append(InlineKeyboardButton("🖼 원본 보기", callback_data=f"wnt:media:{user_id}"))
+    if top:
+        rows.append(top)
+    if not banned:
+        rows.append([InlineKeyboardButton("🚫 밴", callback_data=f"wnt:ban:{user_id}"),
+                     InlineKeyboardButton("🙈 무시", callback_data=f"wnt:ig:{user_id}")])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def post_wanted_card(svc, bot, chat_id: int, user_id: int, name: str, info: dict, *,
+                           reply_to: int | None = None, banned: bool = False, force: bool = False) -> bool:
+    """방에 수배 카드 1장. force=False 면 같은 사람·같은 방 CARD_GAP 초 쿨다운. 올렸으면 True."""
+    if not force and not await persist.claim(svc.db, f"wanted_card:{chat_id}:{user_id}", CARD_GAP):
+        return False
+    text = wanted_card_text(info, name, user_id, expanded=False, tz=svc.cfg.tz, banned=banned)
+    kb = wanted_kb(user_id, expanded=False, has_media=bool(info.get("media_id")), banned=banned,
+                   has_evidence=bool(info.get("evidence")))
+    try:
+        from telegram import ReplyParameters
+        await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb,
+                               reply_parameters=ReplyParameters(reply_to, allow_sending_without_reply=True)
+                               if reply_to else None)
+    except TelegramError as e:
+        log.warning("wanted card post failed %s: %s", chat_id, e)
+        return False
+    return True
+
+
+async def on_wanted(svc, bot, q, parts: list) -> None:
+    """공개 수배 카드 버튼 (prefix wnt). open/close 누구나 제자리 교체, media 누구나, ban/ig 는 권한 있는 사람만."""
+    act = parts[0] if parts else ""
+    try:
+        user_id = int(parts[1])
+    except (IndexError, ValueError):
+        await q.answer("만료된 카드예요.")
+        return
+    chat_id = q.message.chat_id
+    info = await lookup(svc.db, user_id)
+    if not info:
+        await q.answer("명단에서 빠진 계정이에요.")
+        return
+    name = info.get("by_name") or info["name"]
+    if act in ("open", "close"):
+        expanded = act == "open"
+        text = wanted_card_text(info, name, user_id, expanded=expanded, tz=svc.cfg.tz)
+        kb = wanted_kb(user_id, expanded=expanded, has_media=bool(info.get("media_id")),
+                       has_evidence=bool(info.get("evidence")))
+        try:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        except BadRequest:
+            pass
+        await q.answer()
+        return
+    if act == "media":
+        if not info.get("media_id"):
+            await q.answer("저장된 원본이 없어요.")
+            return
+        mid = getattr(q.message, "message_id", None)
+        try:
+            from telegram import ReplyParameters
+            await mediastore.send(bot, svc.db, info["media_kind"], chat_id, info["media_id"],
+                                  reply_parameters=ReplyParameters(mid, allow_sending_without_reply=True)
+                                  if mid else None)
+        except mediastore.MediaLost:
+            await q.answer("원본이 사라졌어요 (글만 남아 있어요).", show_alert=True)
+            return
+        except TelegramError:
+            await q.answer("원본을 못 불러왔어요.")
+            return
+        await q.answer()
+        return
+    if act in ("ban", "ig"):
+        if not await may(svc.perms, bot, chat_id, q.from_user.id):
+            await q.answer("'사용자 차단' 권한이 있는 관리자만 할 수 있어요.", show_alert=True)
+            return
+        if act == "ig":
+            await q.answer("무시했어요.")
+            try:
+                await q.edit_message_reply_markup(None)
+            except (BadRequest, AttributeError):
+                pass
+            return
+        try:
+            await svc.mod.ban(bot, chat_id, user_id, q.from_user.id, "공동 차단 명단: " + info["reasons"][0][:100])
+        except TelegramError as e:
+            await q.answer(f"실패: {e.message[:80]}", show_alert=True)
+            return
+        await _mark(svc.db, chat_id, user_id, info["rooms"])
+        text = wanted_card_text(info, name, user_id, expanded=False, tz=svc.cfg.tz, banned=True)
+        try:
+            await q.edit_message_text(text, parse_mode="HTML",
+                                      reply_markup=wanted_kb(user_id, expanded=False,
+                                                             has_media=bool(info.get("media_id")), banned=True,
+                                                             has_evidence=bool(info.get("evidence"))))
+        except BadRequest:
+            pass
+        await q.answer("내보냈어요.")
+        return
+    await q.answer()
+
+
 async def check(svc, bot, chat_id: int, user, *, spoke: bool = False) -> bool:
     """명단에 있는 사람이면 방 설정대로 처리. 밴했으면 True."""
     s = await svc.db.get_settings(chat_id)
@@ -196,15 +404,21 @@ async def check(svc, bot, chat_id: int, user, *, spoke: bool = False) -> bool:
         return False
     name = " ".join(x for x in (user.first_name, user.last_name) if x) or f"ID {user.id}"
     if mode == "ban" and await svc.paid_features(chat_id) and await svc.perms.bot_can_moderate(bot, chat_id):
+        banned = False
         try:
             await svc.mod.ban(bot, chat_id, user.id, None, "공동 차단 명단: " + info["reasons"][0][:100])
         except TelegramError as e:
             log.warning("fedban auto ban failed in %s: %s", chat_id, e)
         else:
+            banned = True
+        if banned:
             await _mark(svc.db, chat_id, user.id, info["rooms"])
-            post_temp(bot, chat_id, f"🛡️ {esc(name)}님은 공동 차단 명단(방 {info['rooms']}곳에서 신고)에 있는 계정이라 "
-                                "내보냈어요.")
+            await post_wanted_card(svc, bot, chat_id, user.id, name, info, banned=True)   # 사유·원글 보이는 공개 카드
             return True
+    if mode == "warn":   # 밴 안 하고 방에 공개 수배 카드만
+        if await post_wanted_card(svc, bot, chat_id, user.id, name, info):
+            await _mark(svc.db, chat_id, user.id, info["rooms"])
+        return False
     seen = await svc.db._one("SELECT n_rooms FROM fedban_seen WHERE chat_id=? AND user_id=?", (chat_id, user.id))
     if seen and seen["n_rooms"] >= info["rooms"]:
         return False  # 이미 알렸음 (올린 방이 늘면 다시 알림)
@@ -238,3 +452,4 @@ async def on_message(svc, bot, msg, role) -> None:
 
 hooks.add_member_join_hook(on_join)
 hooks.add_group_message_hook(on_message)
+hooks.add_callback_handler("wnt", on_wanted)

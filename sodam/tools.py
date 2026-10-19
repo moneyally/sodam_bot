@@ -1178,7 +1178,47 @@ async def t_fedban(ctx: ToolCtx, a: dict) -> str:
         return "공동 차단 명단은 이용 기간 중인 방에서만 올릴 수 있음. 그대로 짧게 안내할 것."
     if not str(a.get("reason", "")).strip():
         return "사유가 꼭 필요함 (명단은 다른 방에도 알려짐). 사유를 물어볼 것."
+    reply = getattr(ctx.request_msg, "reply_to_message", None)   # 박제 원글에 답장하며 올리면 그 원글을 증거로
+    if reply is not None and getattr(reply, "from_user", None) and not reply.from_user.is_bot:
+        from . import fedban
+        ev, mk, mid = fedban.capture_evidence(reply)
+        fedban.stash_evidence(ctx.chat_id, reply.from_user.id, ev, mk, mid)
     return await _ask_sanction(ctx, "fedban", a, resolver=_ban_targets)
+
+
+async def t_scam_lookup(ctx: ToolCtx, a: dict) -> str:
+    """공동 차단(수배) 명단 조회 — 누구나. 그룹방이면 수배 카드를 직접 올림."""
+    from . import fedban
+    who = str(a.get("who", "")).strip()
+    uid = None
+    if who.startswith("#") and who[1:].strip().isdigit():
+        uid = await fedban.by_number(ctx.svc.db, int(who[1:].strip()))
+    elif who.lstrip("-").isdigit():
+        uid = int(who)
+    else:
+        row, _ = await _resolve(ctx, who)
+        if row:
+            uid = row["user_id"]
+        else:
+            u = who.lstrip("@")
+            r = await ctx.svc.db._one("SELECT user_id FROM users WHERE lower(username)=lower(?)", (u,)) if u else None
+            if r:
+                uid = r["user_id"]
+    if not uid:
+        return f"'{who}' 를 못 찾음. @아이디·숫자ID·#수배번호로 다시 시도할 것."
+    info = await fedban.lookup(ctx.svc.db, uid)
+    if not info:
+        return f"<code>{uid}</code> 는 공동 차단(수배) 명단에 없는 계정임. '명단에 없다'고 짧게 답할 것."
+    name = info.get("by_name") or info["name"]
+    if ctx.chat_id < 0 and ctx.request_msg is not None:   # 그룹방 → 카드를 방에 직접 올림
+        if await fedban.post_wanted_card(ctx.svc, ctx.bot, ctx.chat_id, uid, name, info,
+                                         reply_to=getattr(ctx.request_msg, "message_id", None), force=True):
+            ctx.quiet = True
+            return "수배 카드를 방에 올렸음 (따로 답하지 않는다)."
+    reasons = " / ".join(info["reasons"])
+    no = info.get("no")
+    tail = (f" 원글: {info['evidence'][:400]}" if info.get("evidence") else " (저장된 원글 없음)")
+    return (f"수배{('#' + str(no)) if no else ''}: {name}({uid}), {info['rooms']}곳 신고. 사유: {reasons}.{tail}")
 
 
 async def t_change_setting(ctx: ToolCtx, a: dict) -> str:
@@ -1502,6 +1542,10 @@ TOOLS: list[Tool] = [
          "먼저 호출할 것 — 어느 방의 관리자인지는 도구가 텔레그램에서 직접 확인한다.",
          {"room": {"type": "string", "description": "자세히 볼 방 이름(일부) 또는 ID. 비우면 전체 현황"}}, [], t_my_rooms,
          where="dm"),
+    Tool("scam_lookup", "공동 차단(수배) 명단 조회 — 누구나. '이 사람 사기꾼이야?·수배됐어?·블랙리스트 조회·#수배번호' 일 때. "
+         "그룹방이면 사유·박제 원글 버튼이 달린 수배 카드를 방에 바로 올림 (따로 답하지 말 것). 등록(올리기)은 fedban_member.",
+         {"who": {"type": "string", "description": "@아이디·숫자ID·#수배번호·이름"}}, ["who"], t_scam_lookup,
+         Role.MEMBER, where="any"),
     Tool("owner_rooms", "[오너] 봇이 들어가 있는 방 목록과 방마다 봇 제재 권한 여부.", {}, [], t_owner_rooms, Role.OWNER,
          where="owner_dm"),
     Tool("owner_sanction", "[오너] 1:1 에서 다른 방의 멤버를 경고·뮤트·밴하거나 뮤트 해제(unmute)·밴 해제(unban)한다 "
@@ -1595,7 +1639,7 @@ def find_tools_schema(deferred: list[Tool]) -> dict:
 
 # 다른 방 기록을 읽은 뒤에도 쓸 수 있는 도구 = 이 서버 데이터를 읽기만 (제재·전송·외부 검색·기억 저장 없음)
 READ_ONLY = {"owner_rooms", "owner_room_log", "my_rooms", "chat_stats", "search_chat", "read_chat", "member_info", "room_members",
-             "room_rules", "points_ranking", "search_knowledge", "get_my_requests", "answer_sources"}
+             "room_rules", "points_ranking", "search_knowledge", "get_my_requests", "answer_sources", "scam_lookup"}
 
 
 # 이 방 멤버가 쓴 글을 돌려주는 도구 — 쓰면 그 답변은 room_read (ChatGPT 코드 감사 2026-10-03: 그룹방 read_chat·search_chat 이
