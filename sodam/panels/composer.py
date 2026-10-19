@@ -115,6 +115,7 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
             [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1))],
+            [B(f"🎨 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
             [B("👀 미리보기 (1:1)", cp(did, "pr"))],
             [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
             [B("📤 다른 방·채널에도", cp(did, "cpy"))] if not edit and (d["body"] or d["media_type"]) else [],
@@ -343,6 +344,10 @@ async def r_cp(c: PanelCtx) -> Screen:
         return s_buttons(await composer.get(db, did), "🗑 지웠어요." if op == "x" else "옮겼어요.")
     elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
         await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
+    elif act == "th":   # 버튼색 틀 돌려가며 (신호등→파랑→무채색→강조)
+        order = list(composer.THEMES)
+        nxt = order[(order.index(composer.theme_of(d)) + 1) % len(order)]
+        await composer.update(db, did, theme=nxt)
     elif act == "pr":
         if not d["body"] and not d["media_type"]:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
