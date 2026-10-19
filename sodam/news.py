@@ -61,7 +61,13 @@ OUTLETS = {"bbc": ("BBC", ("bbc.co.uk", "bbc.com")), "nyt": ("NYT", ("nytimes.co
            "npr": ("NPR", ("npr.org",)), "bbcko": ("BBC코리아", ("bbc.com", "bbc.co.uk")),
            "coindesk": ("코인데스크", ("coindesk.com",)), "cointelegraph": ("코인텔레그래프", ("cointelegraph.com",)),
            "decrypt": ("디크립트", ("decrypt.co",)), "espn": ("ESPN", ("espn.com",)),
-           "skysports": ("스카이스포츠", ("skysports.com",)), "google": ("구글뉴스", ())}
+           "skysports": ("스카이스포츠", ("skysports.com",)), "google": ("구글뉴스", ()),
+           # 🇰🇷 국내 (2026-10-20 약관 조사 — 제목+링크만·AI 차단 없는 곳. 연합·한겨레는 '재배포·AI 금지'라 제외)
+           "sbs": ("SBS", ("sbs.co.kr",)), "etnews": ("전자신문", ("etnews.com",)), "mk": ("매경", ("mk.co.kr",)),
+           "chosun": ("조선일보", ("chosun.com",)), "newsis": ("뉴시스", ("newsis.com",)),
+           "ohmynews": ("오마이뉴스", ("ohmynews.com",)), "khan": ("경향신문", ("khan.co.kr",)),
+           "donga": ("동아일보", ("donga.com",))}
+KR_OUTLETS = frozenset({"sbs", "etnews", "mk", "chosun", "newsis", "ohmynews", "khan", "donga"})
 SOURCES = [   # 2026-09-29 실측 200 (NPR 은 'Mozilla/5.0' 만 적은 UA 를 403 으로 막음 → 이름 밝힌 UA)
     Source("bbc", "world", "https://feeds.bbci.co.uk/news/world/rss.xml"),
     Source("nyt", "world", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
@@ -85,13 +91,32 @@ SOURCES = [   # 2026-09-29 실측 200 (NPR 은 'Mozilla/5.0' 만 적은 UA 를 4
     Source("guardian", "sports", "https://www.theguardian.com/sport/rss"),
     Source("espn", "sports", "https://www.espn.com/espn/rss/news"),
     Source("skysports", "sports", "https://www.skysports.com/rss/12040"),
+    # 🇰🇷 국내 (전부 cat='korea' → 기본 분야에 들어가 방 설정 안 바꿔도 뜸. lang='ko' → AI 요약 안 함·제목이 곧 한국어, 비용 0.
+    #           2026-10-20 서버 실측 200. 연합·한겨레는 피드에 '재배포·AI 금지'라 제외, JTBC 는 2024 피드(죽음)라 제외)
+    Source("sbs", "korea", "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01", lang="ko"),      # 정치
+    Source("sbs", "korea", "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", lang="ko"),      # 경제
+    Source("sbs", "korea", "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=03", lang="ko"),      # 사회
+    Source("sbs", "korea", "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=07", lang="ko"),      # 국제
+    Source("sbs", "korea", "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=09", lang="ko"),      # 스포츠
+    Source("etnews", "korea", "https://rss.etnews.com/02.xml", lang="ko"),                                 # 경제
+    Source("etnews", "korea", "https://rss.etnews.com/03.xml", lang="ko"),                                 # IT
+    Source("mk", "korea", "https://www.mk.co.kr/rss/30000001/", lang="ko"),                                # 경제
+    Source("newsis", "korea", "https://www.newsis.com/RSS/politics.xml", lang="ko"),
+    Source("newsis", "korea", "https://www.newsis.com/RSS/society.xml", lang="ko"),
+    Source("newsis", "korea", "https://www.newsis.com/RSS/economy.xml", lang="ko"),
+    Source("ohmynews", "korea", "http://rss.ohmynews.com/rss/ohmynews.xml", lang="ko"),
+    Source("chosun", "korea", "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml", lang="ko"),
+    Source("khan", "korea", "https://www.khan.co.kr/rss/rssdata/politic_news.xml", lang="ko"),
+    Source("donga", "korea", "https://rss.donga.com/total.xml", lang="ko"),
 ]
 GOOGLE = Source("google", "world", "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en",
                 signal=True)
 
-CATS = {"world": "🌍 세계", "economy": "💰 경제", "tech": "💻 기술", "crypto": "🪙 코인", "sports": "⚽ 스포츠"}
+CATS = {"world": "🌍 세계", "korea": "🇰🇷 국내", "economy": "💰 경제", "tech": "💻 기술", "crypto": "🪙 코인",
+        "sports": "⚽ 스포츠"}
 CAT_ALIASES = {**{k: k for k in CATS}, **{v.split()[1]: k for k, v in CATS.items()}, "국제": "world", "비즈니스": "economy",
-               "it": "tech", "테크": "tech", "암호화폐": "crypto", "비트코인": "crypto", "스포츠": "sports", "sport": "sports"}
+               "it": "tech", "테크": "tech", "암호화폐": "crypto", "비트코인": "crypto", "스포츠": "sports", "sport": "sports",
+               "한국": "korea", "국내뉴스": "korea", "정치": "korea", "사회": "korea", "종합": "korea", "kr": "korea"}
 MODES = {"off": "끔", "breaking": "속보만", "digest": "정해진 시각 정리", "both": "정리 + 속보"}
 QUIETS = {"0-7": "0~7시", "23-7": "23~7시", "1-8": "1~8시", "off": "없음"}
 TIME_PRESETS = ["09:00,21:00", "08:00,12:00,18:00,22:00", "09:00", "07:00,19:00"]
@@ -116,7 +141,7 @@ def _cats_value(raw: str) -> list[str]:
 
 
 register_setting("news_times", "09:00,21:00", "뉴스 정리 시각", validator=lambda raw: _times_value(raw))
-register_setting("news_categories", ["world"], "뉴스 분야",
+register_setting("news_categories", ["world", "korea"], "뉴스 분야",
                  render_fn=lambda v: ", ".join(CATS[c].split()[1] for c in cats_of({"news_categories": v})),
                  validator=lambda raw: _cats_value(raw))
 register_setting("news_min_sources", 3, "뉴스 기준(매체 수)", range_=(2, 5))
@@ -587,22 +612,60 @@ async def top(db, cats: list[str], need: int, *, now: int | None = None, since: 
     return rows[:limit]
 
 
-def line(r, *, cat_mark: bool = False) -> str:
-    """한 줄: 요약 — 매체 · 원문 (링크는 코드가 확인한 피드 주소)."""
-    text = esc(r["ko_line"]) if r["ko_line"] else esc(r["rep_title"][:110]) + " <i>(영문)</i>"
+def _rv(r, key, default=None):
+    """sqlite Row·dict 둘 다 안전하게 (테스트는 dict 를 줄 수 있음)."""
+    try:
+        v = r[key]
+        return default if v is None else v
+    except (KeyError, IndexError):
+        return default
+
+
+def cluster_country(sources: str) -> str:
+    """묶음에 국내 매체가 하나라도 있으면 '국내'(🇰🇷), 아니면 '세계'(🌍)."""
+    return "kr" if any(o in KR_OUTLETS for o in sources.split(",")) else "intl"
+
+
+def line(r, *, cat_mark: bool = False, tz=None) -> str:
+    """한 줄: 분야 이모지 요약 — 매체 · 📊매체수 · 🕐시각 · 원문 (링크는 코드가 확인한 피드 주소).
+    국내(lang='ko')는 제목이 곧 한국어라 '(영문)' 안 붙이고 AI 요약도 안 씀."""
+    if r["ko_line"]:
+        text = esc(r["ko_line"])
+    else:
+        text = esc(r["rep_title"][:110]) + ("" if _rv(r, "lang") == "ko" else " <i>(영문)</i>")
     outs = "·".join(_outlets(r["sources"]))
     mark = next((CATS[c].split()[0] + " " for c in CATS if c in r["cats"].split(",")), "") if cat_mark else ""
     src = r["sources"].split(",")[0]
     url = r["rep_url"] if any(safe_url(r["rep_url"], o) for o in r["sources"].split(",")) else safe_url(r["rep_url"], src)
     link = f' <a href="{esc(url)}">원문</a>' if url else ""
-    return f"{mark}{text} — {esc(outs)}{link}"
+    meta = ""
+    n = _rv(r, "n_sources")
+    if n:
+        meta += f" · 📊{n}곳"
+    seen = _rv(r, "last_seen")
+    if tz is not None and seen:
+        meta += " · 🕐" + datetime.fromtimestamp(int(seen), tz).strftime("%H:%M")
+    return f"{mark}{text} — {esc(outs)}{meta}{link}"
 
 
-def digest_text(rows: list, title: str, cats: list[str]) -> str:
+def digest_text(rows: list, title: str, cats: list[str], tz=None) -> str:
+    """🇰🇷 국내 / 🌍 세계 섹션으로 나눠 꾸민 정리글. 한쪽만 있으면 섹션 머리말은 생략(기존 모양 유지)."""
     many = len(cats) > 1
     head = ("🗞" if many else CATS[cats[0]].split()[0]) + f" <b>{esc(title)}</b>"
-    body = [f"{i}. {line(r, cat_mark=many)}" for i, r in enumerate(rows, 1)]
-    return "\n".join([head, *body, "<i>여러 해외 언론이 함께 다룬 기사만 · 한 줄 요약은 AI</i>"])
+    kr = [r for r in rows if cluster_country(r["sources"]) == "kr"]
+    intl = [r for r in rows if cluster_country(r["sources"]) != "kr"]
+    out, i = [head], 1
+    both = bool(kr) and bool(intl)
+    for label, grp in (("🇰🇷 <b>국내</b>", kr), ("🌍 <b>세계</b>", intl)):
+        if not grp:
+            continue
+        if both:
+            out.append(label)
+        for r in grp:
+            out.append(f"{i}. {line(r, cat_mark=many, tz=tz)}")
+            i += 1
+    out.append("<i>제목·링크만 · 세계 뉴스 한 줄 요약은 AI (국내는 제목 그대로)</i>")
+    return "\n".join(out)
 
 
 def digest_title(cats: list[str], when: str = "") -> str:
@@ -663,7 +726,7 @@ async def _room(svc: Services, bot: Bot, chat_id: int, s: dict, now: int) -> Non
                          limit=min(s["news_digest_k"], left))
         if rows:
             title = digest_title(cats, t) if not imp else "밤사이 주요 뉴스"
-            await _send(svc, bot, chat_id, rows, digest_text(rows, title, cats), "digest", now)
+            await _send(svc, bot, chat_id, rows, digest_text(rows, title, cats, tz=tz), "digest", now)
             left -= len(rows)
         return
     if mode not in ("breaking", "both") or in_quiet(s, dt.hour) or left <= 0:
@@ -675,7 +738,7 @@ async def _room(svc: Services, bot: Bot, chat_id: int, s: dict, now: int) -> Non
                      min_importance=BREAK_IMPORTANCE, limit=1)
     rows = [r for r in rows if r["importance"]]   # 중요도는 AI 가 매긴 것만 (요약 전 묶음은 속보로 안 냄)
     if rows:
-        await _send(svc, bot, chat_id, rows, "🚨 <b>속보</b>\n" + line(rows[0], cat_mark=len(cats) > 1), "breaking", now)
+        await _send(svc, bot, chat_id, rows, "🚨 <b>속보</b>\n" + line(rows[0], cat_mark=len(cats) > 1, tz=tz), "breaking", now)
 
 
 async def run(svc: Services, bot: Bot, now: int | None = None) -> None:

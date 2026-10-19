@@ -84,7 +84,7 @@ async def r_preview(c: PanelCtx) -> Screen:
     s = await c.svc.db.get_settings(c.cid)
     cats = news.cats_of(s)
     rows = await news.headlines(c.svc, cats, news.min_sources(s), s["news_digest_k"])
-    text = (news.digest_text(rows, "미리보기 · " + news.digest_title(cats), cats) if rows
+    text = (news.digest_text(rows, "미리보기 · " + news.digest_title(cats), cats, tz=c.svc.cfg.tz) if rows
             else "🌍 지금은 여러 매체가 함께 다룬 큰 뉴스가 아직 없어요. 10분쯤 뒤에 다시 눌러 보세요.")
     try:
         await c.bot.send_message(c.uid, text, parse_mode="HTML", link_preview_options=NO_PREVIEW)
@@ -128,7 +128,7 @@ async def c_news(ctx) -> None:
     if not rows:
         await ctx.reply("🌍 지금은 여러 매체가 함께 다룬 큰 뉴스가 아직 없어요.")
         return
-    await ctx.reply(news.digest_text(rows, "지금 " + news.digest_title(cats), cats), link_preview_options=NO_PREVIEW)
+    await ctx.reply(news.digest_text(rows, "지금 " + news.digest_title(cats), cats, tz=ctx.svc.cfg.tz), link_preview_options=NO_PREVIEW)
 
 
 # ── AI 도구 (읽기 전용, 공용 캐시 — 방마다 웹 검색 안 함) ──
