@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.error import BadRequest
 
-from . import mediastore, persist
+from . import btnstyle, mediastore, persist
 from .db import register_columns, register_schema
 
 TEXT_LIMIT, CAPTION_LIMIT = 4096, 1024
@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS composer_drafts (
     msg_id     INTEGER                        -- 그룹방에 올린 글 번호 (🎛 버튼 메뉴: 나중에 고치기)
 );
 """)
-register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER"})
+register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER",
+                                      "theme": "TEXT NOT NULL DEFAULT 'signal'"})
 
 
 class HtmlError(ValueError):
@@ -195,9 +196,41 @@ def buttons(d) -> list[list[dict]]:
     return [[b for b in r if isinstance(b, dict) and b.get("t") and b.get("u")] for r in rows if r][:MAX_ROWS]
 
 
-def markup(rows: list[list[dict]]) -> InlineKeyboardMarkup | None:
-    rows = [[InlineKeyboardButton(b["t"], url=b["u"]) for b in r[:MAX_COLS]] for r in rows if r]
-    return InlineKeyboardMarkup(rows) if rows else None
+# 버튼 색 틀(테마) — 방장이 하나만 고르면 코드가 각 버튼 색을 정함 (Bot API 9.4 style)
+THEMES = {"signal": "🚦 신호등", "blue": "🔵 파랑", "mono": "⚪ 무채색", "accent": "🎯 강조"}
+
+
+def theme_of(d) -> str:
+    try:
+        t = d["theme"]
+    except (KeyError, IndexError, TypeError):
+        t = None
+    return t if t in THEMES else "signal"
+
+
+def _btn_style(theme: str, label: str, first: bool) -> str | None:
+    if theme == "blue":
+        return btnstyle.PRIMARY
+    if theme == "mono":
+        return None
+    if theme == "accent":
+        return btnstyle.PRIMARY if first else None
+    return btnstyle._by_words(label) or btnstyle.PRIMARY   # 신호등(기본): 글자 뜻, 없으면 파랑
+
+
+def markup(rows: list[list[dict]], theme: str = "signal") -> InlineKeyboardMarkup | None:
+    out, seen = [], 0
+    for r in rows or []:
+        if not r:
+            continue
+        line = []
+        for b in r[:MAX_COLS]:
+            st = _btn_style(theme, b["t"], seen == 0)
+            line.append(InlineKeyboardButton(b["t"], url=b["u"], style=st))
+            seen += 1
+        if line:
+            out.append(line)
+    return InlineKeyboardMarkup(out) if out else None
 
 
 def limit_of(d) -> int:
@@ -245,7 +278,7 @@ async def remove(db, did: int) -> None:
 # ── 보내기 · 고치기 ───────────────────────────────────────
 async def send(bot, chat_id: int, d, *, silent: bool | None = None):
     """초안을 chat_id 로 (채널 게시·1:1 미리보기 공용 → 미리보기가 실제와 같음)."""
-    kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d)),
+    kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d), theme_of(d)),
               disable_notification=bool(d["silent"] if silent is None else silent))
     body = d["body"] or None
     if d["media_type"] in MEDIA and d["media_id"]:
@@ -255,7 +288,7 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
 
 
 async def edit(bot, chat_id: int, msg_id: int, d) -> None:
-    kb = markup(buttons(d))
+    kb = markup(buttons(d), theme_of(d))
     try:
         if d["media_type"]:
             await bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=d["body"] or None,

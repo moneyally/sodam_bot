@@ -24,8 +24,10 @@ from .llm import LLM
 from .moderation import Moderator
 from .mtproto import MTProto
 from .permissions import Permissions
-from . import casino, cleanup, hooks, namehist, persist
+from . import btnstyle, casino, cleanup, hooks, namehist, persist
 from .ratelimit import ChatRateLimiter
+
+btnstyle.install()   # 인라인 버튼 색(Bot API 9.4) 전역 자동 입히기 — 한 곳에서 전 버튼
 from .services import Services
 from .sports import Sports
 from .util import esc

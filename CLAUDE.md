@@ -266,6 +266,7 @@
 - 방에 올리는 확인 카드(schedule_task·alert_rule)는 `menu.lasting_token` 으로 DB(menu_tokens)에도 저장 — 봇 재시작(배포) 뒤에도 30분 유효
   (실제 사례: OTC 방 예약 카드 → 1분 뒤 배포 재시작 → [✅ 예약] 만료). 예약 deliver room/me(만든 관리자 1:1), action post=정해진 글.
 - 메뉴 버튼은 1:1 전용이지만 방에 올리는 확인 카드(`m:k:<토큰>`)는 방에서 눌림 (2026-09-27 전엔 이것까지 막혀 방 예약·알림 카드가 안 먹혔음 — 테스트는 방에서 누를 것).
+- **🎨 버튼 색(`btnstyle.py`, Bot API 9.4 style, PTB 22.8↑, 2026-10-20)**: `__main__` 이 `btnstyle.install()` 로 InlineKeyboardMarkup 전역을 감싸 **콜백 버튼(소담 UI)만** 글자·접두어로 색 자동(🟢결제·실행·✅ / 🔴밴·삭제·취소·🚫 / 🔵조회·보기·📄 / ⚪나머지). 화면마다 손 안 댐. 이미 style 지정된 버튼(브랜드·composer 테마)은 존중, **url·웹앱 버튼은 안 건드림**(방장이 테마로). 새 화면도 자동으로 색 입혀짐 — 급하면 글자에 뜻 담긴 낱말/이모지. composer(리모컨·채널 글) URL 버튼은 `composer.THEMES` 틀(🚦신호등 기본/🔵파랑/⚪무채색/🎯강조)을 편집화면 🎨 버튼으로 고름(composer_drafts.theme). PTB 는 21→22 올림(style 은 22.x부터, 전체 시험 회귀 없음). tests/test_button_style.py.
 - menu 토큰: 다른 사람이 누르면 '요청한 사람만' 으로 거절하고 토큰은 남김 (방에 뜬 카드를 남이 눌러 무효화 못 하게).
 - 게임 AI 도구 `game_control`(status/stop/restart, panels/wordchain.py): 끝난 게임은 GameManager.recent 에 10분(이유·마지막 낱말) → AI 단서로도 들어감.
   첫 글자는 맞는데 숫자·영어가 섞인 한 덩어리('죄인러브3')는 🤔 (조용히 무시하면 '고장'처럼 보였음 — 실제 사례).
