@@ -959,6 +959,11 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   미리보기는 이용 기간 방만, AI 도구는 이용 중인 방에서만 새로 가져오기·요약(끝난 방·1:1 = 모아 둔 것만, headlines(fetch=False)).
 - 유료 키 후보(오너 결정 대기): newsapi.ai $90/월(이벤트·기사 수), GNews €49.99/월, 네이버 검색 API(무료·약관 확인).
 
+## 💱 실시간 USDT 시세 (`rates.py`, `panels/rates.py`, tests/test_rates.py · 뮤테이션 5개, 2026-10-20 — @ggigq_bot '법무부 USDT 조회봇' 보고)
+- 독립 모듈. 방에서 `50테더`·`249 usdt`·`150000원`·`100만원`·`5만테더` 치면 USDT↔원 변환 ("50 USDT는 약 67,300원"). 방 설정 `rate_enabled` **기본 off**(그룹 훅, 메시지 전체가 숫자+단위일 때만 = 오탐 차단, 같은 사람 2초 쿨다운). `.시세`(별칭 환율·rate, dm_ok)·AI 도구 `rate_convert`(read_only·누구나)는 설정 무관 항상.
+- 시세 = 업비트 `KRW-USDT` trade_price(주) → 빗썸 `USDT_KRW` closing_price(폴백) → 코인게코. 전역 60초 캐시(외부 호출 분당 1회 = 레이트리밋 0.2%), **Origin 헤더 금지**(업비트 느려짐), sanity 800~2500원 밖·전부 실패면 지어내지 말고 None("확인 불가"), 갱신 실패해도 5분 안 직전 값은 stale 로. 업비트 약관 '복제·배포'는 회색지대 → "업비트 기준·참고용" 표기. 안내서 guide/rates.md.
+- 명령 등록은 handlers 가 `rates.register_commands()` (autoreply 등과 같은 자리). 토글 bool 설정은 choices 없이 default 만 (choices 에 bool 넣으면 설정 렌더링이 깨짐 — 실제 겪음).
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
