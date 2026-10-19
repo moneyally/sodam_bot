@@ -33,7 +33,7 @@ CHAT, CHAT2, ADMIN, MEMBER = -100500, -100600, 1, 5
 async def feeds(url, headers):
     if url in BY_URL:
         return 200, BY_URL[url], {"ETag": '"v1"'}
-    return 404, b"", {}
+    return 200, b"<rss/>", {}   # 안 깔린 피드(국내 등)는 빈 피드 → 실패로 안 침
 
 
 class NewsLLM:
@@ -263,7 +263,7 @@ async def llm_output_links_are_stripped_and_budget_failure_falls_back_to_english
 # ── 방마다 보내기 ─────────────────────────────────────────
 @test
 async def digest_at_its_time_once_with_outlets_links_and_no_preview():
-    db, svc, bot = await world(news_mode="digest", news_times=f"{hhmm(NOW - 300)},23:59")
+    db, svc, bot = await world(news_mode="digest", news_times=f"{hhmm(NOW - 300)},23:59", news_categories=["world"])
     await news.run(svc, bot, now=NOW)
     await news.run(svc, bot, now=NOW + 60)                              # 같은 정리 시각 두 번째 = 안 보냄
     [(_, cid, text, kw)] = bot.named("send_message")[:1]
@@ -388,7 +388,7 @@ def find(kb, text):
 
 @test
 async def settings_panel_and_preview_to_admin_dm():
-    db, svc, bot = await world()
+    db, svc, bot = await world(news_categories=["world"])
     q = await press(svc, bot, ADMIN, f"m:g:{CHAT}")
     assert find(q.kb, "🌍 뉴스 알림").callback_data == f"m:nw:{CHAT}"
     q = await press(svc, bot, ADMIN, f"m:nw:{CHAT}")
@@ -437,7 +437,7 @@ async def dot_news(svc, bot, text=".뉴스"):
 
 @test
 async def dot_news_command_shows_now_and_is_rate_limited():
-    db, svc, bot = await world()
+    db, svc, bot = await world(news_categories=["world"])
     msg = await dot_news(svc, bot)
     assert "지금 세계 주요 뉴스" in msg.replies[0] and "BBC·NYT·가디언·알자지라" in msg.replies[0], msg.replies
     assert msg.reply_kws[0]["link_preview_options"].is_disabled
@@ -654,6 +654,82 @@ async def etag_kept_only_after_ingest_and_duplicate_url_adds_category():
     later = [news.Item("bbc", "tech", it.title, it.url + "/", NOW)]
     assert await db.atomic(lambda c: news._ingest(c, later, NOW)) == 0
     assert set((await cluster_of(db, "Central bank"))["cats"].split(",")) == {"world", "economy", "tech"}
+
+
+# ── 🇰🇷 국내 뉴스 (2026-10-20) ────────────────────────────
+KR_MAP = {"https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01": "https://news.sbs.co.kr/news/end.do?id=1",
+          "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml": "https://www.chosun.com/politics/1",
+          "https://rss.donga.com/total.xml": "https://www.donga.com/news/1"}
+KR_STORY = "여야 내년도 예산안 협상 결렬 국회 파행"
+
+
+def kr_feeds(story=KR_STORY):
+    async def http(url, headers):
+        if url in KR_MAP:
+            return 200, rss([(story, KR_MAP[url], NOW)]), {}
+        if url in BY_URL:
+            return 200, BY_URL[url], {"ETag": '"v1"'}
+        return 200, b"<rss/>", {}
+    return http
+
+
+@test
+async def korea_sources_are_safe_and_banned_outlets_excluded():
+    assert "korea" in news.CATS and news.CATS["korea"] == "🇰🇷 국내"
+    # 기본 분야에 국내 포함 (방 설정 안 바꿔도 뜸)
+    db, svc, bot = await world()
+    assert "korea" in news.cats_of(await db.get_settings(CHAT)), "기본 분야에 국내"
+    kr = [s for s in news.SOURCES if s.outlet in news.KR_OUTLETS]
+    assert len(kr) >= 10 and all(s.lang == "ko" and s.cat == "korea" for s in kr), "국내 소스는 전부 ko·korea"
+    assert not any("yna.co.kr" in s.url or "hani.co.kr" in s.url for s in news.SOURCES), "연합·한겨레 제외"
+    assert "hani" not in news.OUTLETS and not any(d.endswith("yna.co.kr") for _, ds in news.OUTLETS.values() for d in ds)
+
+
+@test
+async def cluster_country_splits_domestic_and_world():
+    assert news.cluster_country("sbs,chosun") == "kr" and news.cluster_country("donga") == "kr"
+    assert news.cluster_country("bbc,nyt") == "intl" and news.cluster_country("bbc,sbs") == "kr"
+
+
+@test
+async def line_marks_english_only_not_korean():
+    """ko_line 없는 묶음도 국내(lang ko)면 '(영문)' 안 붙고, 해외(en)면 붙음 + 📊 매체수."""
+    ko = {"ko_line": None, "rep_title": "여야 예산안 처리 두고 국회 파행", "sources": "sbs",
+          "cats": "korea", "rep_url": "https://news.sbs.co.kr/x", "lang": "ko", "n_sources": 2, "last_seen": NOW}
+    en = {**ko, "lang": "en", "rep_title": "Some English headline", "sources": "bbc", "cats": "world",
+          "rep_url": "https://www.bbc.co.uk/x"}
+    assert "(영문)" not in news.line(ko) and "📊2곳" in news.line(ko), news.line(ko)
+    assert "(영문)" in news.line(en), news.line(en)
+
+
+@test
+async def korea_news_in_its_own_section_no_english_tag_no_ai():
+    db, svc, bot = await world()
+    news.http_get = kr_feeds()
+    await news.refresh(svc, {"world", "korea"}, now=NOW)
+    # 국내 묶음 1개 (SBS·조선·동아 3곳) — lang ko 라 제목이 곧 한국어 줄, AI 안 거침
+    kr = await db._all("SELECT * FROM news_clusters WHERE cats='korea'")
+    assert len(kr) == 1 and kr[0]["n_sources"] == 3 and kr[0]["ko_line"] == KR_STORY, [dict(r) for r in kr]
+    await news.summarize(svc, need=2, now=NOW)
+    assert all("sbs" not in c["user"] and "파행" not in c["user"] for c in svc.llm.calls), "국내 제목은 AI 에 안 감"
+    rows = await news.headlines(svc, ["world", "korea"], 3)
+    text = news.digest_text(rows, "지금 " + news.digest_title(["world", "korea"]), ["world", "korea"], tz=fakes.TZ)
+    assert "🇰🇷 <b>국내</b>" in text and "🌍 <b>세계</b>" in text, text
+    assert "예산안" in text and "📊3곳" in text and "SBS·조선일보·동아일보" in text, text
+    # 국내 줄엔 '(영문)' 안 붙음 (제목이 곧 한국어)
+    kr_line = next(x for x in text.split("\n") if "예산안" in x)
+    assert "(영문)" not in kr_line, kr_line
+
+
+@test
+async def domestic_only_digest_has_korea_head_and_no_section_labels():
+    db, svc, bot = await world()
+    news.http_get = kr_feeds()
+    await news.refresh(svc, {"korea"}, now=NOW)
+    rows = await news.headlines(svc, ["korea"], 3)
+    text = news.digest_text(rows, "지금 " + news.digest_title(["korea"]), ["korea"], tz=fakes.TZ)
+    assert text.startswith("🇰🇷 <b>") and "🇰🇷 <b>국내</b>" not in text, "한쪽만이면 섹션 머리말 생략"
+    assert "📊3곳" in text and "🕐" in text
 
 
 async def run_all():
