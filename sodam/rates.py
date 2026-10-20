@@ -168,6 +168,52 @@ async def current_line() -> str:
     return f"💱 지금 <b>1 USDT = {rate:,.0f}원</b>{TAIL}" + (" · 갱신 실패로 직전 값" if stale else "")
 
 
+# ── 즉답 (호칭·'얼마'가 붙어도 AI 안 거치고 코드로) ────────
+# "소담아 500테더 얼마야" 처럼 소담을 불러도 순수 시세 질문이면 AI 왕복 없이 바로 답한다.
+# 호칭·물음말을 떼고 남은 게 '금액+단위'뿐일 때만 (다른 낱말이 섞이면 None → 일반 대화로 AI 로 넘김 = 오탐 0).
+_CALL_RE = re.compile(r"소담아|소담이|소담", re.I)
+_ASK_RE = re.compile(
+    r"얼마에요|얼마예요|얼마냐|얼만가요?|얼마야|얼마는|얼만|얼마|시세가|시세는|시세|환율이|환율은|환율|"
+    r"몇\s*원|지금|요즘|현재가?|알려줘|알려|변환해?\s*줘?|변환|바꿔\s*줘?|바꿔|좀|이야|인가요?|해\s*줘|줘", re.I)
+_TRAIL_RE = re.compile(r"[\s?!~.]+$")
+
+
+def fast_body(text: str) -> str | None:
+    """호칭·물음말을 뗀 뒤 남은 게 순수 '금액+단위'면 그 조각, 아니면 None."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    t = _CALL_RE.sub(" ", t)
+    t = _ASK_RE.sub(" ", t)
+    t = _TRAIL_RE.sub("", " ".join(t.split())).strip()
+    return t if t and _RE_STRICT.match(t) else None
+
+
+async def fast_reply(svc, bot, msg, text: str) -> bool:
+    """그룹에서 호칭+시세질문이면 AI 전에 코드로 즉답. True 면 handlers 가 AI 를 안 부른다."""
+    if msg.chat_id > 0 or not msg.from_user or msg.from_user.is_bot:
+        return False
+    s = await svc.db.get_settings(msg.chat_id)
+    if not s.get("rate_enabled"):
+        return False
+    body = fast_body(text)
+    if body is None:
+        return False
+    now = time.time()
+    key = (msg.chat_id, msg.from_user.id)
+    if now - _last.get(key, 0.0) < USER_GAP:
+        return True   # 쿨다운: 조용히 삼킴 (AI 로 안 넘김)
+    out = await reply_for(body, strict=True)
+    if out is None:
+        return False
+    _last[key] = now
+    try:
+        await msg.reply_text(out, parse_mode="HTML")
+    except Exception as e:   # noqa: BLE001
+        log.warning("시세 즉답 못 보냄 %s: %s", msg.chat_id, e)
+    return True
+
+
 # ── 그룹 훅 (맨 숫자) ─────────────────────────────────────
 async def on_message(svc, bot, msg, role) -> None:
     if msg.chat_id > 0 or not msg.from_user or msg.from_user.is_bot or not (msg.text or "").strip():

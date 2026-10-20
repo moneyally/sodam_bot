@@ -649,6 +649,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # 게임 중이면 게임 답이 먼저 (AI 답에 답장으로 단 단어도 게임이 받음 → AI 가 대신 진행하지 않게)
     if svc.games.is_active(chat_id) and await svc.games.on_text(msg, text):
         return
+    # 💱 시세 즉답: "소담아 500테더 얼마야"처럼 호칭이 붙어도 순수 시세 질문이면 AI 왕복 없이 코드로 바로 (게임 다음·AI 앞)
+    if await _rates.fast_reply(svc, bot, msg, text):
+        return
     # 봇 메시지에 답장: AI 답(ai_turns 에 기록된 메시지)일 때만 호출. 게임 결과·경고·인사에 단 답장은 호출 아님
     r = msg.reply_to_message
     reply_is_ai = not (r and r.from_user and r.from_user.id == bot.id) or \
