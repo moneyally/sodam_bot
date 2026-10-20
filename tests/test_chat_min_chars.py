@@ -51,6 +51,36 @@ async def five_chars_rule_counts_only_long_messages():
 
 
 @test
+async def over_text_counts_people_above_threshold():
+    db = await setup()   # 가나 7개, 다라 3개
+    t2 = await stats.over_text(db, CHAT, TZ, "오늘", 2)
+    assert "2개 이상 친 사람 2명" in t2 and "가나(7)" in t2 and "다라(3)" in t2, t2
+    t4 = await stats.over_text(db, CHAT, TZ, "오늘", 4)
+    assert "4개 이상 친 사람 1명" in t4 and "가나(7)" in t4 and "다라" not in t4, t4
+    t10 = await stats.over_text(db, CHAT, TZ, "오늘", 10)
+    assert "10개 이상 친 사람은 없어요" in t10, t10
+
+
+@test
+async def over_text_respects_min_chars_rule():
+    db = await setup()
+    await db.set_setting(CHAT, "chat_min_chars", 5)   # 가나 1개(긴 글만), 다라 3개
+    t = await stats.over_text(db, CHAT, TZ, "오늘", 2)
+    assert "2개 이상 친 사람 1명" in t and "다라(3)" in t and "가나" not in t, t
+
+
+@test
+async def chat_stats_tool_over_param():
+    from sodam import tools
+    db = await setup()
+    svc = await make_svc(db, admins=set())
+    ctx = SimpleNamespace(svc=svc, chat_id=CHAT, caller=fake_user(1, "가나"),
+                          name_notes=[], bot=SimpleNamespace(id=999))
+    out = await tools.t_chat_stats(ctx, {"over": 2, "period": "오늘"})
+    assert "2개 이상 친 사람 2명" in out, out
+
+
+@test
 async def setting_shows_on_report_screen_with_presets():
     db = await setup()
     svc = await make_svc(db, admins={9})

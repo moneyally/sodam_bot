@@ -62,6 +62,28 @@ async def member_text(db: DB, chat_id: int, tz, period: str, user_id: int, name:
     return f"📊 {esc(name)} — {label} 채팅 {n}개{_rule(m)} · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
 
 
+async def over_text(db: DB, chat_id: int, tz, period: str, threshold: int) -> str:
+    """'오늘 N개 넘는 사람 몇 명' — 그 기간 N개 이상 친 사람 수 + 참여 + 해당하는 사람 이름 (코드 집계, AI·run_code 불필요).
+    2026-10-20 뉴월드 '100개 넘는 사람 몇명' → 소담이 run_code 로 세려다 멤버 권한에 막힘 → chat_stats 로 바로."""
+    since, until, label = period_range(period, tz)
+    end = until if until is not None else 1 << 62
+    thr = max(1, int(threshold))
+    m = await min_chars(db, chat_id)
+    row = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? "
+                        "AND ts<? AND is_bot=0 " + count_filter() + " GROUP BY user_id) WHERE c>=?",
+                        (chat_id, since, end, *m.args, thr))
+    cnt = int(row["n"]) if row else 0
+    ppl = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 "
+                        + count_filter(), (chat_id, since, end, *m.args))
+    total = int(ppl["n"]) if ppl else 0
+    if cnt == 0:
+        return f"📊 {label} 채팅 {thr}개 이상 친 사람은 없어요{_rule(m)} (참여 {total}명)"
+    rows = await db.top_chatters(chat_id, since, min(cnt, 10), until, m)
+    names = ", ".join(f"{esc(_name(r))}({r['n']})" for r in rows if r["n"] >= thr)
+    tail = f" — {names}{' …' if cnt > 10 else ''}" if names else ""
+    return f"📊 {label} 채팅 {thr}개 이상 친 사람 {cnt}명{_rule(m)} (참여 {total}명 중){tail}"
+
+
 async def summary_text(db: DB, chat_id: int, tz, period: str = "오늘") -> str:
     since, until, label = period_range(period, tz)   # '어제' = 어제 하루만 (오늘 것 안 섞임)
     m = await min_chars(db, chat_id)
