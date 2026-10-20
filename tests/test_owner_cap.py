@@ -70,7 +70,7 @@ async def cap_rule_itself():
     assert over_cap("image_daily", 6) and not over_cap("image_daily", 5) and not over_cap("flood_count", 99)
     assert not over_cap("image_daily", True), "bool 은 int 로 치지 않음"
     assert OWNER_CAP == {"image_daily": 5, "web_search_daily": 30, "video_weekly": 6, "video_seconds": 6,
-                         "run_code_daily": 30}   # 영상: test_videogen · 코드 실행: test_runcode
+                         "run_code_daily": 100}   # 영상: test_videogen · 코드 실행: test_runcode (2026-10-21 30→100)
 
 
 if __name__ == "__main__":
