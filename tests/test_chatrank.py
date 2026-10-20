@@ -449,5 +449,15 @@ async def period_arg_picks_period_for_one_look_without_changing_room_default():
     assert "이번 주" in e.bot.named("send_message")[0][2], e.bot.named("send_message")[0][2]
 
 
+@test
+async def top_over_ten_renders_without_icon_indexerror():
+    # 라이브 버그(2026-10-20): TOP_MAX 20 인데 ICONS 10개 → top>10·아이콘 빈 방에서 IndexError 로 .순위 깨짐
+    c = cr.Cfg(top=20)   # icons=[] 기본
+    assert c.icon(9) in cr.ICONS and c.icon(10) == "11." and c.icon(19) == "20.", "11~20위는 번호로"
+    rows = [(f"user{i}", 200 - i) for i in range(20)]
+    out = cr.render(c, "오늘", "10/20", rows)   # IndexError 안 나야
+    assert "11." in out and "20." in out and "user19" in out, out
+
+
 if __name__ == "__main__":
     run_all()
