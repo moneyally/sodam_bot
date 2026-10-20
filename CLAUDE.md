@@ -552,6 +552,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **📏 채팅 집계 최소 글자 수** 방 설정 chat_min_chars(0=전부, 📊 화면 프리셋 2·3·5·10, 2026-10-10 뉴월드 '5글자부터'): 띄어쓰기·줄바꿈 빼고 셈, db.MIN_CHARS 를
   top_chatters·chat_totals·hourly_counts·stats.member_text 가 같이 씀 (.랭킹·.통계·하루 리포트·chat_stats). tests/test_chat_min_chars.py.
 - 채팅 집계 chat_stats name('나'·이름) = 그 기간 수·순위 (상위 5명만 줘서 랭킹 밖 사람을 0개로 지어내던 것).
+  **over=N** = 'N개 이상(넘는) 친 사람 몇 명' 을 코드가 바로 셈(`stats.over_text`, 참여 수·해당 사람 이름, min_chars·no_repeat 반영) — 멤버도 되고 run_code 불필요 (2026-10-20 뉴월드 '100개 넘는 사람 몇명' → 소담이 run_code 로 세려다 멤버 권한에 막힘). tests/test_chat_min_chars.py over_*.
 - 재시작: 실행 중 이어 보낸 말도 ai_queue 줄에 덧붙임(aiqueue.append) · 다시 보낸 답은 실제 글로 기록 + ai_turns. 1.5초 몰아 받기·사진 3분 기억·끝난 게임 10분은
   메모리 그대로 (실측상 재시작 5초라 영향 거의 없음).
 

@@ -285,6 +285,14 @@ ME_WORDS = {"나", "내", "저", "제", "본인", "me", "나는", "내꺼", "제
 async def t_chat_stats(ctx: ToolCtx, a: dict) -> str:
     period = a.get("period", "오늘")
     who = str(a.get("name") or "").strip()
+    over = a.get("over")
+    if over and not who:                                 # 'N개 이상(넘는) 친 사람 몇 명' — 코드 집계 (run_code 없이)
+        try:
+            thr = max(1, int(over))
+        except (TypeError, ValueError):
+            thr = 0
+        if thr:
+            return _plain(await stats.over_text(ctx.svc.db, ctx.chat_id, ctx.svc.cfg.tz, period, thr))
     if who:                                              # 한 사람: 그 기간 수·순위 (랭킹 밖이어도 정확히)
         if who.lower() in ME_WORDS:
             uid, label = ctx.caller.id, display_name(ctx.caller.first_name, ctx.caller.last_name, ctx.caller.username)
@@ -1399,8 +1407,10 @@ TOOLS: list[Tool] = [
     Tool("get_my_requests", "지금 말한 사람이 봇에게 요청했던 기록을 조회한다. '내가 뭐 요청했지' 같은 질문에 반드시 사용.",
          {"period": PERIOD}, [], t_my_requests),
     Tool("chat_stats", "방 채팅 통계와 수다 랭킹을 조회한다 ('어제' = 어제 하루만). 한 사람의 수·순위('나 몇 개야'·'이분 채팅집계')는 "
-         "name 에 그 사람 (말한 본인은 '나', '이분'·'걔'는 답장 대상이나 방금 말한 사람 이름).",
+         "name 에 그 사람 (말한 본인은 '나', '이분'·'걔'는 답장 대상이나 방금 말한 사람 이름). "
+         "'N개 이상(넘는) 친 사람 몇 명?' 은 over 에 N (코드가 바로 세므로 run_code 쓰지 말 것).",
          {"period": PERIOD, "name": {"type": "string", "description": "한 사람만: 이름·@아이디·ID 또는 '나'"},
+          "over": {"type": "integer", "description": "'N개 이상(넘는) 친 사람 몇 명?' 질문이면 그 숫자 N (예: '오늘 100개 넘는 사람 몇명' → 100)"},
           "show": {"type": "boolean", "description": "'통계표·랭킹표·순위표·표로 보여줘' 면 true → 표(통계+랭킹 10위)를 방에 그대로 올림"},
           **ROOM_PARAM}, [],
          room_scoped(t_chat_stats)),
