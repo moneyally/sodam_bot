@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Callable
@@ -1131,6 +1132,13 @@ async def c_lookup(ctx: CmdCtx) -> None:
                 return
             if rows:
                 uid = rows[0]["user_id"]
+            elif (handle := arg.lstrip("@")) and re.fullmatch(r"[A-Za-z0-9_]{4,32}", handle):
+                # 이 방 멤버가 아니어도 @아이디로 조회 (수배 명단은 보통 다른 방 사람) → 기록 전체 → 없으면 텔레그램 직접
+                g = await svc.db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (handle,))
+                if g:
+                    uid = g["user_id"]
+                else:
+                    uid, _ = await namehist.resolve_remote(svc, "@" + handle, ctx.user.id)
     if not uid:
         await ctx.reply("조회할 사람을 <code>@아이디</code>·숫자ID·<code>#수배번호</code>로 적거나, 그 사람 글에 답장해주세요.")
         return

@@ -62,6 +62,19 @@ async def anyone_lookup_posts_card_with_evidence_button():
 
 
 @test
+async def lookup_by_username_when_not_room_member():
+    # 수배 명단은 보통 다른 방 사람 → 이 방 멤버가 아니어도 @아이디로 조회돼야 함 (일루왕 2026-10-21)
+    db, svc, bot = await setup()
+    await cmd(svc, bot, A, STRONG, ".박제 777111 코인 사기")        # 이 방 멤버 아닌 사람 등재
+    await db.upsert_user(fake_user(777111, "사기꾼", username="scamx99"))
+    bot.calls.clear()
+    r = await cmd(svc, bot, A, MEMBER, ".조회 @scamx99")            # @아이디로 (방 멤버 아님)
+    cards = [c for c in bot.named("send_message") if "수배" in c[2]]
+    assert cards, (r, bot.named("send_message"))
+    _drain()
+
+
+@test
 async def open_close_toggles_card_in_place():
     db, svc, bot = await setup()
     await register_with_evidence(svc, bot)
