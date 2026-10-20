@@ -25,9 +25,9 @@ from ..workshop import client, snapshot
 
 log = logging.getLogger(__name__)
 
-register_setting("run_code_members", False, "🧪 멤버도 코드 실행(계산·차트) 쓰기")
-register_setting("run_code_daily", 30, "🧪 코드 실행 하루 횟수", range_=(0, 30))
-OWNER_CAP["run_code_daily"] = 30          # 방 관리자는 줄이기만, 늘리는 건 오너
+register_setting("run_code_members", True, "🧪 멤버도 코드 실행(계산·차트) 쓰기")   # 2026-10-21 오너: 기본 켬 (샌드박스·멤버는 메시지 원문 없음)
+register_setting("run_code_daily", 100, "🧪 코드 실행 하루 횟수", range_=(0, 100))
+OWNER_CAP["run_code_daily"] = 100         # 방 관리자는 줄이기만, 늘리는 건 오너 (2026-10-21 30→100 상향)
 
 PHOTO_EXT = (".png", ".jpg", ".jpeg", ".gif")
 SRC_PREFIX = "src_"                        # 이 이름으로 저장한 그림 = 스티커·움프 원본 (방에 안 올림)
@@ -70,7 +70,7 @@ async def t_run_code(ctx: ToolCtx, a: dict) -> str:
         return why
     svc = ctx.svc
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
-    limit = min(int(ctx.settings.get("run_code_daily", 30)), OWNER_CAP["run_code_daily"])
+    limit = min(int(ctx.settings.get("run_code_daily", 100)), OWNER_CAP["run_code_daily"])
     if ctx.role < Role.OWNER and await svc.db.counter(day, ctx.chat_id, COUNTER) >= limit:
         return f"오늘 이 방 코드 실행 한도({limit}번)를 다 썼음. 내일 다시 된다고 안내할 것."
     files: dict[str, bytes] = {}
@@ -144,7 +144,7 @@ async def fire_recipe(svc, bot, row, dest: int, title: str) -> bool:
     cid = row["chat_id"]
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
     s = await svc.db.get_settings(cid)
-    if await svc.db.counter(day, cid, COUNTER) >= min(int(s.get("run_code_daily", 30)), OWNER_CAP["run_code_daily"]):
+    if await svc.db.counter(day, cid, COUNTER) >= min(int(s.get("run_code_daily", 100)), OWNER_CAP["run_code_daily"]):
         return False
     files = {"room.db": await snapshot.build(svc.db, cid, True, svc.cfg.tz)} if cid < 0 else {}
     res = await client.run(f"c{abs(cid)}", row["text"] or "", files)   # WorkshopDown 은 cron.fire 가 실패로 기록

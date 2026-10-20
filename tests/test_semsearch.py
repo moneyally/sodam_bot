@@ -79,6 +79,19 @@ async def keyword_plus_meaning_rrf_same_room_only():
 
 
 @test
+async def skips_embedding_when_keyword_fills_page():
+    # 2026-10-21 오너 '검색 느림': 단어 검색이 한 페이지(10개)를 채우면 임베딩(OpenAI 왕복) 생략 → 즉답
+    r = await world()
+    for i in range(12):
+        await say(r, f"그 업체 먹튀 확정 {i}번이요")
+    await index_all(r)
+    r.calls.clear()
+    res = await ask(r, BOSS, [tool_call("search_chat", {"keyword": "먹튀", "days": 7})])
+    assert "먹튀 확정" in res[0], res
+    assert not any(p == "embed_query" for p, _ in r.calls), r.calls   # 임베딩 호출 없어야 함
+
+
+@test
 async def falls_back_to_keywords_without_vec_or_on_error():
     r = await world(vec=False)
     await say(r, "그 업체 먹튀 확정이래요")
