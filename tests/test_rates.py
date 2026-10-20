@@ -188,6 +188,52 @@ async def group_hook_user_cooldown():
     assert m2.replies == [], "같은 사람 2초 안엔 또 안 답 (도배 방지)"
 
 
+# ── 즉답 (호칭·'얼마'가 붙어도 코드로) ────────────────────
+@test
+async def fast_body_strips_call_and_question():
+    # 호칭·물음말 떼면 순수 금액+단위 → 그 조각
+    assert rates.fast_body("소담아 500테더 얼마야") == "500테더"
+    assert rates.fast_body("소담아 500테더 얼마야").replace(" ", "") == "500테더"
+    assert rates.fast_body("500테더 얼마") == "500테더"
+    assert rates.fast_body("100만원 얼마야") == "100만원"
+    assert rates.fast_body("소담아 0.4테더 시세") == "0.4테더"   # 소수점 안 깨짐
+    assert rates.fast_body("2만달러 환율 알려줘") == "2만달러"
+
+
+@test
+async def fast_body_ignores_mixed_and_plain():
+    for t in ("소담아 뭐해", "오늘 50명 왔어", "테더 어때 요즘", "소담아 500테더 사고싶어", "안녕"):
+        assert rates.fast_body(t) is None, t
+
+
+@test
+async def fast_reply_answers_addressed_query():
+    _reset(FakeClient(upbit=1346))
+    m = _Msg("소담아 500테더 얼마야")
+    done = await rates.fast_reply(_Svc(True), None, m, m.text)
+    assert done is True and m.replies and "673,000원" in m.replies[0], m.replies
+
+    # 꺼진 방은 즉답 안 함 → AI 로 넘어가게 False
+    off = _Msg("소담아 500테더 얼마야")
+    assert await rates.fast_reply(_Svc(False), None, off, off.text) is False
+    assert off.replies == []
+
+    # 섞인 말은 즉답 아님 → False (AI 가 판단)
+    mixed = _Msg("소담아 500테더 사면 얼마 벌어?")
+    assert await rates.fast_reply(_Svc(True), None, mixed, mixed.text) is False
+
+
+@test
+async def fast_reply_user_cooldown():
+    _reset(FakeClient(upbit=1346))
+    svc = _Svc(True)
+    m1 = _Msg("소담아 500테더 얼마야")
+    assert await rates.fast_reply(svc, None, m1, m1.text) is True and m1.replies
+    m2 = _Msg("소담아 100테더 얼마야")
+    done = await rates.fast_reply(svc, None, m2, m2.text)
+    assert done is True and m2.replies == [], "2초 안엔 조용히 삼킴(AI 로도 안 넘김)"
+
+
 # ── AI 도구 ───────────────────────────────────────────────
 @test
 async def ai_tool_rate_convert():
