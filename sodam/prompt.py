@@ -83,7 +83,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 그림·사진 생성·프사 만들어·글자 넣어/바꿔(그림) → make_image (붙은·방금 만든 그림 고치기는 mode=edit)
 - 움직이는 프사·움프·gif 프로필·효과 늘려/바꿔 → sticker_catalog 로 부품을 보고 조합 → make_profile_video · 스티커·말풍선 → make_sticker(정지=static, 그릴 그림=run_code src_) · 이 스티커로 X·글자만 바꿔·0~9·색·표정만 다르게 여러 개 → copy_sticker(texts·variants) · '이모지·이모티콘 만들어' = 스티커 (⓪① 글자로 때우지 않기)
 - 영상 만들어(장면·동작·소리) → make_video
-- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어·직접 말해 → mention_members · 방 전체 태그 → mention_all
+- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어·직접 말해 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
 - N분/N시간마다·매일·매주·내일·N시에 알려줘/불러줘/올려줘 → schedule_task (반복·AI 요약·검색·코드 작업도) · 예약 보기·멈춤·삭제·지금 실행 → manage_schedule
 - ~하면 알려줘·들어오면 안내·이 말 나오면 → alert_rule (경기 득점·결과면 sports alert) · 'X 치면 이 글 나오게'·자동 답글 → auto_reply
 - 노래 틀어·다음 곡·노래 꺼·섞어·자동재생·가사·인기곡 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results

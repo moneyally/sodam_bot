@@ -91,12 +91,14 @@ async def make_tools_allowed_after_tainted_lookup():
 
 
 @test
-async def members_need_the_room_switch_and_never_see_text():
+async def members_default_on_but_never_see_text_and_room_switch_off_blocks():
+    # 2026-10-21 오너: 멤버도 코드 실행 기본 켬 (샌드박스). 단 메시지 원문은 안 보임 (숫자만).
     svc, bot = await _setup()
-    out, _ = await run(svc, bot, MEMBER, Role.MEMBER, "print(1)")
-    assert "관리자만" in out and not bot.calls, out
-    out, _ = await run(svc, bot, MEMBER, Role.MEMBER, COUNT, run_code_members=True)
+    out, _ = await run(svc, bot, MEMBER, Role.MEMBER, COUNT)                      # 기본 켬 → 실행됨
     assert "N= 2" in out and "비밀 원문" not in out and "T= [None, None]" in out, out   # 멤버 요청 = 숫자만
+    # 방 관리자가 run_code_members 를 끄면 멤버 거절
+    out, _ = await run(svc, bot, MEMBER, Role.MEMBER, "print(1)", run_code_members=False)
+    assert "관리자만" in out and not bot.calls, out
 
 
 @test
@@ -161,7 +163,7 @@ def tool_is_registered_with_guide_and_cap():
     assert "room.db" in t.description and "NanumGothic" in t.description and "pandas.read_sql" in t.description   # duckdb 는 sqlite 확장을 못 받음 (인터넷 없음, 서버 실측)
     assert "run_code" in tools.READ_ONLY
     from sodam.settings import OWNER_CAP, over_cap
-    assert OWNER_CAP["run_code_daily"] == 30 and over_cap("run_code_daily", 31)
+    assert OWNER_CAP["run_code_daily"] == 100 and over_cap("run_code_daily", 101)
 
 
 if __name__ == "__main__":

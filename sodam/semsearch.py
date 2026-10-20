@@ -68,7 +68,9 @@ async def index_new(svc, now: float | None = None) -> int:
 async def search(svc, chat_id: int, query: str, since: int, limit: int = 10) -> list:
     """단어 + 뜻 합친 결과 (messages 행 + username/first_name, 뜻으로만 찾은 글은 'semantic' 표시)."""
     words = list(await svc.db.search_messages(chat_id, query, since, POOL))
-    if not enabled(svc):
+    # 단어 검색이 한 페이지를 채우면 임베딩(OpenAI 왕복)·뜻검색을 건너뛴다 → 흔한 검색은 즉답.
+    # 단어로 거의 못 찾을 때만(뜻으로 찾을 값어치가 있을 때) 임베딩한다. (2026-10-21 오너 '검색 느림')
+    if not enabled(svc) or len(words) >= limit:
         return words[:limit]
     try:
         await _table(svc.db)
