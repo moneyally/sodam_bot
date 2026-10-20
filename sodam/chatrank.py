@@ -81,7 +81,8 @@ class Cfg:
     reset_at: int = 0      # 채팅 수 초기화 시각 — 이 뒤 글만 셈 (글은 안 지움: AI 기억·검색·사칭 확인 기록 그대로). 0 = 안 함
 
     def icon(self, i: int) -> str:
-        return self.icons[i] if i < len(self.icons) else ICONS[i]
+        # 11~20위는 ICONS(10개) 밖이라 번호로 (TOP_MAX 20 인데 아이콘 비거나 짧은 방 IndexError 방지)
+        return self.icons[i] if i < len(self.icons) else (ICONS[i] if i < len(ICONS) else f"{i + 1}.")
 
     def prize(self, i: int) -> str:
         return self.prizes[i] if i < len(self.prizes) else ""

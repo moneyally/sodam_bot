@@ -156,6 +156,7 @@
   바로 저장 안 하는 이유: 자료는 AI 가 모든 멤버에게 사실처럼 전하는 곳이라 숨은 지시·오해가 조용히 규칙이 되면 안 됨.
 - `.도움말`/`/help`/❓ 메뉴 = "소담에게 이렇게 말해보세요" 예시(`commands.EXAMPLES_MEMBER/ADMIN`, 관리자 = 방 역할 또는 1:1 에선
   어느 방이든 관리자·오너). 명령어 전체는 `.명령어` · 메뉴 [📋 명령어 전체](m:helpc). 메뉴 화면은 `panels/help.py` 가 m:help 를 덮어씀.
+  **새 명령·기능을 추가하면 `commands.EXAMPLES_MEMBER/ADMIN` 에도 예시 한 줄 넣을 것** (안 넣으면 `.명령어` 엔 나와도 `.도움말` 엔 안 보임 — 2026-10-20 오너 '시세·수배 등 왜 도움말에 없냐'). tests/test_fix_memory_help.py 가 시세·수배·뉴스·음악·순위 예시 존재를 검사.
 - 봇 종료: `memory.shutdown` 이 `casino.SHUTDOWN_HOOKS`(post_shutdown, DB 닫기 전)에 걸려 기억 정리·끼어들기 뒷작업을 취소·대기
   ('Task was destroyed … _extract_later' 경고 없앰), 그 뒤 spawn 은 안 만듦.
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
