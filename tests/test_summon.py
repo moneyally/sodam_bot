@@ -84,6 +84,18 @@ async def save_load_delete_list():
 
 
 @test
+async def migrate_chat_keeps_lists_and_does_not_crash():
+    # summon_members 엔 chat_id 가 없으니 migrate 대상이면 안 됨 (그룹→슈퍼그룹 이사 때 터졌던 버그)
+    db, svc, bot = await setup()
+    lid = await summon.save_list(db, CHAT, "단골", [A, B], ADMIN)
+    NEW = -1009999999999
+    await db.migrate_chat(CHAT, NEW)
+    rows = await summon.lists(db, NEW)
+    assert rows and rows[0]["name"] == "단골", rows            # 명단이 새 방 번호로 따라감
+    assert await summon.list_ids(db, NEW, rows[0]["id"]) == [A, B]   # 멤버도 유지
+
+
+@test
 async def fire_posts_mentions_in_batches():
     db, svc, bot = await setup()
     summon.BATCH = 2

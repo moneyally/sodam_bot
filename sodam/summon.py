@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS summon_members (
     user_id INTEGER NOT NULL,
     PRIMARY KEY (list_id, user_id)
 );
-""", migrate={"summon_members": "plain"})
+""")   # chat_id 칸 없음 → chat_id 이사(migrate_chat) 대상 아님. list_id 는 그대로라 저절로 따라감.
 
 MAX_PICK = 200        # 한 번에 부를 수 있는 최대 인원
 BATCH = 20            # 한 메시지에 넣는 멘션 수 (텔레그램 엔티티 100 제한 안)
