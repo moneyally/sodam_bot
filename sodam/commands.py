@@ -9,7 +9,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, TelegramError
 
-from . import fedban, free, knowledge, menu, namehist, persist, stats, subscription
+from . import fedban, free, knowledge, menu, namehist, persist, protect, stats, subscription
 from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
@@ -136,7 +136,7 @@ EXAMPLES_MEMBER: list[tuple[str, list[str]]] = [
     ("🎮 게임", ["끝말잇기 시작"]),
 ]
 EXAMPLES_ADMIN: list[tuple[str, list[str]]] = [
-    ("👮 관리", ["철수 최근 경고 내역 보여줘"]),
+    ("👮 관리", ["철수 최근 경고 내역 보여줘", "쓰잔 밴 못하게 보호해줘"]),
     ("🚨 수배", ["이 사람 사기꾼이야 수배 올려 (답장)"]),
     ("💬 자동답글", ["'공지' 치면 이 글 자동으로 보내줘 (답장)"]),
     ("📚 자료 저장", ["광고는 관리자에게 먼저 말하기, 방 규칙으로 기억해"]),
@@ -755,6 +755,40 @@ async def c_freelist(ctx: CmdCtx) -> None:
     names = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
              f"(<code>{r['user_id']}</code>)" for r in rows]
     await ctx.reply("🕊️ <b>자유 멤버</b> (자동 통제 안 받음)\n" + "\n".join(names))
+
+
+async def c_protect(ctx: CmdCtx) -> None:
+    """보호 멤버 지정: 소담을 통한 밴·뮤트·경고·강퇴를 거절 (sodam/protect.py). 텔레그램 앱 직접 밴은 못 막음."""
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    await protect.add(ctx.svc.db, ctx.chat_id, uid, ctx.user.id)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "protect", "지정")
+    await ctx.reply(f"🛡️ {mention(uid, name)}님을 보호 멤버로 지정했어요. 이제 관리자가 소담으로 밴·뮤트·경고·강퇴를 "
+                    "시도해도 소담이 거절해요. (오너는 제외 · 텔레그램 앱에서 직접 밴하는 건 못 막아요 — 그건 관리자 승격으로)")
+
+
+async def c_unprotect(ctx: CmdCtx) -> None:
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if not await protect.remove(ctx.svc.db, ctx.chat_id, uid):
+        await ctx.reply(f"{mention(uid, name)}님은 보호 멤버가 아니에요.")
+        return
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "protect", "해제")
+    await ctx.reply(f"{mention(uid, name)}님 보호 멤버를 해제했어요. 이제 다시 제재받을 수 있어요.")
+
+
+async def c_protectlist(ctx: CmdCtx) -> None:
+    rows = await protect.members(ctx.svc.db, ctx.chat_id)
+    if not rows:
+        await ctx.reply("보호 멤버가 없어요. <code>.보호 @아이디</code> 로 지정해요.")
+        return
+    names = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
+             f"(<code>{r['user_id']}</code>)" for r in rows]
+    await ctx.reply("🛡️ <b>보호 멤버</b> (소담으로 제재 불가)\n" + "\n".join(names))
 
 
 async def c_resetwarns(ctx: CmdCtx) -> None:
@@ -1468,6 +1502,11 @@ COMMANDS: list[Cmd] = [
     Cmd(("free해제", "unfree", "프리해제"), c_unfree, Role.ADMIN, usage="@user", help="자유 멤버 해제", group="관리자",
         right="restrict"),
     Cmd(("free목록", "freelist", "프리목록"), c_freelist, Role.ADMIN, help="자유 멤버 목록", group="관리자"),
+    Cmd(("보호", "protect"), c_protect, Role.ADMIN, usage="@user", help="보호 멤버: 소담으로 제재 못 하게",
+        group="관리자", right="restrict"),
+    Cmd(("보호해제", "unprotect"), c_unprotect, Role.ADMIN, usage="@user", help="보호 멤버 해제", group="관리자",
+        right="restrict"),
+    Cmd(("보호목록", "protectlist"), c_protectlist, Role.ADMIN, help="보호 멤버 목록", group="관리자"),
     Cmd(("밴", "ban", "벤"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자", right="restrict"),
     Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자", right="restrict"),
     Cmd(("킥", "kick", "강퇴", "강제퇴장"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자", right="restrict"),

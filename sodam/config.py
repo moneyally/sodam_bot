@@ -60,6 +60,8 @@ class Config:
     # MTProto 도우미 (sodam/mtproto.py, 선택): my.telegram.org 에서 받은 API ID/HASH. 비우면 꺼짐
     mtproto_api_id: int = 0
     mtproto_api_hash: str = ""
+    # 로마자/영어 호출어 (외국인 번역기 — 'Sodam help me …'), 대소문자 무시. 비우면 영어 호출 꺼짐
+    call_names_en: tuple[str, ...] = ("sodam",)
 
 
 def load_config() -> Config:
@@ -76,6 +78,9 @@ def load_config() -> Config:
     bot_name = os.getenv("BOT_NAME", "").strip() or "소담"
     raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or f"{bot_name}아,{bot_name}이,{bot_name}"
     names = [n.strip() for n in raw_names.split(",") if n.strip()]
+    # 외국인(번역기)이 영어로 'Sodam help me …' 처럼 부르면 호출로 인식 (대소문자 무시)
+    raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or "sodam"
+    en_names = [n.strip().lower() for n in raw_en.split(",") if n.strip()]
     log_chat = os.getenv("LOG_CHAT_ID", "").strip()
     return Config(
         telegram_token=token,
@@ -84,6 +89,7 @@ def load_config() -> Config:
         bot_name=bot_name,
         # 긴 이름부터 비교해야 "소담아"가 "소담"보다 먼저 잡힘
         call_names=tuple(sorted(names, key=len, reverse=True)),
+        call_names_en=tuple(sorted(en_names, key=len, reverse=True)),
         model=os.getenv("OPENAI_MODEL", "gpt-5.4").strip(),
         guard_model=os.getenv("OPENAI_GUARD_MODEL", "gpt-5.4-mini").strip(),
         reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "").strip(),

@@ -102,6 +102,21 @@ def call_name_third_person_not_addressed():
         assert addressed_to_bot(msg, t, NAMES, BOT)[0] is False, t
 
 
+@test
+def english_call_name_from_foreigner():
+    # 외국인(번역기)이 영어로 'Sodam help me …' 라고 부르면 호출 — 일루왕 2026-10-20 (대소문자 무시)
+    msg = SimpleNamespace(reply_to_message=None)
+    EN = ("sodam",)
+    assert addressed_to_bot(msg, "Sodam help me for my korean sentences", NAMES, BOT, en_names=EN) \
+        == (True, "help me for my korean sentences")
+    assert addressed_to_bot(msg, "please sodam translate this", NAMES, BOT, en_names=EN)[0] is True
+    assert addressed_to_bot(msg, "SODAM 도와줘", NAMES, BOT, en_names=EN)[0] is True
+    # @아이디·링크 조각은 영어 호출로 안 봄 (별도 처리)
+    assert addressed_to_bot(msg, "t.me/sodam_shop 광고", NAMES, BOT, en_names=EN)[0] is False
+    # en_names 안 주면(기본 빈 튜플) 영어 호출 꺼짐 — 기존 호출 테스트 그대로
+    assert addressed_to_bot(msg, "Sodam help me", NAMES, BOT)[0] is False
+
+
 # ── 4. 봇 메시지 답장: AI 답에 단 답장만 호출 ──────────────
 @test
 async def reply_to_non_ai_bot_message_not_addressed():

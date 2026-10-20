@@ -139,6 +139,7 @@
   **'사용자 초대' 권한이 없으면 텔레그램이 가입 신청을 봇에 안 보냄** → 🤖 화면이 권한·승인제 여부를 바로 점검. 안내서 guide/robot-check.md.
 - 자유 멤버(`free.py`, `.free @user` / `.free해제` / `.free목록`, '사용자 차단' 권한 관리자만): 지정 시 채팅 금지·캡차 대기·경고 해제,
   이후 자동 통제(도배·링크·금지어·잠금·사칭·입장 캡차·CAS·공동 차단·사기 의심·봇 조작 경고) 제외. 관리자 권한은 아님.
+- **🛡️ 보호 멤버**(`protect.py`, `panels/protect.py` 허브 m:prt, tests/test_protect.py · 뮤테이션 2개, 2026-10-20 일루왕 오너 '밴 못하게 처리'): `.보호/.보호해제/.보호목록`·AI 도구 `protect_member(name, on)`·버튼 화면(🗑 삭제·✏️ @추가), 전부 '사용자 차단' 권한 관리자+오너. free 구조 복제(방별 캐시·즉시 반영, 표 protected_members). `permissions.shield` 가 **오너 말곤** 보호 멤버 제재를 거절 → 밴·뮤트·경고·강퇴 모두 (shield 가 단일 관문). **단 free(자동 통제 면제)와 달리 소담 통한 수동 제재까지 막음. 텔레그램 앱 직접 밴은 못 막음**(그건 관리자 승격뿐). mod_log 'protect'.
 - 사기 의심 검사(`scamguard.py`, 🕵️ 메뉴): 선택(기본 꺼짐). 관리자 키워드·지갑주소·초대링크·신규 첫 메시지 → (선택) mini AI 확인 0.8 이상 →
   관리자 1:1 알림 + [지우기·밴·뮤트·괜찮음] 버튼 (권한 `may`). 자동 제재 없음, '가리고 확인' 모드만 삭제. 평가 `tools/ai_eval_scam.py`.
 - 활동 리포트·AI 하루 요약(`reports.py`, 📊 메뉴): 기록된 데이터로만 셈(mod_log·counters rep_*·ai_turns). 체험 마지막 날 관리자 1:1 리포트+결제 화면 1번,
@@ -162,6 +163,7 @@
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
   인사했다고만 하고 안 보내서였음 → 진짜 Greeter 로. 인사 꺼진 방은 AI 가 greet_members 로 멘션.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
+- 호출어: `handlers.addressed_to_bot`. 한국어 '소담아/소담이/소담'(호격·조사·'~도' 부탁 판정) + **영어/로마자 'Sodam'** (`cfg.call_names_en`, 기본 ("sodam",), 대소문자 무시·낱말 경계, @아이디·링크 조각 제외) — 외국인 번역기가 'Sodam help me …'로 불러도 받음 (2026-10-20 일루왕). `"" in "@/._-"` 가 True 라 문장 맨 앞 호출이 걸러지던 버그 주의. 끄기 .env BOT_CALL_NAMES_EN="". tests/test_fix_ux.py english_call_*.
 - **Codex식 에이전트 루프** (openai/codex 분석 반영, tests/test_agent_think.py·test_agent_codex.py): `AGENT_THINK` 기본 **auto** =
   오너·관리자 요청(call/follow)은 전부 + 멤버는 `wants_thinking` 규칙에 걸릴 때만 Responses API(추론 low + 도구, `llm.think`, 암호화 추론
   이어 넣기, verbosity low). 멤버 잡담·끼어들기는 chat.completions. MAX_STEPS 8 + 실행당 $0.05 상한(RUN_USD_CAP), 부드러운 실패엔

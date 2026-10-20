@@ -267,7 +267,11 @@ class Permissions:
     async def shield(self, bot: Bot, chat_id: int, actor_id: int, user_id: int) -> str | None:
         """actor 가 user 를 제재할 수 없으면 그 이유, 되면 None.
         오너 우선권 (오너 결정 2026-10-16, 방 설정 owner_override 기본 켬): 오너는 다른 방 관리자에게도 경고·제재.
-        방장(creator)·봇·다른 오너는 그대로 보호. 뮤트·밴은 텔레그램이 허락할 때만 (moderation.Moderator._unadmin)."""
+        방장(creator)·봇·다른 오너는 그대로 보호. 뮤트·밴은 텔레그램이 허락할 때만 (moderation.Moderator._unadmin).
+        🛡️ 보호 멤버(sodam/protect.py, 2026-10-20 오너 '밴 못하게')는 오너 말곤 소담으로 제재 불가 (앱 직접 밴은 못 막음)."""
+        from . import protect
+        if actor_id not in await self.owners() and await protect.is_protected(self.db, chat_id, user_id):
+            return "🛡️ 보호 멤버라 소담으로는 제재할 수 없어요. (해제: .보호해제 또는 🛡️ 보호 멤버 화면)"
         if not await self.protected(bot, chat_id, user_id):
             return None
         owners = await self.owners()
