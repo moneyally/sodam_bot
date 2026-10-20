@@ -121,7 +121,7 @@ def _strip_call(text: str, start: int, name: str) -> str:
 
 
 def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot,
-                     reply_is_ai: bool = True) -> tuple[bool, str]:
+                     reply_is_ai: bool = True, en_names: tuple[str, ...] = ()) -> tuple[bool, str]:
     """봇을 부른 메시지인지 + 호출어를 뗀 요청문.
 
     - '소담아 …' / '@kim 소담아 …' (앞에 멘션이 붙어도 OK, 멘션은 요청에 남김)
@@ -154,6 +154,14 @@ def addressed_to_bot(msg: Message, text: str, call_names: tuple[str, ...], bot,
         m = re.search(rf"(?<![\w가-힣]){re.escape(name)}(?![\w가-힣])", t)
         if m and (name[-1] != "이" or _ASK_TAIL.search(t)):
             return True, _strip_call(t, m.start(), name)
+    # 외국인(번역기)이 영어/로마자로 부른 경우 — 'Sodam help me …'·'please sodam' (낱말 경계, 대소문자 무시).
+    # @아이디·링크 조각(앞 글자가 @/./_/-/숫자·영문)은 제외 (@sodam_ai_bot 은 아래에서 따로 처리).
+    for en in en_names:
+        for m in re.finditer(rf"(?<![a-z0-9]){re.escape(en)}(?![a-z0-9])", t, re.I):
+            before = t[m.start() - 1] if m.start() else ""
+            if before and before in "@/._-":   # '' in '...' 은 True 라 빈 값은 통과시켜야 함 (문장 맨 앞 호출)
+                continue
+            return True, _strip_call(t, m.start(), t[m.start():m.end()])
     if bot.username and f"@{bot.username}".lower() in t.lower():
         return True, re.sub(re.escape("@" + bot.username), "", t, flags=re.I).strip() or "(이름만 부름)"
     reply = msg.reply_to_message
@@ -656,7 +664,7 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     r = msg.reply_to_message
     reply_is_ai = not (r and r.from_user and r.from_user.id == bot.id) or \
         await svc.db.is_ai_message(chat_id, r.message_id)
-    addressed, request = addressed_to_bot(msg, text, svc.cfg.call_names, bot, reply_is_ai)
+    addressed, request = addressed_to_bot(msg, text, svc.cfg.call_names, bot, reply_is_ai, svc.cfg.call_names_en)
     via = "call"
     if not addressed:  # 방금 봇과 얘기하던 사람이 이름 없이 이어서 말한 경우
         addressed, request = await social.follow_up(svc, bot, msg, text)

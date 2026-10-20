@@ -162,6 +162,7 @@
 - 라이브 점검 장면 10: 입장 인사 켜진 방은 자동 인사가 멘션 환영 → AI 는 '방금 환영 인사드렸어요' (중복 X). 예전 실패는 가짜 인사기가
   인사했다고만 하고 안 보내서였음 → 진짜 Greeter 로. 인사 꺼진 방은 AI 가 greet_members 로 멘션.
 - "누구 얘기인지": `addressee.py` 가 단서(답장·태그·이름·방금 입장)만 모으고 AI 가 판단. 평가 `python tools/ai_eval_addressee.py` (42상황: 인사·말투·제재 확인 버튼, 목표 엉뚱한 멘션 0).
+- 호출어: `handlers.addressed_to_bot`. 한국어 '소담아/소담이/소담'(호격·조사·'~도' 부탁 판정) + **영어/로마자 'Sodam'** (`cfg.call_names_en`, 기본 ("sodam",), 대소문자 무시·낱말 경계, @아이디·링크 조각 제외) — 외국인 번역기가 'Sodam help me …'로 불러도 받음 (2026-10-20 일루왕). `"" in "@/._-"` 가 True 라 문장 맨 앞 호출이 걸러지던 버그 주의. 끄기 .env BOT_CALL_NAMES_EN="". tests/test_fix_ux.py english_call_*.
 - **Codex식 에이전트 루프** (openai/codex 분석 반영, tests/test_agent_think.py·test_agent_codex.py): `AGENT_THINK` 기본 **auto** =
   오너·관리자 요청(call/follow)은 전부 + 멤버는 `wants_thinking` 규칙에 걸릴 때만 Responses API(추론 low + 도구, `llm.think`, 암호화 추론
   이어 넣기, verbosity low). 멤버 잡담·끼어들기는 chat.completions. MAX_STEPS 8 + 실행당 $0.05 상한(RUN_USD_CAP), 부드러운 실패엔
