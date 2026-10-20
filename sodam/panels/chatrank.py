@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 POST_GAP = 20            # 방에서 .순위 간격 (초)
 ME_GAP = 10              # .나 한 사람 간격 (초)
 NOTIFY_ADMINS = 5
-TOPS = (3, 5, 7, 10)
+TOPS = (3, 5, 7, 10, 15, 20)
 
 
 # ── 보내기 ────────────────────────────────────────────────
@@ -585,7 +585,7 @@ def _register_tool() -> None:
          "room": {"type": "string", "description": "1:1 에서 방 이름"},
          "period": {"type": "string", "enum": list(cr.PERIOD_CHOICES),
                     "description": "today 오늘 · yesterday 어제 · thisweek 이번 주(월요일 0시부터, 매주 0부터 다시) · week 최근 7일 · month 최근 30일"},
-         "top": {"type": "integer", "description": "몇 등까지 3~10"},
+         "top": {"type": "integer", "description": "몇 등까지 3~20"},
          "prizes": {"type": "array", "items": {"type": "string"}, "description": "1등부터 상품 글 (예: ['50,000원','40,000원'])"},
          "icons": {"type": "string", "description": "보통 이모지 등수 그림, 띄어서 (예: '🥇 🥈 🥉 4️⃣ 5️⃣')"},
          "icons_from_message": {"type": "boolean", "description": "요청 메시지에 움직이는(프리미엄) 이모지가 있으면 true"},

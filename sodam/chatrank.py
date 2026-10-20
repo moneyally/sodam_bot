@@ -48,7 +48,7 @@ WEEKLY = 100                                 # 시상식 '매주 월요일 0시'
 AWARD_LABEL = {-1: "끔", 0: "매일 0시", 9: "매일 9시", 12: "매일 12시", WEEKLY: "매주 월요일 0시"}
 NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "mask": "가리기 (sin***)"}
 AWARD_HOURS = (-1, 0, 9, 12, WEEKLY)         # 시상식 (한국 시각, -1 = 끔, WEEKLY = 매주 월요일 0시)
-TOP_MIN, TOP_MAX = 3, 10
+TOP_MIN, TOP_MAX = 3, 20   # 2026-10-20 오너: New world 멤버 '20위까지'
 PRIZE_MAX, LINE_MAX, HEAD_MAX, FOOT_MAX, ICON_MAX = 30, 120, 300, 600, 8
 LINE_FIELDS = ("등수", "이름", "횟수", "상품")
 HEAD_FIELDS = ("기간", "날짜")

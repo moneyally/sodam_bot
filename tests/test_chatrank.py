@@ -398,5 +398,56 @@ async def admin_sets_ranking_by_talking_in_dm_including_premium_emoji():
     assert "chat_rank_setup" in tools._BY_NAME
 
 
+@test
+async def top_can_go_up_to_20_rows():
+    """채팅 랭킹 20위까지 (New world 멤버 '20위까지 보고싶은데 10위만'). TOP_MAX=20."""
+    assert cr.TOP_MAX == 20 and 20 in P.TOPS and 15 in P.TOPS, "20등 프리셋"
+    # 저장·불러오기: 20 허용, 20 초과는 거절(기본 5), prizes/icons 도 20까지
+    assert cr.load('{"top":20}').top == 20 and cr.load('{"top":25}').top == 5, "20 OK · 초과 거절"
+    import json
+    assert len(cr.load(json.dumps({"prizes": [f"{i}등" for i in range(25)]})).prizes) == 20, "상품도 20까지"
+    # 21명이 서로 다르게 떠들면 standings 가 top(20)만큼 내보냄
+    e = await setup()
+    now = int(time.time()); mid = 1000
+    from sodam.util import day_start
+    today0 = day_start(e.svc.cfg.tz, 0)
+    talkers = [fake_user(300 + i, f"유저{i:02d}") for i in range(21)]
+    for i, u in enumerate(talkers):
+        await e.db.upsert_user(u)
+        await e.db._write("INSERT INTO members(chat_id, user_id, joined_at, last_seen) VALUES(?,?,?,?)", (ROOM, u.id, now - 9e5, now))
+        for j in range(21 - i):                       # 유저00=21번 … 유저20=1번 (서로 다른 수)
+            mid += 1
+            await e.db.log_message(ROOM, u.id, mid, f"오늘 글 {j}번째", ts=max(today0, now - 600) + j % 50)
+    cfg = await cr.get(e.db, ROOM)
+    cfg.top = 20
+    await cr.save(e.db, ROOM, cfg, ADMIN.id)
+    assert (await cr.get(e.db, ROOM)).top == 20, "방장이 20등까지 저장"
+    _, _, rows = await cr.standings(e.svc, ROOM, await cr.get(e.db, ROOM))
+    assert len(rows) == 20, f"20줄까지 (TOP_MAX 10 이면 저장이 5로 떨어져 5줄): {len(rows)}"
+
+
+@test
+async def period_arg_picks_period_for_one_look_without_changing_room_default():
+    """`.순위 저번주`·`.나 이번주` 처럼 끝에 기간을 붙이면 그 기간만 보여주고 방 기본은 안 바뀜 (New world 손님 '이번주/저번주 구분')."""
+    e = await setup([(A, 4), (B_, 2)])
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    assert P._PERIOD_WORDS["저번주"] == "lastweek" and P._PERIOD_WORDS["이번주"] == "thisweek" and P._PERIOD_WORDS["오늘"] == "today"
+    # .순위 저번주 → 지난주 기간, 방 기본(today)은 그대로
+    c = CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".순위 저번주", message_id=11), ROOM, A, Role.MEMBER, ["저번주"], "저번주")
+    await P.c_rank(c)
+    [(_, _, text, _)] = e.bot.named("send_message")
+    assert "지난 주" in text, text                  # lastweek 기간으로 (머리말 {기간})
+    assert (await cr.get(e.db, ROOM)).period == "today", "1회성 조회라 방 기본 기간은 안 바뀜"
+    # 모르는/없는 낱말이면 방 기본(오늘) — 저번주로 오해 X (period None → 방 기본 기간 사용)
+    e.bot.calls.clear()
+    await P.c_rank(CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".순위 ㅋㅋ", message_id=13), ROOM, A, Role.MEMBER, ["ㅋㅋ"], "ㅋㅋ"))
+    assert "오늘" in e.bot.named("send_message")[0][2], "모르는 기간 낱말·인자 없음은 방 기본"
+    # .나 이번주
+    e.bot.calls.clear()
+    await P.c_me(CmdCtx(e.svc, e.bot, FakeMsg(ROOM, B_, ".나 이번주", message_id=14), ROOM, B_, Role.MEMBER, ["이번주"], "이번주"))
+    assert "이번 주" in e.bot.named("send_message")[0][2], e.bot.named("send_message")[0][2]
+
+
 if __name__ == "__main__":
     run_all()
