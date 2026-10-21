@@ -104,14 +104,25 @@ class FakeBot:
     async def send_document(self, chat_id, document, caption=None, **kw):
         return await self._send_media("send_document", chat_id, document, caption, **kw)
 
+    def _set_status(self, chat_id, user_id, status):
+        # 제재가 실제로 걸린 걸 반영 (자기점검 get_chat_member 가 확인). drop_sanction=True 면 '텔레그램이 씹음' 흉내 → 상태 안 바뀜
+        if getattr(self, "drop_sanction", False):
+            return
+        if not hasattr(self, "member_status"):
+            self.member_status = {}
+        self.member_status[(chat_id, user_id)] = status
+
     async def restrict_chat_member(self, chat_id, user_id, permissions, until_date=None, **kw):
         self.calls.append(("restrict", chat_id, user_id, permissions, until_date))
+        self._set_status(chat_id, user_id, "restricted" if getattr(permissions, "can_send_messages", False) is not True else "member")
 
     async def ban_chat_member(self, chat_id, user_id, **kw):
         self.calls.append(("ban", chat_id, user_id))
+        self._set_status(chat_id, user_id, "kicked")
 
     async def unban_chat_member(self, chat_id, user_id, only_if_banned=False, **kw):
         self.calls.append(("unban", chat_id, user_id))
+        self._set_status(chat_id, user_id, "left")
 
     async def approve_chat_join_request(self, chat_id, user_id):
         self.calls.append(("approve", chat_id, user_id))

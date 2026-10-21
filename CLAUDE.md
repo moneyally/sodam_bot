@@ -985,7 +985,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - claude식 조각1/3 중 **근거**: 제재하거나 '쟤가 도배/광고/욕 했다' 단정하거나 멤버가 '내가 언제?' 따질 때, 기록에서 **원문+시각**을 코드로 뽑아 들이댐 (AI 비용 0 — 사실은 코드가).
 - `evidence.receipts(svc, chat, uid)`: 최근 6시간(LOOKBACK_SEC) 이 사람 글 40개에서 ① 도배(같은 글 2번↑ → '14:03~14:05 같은 글 3번: "…"') ② 링크 글(도메인만 `evil[.]com 링크`·t.me/…, 눌리지·재도배 안 되게) ③ 특별한 거 없으면 최근 글 1~2개('너 이렇게 말했잖아') ④ mod_log 경고 누적 90일. 없으면 `""` → 소담은 단정 안 함. strip_unsafe 통과.
 - AI 도구 `show_evidence(name)` (read_only·where=room·ctx.tainted): `tools._resolve` 로 멤버 찾아 receipts → '원문·시각 그대로 근거로' 지시, 기록에 없으면 '지어내지 말 것'. 지도·도움말(👮 관리)·prompt 규칙(제재 전 근거)에 있음.
-- **조각2(자기 점검: 제재 진짜 걸렸나 되짚고 재시도)·조각3(계획 카드: 여러 단계 한 장 승인 → ✅/⏳)은 아직 — 다음 작업.**
+- **조각2 자기 점검** (`moderation.Moderator._ensure`, tests/test_selfcheck.py · 뮤테이션 2개): 뮤트·밴 한 뒤 `get_chat_member` 로 진짜 걸렸나 **딱 1번** 확인(mute→restricted/kicked/left·ban→kicked/left), 아니면 그 동작 한 번 더 (텔레그램이 드물게 씹음·경쟁). AI 비용 0. 확인 자체가 터지면 조용히 넘어감(원래 동작 유지, 무한 재시도 없음). FakeBot 이 restrict/ban/unban 결과를 member_status 에 반영(가짜 정확도↑), `drop_sanction=True` 로 '씹힘' 흉내.
+- **조각3(계획 카드: 여러 단계 한 장 승인 → ✅/⏳)은 아직 — 다음 작업.**
 
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
