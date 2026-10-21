@@ -21,7 +21,8 @@ async def game_start_sends_only_the_game_message():
     r.llm.script = [tool_call("start_game", {"game": "끝말잇기"}), reply("좋아요 시작됐어요! 제가 먼저 갈게요: 사과")]
     m = await r.say(BOSS, "소담아 끝말잇기 하자")
     game = r.svc.games.active[Room.CHAT]
-    posts = [c[2] for c in r.bot.named("send_message") if c[1] == Room.CHAT]
+    # 💭 생각 중… 은 곧 지워지는 내부 UI (ai_thinking 기본 켬) → 게임 메시지 수에서 뺌
+    posts = [c[2] for c in r.bot.named("send_message") if c[1] == Room.CHAT and not c[2].startswith("💭")]
     assert len(posts) == 1 and game.last in posts[0] and not m.replies, (posts, m.replies)
 
 

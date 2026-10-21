@@ -27,6 +27,8 @@ class EchoBot(ChatBot):
 
     async def send_message(self, chat_id, text, **kw):
         sent = await super().send_message(chat_id, text, **kw)
+        if text.startswith("💭"):          # 💭 생각 과정은 곧 지워지는 내부 UI — 따라 말하지 않음 (echoes 에도 안 셈)
+            return sent
         if chat_id == Room.CHAT and self.room is not None:
             self.echoes += 1
             mine = SimpleNamespace(message_id=sent.message_id, from_user=self.room.bot_user())
@@ -255,7 +257,7 @@ async def echo_bot_ping_pong_stops_after_one_round():
         ai = SimpleNamespace(message_id=m.message_id + 10_000, from_user=r.bot_user())
         for i in range(20):
             await bot_says(r, DICE, f"소담아 {i} /dice@sodambot 다시 해!", reply_to=ai)
-        sends = r.bot.named("send_message")
+        sends = [c for c in r.bot.named("send_message") if not c[2].startswith("💭")]   # 💭 생각 UI 제외
         assert len([c for c in sends if c[2].startswith("/dice")]) == 1 and r.bot.echoes == len(sends) == 1, sends
         assert not r.llm.script and len(r.llm.of("chat")) == 2, "AI 는 관리자 요청 한 번만"
     finally:

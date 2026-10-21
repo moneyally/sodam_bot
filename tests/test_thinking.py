@@ -244,6 +244,29 @@ async def thinker_filters_links_and_wallets():
     assert "evil.com" not in body and "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" not in body, body
 
 
+@test
+async def md_to_html_makes_telegram_bold():
+    # 텔레그램 봇이니 마크다운을 떼지 말고 서식으로 (오너 '텔레그램 굵게로 처리하면 되잖아')
+    assert agent._md_to_html("**Calculating** the `recurrence`") == "<b>Calculating</b> the <code>recurrence</code>"
+    assert agent._md_to_html("### Step 1\ndo it") == "Step 1\ndo it", "제목 # 는 뗌(텔레그램 제목 서식 없음)"
+    assert agent._md_to_html("~~wrong~~") == "<s>wrong</s>"
+    assert agent._md_to_html("a < b & c > d") == "a &lt; b &amp; c &gt; d", "< > & 는 먼저 esc (태그 주입 방지)"
+    assert agent._md_to_html("half **open") == "half open", "스트리밍 중 반쪽 마커는 제거 — 태그 안 깨지게"
+
+
+@test
+async def thinker_tail_markdown_rendered_html():
+    # 흐르는 영어 추론의 **굵게** 를 텔레그램 <b> 로, parse_mode HTML 로 전송
+    bot = FakeBot()
+    th = agent._Thinker(_ctx(bot))
+    await th.begin()
+    assert bot.named("send_message")[0][3].get("parse_mode") == "HTML", "💭 는 HTML 로 보냄"
+    await th("**Comparing** the two teams", True)
+    body = bot.named("edit_text")[-1][2]
+    assert "<b>Comparing</b>" in body and "**" not in body, body
+    assert bot.named("edit_text")[-1][3].get("parse_mode") == "HTML", "편집도 HTML"
+
+
 # ── agent 가 on_think 를 넘기나 (설정 켜짐·그룹·생각일 때만) ──
 @test
 async def thinker_created_only_when_setting_on_and_group():

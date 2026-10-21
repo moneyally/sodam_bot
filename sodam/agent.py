@@ -1,6 +1,7 @@
 """에이전트 루프: AI가 도구를 부르고, 코드가 실행하고, 결과를 다시 넣는다.
 실행마다 AI 작업 기록(agentlog) 한 줄: 요청·도구 호출·결과·토큰·요금."""
 import asyncio
+import html
 import json
 import logging
 import re
@@ -37,6 +38,23 @@ CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 
 THINK_MAX_CHARS = 3500
 THINK_GAP = 1.2   # 💭 흐르는 영어 추론은 이 간격(초)마다 묶어서 고침 — 텔레그램 편집 플러드 방지
+
+# GPT 영어 추론엔 마크다운(**굵게**·`코드`·### 제목)이 섞여 나옴 → 글자 '**' 로 찍히면 지저분.
+# 텔레그램 봇이니 떼지 말고 서식으로 보여 줌 (오너 2026-10-21 '텔레그램 굵게로 처리하면 되잖아'). HTML parse_mode 로 전송.
+_MD_HEAD = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]*")   # 줄머리 제목 # → 뗌 (텔레그램 제목 서식 없음)
+_RE_BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)           # **굵게** → <b>
+_RE_STRIKE = re.compile(r"~~(.+?)~~", re.S)             # ~~취소~~ → <s>
+_RE_CODE = re.compile(r"`+([^`]+?)`+", re.S)            # `코드`/```블록``` → <code>
+
+
+def _md_to_html(text: str) -> str:
+    """GPT 영어 추론의 마크다운을 텔레그램 HTML 서식으로 (**굵게**→<b>, `코드`→<code>). 추론 원문은 '남의 데이터'라 먼저 esc."""
+    text = html.escape(text, quote=False)               # & < > 먼저 가림 (태그 주입 방지)
+    text = _MD_HEAD.sub("", text)
+    text = _RE_BOLD.sub(r"<b>\1</b>", text)
+    text = _RE_STRIKE.sub(r"<s>\1</s>", text)
+    text = _RE_CODE.sub(r"<code>\1</code>", text)
+    return text.replace("**", "").replace("`", "")      # 스트리밍 중 반쪽(짝 안 맞는) 마커는 제거 — 태그 안 깨지게
 
 
 # ChatGPT 작업표시('계산 가정 정리함')처럼 GPT 가 문구를 알아서 짜게 (하드코딩 목록 말고 틀 — 오너 2026-10-21, 프레임워크 교훈).
@@ -88,7 +106,8 @@ class _Thinker:
         if not force and now - self.last < THINK_GAP:   # 델타마다 고치면 플러드 → 묶어서
             return
         text = "💭 " + self.head + (f"\n\n{self.tail}" if self.tail else "")
-        body = clip_mid(strip_unsafe(text), THINK_MAX_CHARS)   # 링크·지갑·@ 제거 (영어 원문도 '남이 쓴 데이터')
+        raw = clip_mid(strip_unsafe(text), THINK_MAX_CHARS)   # 링크·지갑·@ 제거 + 길이 (자른 뒤 서식 변환 → 태그 안 잘림)
+        body = _md_to_html(raw)                               # **굵게**·`코드` → 텔레그램 HTML 서식 (오너 '텔레그램 굵게로')
         async with self.lock:
             if self.cleared or not body or body == self.body:
                 return
@@ -96,9 +115,11 @@ class _Thinker:
             self.body = body
             try:
                 if self.msg is None:
-                    self.msg = await self.bot.send_message(self.chat_id, body, reply_to_message_id=self.reply_to)
+                    self.msg = await self.bot.send_message(self.chat_id, body, parse_mode="HTML",
+                                                           reply_to_message_id=self.reply_to)
                 else:
-                    await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
+                    await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id,
+                                                     parse_mode="HTML")
             except Exception:
                 pass   # 띄우기·편집 실패(플러드·동일 내용)는 무시 — 진짜 답은 따로 나감
 
