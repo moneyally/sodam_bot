@@ -166,6 +166,28 @@ async def thinker_uses_cheap_guard_model_once_per_round():
 
 
 @test
+def tool_status_maps_names_to_korean():
+    assert "웹" in agent._tool_status(["web_search"])
+    assert "그림" in agent._tool_status(["make_image"])
+    assert "노래" in agent._tool_status(["music"])
+    assert "처리" in agent._tool_status(["ban_member"])   # 모르는/쓰기 도구 = 처리하는 중
+    assert "처리" in agent._tool_status([])               # 기본
+
+
+@test
+async def thinker_status_shows_korean_tool_chunk():
+    # 모델이 생각을 말 안 해도, 도구 실행을 한국어 조각으로 (실시간 조각 느낌 — 오너)
+    bot = FakeBot()
+    th = agent._Thinker(_ctx(bot))
+    await th.begin()
+    await th.status(["web_search"])
+    assert "웹에서" in bot.named("edit_text")[-1][2], bot.calls
+    await th.status(["make_image"])
+    assert "그림" in bot.named("edit_text")[-1][2]
+    assert "evil" not in str(bot.calls)   # 안전 필터는 그대로
+
+
+@test
 async def thinker_begin_shows_placeholder_before_summary():
     bot = FakeBot()
     th = agent._Thinker(_ctx(bot))
