@@ -45,7 +45,14 @@ _THINK_TRANS = ("아래는 AI 가 문제를 푸는 '생각 과정' 영어 요약
                 "설명·따옴표·머리말 없이 번역문만. JSON {\"ko\": \"한국어\"} 로만 답해.")
 
 
-# '지금 하는 일'을 한국어 조각으로 (모델이 생각을 말 안 해도 '실시간 조각' 느낌 — 오너 2026-10-21). 도구 이름 → 한국어.
+# ChatGPT 작업표시('계산 가정 정리함')처럼 GPT 가 문구를 알아서 짜게 (하드코딩 목록 말고 틀 — 오너 2026-10-21, 프레임워크 교훈).
+# 우리 모델은 생각 요약을 거의 안 뱉으므로(실측 effort 무관 0조각) 싼 모델이 요청+도구를 보고 한국어 한마디를 만든다 (~0.003원·뒤에서).
+_STATUS_SYS = ("소담이(단톡방 AI 비서)가 지금 뭘 하는지 ChatGPT 작업표시처럼 짧은 한국어 반말 한마디로. 요청과 '지금 부른 도구·인자'를 "
+               "보고 자연스럽게 (예: '채팅 기록 뒤져서 100개 넘게 친 사람 세는 중…', '비트코인 시세 찾는 중…', '민찬 방 조회 중…'). "
+               "14자 안팎·끝 '중…'·따옴표/설명/링크/@/지갑주소 없이 JSON {\"s\":\"문구\"} 로만.")
+
+
+# '지금 하는 일'을 한국어 조각으로 (GPT 문구 생성이 1초 걸리니 그 사이 즉시 보여 줄 기본값). 도구 이름 → 한국어.
 def _tool_status(names: list[str]) -> str:
     for n in names:
         if n in ("web_search", "news_headlines"):           return "웹에서 찾아보는 중…"
@@ -101,9 +108,26 @@ class _Thinker:
         """생각(느린) 답이 시작되면 '💭 생각 중…'을 먼저 띄운다 (요약이 없거나 빠른 답이어도 항상 보이게, 오너 '안 뜬다')."""
         await self.show("생각 중…")
 
-    async def status(self, names: list[str]) -> None:
-        """도구를 실행하기 직전, 지금 하는 일을 한국어 조각으로 (모델이 요약을 안 뱉어도 실시간 조각)."""
-        await self.show(_tool_status(names))
+    async def status(self, calls, request: str) -> None:
+        """도구 실행 직전: 즉시 기본 조각(하드코딩)을 띄우고, 뒤에서 GPT 가 요청·도구에 맞춘 문구를 지어 교체 (ChatGPT처럼)."""
+        names = [c.function.name for c in calls]
+        await self.show(_tool_status(names))                   # 즉시 (GPT 문구는 ~1초 걸림)
+        c0 = calls[0]
+        task = asyncio.create_task(self._gen(request, c0.function.name, c0.function.arguments or ""))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def _gen(self, request: str, tool: str, args: str) -> None:
+        """싼 모델이 '지금 뭐 하는지' 한국어 한마디를 짓는다 (하드코딩 목록 아님 — 틀)."""
+        try:
+            data = await self.svc.llm.json(_STATUS_SYS, f"요청: {request[:200]}\n부른 도구: {tool} {args[:200]}",
+                                           model=self.svc.cfg.guard_model, max_tokens=40, purpose="thinkstatus",
+                                           chat_id=self.chat_id, effort="none")
+            s = (data.get("s") or "").strip()
+        except Exception:
+            return   # 실패하면 즉시 띄운 기본 조각 그대로
+        if s:
+            await self.show(s)
 
     async def __call__(self, summary: str, done: bool) -> None:
         """on_think: 한 라운드 생각이 끝나면(done) 영어 요약을 뒤에서(답 안 느리게) 한국어로 옮겨 보여 준다."""
@@ -667,8 +691,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                          {"role": "system", "content": NUMBER_NOTE.format(nums=", ".join(bad[:5]))}]
             continue
         used = True
-        if th is not None:   # 💭 지금 뭐 하는 중 (도구 → 한국어 조각) — 모델이 생각을 말 안 해도 실시간 조각
-            await th.status([c.function.name for c in calls])
+        if th is not None:   # 💭 지금 뭐 하는 중 — GPT 가 요청·도구 보고 문구를 지어 띄움 (ChatGPT처럼, 틀)
+            await th.status(calls, request)
         messages.append({
             "role": "assistant",
             "content": msg.content or "",
