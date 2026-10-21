@@ -36,13 +36,7 @@ THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 
 CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 
 THINK_MAX_CHARS = 3500
-
-
-# 생각 요약 번역: OpenAI 요약은 영어 고정(언어 옵션 없음·조사·실측) → ChatGPT 앱처럼 보이려면 우리가 번역.
-# 오픈소스에도 바로 쓸 건 없고(클로드 코드도 요청만 열림 #89776) 다들 '싼 모델로 번역 한 번' — 그래서 생각 끝에 한 번만,
-# 뒤에서(답을 안 느리게) 싼 모델(guard)로 옮긴다 (오너 '그냥 영어 번역처리', 비용 걱정 2026-10-21).
-_THINK_TRANS = ("아래는 AI 가 문제를 푸는 '생각 과정' 영어 요약이야. 자연스러운 한국어 반말 한두 문장으로 옮겨. "
-                "설명·따옴표·머리말 없이 번역문만. JSON {\"ko\": \"한국어\"} 로만 답해.")
+THINK_GAP = 1.2   # 💭 흐르는 영어 추론은 이 간격(초)마다 묶어서 고침 — 텔레그램 편집 플러드 방지
 
 
 # ChatGPT 작업표시('계산 가정 정리함')처럼 GPT 가 문구를 알아서 짜게 (하드코딩 목록 말고 틀 — 오너 2026-10-21, 프레임워크 교훈).
@@ -69,8 +63,8 @@ def _tool_status(names: list[str]) -> str:
 
 
 class _Thinker:
-    """느린(생각) 답에서 '💭 생각 중…'을 띄우고, 소담이 지금 뭘 하는지(도구)를 한국어 조각으로 바꿔 보여 준다. 모델이 생각을
-    말로 뱉으면(on_think, 영어) 뒤에서 싼 모델로 한국어로 옮겨 같이. 답 나오면 지운다. 방 ai_thinking 켬 + 그룹방만 (2026-10-21 오너)."""
+    """느린(생각) 답에서 💭 메시지 하나에 **위=한국어 상태 문구(GPT 가 지음) + 아래=영어 추론 원문(on_think 실시간)** 을 같이 보여 준다
+    (오너 2026-10-21 '교체 문구 밑에 영어 델타도 흘리게'). think 길이면 영어가 밑에 줄줄, light 면 위 문구만. 답 나오면 지운다. 방 ai_thinking 켬 + 그룹방만."""
 
     def __init__(self, ctx: ToolCtx):
         self.svc = ctx.svc
@@ -78,23 +72,27 @@ class _Thinker:
         self.chat_id = ctx.chat_id
         self.reply_to = getattr(ctx.request_msg, "message_id", None)
         self.msg = None
-        self.body = ""                      # 지금 띄운 글 (같으면 또 안 고침)
+        self.head = "생각 중…"                # 위: 한국어 상태 (GPT 문구)
+        self.tail = ""                        # 아래: 영어 추론 원문 (흐름)
+        self.body = ""                        # 지금 띄운 글 (같으면 또 안 고침)
+        self.last = 0.0                       # 흐르는 영어는 묶어서(스로틀) 고침 — 플러드 방지
         self.lock = asyncio.Lock()
         self.cleared = False
-        self.seen = ""                      # 이미 옮긴 영어 요약 (같으면 또 안 옮김)
         self.tasks: set[asyncio.Task] = set()
 
-    async def show(self, text: str) -> None:
-        """💭 <한국어 조각> 을 띄우거나 그 자리를 고친다 (가장 최근 상태만, 같으면 안 함)."""
+    async def _push(self, force: bool) -> None:
+        """위(head)+아래(tail)를 합쳐 💭 메시지를 고친다. 흐르는 영어는 THINK_GAP 초마다(force 면 바로)."""
         if self.cleared:
             return
-        text = strip_unsafe((text or "").strip())   # 링크·지갑·@ 제거 (요약도 '남이 쓴 데이터')
-        if not text:
+        now = time.monotonic()
+        if not force and now - self.last < THINK_GAP:   # 델타마다 고치면 플러드 → 묶어서
             return
-        body = "💭 " + clip_mid(text, THINK_MAX_CHARS)
+        text = "💭 " + self.head + (f"\n\n{self.tail}" if self.tail else "")
+        body = clip_mid(strip_unsafe(text), THINK_MAX_CHARS)   # 링크·지갑·@ 제거 (영어 원문도 '남이 쓴 데이터')
         async with self.lock:
-            if self.cleared or body == self.body:
+            if self.cleared or not body or body == self.body:
                 return
+            self.last = time.monotonic()
             self.body = body
             try:
                 if self.msg is None:
@@ -106,12 +104,12 @@ class _Thinker:
 
     async def begin(self) -> None:
         """생각(느린) 답이 시작되면 '💭 생각 중…'을 먼저 띄운다 (요약이 없거나 빠른 답이어도 항상 보이게, 오너 '안 뜬다')."""
-        await self.show("생각 중…")
+        await self._push(force=True)
 
     async def status(self, calls, request: str) -> None:
-        """도구 실행 직전: 즉시 기본 조각(하드코딩)을 띄우고, 뒤에서 GPT 가 요청·도구에 맞춘 문구를 지어 교체 (ChatGPT처럼)."""
-        names = [c.function.name for c in calls]
-        await self.show(_tool_status(names))                   # 즉시 (GPT 문구는 ~1초 걸림)
+        """도구 실행 직전: 즉시 기본 문구(하드코딩)를 위에 띄우고, 뒤에서 GPT 가 요청·도구에 맞춰 지은 문구로 교체 (ChatGPT처럼)."""
+        self.head = _tool_status([c.function.name for c in calls])
+        await self._push(force=True)
         c0 = calls[0]
         task = asyncio.create_task(self._gen(request, c0.function.name, c0.function.arguments or ""))
         self.tasks.add(task)
@@ -125,32 +123,15 @@ class _Thinker:
                                            chat_id=self.chat_id, effort="none")
             s = (data.get("s") or "").strip()
         except Exception:
-            return   # 실패하면 즉시 띄운 기본 조각 그대로
+            return   # 실패하면 즉시 띄운 기본 문구 그대로
         if s:
-            await self.show(s)
+            self.head = s
+            await self._push(force=True)
 
     async def __call__(self, summary: str, done: bool) -> None:
-        """on_think: 한 라운드 생각이 끝나면(done) 영어 요약을 뒤에서(답 안 느리게) 한국어로 옮겨 보여 준다."""
-        if self.cleared or not done:
-            return
-        en = (summary or "").strip()
-        if not en or en == self.seen:
-            return
-        self.seen = en
-        task = asyncio.create_task(self._translate(en))
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-
-    async def _translate(self, en: str) -> None:
-        try:
-            data = await self.svc.llm.json(_THINK_TRANS, en[:1200], model=self.svc.cfg.guard_model,
-                                           max_tokens=200, purpose="thinktrans", chat_id=self.chat_id, effort="none")
-            ko = (data.get("ko") or "").strip()
-        except Exception:
-            log.debug("생각 요약 번역 실패 — 건너뜀")
-            return
-        if ko:
-            await self.show(ko)   # 최근 상태로 교체 (뒤에 도구 조각이 또 오면 그게 덮음 — 최근 게 맞음)
+        """on_think: 모델이 뱉는 영어 추론 원문을 💭 밑에 실시간으로 흘린다 (ChatGPT 작업표시처럼 — 오너 요청)."""
+        self.tail = (summary or "").strip()
+        await self._push(force=done)
 
     async def clear(self) -> None:
         self.cleared = True
