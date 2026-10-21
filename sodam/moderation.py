@@ -143,11 +143,27 @@ class Moderator:
         self.perms.forget(chat_id)
         await self.db.log_mod(chat_id, actor_id, user_id, "demote", "오너 우선권 — 제재 전 관리자 해제")
 
+    async def _ensure(self, bot: Bot, chat_id: int, user_id: int, ok: set, redo) -> None:
+        """제재가 진짜 걸렸나 get_chat_member 로 한 번 확인, 상태가 ok 가 아니면 redo() 한 번 더 (텔레그램이 드물게 씹음·경쟁).
+        AI 비용 0 (코드만). 확인 자체가 안 되면(권한·네트워크) 조용히 넘어감 — 원래 동작 유지, 무한 재시도 없음 (딱 1회)."""
+        try:
+            st = getattr(await bot.get_chat_member(chat_id, user_id), "status", "")
+        except Exception:
+            return
+        if st in ok:
+            return
+        try:
+            await redo()
+        except Exception:
+            pass
+
     async def mute(self, bot: Bot, chat_id: int, user_id: int, minutes: int | None,
                    actor_id: int | None, reason: str) -> None:
         await self._unadmin(bot, chat_id, user_id, actor_id)
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes) if minutes else None
         await bot.restrict_chat_member(chat_id, user_id, ChatPermissions.no_permissions(), until_date=until)
+        await self._ensure(bot, chat_id, user_id, {"restricted", "kicked", "left"},
+                           lambda: bot.restrict_chat_member(chat_id, user_id, ChatPermissions.no_permissions(), until_date=until))
         await self.db.log_mod(chat_id, actor_id, user_id, "mute",
                               f"{human_minutes(minutes) if minutes else '무기한'} / {reason}")
 
@@ -187,6 +203,8 @@ class Moderator:
     async def ban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
         await self._unadmin(bot, chat_id, user_id, actor_id)
         await bot.ban_chat_member(chat_id, user_id)
+        await self._ensure(bot, chat_id, user_id, {"kicked", "left"},
+                           lambda: bot.ban_chat_member(chat_id, user_id))
         await self.db.log_mod(chat_id, actor_id, user_id, "ban", reason)
 
     async def unban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
