@@ -188,6 +188,22 @@ async def thinker_status_instant_fallback_then_gpt_phrase():
 
 
 @test
+async def thinker_status_instant_fallback_then_gpt_phrase():
+    # 즉시 기본 조각(하드코딩) → 뒤에서 GPT 가 지은 문구로 교체 (틀 — 오너)
+    bot = FakeBot()
+    c = _ctx(bot, ko="채팅 기록 뒤져서 세는 중")
+    th = agent._Thinker(c)
+    await th.begin()
+    await th.status([_call("chat_stats", '{"over":100}')], "100개 넘게 친 사람 정리해줘")
+    # 즉시 기본 조각이 먼저 떠 있어야 (GPT 문구 오기 전)
+    assert any("찾아보는 중" in e[2] for e in bot.named("edit_text")), bot.calls
+    await _drain(th)                                  # GPT 문구 생성 끝
+    assert "채팅 기록 뒤져서 세는 중" in bot.named("edit_text")[-1][2], "GPT 가 지은 문구로 교체"
+    # 싼 guard 모델로 작업 문구 생성 (thinkstatus)
+    assert any(k[2].get("purpose") == "thinkstatus" and k[2].get("model") == "guard" for k in c.svc.llm.calls)
+
+
+@test
 def tool_status_maps_names_to_korean():
     assert "웹" in agent._tool_status(["web_search"])
     assert "그림" in agent._tool_status(["make_image"])
