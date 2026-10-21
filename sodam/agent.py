@@ -13,7 +13,7 @@ from . import agentlog, ai_instructions, costs, lessons, mediaintent, memory, ro
 from .llm import BudgetExceeded
 from .permissions import Role
 from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
-from .security import nonce, wrap
+from .security import nonce, strip_unsafe, wrap
 from .tools import FIND_TOOL, READ_ONLY, ToolCtx, available, execute, find_tools_schema, offered, split_core
 from .util import clip_mid, name_key, user_name
 from .whyfail import CLAIM as _CLAIM, PROMISE as _PROMISE, refused
@@ -34,6 +34,55 @@ MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
 # 먼저 끼어들 때는 방 자료만 볼 수 있게 (웹검색·제재·게임 같은 도구는 숨김 → 비용·오작동 방지)
 CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
+
+THINK_EDIT_GAP = 1.5   # 💭 생각 메시지 편집 간격(초) — 텔레그램 플러드 방지 (grammY: 한 채팅 ~1초 1회 안전)
+THINK_MAX_CHARS = 3500
+
+
+class _Thinker:
+    """느린(생각) 답에서 생각 요약(reasoning.summary)을 💭 메시지 하나에 흘려보낸다 (1.5초마다 고침), 끝나면 지운다.
+    Claude/Codex 처럼 '뭘 하는 중'을 보여 줌. llm.think 의 on_think(요약, done) 콜백으로 불린다. 방 설정 ai_thinking 켬 + 그룹방만."""
+
+    def __init__(self, ctx: ToolCtx):
+        self.bot = ctx.bot
+        self.chat_id = ctx.chat_id
+        self.reply_to = getattr(ctx.request_msg, "message_id", None)
+        self.msg = None
+        self.last = 0.0
+        self.lock = asyncio.Lock()
+        self.cleared = False
+
+    async def __call__(self, summary: str, done: bool) -> None:
+        if self.cleared:
+            return
+        now = time.monotonic()
+        if not done and now - self.last < THINK_EDIT_GAP:
+            return
+        text = strip_unsafe((summary or "").strip())   # 링크·지갑·@ 제거 (요약도 '남이 쓴 데이터')
+        if not text:
+            return
+        body = "💭 " + clip_mid(text, THINK_MAX_CHARS)
+        async with self.lock:
+            if self.cleared:
+                return
+            self.last = time.monotonic()
+            try:
+                if self.msg is None:
+                    self.msg = await self.bot.send_message(self.chat_id, body, reply_to_message_id=self.reply_to)
+                else:
+                    await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
+            except Exception:
+                pass   # 편집 실패(플러드·동일 내용 등)는 무시 — 진짜 답은 따로 나감
+
+    async def clear(self) -> None:
+        self.cleared = True
+        async with self.lock:
+            if self.msg is not None:
+                try:
+                    await self.bot.delete_message(self.chat_id, self.msg.message_id)
+                except Exception:
+                    pass
+                self.msg = None
 
 # 생각이 필요한 요청 (코드 판단, 비용 0): 관리자·오너 요청 전부 + 멤버는 이유·분석을 묻거나 한 요청에 일이 둘 이상
 # 이어진 것('찾아서 경고', '요약 올리고 알림도', '확인하고 괜찮으면'). 멤버 잡담·도구 하나로 끝나는 요청은 추론 없이(싸게).
@@ -245,6 +294,12 @@ async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
         status = "budget"
         raise
     finally:
+        th = getattr(ctx, "thinker", None)   # 💭 생각 메시지 지우기 (어떻게 끝나든)
+        if th is not None:
+            try:
+                await th.clear()
+            except Exception:
+                log.debug("생각 메시지 정리 실패")
         if steer is not None:   # 마지막 확인과 닫기 사이에 await 없음 → 이후 말은 보낸 쪽이 새 실행으로
             steer.closed = True
         await agentlog.finish(ctx.svc.db, run, token, status)   # 기록 실패는 안에서 삼킴
@@ -318,6 +373,9 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     ctx.media_intent = mediaintent.classify(request, reply_to)
     ctx.request_text = request   # 합쳐진 요청 원문 (영상·그림 원문 보존 — sodam/mediapolicy.py)
     ctx.reply_text = reply_to or ""   # 답장한 글 (영어 프롬프트 글에 답장으로 '영상 만들어줘' — 실제 베베 #2567)
+    # 💭 생각 과정 보여주기 (방 설정 ai_thinking·그룹방만): 느린(생각) 답에서 요약을 흘려 보여 줌 → 끝나면 run_agent 가 지움
+    ctx.thinker = (_Thinker(ctx) if ctx.chat_id < 0 and ctx.settings.get("ai_thinking")
+                   and not ctx.quiet and ctx.request_msg is not None else None)
     if ctx.media_intent == "ambiguous" and "make_video" not in allowed:
         ctx.media_intent = "ump"
     base = list(messages)                    # 올려 보낼 때 처음부터 (light 가 본 도구 결과·답은 버림)
@@ -480,7 +538,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
                                            allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail,
-                                           parallel=True)
+                                           parallel=True, on_think=getattr(ctx, "thinker", None))
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise

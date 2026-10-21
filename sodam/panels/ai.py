@@ -26,7 +26,7 @@ menu.register_preset("reply_max_chars", [(v, f"답변 {v}자") for v in ("200", 
 menu.register_preset("user_rate_per_min", [(v, f"분당 {v}회") for v in ("2", "3", "5")], "ai")
 
 # 🧠 기억·대화 방식 (sodam/memory.py · social.py 의 설정)
-SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_quote", "ai_chime_in", "ai_spicy"]
+SOCIAL_TOGGLES = ["ai_memory", "ai_room_memory", "ai_follow_up", "ai_quote", "ai_thinking", "ai_chime_in", "ai_spicy"]
 for _k in SOCIAL_TOGGLES:
     menu.register_toggle(_k, "aip")
 menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
