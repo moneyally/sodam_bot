@@ -35,54 +35,74 @@ THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 
 # 먼저 끼어들 때는 방 자료만 볼 수 있게 (웹검색·제재·게임 같은 도구는 숨김 → 비용·오작동 방지)
 CHIME_TOOLS = frozenset({"search_knowledge", "room_rules"})
 
-THINK_EDIT_GAP = 1.5   # 💭 생각 메시지 편집 간격(초) — 텔레그램 플러드 방지 (grammY: 한 채팅 ~1초 1회 안전)
 THINK_MAX_CHARS = 3500
 
 
+# 생각 요약 번역: OpenAI 요약은 영어 고정(언어 옵션 없음·조사·실측) → ChatGPT 앱처럼 보이려면 우리가 번역.
+# 오픈소스에도 바로 쓸 건 없고(클로드 코드도 요청만 열림 #89776) 다들 '싼 모델로 번역 한 번' — 그래서 생각 끝에 한 번만,
+# 뒤에서(답을 안 느리게) 싼 모델(guard)로 옮긴다 (오너 '그냥 영어 번역처리', 비용 걱정 2026-10-21).
+_THINK_TRANS = ("아래는 AI 가 문제를 푸는 '생각 과정' 영어 요약이야. 자연스러운 한국어 반말 한두 문장으로 옮겨. "
+                "설명·따옴표·머리말 없이 번역문만. JSON {\"ko\": \"한국어\"} 로만 답해.")
+
+
 class _Thinker:
-    """느린(생각) 답에서 생각 요약(reasoning.summary)을 💭 메시지 하나에 흘려보낸다 (1.5초마다 고침), 끝나면 지운다.
-    Claude/Codex 처럼 '뭘 하는 중'을 보여 줌. llm.think 의 on_think(요약, done) 콜백으로 불린다. 방 설정 ai_thinking 켬 + 그룹방만."""
+    """느린(생각) 답에서 '💭 생각 중…'을 먼저 띄우고, 생각 요약(영어)이 끝나면 뒤에서 싼 모델로 한국어로 옮겨 그 자리를
+    고친다 → 답 나오면 지운다. Claude/Codex 의 '생각 과정'처럼. llm.think 의 on_think(요약, done) 콜백. 방 ai_thinking 켬 + 그룹방만."""
 
     def __init__(self, ctx: ToolCtx):
+        self.svc = ctx.svc
         self.bot = ctx.bot
         self.chat_id = ctx.chat_id
         self.reply_to = getattr(ctx.request_msg, "message_id", None)
         self.msg = None
-        self.last = 0.0
         self.lock = asyncio.Lock()
         self.cleared = False
+        self.seen = ""                      # 이미 옮긴 영어 요약 (같으면 또 안 옮김)
+        self.gen = 0                        # 라운드마다 +1 → 늦게 끝난 옛 번역이 새 생각을 덮지 않게
+        self.tasks: set[asyncio.Task] = set()
 
     async def __call__(self, summary: str, done: bool) -> None:
-        if self.cleared:
+        """on_think: 흐르는 중(done=False)엔 '생각 중…' 그대로(영어 안 보임), 한 라운드 생각이 끝나면(done=True) 뒤에서 번역해 교체."""
+        if self.cleared or not done:
             return
-        now = time.monotonic()
-        if not done and now - self.last < THINK_EDIT_GAP:
+        en = (summary or "").strip()
+        if not en or en == self.seen:
             return
-        text = strip_unsafe((summary or "").strip())   # 링크·지갑·@ 제거 (요약도 '남이 쓴 데이터')
+        self.seen = en
+        self.gen += 1
+        g = self.gen
+        task = asyncio.create_task(self._render(en, g))   # 번역은 뒤에서 — 진짜 답을 안 느리게
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def _render(self, en: str, g: int) -> None:
+        ko = ""
+        try:
+            data = await self.svc.llm.json(_THINK_TRANS, en[:1200], model=self.svc.cfg.guard_model,
+                                           max_tokens=200, purpose="thinktrans", chat_id=self.chat_id, effort="none")
+            ko = (data.get("ko") or "").strip()
+        except Exception:
+            log.debug("생각 요약 번역 실패 — 건너뜀")
+        text = strip_unsafe(ko or en)       # 번역 실패하면 영어라도 (드묾)
         if not text:
             return
         body = "💭 " + clip_mid(text, THINK_MAX_CHARS)
         async with self.lock:
-            if self.cleared:
+            if self.cleared or g != self.gen or self.msg is None:   # 더 새 생각이 왔거나 지워졌으면 버림
                 return
-            self.last = time.monotonic()
             try:
-                if self.msg is None:
-                    self.msg = await self.bot.send_message(self.chat_id, body, reply_to_message_id=self.reply_to)
-                else:
-                    await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
+                await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
             except Exception:
-                pass   # 편집 실패(플러드·동일 내용 등)는 무시 — 진짜 답은 따로 나감
+                pass   # 편집 실패(플러드·동일 내용)는 무시 — 진짜 답은 따로 나감
 
     async def begin(self) -> None:
-        """생각(느린) 답이 시작되면 요약이 오기 전에 '💭 생각 중…'을 먼저 띄운다 — 요약이 흘러오면 그 자리를
-        고쳐 쓰고(on_think), 모델이 요약을 안 내도 '생각 중…'은 그대로 보임 (오너 '안 뜬다' → 항상 보이게, 2026-10-21)."""
+        """생각(느린) 답이 시작되면 번역을 기다리지 않고 '💭 생각 중…'을 먼저 띄운다 — 번역이 오면 그 자리를 고치고,
+        요약이 없거나 빠른 답이면 '생각 중…'만 잠깐 (오너 '안 뜬다' → 항상 보이게, 2026-10-21)."""
         if self.cleared or self.msg is not None:
             return
         async with self.lock:
             if self.cleared or self.msg is not None:
                 return
-            self.last = time.monotonic()
             try:
                 self.msg = await self.bot.send_message(self.chat_id, "💭 생각 중…", reply_to_message_id=self.reply_to)
             except Exception:
@@ -90,6 +110,8 @@ class _Thinker:
 
     async def clear(self) -> None:
         self.cleared = True
+        for t in list(self.tasks):
+            t.cancel()
         async with self.lock:
             if self.msg is not None:
                 try:
