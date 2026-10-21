@@ -784,6 +784,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 빠른 답: AI 답 만드는 동안 '입력 중' 4초마다(`handlers._keep_typing`), 벽시계 상한 `agent.DEADLINE` 그룹 25초·1:1 45초 → 넘으면 지금까지로 답.
   **병렬 도구 호출 켬 (2026-10-06, tests/test_agent_parallel.py · 뮤테이션 5개)**: 에이전트만 parallel_tool_calls=True. 한 라운드의 **맨 앞부터 이어지는
   조회 도구(READ_ONLY)만 동시에** 실행(Codex parallel.rs), 쓰기 도구·그 뒤 조회·find_tools 는 차례대로 하나씩, 결과는 부른 순서대로 (events 'parallel').
+- **💭 라이브 생각 보여주기** (`llm.think` on_think·`llm._stream_think`, `agent._Thinker`, 방 설정 `ai_thinking` 기본 꺼짐, tests/test_thinking.py · 뮤테이션 2개, 2026-10-21 오너 'Claude 처럼'): 느린(생각) 답에서 OpenAI reasoning summary 를 흘려 보여 줌 (Codex 방식 — 요약만, 원문 CoT 는 안 옴). `reasoning={"summary":"auto"}` + `stream=True`(on_think 줄 때만 — 나머지 호출은 예전처럼 한 번에, 회귀 0) → `response.reasoning_summary_text.delta` 를 모아 1.5초마다(THINK_EDIT_GAP) 💭 메시지 editMessageText, `response.completed` 의 response 로 멀티라운드·암호화추론·usage 그대로. `_Thinker` = strip_unsafe(링크·지갑·@) + 방당 💭 하나 + run_agent finally 로 지움. **heavy·생각(think) 길 + 그룹방 + ai_thinking 켬 + request_msg 있을 때만** (잡담 light 는 추론 안 해 안 뜸 — 자연스러움). 조직 미인증이면 summary 400 → `self.summary_off` 로 요약 없이(폴백, 우리 조직은 인증됨). 켜기 🧠 기억·대화 방식(aip) 토글 또는 change_setting. SDK: openai-python `create(stream=True)` + `event.type` 문자열 분기(클래스 isinstance X).
 
 ## 📞 음성채팅 (`sodam/voice/`, `panels/voice.py`, tests/test_voice.py · 뮤테이션 22개)
 - **통화 안정성 (2026-09-30, '렉 때문에 끊겼어요' 조사 — 운영 통화는 1건 reason=idle 뿐)**: Realtime 오류는 무해한 것

@@ -143,6 +143,12 @@ def _cache_rejected(e: Exception) -> bool:
     return "prompt_cache" in text or "cache_breakpoint" in text
 
 
+def _summary_rejected(e: Exception) -> bool:
+    """생각 요약(reasoning.summary)을 못 쓸 때(조직 미인증·모델 미지원): 그 문구면 요약만 빼고 재시도."""
+    text = str(e).lower()
+    return "summary" in text or "must be verified" in text or "organization" in text and "verif" in text
+
+
 def _mark(item: dict) -> dict | None:
     """이 항목 끝(마지막 글 조각)에 캐시 쓰기 지점. 글 조각이 없으면 None."""
     it = dict(item)
@@ -204,6 +210,7 @@ class LLM:
         self.cache_opts_off = False   # GPT-6 캐시 지점(prompt_cache_options)을 API 가 거절하면 True → 자동 캐시로
         self.models_off: set[str] = set()   # 이 프로세스에서 거절된 모델 → fallback_model 로
         self.search_opts_off = False   # 검색 추가 옵션(include·user_location·context)을 API 가 거절하면 True → 예전 모양으로
+        self.summary_off = False   # 생각 요약(reasoning.summary)을 API 가 거절하면(조직 미인증 등) True → 요약 없이
 
     def _today(self) -> str:
         return datetime.now(self.cfg.tz).strftime("%Y-%m-%d")
@@ -429,8 +436,11 @@ class LLM:
     async def think(self, messages: list[dict], *, tools: list[dict] | None = None, tool_choice: str = "auto",
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
                     model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None,
-                    json_mode: bool = False, cache_tail: bool = False, parallel: bool = False):
+                    json_mode: bool = False, cache_tail: bool = False, parallel: bool = False,
+                    on_think=None):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
+        on_think(생각요약, done): 주면 생각 요약(reasoning.summary=auto)을 스트리밍으로 흘려보낸다 — 조각마다 호출.
+        조직 미인증 등으로 거절되면 self.summary_off 로 요약 없이 (= 예전처럼 한 번에).
         messages 는 chat 형식 그대로 받고, 돌려주는 객체도 chat 의 message 처럼 content·tool_calls 를 가진다.
         .items = 이번 출력 항목 (암호화된 추론 포함) → 다음 라운드에 assistant 메시지의 "items" 로 넣으면 추론이 이어진다.
         store=False (서버에 대화 안 남김) + reasoning.encrypted_content (OpenAI 추론 가이드의 상태 없는 방식).
@@ -446,9 +456,13 @@ class LLM:
         text: dict[str, Any] = {"verbosity": "low"}
         if json_mode:
             text["format"] = {"type": "json_object"}
+        want_summary = on_think is not None and not self.summary_off
+        reasoning: dict[str, Any] = {"effort": fix_effort(model, effort)}
+        if want_summary:
+            reasoning["summary"] = "auto"
         kwargs: dict[str, Any] = {
             "model": model, "input": items, "max_output_tokens": max_tokens,
-            "reasoning": {"effort": fix_effort(model, effort)}, "store": False,
+            "reasoning": reasoning, "store": False,
             "include": ["reasoning.encrypted_content"], "text": text, **cache,
         }
         if tools:
@@ -461,11 +475,20 @@ class LLM:
                                          "tools": [{"type": "function", "name": n} for n in allowed]}
             kwargs["parallel_tool_calls"] = parallel   # 에이전트만 True (조회 도구는 agent 가 동시에 실행)
         try:
-            resp = await self.client.responses.create(**kwargs)
+            resp = await self._create_think(kwargs, on_think if want_summary else None)
             await self._mark_allowed(kwargs, model, ok=True)
         except (BadRequestError, NotFoundError) as e:
+            if want_summary and isinstance(e, BadRequestError) and _summary_rejected(e):
+                log.warning("생각 요약 거절(조직 미인증 등) → 요약 없이 (재시작 전까지): %s", e)
+                self.summary_off = True
+                kwargs["reasoning"].pop("summary", None)
+                resp = await self.client.responses.create(**kwargs)   # 요약·스트리밍 없이 한 번에
+                await self._mark_allowed(kwargs, model, ok=True)
+                await self._record(resp.usage, chat_id, purpose, model)
+                return self._think_result(resp)
             again = dict(tools=tools, tool_choice=tool_choice, effort=effort, max_tokens=max_tokens, purpose=purpose,
-                         chat_id=chat_id, allowed=allowed, cache_key=cache_key, json_mode=json_mode, parallel=parallel)
+                         chat_id=chat_id, allowed=allowed, cache_key=cache_key, json_mode=json_mode, parallel=parallel,
+                         on_think=on_think)
             if (fb := self._drop_model(model, e)) is not None:
                 return await self.think(messages, model=fb, **again)
             if isinstance(e, BadRequestError) and "prompt_cache_options" in kwargs and _cache_rejected(e):
@@ -481,10 +504,48 @@ class LLM:
             kwargs["tool_choice"] = "auto"
             resp = await self.client.responses.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
+        return self._think_result(resp)
+
+    @staticmethod
+    def _think_result(resp):
+        """Responses API 응답(스트리밍이든 아니든 같은 Response 객체) → chat 의 message 모양."""
         calls = [SimpleNamespace(id=o.call_id, type="function", function=SimpleNamespace(name=o.name, arguments=o.arguments))
                  for o in resp.output if o.type == "function_call"]
         return SimpleNamespace(content=resp.output_text or "", tool_calls=calls or None,
                                items=[o.model_dump(exclude_unset=True, by_alias=True) for o in resp.output])
+
+    async def _create_think(self, kwargs: dict, on_think):
+        """on_think 가 있으면 스트리밍으로 생각 요약을 흘려보내고, 없으면 예전처럼 한 번에. 둘 다 완성된 Response 반환."""
+        if on_think is None:
+            return await self.client.responses.create(**kwargs)
+        return await self._stream_think(kwargs, on_think)
+
+    async def _stream_think(self, kwargs: dict, on_think):
+        """create(stream=True): response.reasoning_summary_text.delta 를 모아 on_think 로, response.completed 의
+        response 를 그대로 돌려줌 (non-stream Response 와 동일 — 멀티라운드·암호화추론·usage 코드 그대로 씀)."""
+        summary, final = "", None
+        stream = await self.client.responses.create(**kwargs, stream=True)
+        async for event in stream:
+            t = getattr(event, "type", "")
+            if t == "response.reasoning_summary_text.delta":
+                summary += getattr(event, "delta", "") or ""
+                try:
+                    await on_think(summary, False)
+                except Exception:
+                    log.debug("on_think 콜백 오류 무시")
+            elif t == "response.reasoning_summary_part.added" and getattr(event, "summary_index", 0) \
+                    and summary and not summary.endswith("\n"):
+                summary += "\n\n"
+            elif t == "response.completed":
+                final = event.response
+        if final is None:
+            raise RuntimeError("스트림에 response.completed 이벤트가 없음")
+        if summary:
+            try:
+                await on_think(summary, True)   # 생각 완성 — 마지막으로 한 번(스로틀에 묻힌 마지막 조각 반영)
+            except Exception:
+                pass
+        return final
 
     async def json(self, system: str, user: str, *, model: str | None = None,
                    max_tokens: int = 1500, purpose: str = "json", chat_id: int | None = None,
