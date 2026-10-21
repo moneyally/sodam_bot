@@ -18,6 +18,11 @@ register_setting("ai_sanction_card", "risky", "AI 제재 확인 버튼",
                  choices={"risky": "risky", "위험한것만": "risky", "밴강퇴만": "risky", "all": "all", "전부": "all"}, choice_labels={"risky": "밴·강퇴만", "all": "전부"})
 register_setting("ai_spicy", False, "19금 드립 받아치기")               # 기본 꺼짐: 켠 방에서만 야한 드립에 은유 수준으로 (노골적 X)
 register_setting("ai_quote", True, "답장 인용으로 답하기")             # 끄면 그룹방 AI 답을 인용 없이 그냥 메시지로 (오너 요청 2026-10-01)
+# 소담 답 언어 (2026-10-22 오너 '외국인한테 한국어로 가는 문제'): auto = 손님이 쓴 언어로 (영어엔 영어·일본어엔 일본어·한국어엔 한국어),
+# ko = 항상 한국어 (손님이 외국어로 말해도). 기본 auto (오너 결정: 모든 방). 숫자·이름·명령어는 원래 글자.
+register_setting("ai_reply_lang", "auto", "소담 답 언어",
+                 choices={"auto": "auto", "자동": "auto", "손님언어": "auto", "ko": "ko", "한국어": "ko", "한국어고정": "ko"},
+                 choice_labels={"auto": "손님이 쓴 언어로", "ko": "항상 한국어"})
 register_setting("ai_thinking", True, "💭 생각 과정 보여주기")         # 2026-10-21 오너 '모든 방·멤버도 켜': 기본 켬. 소담이 일할 때 💭(한국어 문구+영어 추론) — 끄려면 🧠 토글
 register_setting("ai_chime_in", False, "AI 먼저 끼어들기")            # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디
 register_setting("ai_chime_gap_min", 120, "끼어들기 최소 간격(분)", range_=(30, 1440))

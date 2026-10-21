@@ -420,7 +420,8 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         bot_name=svc.cfg.bot_name, bot_id=ctx.bot.id, style_key=style_key, tz=svc.cfg.tz,
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
         reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, in_dm=ctx.chat_id > 0,
-        instructions=instructions, lessons=room_lessons, comeback=comeback, spicy=spicy, **extras)
+        instructions=instructions, lessons=room_lessons, comeback=comeback, spicy=spicy,
+        reply_lang=ctx.settings.get("ai_reply_lang", "auto"), **extras)
     # 모델에 싣는 목록 = 역할·대화 종류로만 (방 설정과 무관 → 방마다 같아 캐시 유지), 부를 수 있는 건 방 설정까지 본 것만
     shown = offered(ctx.role, ctx.chat_id > 0)
     usable = {t.name for t in available(ctx.role, ctx.settings, ctx.chat_id > 0)}
