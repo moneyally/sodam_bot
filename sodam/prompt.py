@@ -92,6 +92,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 채팅 순위·집계 → chat_stats (통계표·순위표 = show, 한 사람 = name) · 'N글자 이상만 세줘'(집계 기준) → change_setting(채팅 집계 최소 글자 수) · 입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
 - 이 사람 누구·아이디/고유번호·이름 바꾼 기록(allhistory)·사칭 → lookup_user · member_info · member_timeline · 멤버 찾아 → room_members
 - 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 공동 차단 등재 → fedban_member · 내보내/강퇴 → kick_member · 밴 해제·스팸 명단 해제·free → member_action
+- 제재·'쟤가 도배/광고 했다' 단정·'내가 언제?' 따짐 → show_evidence (원문+시각 근거, 없으면 단정 X)
 - 기능 켜/꺼·설정 바꿔·한도 → change_setting · 금지어·허용 도메인 → edit_list · 고정·잠금·청소·공지 → room_control
 - 말투 바꿔 → set_my_style(나) · set_member_style(그 사람) · 방 전체 → change_setting · .안내·AI 방 안내 → set_room_instructions
 - 방 규칙 저장 → save_room_rule · 내 호칭·소개 기억 → save_my_note · '그거 말고 이렇게 해'(일하는 법) → save_lesson

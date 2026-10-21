@@ -981,6 +981,12 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 시세 = 업비트 `KRW-USDT` trade_price(주) → 빗썸 `USDT_KRW` closing_price(폴백) → 코인게코. 전역 60초 캐시(외부 호출 분당 1회 = 레이트리밋 0.2%), **Origin 헤더 금지**(업비트 느려짐), sanity 800~2500원 밖·전부 실패면 지어내지 말고 None("확인 불가"), 갱신 실패해도 5분 안 직전 값은 stale 로. 업비트 약관 '복제·배포'는 회색지대 → "업비트 기준·참고용" 표기. 안내서 guide/rates.md.
 - 명령 등록은 handlers 가 `rates.register_commands()` (autoreply 등과 같은 자리). 토글 bool 설정은 choices 없이 default 만 (choices 에 bool 넣으면 설정 렌더링이 깨짐 — 실제 겪음).
 
+## 📋 근거(영수증) (`evidence.py`, `panels/evidence.py`, tests/test_evidence.py · 뮤테이션 3개, 2026-10-21 오너 '거짓말했으면 근거 제시해서 반박 못하게')
+- claude식 조각1/3 중 **근거**: 제재하거나 '쟤가 도배/광고/욕 했다' 단정하거나 멤버가 '내가 언제?' 따질 때, 기록에서 **원문+시각**을 코드로 뽑아 들이댐 (AI 비용 0 — 사실은 코드가).
+- `evidence.receipts(svc, chat, uid)`: 최근 6시간(LOOKBACK_SEC) 이 사람 글 40개에서 ① 도배(같은 글 2번↑ → '14:03~14:05 같은 글 3번: "…"') ② 링크 글(도메인만 `evil[.]com 링크`·t.me/…, 눌리지·재도배 안 되게) ③ 특별한 거 없으면 최근 글 1~2개('너 이렇게 말했잖아') ④ mod_log 경고 누적 90일. 없으면 `""` → 소담은 단정 안 함. strip_unsafe 통과.
+- AI 도구 `show_evidence(name)` (read_only·where=room·ctx.tainted): `tools._resolve` 로 멤버 찾아 receipts → '원문·시각 그대로 근거로' 지시, 기록에 없으면 '지어내지 말 것'. 지도·도움말(👮 관리)·prompt 규칙(제재 전 근거)에 있음.
+- **조각2(자기 점검: 제재 진짜 걸렸나 되짚고 재시도)·조각3(계획 카드: 여러 단계 한 장 승인 → ✅/⏳)은 아직 — 다음 작업.**
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
