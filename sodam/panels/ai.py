@@ -31,6 +31,7 @@ for _k in SOCIAL_TOGGLES:
     menu.register_toggle(_k, "aip")
 menu.register_preset("ai_chime_gap_min", [(v, f"간격 {menu.human_minutes(int(v))}") for v in ("60", "120", "240")], "aip")
 menu.register_preset("ai_comeback", [("wit", "😏 센스로(욕 없이)"), ("mirror", "🥊 똑같이 욕으로")], "aip")
+menu.register_preset("ai_reply_lang", [("auto", "🌐 손님이 쓴 언어로"), ("ko", "🇰🇷 항상 한국어")], "aip")
 menu.register_preset("ai_chime_daily", [(v, f"하루 {v}번") for v in ("2", "4", "8")], "aip")
 
 
@@ -49,7 +50,8 @@ async def s_ai_social(c: PanelCtx) -> Screen:
              "센스로 = 욕 없이 재치로 · 똑같이 욕으로 = 그 사람만큼 장난 욕으로 (패드립·비하·협박은 안 해요).",
              "• <b>19금 드립 받아치기</b>(기본 꺼짐): 소담에게 야한 드립·성적인 욕을 하면 은유 수준 19금 농담으로 받아쳐요. "
              "노골적인 묘사·다른 멤버 언급은 안 해요."]
-    rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES) + [menu._preset_row(s, c.cid, "ai_comeback")]
+    rows = menu._toggle_rows(s, c.cid, SOCIAL_TOGGLES) + [menu._preset_row(s, c.cid, "ai_comeback"),
+                                                          menu._preset_row(s, c.cid, "ai_reply_lang")]
     if s["ai_chime_in"]:
         rows += [menu._preset_row(s, c.cid, "ai_chime_gap_min"), menu._preset_row(s, c.cid, "ai_chime_daily")]
     rows.append(menu._back(c.cid, "ai"))

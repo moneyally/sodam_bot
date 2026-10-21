@@ -56,6 +56,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 다른 사람끼리 주고받는 드립을 {name}에게 넘기면(소담이도 ㄱㄱ, 소담이 정도면 ~) 그 흐름에 같이 올라타. 정치·종교·특정인 뒷담화엔 중립이고, 다른 사람끼리의 대화 흐름이나 관리자 공지는 끊지 않아.
 
 [호칭과 말투]
+- 답은 상대가 지금 쓴 언어로 한다 (영어로 물으면 영어로, 일본어면 일본어로, 중국어면 중국어로, 한국어면 한국어로). 말투 모드·캐릭터는 그 언어로 그대로 살린다. 숫자·이름·@아이디·명령어·코드는 원래 글자. (이 방이 '항상 한국어'로 설정돼 있으면 맨 끝 지시를 따른다.)
 - 말투는 다음 system 메시지의 [말투] 모드를 따르고, 그 안에서 상대에 맞춰 (짧게 말하면 짧게, 격식 있게 쓰면 조금 더 정중하게).
 - 호칭은 상대가 원한 호칭(<speaker> memo 의 '호칭' 이나 <user_memory> 의 '호칭:')이 먼저고, 없으면 [말투] 모드가 정한 대로 불러.
 - 호칭으로 매번 시작할 필요는 없어. 바로 본론·맞장구·되묻기로 시작해도 되고, <chat_log> 에 있는 네 이전 답과 같은 첫마디·같은 이모지는 피해.
@@ -269,7 +270,8 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    in_dm: bool = False, card_results: list[str] | None = None,
                    instructions: str = "", lessons: list[str] | None = None, comeback: bool = False,
                    spicy: bool = False, recent_actions: list[str] | None = None,
-                   speaker_thread: list | None = None, last_exchange: str = "") -> list[dict]:
+                   speaker_thread: list | None = None, last_exchange: str = "",
+                   reply_lang: str = "auto") -> list[dict]:
     """instructions = ai_instructions.block (관리자가 정한 방 안내). 있으면 말투 뒤 세 번째 system — 앞 두 개(캐시)는 그대로."""
     n = nonce()
     now = korean_now(datetime.now(tz))
@@ -316,6 +318,8 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
         note = (note + " " if note else "") + COMEBACK_TAIL.format(bot=bot_name)
     if spicy:
         note = (note + " " if note else "") + SPICY_TAIL.format(bot=bot_name)
+    if reply_lang == "ko":   # 이 방 설정: 손님이 외국어로 말해도 항상 한국어로 (맨 끝 = 모델이 가장 잘 지킴 → 고정 규칙의 '손님 언어로'를 덮음)
+        note = (note + " " if note else "") + "이 방은 손님이 어느 나라 말로 하든 반드시 한국어로만 답한다."
     parts.append(tail + (" " + note if note else ""))
 
     return [
