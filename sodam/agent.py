@@ -45,9 +45,25 @@ _THINK_TRANS = ("아래는 AI 가 문제를 푸는 '생각 과정' 영어 요약
                 "설명·따옴표·머리말 없이 번역문만. JSON {\"ko\": \"한국어\"} 로만 답해.")
 
 
+# '지금 하는 일'을 한국어 조각으로 (모델이 생각을 말 안 해도 '실시간 조각' 느낌 — 오너 2026-10-21). 도구 이름 → 한국어.
+def _tool_status(names: list[str]) -> str:
+    for n in names:
+        if n in ("web_search", "news_headlines"):           return "웹에서 찾아보는 중…"
+        if n == "make_image":                                return "그림 그리는 중…"
+        if n in ("make_sticker", "copy_sticker", "sticker_catalog"): return "스티커 만드는 중…"
+        if n == "make_profile_video":                        return "움짤 만드는 중…"
+        if n == "make_video":                                return "영상 만드는 중…"
+        if n == "music":                                     return "노래 찾는 중…"
+        if n == "run_code":                                  return "계산하는 중…"
+        if n == "sports":                                    return "경기 찾아보는 중…"
+        if n in ("bot_command", "other_bot_results"):        return "다른 봇에 물어보는 중…"
+        if n in READ_ONLY:                                   return "기록 찾아보는 중…"
+    return "처리하는 중…"
+
+
 class _Thinker:
-    """느린(생각) 답에서 '💭 생각 중…'을 먼저 띄우고, 생각 요약(영어)이 끝나면 뒤에서 싼 모델로 한국어로 옮겨 그 자리를
-    고친다 → 답 나오면 지운다. Claude/Codex 의 '생각 과정'처럼. llm.think 의 on_think(요약, done) 콜백. 방 ai_thinking 켬 + 그룹방만."""
+    """느린(생각) 답에서 '💭 생각 중…'을 띄우고, 소담이 지금 뭘 하는지(도구)를 한국어 조각으로 바꿔 보여 준다. 모델이 생각을
+    말로 뱉으면(on_think, 영어) 뒤에서 싼 모델로 한국어로 옮겨 같이. 답 나오면 지운다. 방 ai_thinking 켬 + 그룹방만 (2026-10-21 오너)."""
 
     def __init__(self, ctx: ToolCtx):
         self.svc = ctx.svc
@@ -55,58 +71,62 @@ class _Thinker:
         self.chat_id = ctx.chat_id
         self.reply_to = getattr(ctx.request_msg, "message_id", None)
         self.msg = None
+        self.body = ""                      # 지금 띄운 글 (같으면 또 안 고침)
         self.lock = asyncio.Lock()
         self.cleared = False
         self.seen = ""                      # 이미 옮긴 영어 요약 (같으면 또 안 옮김)
-        self.gen = 0                        # 라운드마다 +1 → 늦게 끝난 옛 번역이 새 생각을 덮지 않게
         self.tasks: set[asyncio.Task] = set()
 
+    async def show(self, text: str) -> None:
+        """💭 <한국어 조각> 을 띄우거나 그 자리를 고친다 (가장 최근 상태만, 같으면 안 함)."""
+        if self.cleared:
+            return
+        text = strip_unsafe((text or "").strip())   # 링크·지갑·@ 제거 (요약도 '남이 쓴 데이터')
+        if not text:
+            return
+        body = "💭 " + clip_mid(text, THINK_MAX_CHARS)
+        async with self.lock:
+            if self.cleared or body == self.body:
+                return
+            self.body = body
+            try:
+                if self.msg is None:
+                    self.msg = await self.bot.send_message(self.chat_id, body, reply_to_message_id=self.reply_to)
+                else:
+                    await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
+            except Exception:
+                pass   # 띄우기·편집 실패(플러드·동일 내용)는 무시 — 진짜 답은 따로 나감
+
+    async def begin(self) -> None:
+        """생각(느린) 답이 시작되면 '💭 생각 중…'을 먼저 띄운다 (요약이 없거나 빠른 답이어도 항상 보이게, 오너 '안 뜬다')."""
+        await self.show("생각 중…")
+
+    async def status(self, names: list[str]) -> None:
+        """도구를 실행하기 직전, 지금 하는 일을 한국어 조각으로 (모델이 요약을 안 뱉어도 실시간 조각)."""
+        await self.show(_tool_status(names))
+
     async def __call__(self, summary: str, done: bool) -> None:
-        """on_think: 흐르는 중(done=False)엔 '생각 중…' 그대로(영어 안 보임), 한 라운드 생각이 끝나면(done=True) 뒤에서 번역해 교체."""
+        """on_think: 한 라운드 생각이 끝나면(done) 영어 요약을 뒤에서(답 안 느리게) 한국어로 옮겨 보여 준다."""
         if self.cleared or not done:
             return
         en = (summary or "").strip()
         if not en or en == self.seen:
             return
         self.seen = en
-        self.gen += 1
-        g = self.gen
-        task = asyncio.create_task(self._render(en, g))   # 번역은 뒤에서 — 진짜 답을 안 느리게
+        task = asyncio.create_task(self._translate(en))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
-    async def _render(self, en: str, g: int) -> None:
-        ko = ""
+    async def _translate(self, en: str) -> None:
         try:
             data = await self.svc.llm.json(_THINK_TRANS, en[:1200], model=self.svc.cfg.guard_model,
                                            max_tokens=200, purpose="thinktrans", chat_id=self.chat_id, effort="none")
             ko = (data.get("ko") or "").strip()
         except Exception:
             log.debug("생각 요약 번역 실패 — 건너뜀")
-        text = strip_unsafe(ko or en)       # 번역 실패하면 영어라도 (드묾)
-        if not text:
             return
-        body = "💭 " + clip_mid(text, THINK_MAX_CHARS)
-        async with self.lock:
-            if self.cleared or g != self.gen or self.msg is None:   # 더 새 생각이 왔거나 지워졌으면 버림
-                return
-            try:
-                await self.bot.edit_message_text(body, chat_id=self.chat_id, message_id=self.msg.message_id)
-            except Exception:
-                pass   # 편집 실패(플러드·동일 내용)는 무시 — 진짜 답은 따로 나감
-
-    async def begin(self) -> None:
-        """생각(느린) 답이 시작되면 번역을 기다리지 않고 '💭 생각 중…'을 먼저 띄운다 — 번역이 오면 그 자리를 고치고,
-        요약이 없거나 빠른 답이면 '생각 중…'만 잠깐 (오너 '안 뜬다' → 항상 보이게, 2026-10-21)."""
-        if self.cleared or self.msg is not None:
-            return
-        async with self.lock:
-            if self.cleared or self.msg is not None:
-                return
-            try:
-                self.msg = await self.bot.send_message(self.chat_id, "💭 생각 중…", reply_to_message_id=self.reply_to)
-            except Exception:
-                pass   # 띄우기 실패는 무시 — 진짜 답은 따로 나감
+        if ko:
+            await self.show(ko)   # 최근 상태로 교체 (뒤에 도구 조각이 또 오면 그게 덮음 — 최근 게 맞음)
 
     async def clear(self) -> None:
         self.cleared = True
@@ -569,15 +589,12 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
         schemas = [*ts.schemas, *([route.ESCALATE_SCHEMA] if extra else [])]   # 복사본 (불러오기가 지난 호출 목록을 안 바꾸게)
         restrict = ts.restrict(extra)
         if think:
-            th = getattr(ctx, "thinker", None)
-            if th is not None:
-                await th.begin()   # 요약이 오기 전에 '💭 생각 중…' 먼저 (항상 보이게) → on_think 이 그 자리를 고쳐 씀
             try:
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
                                            allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail,
-                                           parallel=True, on_think=th)
+                                           parallel=True, on_think=getattr(ctx, "thinker", None))
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
@@ -600,6 +617,9 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     done: list[str] = []                     # light 가 실행한 쓰기 도구 (올려 보낼 때 heavy 에 알림)
     usd0 = run.usd_micro - run.media_micro   # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
     rounds = min(LIGHT_MAX_STEPS, MAX_STEPS) if light else MAX_STEPS
+    th = getattr(ctx, "thinker", None)       # 💭 생각 중: 생각 길이거나 오너·관리자 요청이면 길과 무관하게 띄움 (오너는 다 보고 싶어 함)
+    if th is not None and (think or ctx.role >= Role.ADMIN):
+        await th.begin()
     for step in range(rounds):
         if step and run.usd_micro - run.media_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답
             log.warning("에이전트 실행 요금 상한 $%.2f 도달 (chat=%s, %d라운드) → 도구 없이 마무리", RUN_USD_CAP, ctx.chat_id, step)
@@ -647,6 +667,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                          {"role": "system", "content": NUMBER_NOTE.format(nums=", ".join(bad[:5]))}]
             continue
         used = True
+        if th is not None:   # 💭 지금 뭐 하는 중 (도구 → 한국어 조각) — 모델이 생각을 말 안 해도 실시간 조각
+            await th.status([c.function.name for c in calls])
         messages.append({
             "role": "assistant",
             "content": msg.content or "",
