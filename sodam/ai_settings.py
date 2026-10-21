@@ -18,7 +18,7 @@ register_setting("ai_sanction_card", "risky", "AI 제재 확인 버튼",
                  choices={"risky": "risky", "위험한것만": "risky", "밴강퇴만": "risky", "all": "all", "전부": "all"}, choice_labels={"risky": "밴·강퇴만", "all": "전부"})
 register_setting("ai_spicy", False, "19금 드립 받아치기")               # 기본 꺼짐: 켠 방에서만 야한 드립에 은유 수준으로 (노골적 X)
 register_setting("ai_quote", True, "답장 인용으로 답하기")             # 끄면 그룹방 AI 답을 인용 없이 그냥 메시지로 (오너 요청 2026-10-01)
-register_setting("ai_thinking", False, "💭 생각 과정 보여주기")        # 기본 꺼짐: 켠 방만, 느린(생각) 답에서 요약을 💭 로 흘려 보여 줌 (Claude 처럼)
+register_setting("ai_thinking", True, "💭 생각 과정 보여주기")         # 2026-10-21 오너 '모든 방·멤버도 켜': 기본 켬. 소담이 일할 때 💭(한국어 문구+영어 추론) — 끄려면 🧠 토글
 register_setting("ai_chime_in", False, "AI 먼저 끼어들기")            # 기본 꺼짐: 답 없는 질문·아침 인사에 가끔 한마디
 register_setting("ai_chime_gap_min", 120, "끼어들기 최소 간격(분)", range_=(30, 1440))
 register_setting("ai_chime_daily", 4, "끼어들기 하루 최대", range_=(1, 20))
