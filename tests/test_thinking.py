@@ -109,7 +109,11 @@ class _FakeLLM:
 
     async def json(self, system, user, **kw):
         self.calls.append((system, user, kw))
-        return {"ko": self.ko}
+        return {"ko": self.ko, "s": self.ko}   # ko=요약 번역, s=작업 문구 (둘 다 가짜로 같은 값)
+
+
+def _call(name, args="{}"):
+    return SimpleNamespace(function=SimpleNamespace(name=name, arguments=args))
 
 
 def _ctx(bot, chat=-100777, ko="옮긴 한국어"):
@@ -166,25 +170,28 @@ async def thinker_uses_cheap_guard_model_once_per_round():
 
 
 @test
+async def thinker_status_instant_fallback_then_gpt_phrase():
+    # 즉시 기본 조각(하드코딩) → 뒤에서 GPT 가 지은 문구로 교체 (틀 — 오너)
+    bot = FakeBot()
+    c = _ctx(bot, ko="채팅 기록 뒤져서 세는 중")
+    th = agent._Thinker(c)
+    await th.begin()
+    await th.status([_call("chat_stats", '{"over":100}')], "100개 넘게 친 사람 정리해줘")
+    # 즉시 기본 조각이 먼저 떠 있어야 (GPT 문구 오기 전)
+    assert any("찾아보는 중" in e[2] for e in bot.named("edit_text")), bot.calls
+    await _drain(th)                                  # GPT 문구 생성 끝
+    assert "채팅 기록 뒤져서 세는 중" in bot.named("edit_text")[-1][2], "GPT 가 지은 문구로 교체"
+    # 싼 guard 모델로 작업 문구 생성 (thinkstatus)
+    assert any(k[2].get("purpose") == "thinkstatus" and k[2].get("model") == "guard" for k in c.svc.llm.calls)
+
+
+@test
 def tool_status_maps_names_to_korean():
     assert "웹" in agent._tool_status(["web_search"])
     assert "그림" in agent._tool_status(["make_image"])
     assert "노래" in agent._tool_status(["music"])
     assert "처리" in agent._tool_status(["ban_member"])   # 모르는/쓰기 도구 = 처리하는 중
     assert "처리" in agent._tool_status([])               # 기본
-
-
-@test
-async def thinker_status_shows_korean_tool_chunk():
-    # 모델이 생각을 말 안 해도, 도구 실행을 한국어 조각으로 (실시간 조각 느낌 — 오너)
-    bot = FakeBot()
-    th = agent._Thinker(_ctx(bot))
-    await th.begin()
-    await th.status(["web_search"])
-    assert "웹에서" in bot.named("edit_text")[-1][2], bot.calls
-    await th.status(["make_image"])
-    assert "그림" in bot.named("edit_text")[-1][2]
-    assert "evil" not in str(bot.calls)   # 안전 필터는 그대로
 
 
 @test
