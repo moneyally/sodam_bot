@@ -123,6 +123,31 @@ async def thinker_sends_then_edits_then_clears():
 
 
 @test
+async def thinker_begin_shows_placeholder_before_summary():
+    # 요약이 오기 전에 '💭 생각 중…'을 먼저 띄운다 (오너 '안 뜬다' → 항상 보이게)
+    bot = FakeBot()
+    th = agent._Thinker(_ctx(bot))
+    await th.begin()
+    sends = bot.named("send_message")
+    assert sends and "💭" in sends[0][2] and "생각 중" in sends[0][2], sends
+    assert sends[0][3].get("reply_to_message_id") == 42
+    await th.begin()                                   # 두 번 불러도 한 번만 (이미 떠 있음)
+    assert len(bot.named("send_message")) == 1, bot.calls
+    await th("이 사람 찾는 중 — 밴한다", True)          # 요약이 오면 그 자리를 고침 (새 메시지 아님)
+    assert bot.named("edit_text"), bot.calls
+    assert len(bot.named("send_message")) == 1, "요약은 새로 안 보내고 placeholder 를 고침"
+
+
+@test
+async def thinker_begin_after_clear_does_nothing():
+    bot = FakeBot()
+    th = agent._Thinker(_ctx(bot))
+    await th.clear()
+    await th.begin()
+    assert not bot.named("send_message"), "clear 뒤엔 안 띄움"
+
+
+@test
 async def thinker_filters_links_and_wallets():
     bot = FakeBot()
     th = agent._Thinker(_ctx(bot))

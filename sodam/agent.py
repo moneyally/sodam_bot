@@ -74,6 +74,20 @@ class _Thinker:
             except Exception:
                 pass   # 편집 실패(플러드·동일 내용 등)는 무시 — 진짜 답은 따로 나감
 
+    async def begin(self) -> None:
+        """생각(느린) 답이 시작되면 요약이 오기 전에 '💭 생각 중…'을 먼저 띄운다 — 요약이 흘러오면 그 자리를
+        고쳐 쓰고(on_think), 모델이 요약을 안 내도 '생각 중…'은 그대로 보임 (오너 '안 뜬다' → 항상 보이게, 2026-10-21)."""
+        if self.cleared or self.msg is not None:
+            return
+        async with self.lock:
+            if self.cleared or self.msg is not None:
+                return
+            self.last = time.monotonic()
+            try:
+                self.msg = await self.bot.send_message(self.chat_id, "💭 생각 중…", reply_to_message_id=self.reply_to)
+            except Exception:
+                pass   # 띄우기 실패는 무시 — 진짜 답은 따로 나감
+
     async def clear(self) -> None:
         self.cleared = True
         async with self.lock:
@@ -533,12 +547,15 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
         schemas = [*ts.schemas, *([route.ESCALATE_SCHEMA] if extra else [])]   # 복사본 (불러오기가 지난 호출 목록을 안 바꾸게)
         restrict = ts.restrict(extra)
         if think:
+            th = getattr(ctx, "thinker", None)
+            if th is not None:
+                await th.begin()   # 요약이 오기 전에 '💭 생각 중…' 먼저 (항상 보이게) → on_think 이 그 자리를 고쳐 씀
             try:
                 return await svc.llm.think(messages, tools=schemas or None, tool_choice=tool_choice,
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
                                            allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail,
-                                           parallel=True, on_think=getattr(ctx, "thinker", None))
+                                           parallel=True, on_think=th)
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
