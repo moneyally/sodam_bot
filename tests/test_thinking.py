@@ -102,56 +102,111 @@ def summary_rejected_detects():
     assert not _summary_rejected(Exception("model not found"))
 
 
-# ── agent._Thinker ───────────────────────────────────────
-def _ctx(bot, chat=-100777):
-    return SimpleNamespace(bot=bot, chat_id=chat,
+# ── agent._Thinker (생각 요약을 뒤에서 한국어로 번역해 교체) ──
+class _FakeLLM:
+    def __init__(self, ko="옮긴 한국어"):
+        self.ko, self.calls = ko, []
+
+    async def json(self, system, user, **kw):
+        self.calls.append((system, user, kw))
+        return {"ko": self.ko}
+
+
+def _ctx(bot, chat=-100777, ko="옮긴 한국어"):
+    svc = SimpleNamespace(llm=_FakeLLM(ko), cfg=SimpleNamespace(guard_model="guard"))
+    return SimpleNamespace(svc=svc, bot=bot, chat_id=chat,
                            request_msg=SimpleNamespace(message_id=42), settings={})
 
 
+async def _drain(th):
+    for t in list(th.tasks):   # 뒤에서 도는 번역이 끝나길 기다림
+        await t
+
+
 @test
-async def thinker_sends_then_edits_then_clears():
+async def thinker_begin_then_translates_korean_then_clears():
     bot = FakeBot()
-    th = agent._Thinker(_ctx(bot))
-    await th(" 이 사람 찾는 중 ", True)               # done=True → 바로
+    th = agent._Thinker(_ctx(bot, ko="이 사람 찾아서 밴하는 중"))
+    await th.begin()
     sends = bot.named("send_message")
-    assert sends and "💭" in sends[0][2] and "찾는 중" in sends[0][2], sends
-    assert sends[0][3].get("reply_to_message_id") == 42         # 요청에 답장
-    await th("이 사람 찾는 중 — 밴한다", True)          # 두 번째 = 편집
-    assert bot.named("edit_text"), bot.calls
+    assert sends and "💭 생각 중" in sends[0][2], sends                   # 먼저 '생각 중…'
+    assert sends[0][3].get("reply_to_message_id") == 42
+    await th("locating the user and checking ban perms", True)            # 영어 요약 끝 → 뒤에서 번역
+    await _drain(th)
+    edits = bot.named("edit_text")
+    assert edits and "밴하는 중" in edits[-1][2], edits                   # 한국어로 교체 (영어 아님)
+    assert "locating" not in edits[-1][2], "영어 요약을 그대로 안 보임"
+    assert len(bot.named("send_message")) == 1, "교체는 편집 — 새 메시지 아님"
     await th.clear()
     assert bot.named("delete"), "clear 는 💭 메시지를 지움"
 
 
 @test
-async def thinker_filters_links_and_wallets():
+async def thinker_streaming_shows_nothing_until_done():
     bot = FakeBot()
     th = agent._Thinker(_ctx(bot))
-    await th("https://evil.com 지갑 TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t 확인 중", True)
-    body = bot.named("send_message")[0][2]
-    assert "evil.com" not in body and "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" not in body, body   # strip_unsafe 통과
+    await th.begin()
+    before = len(bot.named("edit_text"))
+    await th("still thinking in english", False)     # done=False → 영어 안 보임, 편집도 안 함
+    await _drain(th)
+    assert len(bot.named("edit_text")) == before, "흐르는 중엔 아무것도 안 바꿈"
 
 
 @test
-async def thinker_throttles_within_gap():
+async def thinker_uses_cheap_guard_model_once_per_round():
+    bot = FakeBot()
+    c = _ctx(bot, ko="한국어 생각")
+    th = agent._Thinker(c)
+    await th.begin()
+    await th("english summary one", True)
+    await th("english summary one", True)            # 같은 요약 → 또 안 옮김
+    await _drain(th)
+    assert len(c.svc.llm.calls) == 1, "같은 요약은 한 번만 번역"
+    assert c.svc.llm.calls[0][2].get("model") == "guard", "싼 guard 모델로"
+
+
+@test
+async def thinker_begin_shows_placeholder_before_summary():
     bot = FakeBot()
     th = agent._Thinker(_ctx(bot))
-    import time as _t
-    th.last = _t.monotonic()                      # 방금 고친 척
-    await th("새 생각", False)                     # done=False + 간격 안 → 아무것도 안 함
-    assert not bot.calls, "1.5초 안엔 편집 안 함"
-    await th("새 생각", True)                      # done=True → 무조건 보냄
-    assert bot.named("send_message"), bot.calls
+    await th.begin()
+    sends = bot.named("send_message")
+    assert sends and "💭" in sends[0][2] and "생각 중" in sends[0][2], sends
+    await th.begin()                                   # 두 번 불러도 한 번만 (이미 떠 있음)
+    assert len(bot.named("send_message")) == 1, bot.calls
+
+
+@test
+async def thinker_begin_after_clear_does_nothing():
+    bot = FakeBot()
+    th = agent._Thinker(_ctx(bot))
+    await th.clear()
+    await th.begin()
+    assert not bot.named("send_message"), "clear 뒤엔 안 띄움"
+
+
+@test
+async def thinker_filters_links_and_wallets():
+    bot = FakeBot()
+    # 번역 결과에 링크·지갑이 섞여도 strip_unsafe 로 거름
+    th = agent._Thinker(_ctx(bot, ko="https://evil.com 지갑 TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t 확인 중"))
+    await th.begin()
+    await th("checking a wallet address", True)
+    await _drain(th)
+    body = bot.named("edit_text")[-1][2]
+    assert "evil.com" not in body and "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" not in body, body
 
 
 # ── agent 가 on_think 를 넘기나 (설정 켜짐·그룹·생각일 때만) ──
 @test
 async def thinker_created_only_when_setting_on_and_group():
     bot = FakeBot()
-    on = SimpleNamespace(bot=bot, chat_id=-100, request_msg=SimpleNamespace(message_id=1),
+    svc = SimpleNamespace(llm=_FakeLLM(), cfg=SimpleNamespace(guard_model="guard"))
+    on = SimpleNamespace(svc=svc, bot=bot, chat_id=-100, request_msg=SimpleNamespace(message_id=1),
                          settings={"ai_thinking": True}, quiet=False)
-    off = SimpleNamespace(bot=bot, chat_id=-100, request_msg=SimpleNamespace(message_id=1),
+    off = SimpleNamespace(svc=svc, bot=bot, chat_id=-100, request_msg=SimpleNamespace(message_id=1),
                           settings={"ai_thinking": False}, quiet=False)
-    dm = SimpleNamespace(bot=bot, chat_id=555, request_msg=SimpleNamespace(message_id=1),
+    dm = SimpleNamespace(svc=svc, bot=bot, chat_id=555, request_msg=SimpleNamespace(message_id=1),
                          settings={"ai_thinking": True}, quiet=False)
     # _run 의 판정식과 같은 조건
     def make(c):
