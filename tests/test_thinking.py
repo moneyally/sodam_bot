@@ -102,7 +102,7 @@ def summary_rejected_detects():
     assert not _summary_rejected(Exception("model not found"))
 
 
-# ── agent._Thinker (생각 요약을 뒤에서 한국어로 번역해 교체) ──
+# ── agent._Thinker (위=한국어 상태 문구 + 아래=영어 추론 원문 실시간) ──
 class _FakeLLM:
     def __init__(self, ko="옮긴 한국어"):
         self.ko, self.calls = ko, []
@@ -128,45 +128,47 @@ async def _drain(th):
 
 
 @test
-async def thinker_begin_then_translates_korean_then_clears():
+async def thinker_head_korean_tail_english_then_clears():
+    # 위=한국어 상태, 아래=영어 추론 원문 (오너 '교체 문구 밑에 영어 델타도')
     bot = FakeBot()
-    th = agent._Thinker(_ctx(bot, ko="이 사람 찾아서 밴하는 중"))
+    th = agent._Thinker(_ctx(bot))
     await th.begin()
     sends = bot.named("send_message")
     assert sends and "💭 생각 중" in sends[0][2], sends                   # 먼저 '생각 중…'
     assert sends[0][3].get("reply_to_message_id") == 42
-    await th("locating the user and checking ban perms", True)            # 영어 요약 끝 → 뒤에서 번역
-    await _drain(th)
-    edits = bot.named("edit_text")
-    assert edits and "밴하는 중" in edits[-1][2], edits                   # 한국어로 교체 (영어 아님)
-    assert "locating" not in edits[-1][2], "영어 요약을 그대로 안 보임"
-    assert len(bot.named("send_message")) == 1, "교체는 편집 — 새 메시지 아님"
+    await th("Calculating recurrence step by step", True)                 # 영어 추론 → 밑에 그대로 흐름
+    body = bot.named("edit_text")[-1][2]
+    assert "💭 생각 중" in body and "Calculating recurrence" in body, body   # 위 한국어 + 아래 영어 둘 다
+    assert len(bot.named("send_message")) == 1, "한 메시지 안에서 교체 — 새 메시지 아님"
     await th.clear()
     assert bot.named("delete"), "clear 는 💭 메시지를 지움"
 
 
 @test
-async def thinker_streaming_shows_nothing_until_done():
+async def thinker_streaming_throttled_but_done_forces():
     bot = FakeBot()
     th = agent._Thinker(_ctx(bot))
     await th.begin()
-    before = len(bot.named("edit_text"))
-    await th("still thinking in english", False)     # done=False → 영어 안 보임, 편집도 안 함
-    await _drain(th)
-    assert len(bot.named("edit_text")) == before, "흐르는 중엔 아무것도 안 바꿈"
+    th.last = 0.0                                     # 간격 지난 척 → 첫 조각은 바로
+    await th("first chunk", False)
+    assert any("first chunk" in e[2] for e in bot.named("edit_text")), bot.calls
+    n = len(bot.named("edit_text"))
+    await th("first chunk more", False)               # THINK_GAP 안 → 묶어서 (안 고침)
+    assert len(bot.named("edit_text")) == n, "흐르는 중엔 묶어서 고침 (플러드 방지)"
+    await th("first chunk more and done", True)       # done=True → 바로
+    assert "done" in bot.named("edit_text")[-1][2], bot.calls
 
 
 @test
-async def thinker_uses_cheap_guard_model_once_per_round():
+async def thinker_no_translation_call_on_reasoning():
+    # 영어 원문을 그대로 흘리니 번역 호출(비용) 없음 — on_think 은 LLM 안 부름
     bot = FakeBot()
-    c = _ctx(bot, ko="한국어 생각")
+    c = _ctx(bot)
     th = agent._Thinker(c)
     await th.begin()
-    await th("english summary one", True)
-    await th("english summary one", True)            # 같은 요약 → 또 안 옮김
+    await th("english reasoning text", True)
     await _drain(th)
-    assert len(c.svc.llm.calls) == 1, "같은 요약은 한 번만 번역"
-    assert c.svc.llm.calls[0][2].get("model") == "guard", "싼 guard 모델로"
+    assert c.svc.llm.calls == [], "추론 흘리기는 LLM 호출 없음 (번역 안 함)"
 
 
 @test
