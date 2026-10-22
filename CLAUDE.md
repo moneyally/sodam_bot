@@ -687,6 +687,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 제작은 클로드: ssh_ws --get 으로 견본 → 분석·PIL 로 100×100 조각(정지 PNG / 영상 WebM 64KB↓) → data/emoji_lab/out/<이름>/01.png… 올림 →
   서버에서 `tools/emoji_pack.py --dir … --name … --title … --user <오너ID>` (sticker_type custom_emoji, 팩 <이름>_by_<봇>, --add 덧붙이기) → 오너 1:1 에 t.me/addemoji 링크.
   쓰는 사람은 텔레그램 프리미엄이어야 함, 봇은 메시지에 커스텀 이모지를 못 씀(링크로만).
+- **🆕 분할 이모지 처음부터 만들기** (`stickerforge/banner.py`, `tools/make_tiles.py`, tests/test_banner.py · 뮤테이션 확인, 2026-10-22 오너 '제작 기술 업그레이드'): 견본 없이
+  배너 spec({cols 1~10, rows 1~3, bg 색/그라데이션/투명, layers text·shape·image})으로 **전체 캔버스에 한 번 그려 → 한 번만 축소 → 100×100 격자 crop**(이음새 방지, `build_tiles` 의 qa_error=재조립 오차 0 이어야 함). 폰트/그라데이션은 layout.py 재사용, SS=3 수퍼샘플. `tools/make_tiles.py SPEC.json OUTDIR` → `00.png…` + preview → 그대로 `emoji_pack.py --dir`. ssh 로 클로드가 직접 만들 수 있음(봇은 MTProto history·getCustomEmoji 번호 못 뽑으니 견본 복제는 1:1 emojilab 캡처 필요, **새로 만들기는 banner.py 로 바로**). 다음(미착수): AI 도구 `make_tile_emoji`(요청 글 → 배너 spec) + 오너 1:1 흐름. 설계 근거 = ChatGPT E(전체 캔버스 한 번 축소·재조립 QA).
 
 ## 📅 출석 · 🎟 복권 · 🔮 운세 · 📏 도배 빼기 (`lottery.py`·`panels/lottery.py`·`fortune.py`, tests/test_lottery.py · test_chat_min_chars.py, 뮤테이션 17개, 2026-10-11 FOX 고객)
 - `.출석`(출첵) 한국 날짜 하루 1번·연속 일수(어제 줄 +1) → 방 설정 lotto_enabled(기본 꺼짐)면 복권 1장(7일): 자격 = 입장 lotto_min_days(3)일↑ (관리자도 받음, lotto_admins 끄면 관리자 빠짐 — 백악관 2026-10-11)·7일 안 대화·
