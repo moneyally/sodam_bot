@@ -20,6 +20,16 @@ def pick(q):
 
 
 @test
+def reorder_query_half_swaps_and_dedupes():
+    """유튜브 검색 0건일 때 쓸 다른 순서 (실측: 'doja cat freaky deaky' 0건 ↔ 'freaky deaky doja cat' 찾음)."""
+    alts = mm.reorder_query("doja cat freaky deaky")
+    assert alts[0] == "freaky deaky doja cat", alts          # 반 갈라 뒤+앞 (실측 성공)
+    assert "doja cat freaky deaky" not in alts               # 원문은 안 넣음
+    assert mm.reorder_query("아이유") == []                   # 한 낱말은 바꿀 게 없음
+    assert "틀어줘" not in " ".join(mm.reorder_query("아이유 밤편지 틀어줘"))  # STOP 낱말 뺀 뒤 순서만
+
+
+@test
 def requests_are_cleaned_and_generic_or_compilation_asks_back():
     r = mm.parse("아이유 밤편지 틀어줘")
     assert r.must == ["아이유", "밤편지"] and not r.intent and not r.generic

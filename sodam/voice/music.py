@@ -321,6 +321,17 @@ class Source:
             res = None
         cands = [e for e in (res or {}).get("entries") or [] if e]
         if not cands:
+            for alt_q in mm.reorder_query(req.text):   # 유튜브 검색이 낱말 순서에 변덕 → 순서 바꿔 한 번 더 (실측)
+                try:
+                    res = self._run(lambda y, q=alt_q: y.extract_info(f"ytsearch{SEARCH_N}:{q}", download=False),
+                                    extract_flat="in_playlist")
+                except MusicError:
+                    continue
+                cands = [e for e in (res or {}).get("entries") or [] if e]
+                if cands:
+                    log.info("기본 음원 검색 0건 → 순서 바꿔 찾음 %r", alt_q)
+                    break
+        if not cands:
             return self.alt_for(None, req, 0)
         got = mm.choose(req, cands, self.max_sec)
         if got.item:

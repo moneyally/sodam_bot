@@ -80,6 +80,24 @@ def search_text(text: str) -> str:
     return re.sub(r"\s+", " ", out).strip() or (text or "").strip()
 
 
+def reorder_query(text: str) -> list[str]:
+    """유튜브 검색이 낱말 순서에 변덕을 부림 (실측 2026-10-23 일루왕: 'doja cat freaky deaky' 0건 ↔
+    'freaky deaky doja cat' 바로 찾음 — 가수|제목 반을 앞뒤로 바꾸면 됨). 검색 0건일 때 다시 시도할 다른 순서."""
+    ws = search_text(text).split()
+    alts = []
+    if len(ws) >= 2:
+        h = len(ws) // 2
+        alts.append(" ".join(ws[h:] + ws[:h]))      # 뒤반 + 앞반 (실측 성공)
+    if len(ws) >= 3:
+        alts.append(" ".join(reversed(ws)))         # 완전 역순
+    seen, out = {" ".join(ws)}, []
+    for q in alts:
+        if q and q not in seen:
+            seen.add(q)
+            out.append(q)
+    return out
+
+
 def parse(text: str) -> Req:
     r = Req(text=search_text(text))
     ws = [w for w in words(r.text) if w not in STOP]
