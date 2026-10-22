@@ -422,8 +422,10 @@ TOOLS = [
                 "op": {"type": "string", "enum": ["list", *SCHED_OPS, "run"]},
                 "id": {"type": "integer", "description": "list 에 나온 번호"}},
                ["target", "op"], t_manage_schedule, Role.ADMIN, where="room"),
-    tools.Tool("room_control", "[관리자] 방 전체 조치 (확인 버튼): lock=방 잠그기(관리자만 채팅) · unlock=잠금 풀기 · "
-               f"purge=최근 메시지 count개 지우기(1~{PURGE_MAX}) · notice=공지 글 올리고 고정(text). 한 사람 제재는 멤버 도구.",
+    tools.Tool("room_control", "[관리자] 방 전체 조치 (확인 버튼): lock=방 잠그기 **= 전원/전체 뮤트** (관리자 빼고 "
+               "모두 채팅 금지 — '전체 뮤트'·'전원 뮤트'·'다 입막아'·'채팅하는 사람 전부 뮤트'·'다 조용히 시켜'가 전부 lock) · "
+               "unlock=잠금 풀기('전체 뮤트 해제'·'다시 풀어') · "
+               f"purge=최근 메시지 count개 지우기(1~{PURGE_MAX}) · notice=공지 글 올리고 고정(text). 한 명만 뮤트는 멤버 도구(mute_member).",
                {"action": {"type": "string", "enum": list(ROOM_OPS)},
                 "count": {"type": "integer", "description": f"purge: 1~{PURGE_MAX}"},
                 "text": {"type": "string", "description": "notice: 올릴 공지 글 그대로"}},

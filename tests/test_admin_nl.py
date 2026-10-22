@@ -472,3 +472,15 @@ def prompt_and_guide_mention_speech_admin():
     docs = G.load()
     assert "말로도 돼요" in docs["security"]["body"] and "말로도 돼요" in docs["schedule"]["body"]
     assert "말로도 돼요" in docs["admin-menu"]["body"] and "말로도 돼요" in docs["commands"]["body"]
+
+
+@test
+async def all_mute_maps_to_room_lock():
+    """'채팅하는 사람 전원 뮤트' = 방 잠금 (2026-10-23 오너 — 소담이 '기능 없다' 했던 것).
+    도구 설명에 전원/전체 뮤트가 lock 으로 연결돼 있어야 하고, 명령 별칭도 c_lock/c_unlock 으로."""
+    desc = next(t for t in tools.available(Role.ADMIN, {}, in_dm=False) if t.name == "room_control").description
+    assert "전원" in desc and "전체 뮤트" in desc and "다 입막아" in desc, desc
+    for w in ("전원뮤트", "전체뮤트", "다입막아", "방뮤트"):
+        assert commands.parse("." + w, "sodambot")[0].fn is commands.c_lock, w
+    for w in ("전체뮤트해제", "전원뮤트해제"):
+        assert commands.parse("." + w, "sodambot")[0].fn is commands.c_unlock, w
