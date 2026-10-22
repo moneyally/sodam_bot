@@ -76,6 +76,21 @@ async def missing_glyph_falls_back_no_crash():
 
 
 @test
+async def metal_ops_change_pixels():
+    """베벨·반사밴드·안쪽그림자(ChatGPT 역설계)가 실제로 평평한 그라데이션과 다른 픽셀을 만들어야 함."""
+    import numpy as np
+    base = {"cols": 1, "rows": 1, "bg": "transparent"}
+    gold = [[240, 240, 179], [242, 217, 23], [130, 113, 42]]
+    flat = B.build_tiles({**base, "layers": [{"type": "text", "text": "보", "font": "bold", "height": 0.7, "colors": gold}]})
+    metal = B.build_tiles({**base, "layers": [{"type": "text", "text": "보", "font": "bold", "height": 0.7, "colors": gold,
+                                               "band": 0.5, "bevel": 0.7, "inner": 0.45}]})
+    a = np.asarray(flat["tiles"][0], np.int16)
+    b = np.asarray(metal["tiles"][0], np.int16)
+    assert np.abs(a - b).mean() > 1.0, "금속 처리가 픽셀을 안 바꿈"
+    assert metal["qa_error"] == 0.0
+
+
+@test
 async def shape_and_image_layers():
     logo = Image.new("RGBA", (80, 80), (255, 0, 0, 255))
     r = B.build_tiles({"cols": 4, "rows": 1, "bg": [20, 20, 20], "images": [logo],
