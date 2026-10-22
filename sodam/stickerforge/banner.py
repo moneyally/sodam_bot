@@ -64,6 +64,39 @@ def _fit_font(text: str, font: str, target_h: int, max_w: int, stroke: int) -> I
     return ImageFont.truetype(path, 8)
 
 
+def _metal_fill(mask: Image.Image, colors, *, band: float = 0.0, bevel: float = 0.0, inner: float = 0.0,
+                band_color=(255, 255, 236)) -> Image.Image:
+    """글자 마스크 → 금속 채움: 세로 그라데이션 + 반사 밴드 + 베벨(위·왼 밝게/아래·오른 어둡게) + 안쪽 그림자.
+    (설계: ChatGPT 역설계 — stroke·depth·glow 만으론 안 되는 금속 표면·입체. roll 기반 엣지라 scipy 불필요.)"""
+    import numpy as np
+    a = np.asarray(mask, dtype=np.float32) / 255.0                     # HxW 알파 0~1
+    h, w = a.shape
+    ys = np.linspace(0.0, 1.0, h)
+    stops = [list(c)[:3] for c in (colors or [[255, 255, 255]])]
+    if len(stops) == 1:
+        stops = stops * 2
+    seg = np.linspace(0.0, 1.0, len(stops))
+    grad = np.stack([np.interp(ys, seg, [s[i] for s in stops]) for i in range(3)], axis=1)   # Hx3
+    rgb = np.repeat(grad[:, None, :], w, axis=1)                        # HxWx3
+    if band > 0:                                                        # 반사 밴드: 상단 1/3쯤 밝은 가로 띠
+        b = (np.exp(-((ys - 0.36) ** 2) / (2 * 0.05 ** 2)) * band)[:, None, None]
+        rgb = rgb * (1 - b) + np.asarray(band_color, float) * b
+    if bevel > 0 or inner > 0:
+        up, left = np.roll(a, -2, 0), np.roll(a, -2, 1)
+        dn, rt = np.roll(a, 2, 0), np.roll(a, 2, 1)
+        if bevel > 0:                                                  # 베벨: 위·왼 안쪽모서리 밝게, 아래·오른 어둡게
+            light = np.clip((a - dn) + (a - rt), 0, 1)[:, :, None]
+            dark = np.clip((a - up) + (a - left), 0, 1)[:, :, None]
+            rgb = rgb + light * 130 * bevel - dark * 130 * bevel
+        if inner > 0:                                                  # 안쪽 그림자: 위쪽 안쪽 가장자리 어둡게
+            er = np.minimum.reduce([np.roll(a, k, 0) for k in range(0, 4)])
+            shadow = np.clip(a - np.roll(er, 3, 0), 0, 1)[:, :, None]
+            rgb = rgb - shadow * 150 * inner
+    rgb = np.clip(rgb, 0, 255)
+    out = np.dstack([rgb, a * 255.0]).astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
+
+
 def _draw_text(canvas: Image.Image, ly: dict, W: int, H: int) -> None:
     """프리미엄 글자: 금속 그라데이션 채움 + 이중 테두리(stroke·stroke2) + 입체(depth) + 바깥 빛번짐(glow).
     로얄클럽류 팩처럼 보이게. 전부 spec 값이라 요청마다 달라짐(고정 아님)."""
@@ -100,12 +133,10 @@ def _draw_text(canvas: Image.Image, ly: dict, W: int, H: int) -> None:
     if stroke:
         gd.text((ox, oy), text, font=ft, fill=sc, stroke_width=stroke, stroke_fill=sc)
     md.text((ox, oy), text, font=ft, fill=255)
-    colors = ly.get("colors")
-    if colors and len(colors) >= 2:
-        fill = _gradient(glyph.width, glyph.height, [list(c)[:3] for c in colors])
-    else:
-        fill = Image.new("RGBA", glyph.size, _col(ly.get("color", [255, 255, 255]), (255, 255, 255, 255)))
-    glyph.paste(fill, (0, 0), mask)
+    colors = ly.get("colors") or [ly.get("color", [255, 255, 255])]
+    metal = _metal_fill(mask, colors, band=float(ly.get("band", 0.0)), bevel=float(ly.get("bevel", 0.0)),
+                        inner=float(ly.get("inner", 0.0)), band_color=_col(ly.get("band_color", [255, 255, 236]))[:3])
+    glyph.alpha_composite(metal)                       # 금속 채움을 테두리 위에
     if glow:                                          # 빛번짐: 글자 모양을 흐려 뒤에 깔기
         from PIL import ImageFilter
         a = mask.filter(ImageFilter.GaussianBlur(glow)).point(lambda v: min(255, int(v * 1.8)))
