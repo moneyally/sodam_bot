@@ -23,6 +23,15 @@ def _sat(px: np.ndarray) -> float:
     return float(((mx - mn) / (mx + 1e-6)).mean())
 
 
+def _frame_score(alpha: np.ndarray) -> float:
+    """타일 테두리(배지) 정도: 가장자리는 gap 으로 비어 있을 수 있어 안쪽 띠(10~20%)의 불투명 비율로."""
+    h, w = alpha.shape
+    i0, i1 = int(h * 0.1), int(h * 0.2)
+    ring = np.concatenate([alpha[i0:i1].ravel(), alpha[h - i1:h - i0].ravel(),
+                           alpha[:, i0:i1].ravel(), alpha[:, w - i1:w - i0].ravel()])
+    return float(ring.mean())
+
+
 def tile_features(img: Image.Image) -> np.ndarray:
     """조각 한 장 → 지문 벡터(VEC_DIM). 색·채도·밝기·따뜻함·프레임·글로우·채움 — 비슷한 스타일끼리 가까움."""
     rgb, alpha = _arr(img)
@@ -41,7 +50,7 @@ def tile_features(img: Image.Image) -> np.ndarray:
     botb = float((rgb[2 * h // 3:][bot_m].max(1) / 255.0).mean()) if bot_m.any() else bright
     grad = topb - botb                                        # 6: 위-아래 밝기차 (금속 +)
     # 프레임(배지): 가장자리 불투명 비율
-    border = float((alpha[:5].mean() + alpha[-5:].mean() + alpha[:, :5].mean() + alpha[:, -5:].mean()) / 4)  # 7
+    border = _frame_score(alpha)                               # 7: 테두리(배지)
     # 글로우: 반투명(0.1~0.8) 픽셀 비율 (네온·불 높음)
     glow = float(((alpha > 0.1) & (alpha < 0.85)).mean())     # 8
     cover = float(m.mean())                                   # 9: 채움 비율
@@ -91,11 +100,33 @@ def gradient_stops(img: Image.Image) -> list[list[int]]:
     return stops
 
 
+def reproduce_spec(sample_tiles: list, text: str, frame: str = "auto") -> dict:
+    """샘플 조각들을 분석 → 그 스타일로 새 글자(text) banner spec ('이거처럼 똑같이'의 재현 단계).
+    각 조각의 스타일·색을 읽어 글자마다 입힘(조각 수와 글자 수가 달라도 순서대로 돌려 씀). frame=auto 면 샘플에 테두리 있으면 금테."""
+    from ..panels.tileemoji import FRAMES, _font_for                 # 순환 import 피해 함수 안에서
+    toks = [analyze_tile(t) for t in sample_tiles] or [{"style": "gold", "colors": [[246, 241, 94], [130, 113, 42]], "has_frame": True}]
+    chars = [c for c in text if not c.isspace()][:24]
+    if not chars:
+        return {"cols": 1, "rows": 1, "bg": "transparent", "layers": []}
+    cols = min(10, len(chars))
+    rows = (len(chars) + cols - 1) // cols
+    framed = any(t["has_frame"] for t in toks)
+    fr = (FRAMES["gold"] if framed else None) if frame == "auto" else FRAMES.get(frame)
+    h = 0.62 if rows == 1 else 0.6 / rows * 1.6
+    layers = []
+    for i, ch in enumerate(chars):
+        tk = toks[i % len(toks)]
+        at = [((i % cols) + 0.5) / cols, ((i // cols) + 0.5) / rows]
+        layers.append({"type": "text", "text": ch, "style": tk["style"], "font": _font_for(ch, tk["style"]),
+                       "colors": tk["colors"], "at": at, "height": h})
+    return {"cols": cols, "rows": rows, "bg": "transparent", "frames": fr, "layers": layers}
+
+
 def analyze_tile(img: Image.Image) -> dict:
     """조각 → 재현 토큰 {style, colors(그라데이션), has_frame, glow, vector}. banner+stylefx 로 재현하는 시작값."""
     rgb, alpha = _arr(img)
-    border = float((alpha[:5].mean() + alpha[-5:].mean() + alpha[:, :5].mean() + alpha[:, -5:].mean()) / 4)
+    border = _frame_score(alpha)
     glow = float(((alpha > 0.1) & (alpha < 0.85)).mean())
     return {"style": guess_style(img), "colors": gradient_stops(img),
-            "has_frame": border > 0.35, "glow": round(glow, 3),
+            "has_frame": border > 0.4, "glow": round(glow, 3),
             "vector": tile_features(img).tolist()}

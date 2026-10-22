@@ -57,6 +57,29 @@ async def framed_tile_detected():
 
 
 @test
+async def reproduce_copies_style_and_frame():
+    """금테 금색 샘플 → 분석 → 새 글자로 재현하면 금색·프레임 그대로 ('이거처럼 똑같이')."""
+    samp = B.build_tiles({"cols": 2, "rows": 1, "bg": "transparent",
+                          "frames": {"fill": [17, 18, 20], "border": 0.05, "border_color": [172, 143, 47], "radius": 0.11, "gap": 0.08},
+                          "layers": [{"type": "text", "text": t, "style": "gold", "at": [(i + 0.5) / 2, 0.5], "height": 0.6}
+                                     for i, t in enumerate("로얄")]})
+    spec = AZ.reproduce_spec(samp["tiles"], "클럽보증")
+    assert spec["frames"] is not None and len(spec["layers"]) == 4
+    assert all(l["style"] == "gold" for l in spec["layers"])
+    r = B.build_tiles(spec)
+    assert r["qa_error"] == 0.0 and AZ.guess_style(r["tiles"][0]) == "gold"
+
+
+@test
+async def reproduce_no_frame_when_sample_has_none():
+    samp = B.build_tiles({"cols": 2, "rows": 1, "bg": "transparent",
+                          "layers": [{"type": "text", "text": t, "style": "neon", "at": [(i + 0.5) / 2, 0.5], "height": 0.75}
+                                     for i, t in enumerate("AB")]})
+    spec = AZ.reproduce_spec(samp["tiles"], "CD")
+    assert spec["frames"] is None and all(l["style"] == "neon" for l in spec["layers"])
+
+
+@test
 async def empty_tile_safe():
     from PIL import Image
     tok = AZ.analyze_tile(Image.new("RGBA", (100, 100), (0, 0, 0, 0)))
