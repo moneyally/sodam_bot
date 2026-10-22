@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import stylefx
 from .layout import _gradient, font_path, missing_glyphs
+
+# stylefx(ImageMagick) 로 넘기는 스타일 인자 (나머지 at·height 등은 banner 가 처리)
+_STYLE_PARAMS = ("color", "top", "bot", "glow", "glow_color", "bevel", "stroke", "stroke_color")
 
 TILE = 100
 SS = 3                      # 수퍼샘플: 고해상도로 그린 뒤 한 번만 축소 (작은 글씨 계단 현상 줄임)
@@ -106,11 +110,23 @@ def _draw_text(canvas: Image.Image, ly: dict, W: int, H: int) -> None:
     font = ly.get("font", "bold")
     if missing_glyphs(text, font):                    # 글꼴에 없는 글자 → 다 있는 글꼴로
         font = "gothic"
+    at = ly.get("at", [0.5, 0.5])
+    target_h = int(float(ly.get("height", 0.7)) * H)
+    style = ly.get("style")
+    if style:                                         # ImageMagick 스타일(금·크롬·네온·불·유리…) — 없으면 아래 PIL 금속
+        g = stylefx.render(text, style, font=font, size=max(24, target_h),
+                           **{k: v for k, v in ly.items() if k in _STYLE_PARAMS})
+        if g is not None:
+            if g.height > target_h * 1.4:             # 글로우로 커졌으면 칸에 맞게 줄임
+                k = target_h * 1.4 / g.height
+                g = g.resize((max(1, int(g.width * k)), max(1, int(g.height * k))), Image.LANCZOS)
+            cx, cy = int(at[0] * W), int(at[1] * H)
+            canvas.alpha_composite(g, (cx - g.width // 2, cy - g.height // 2))
+            return
     stroke = int(ly.get("stroke", 8)) * SS
     stroke2 = int(ly.get("stroke2", 0)) * SS          # 바깥 두 번째 테두리 (금속 느낌)
     depth = int(ly.get("depth", 0)) * SS              # 아래·오른쪽으로 겹쳐 찍어 입체
     glow = int(ly.get("glow", 0)) * SS                # 바깥 빛번짐 반경
-    target_h = int(float(ly.get("height", 0.7)) * H)
     pad = ly.get("pad", 0.04)
     max_w = int((1 - 2 * pad) * W)
     outer = stroke + stroke2
@@ -143,7 +159,6 @@ def _draw_text(canvas: Image.Image, ly: dict, W: int, H: int) -> None:
         halo = Image.new("RGBA", glyph.size, _col(ly.get("glow_color", [255, 180, 60]))[:3] + (0,))
         halo.putalpha(a)
         glyph = Image.alpha_composite(halo, glyph)
-    at = ly.get("at", [0.5, 0.5])
     cx, cy = int(at[0] * W), int(at[1] * H)
     canvas.alpha_composite(glyph, (cx - glyph.width // 2, cy - glyph.height // 2))
 

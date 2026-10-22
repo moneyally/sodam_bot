@@ -24,6 +24,15 @@ FONTS = {   # 이름: (파일, 설명) — 전부 OFL (data_files/fonts/LICENSE.
     "gothic": ("NanumGothic-ExtraBold.ttf", "깔끔한 굵은 고딕"),
     "brush": ("EastSeaDokdo-Regular.ttf", "거친 붓글씨 (액션·먹물 느낌)"),
     "brush2": ("NanumBrushScript-Regular.ttf", "부드러운 붓글씨"),
+    "serif": ("SongMyung-Regular.ttf", "명조 세리프"),
+    "deco": ("Gugi-Regular.ttf", "장식 간판체"),
+}
+# 영문 전용 디스플레이 폰트 — 한글 없음(자막·한글 글자엔 안 씀, banner 의 영문 브랜드 글자용). FONTS 와 분리해 '모든 폰트 한글' 불변식 유지.
+DISPLAY_FONTS = {
+    "royal": ("Cinzel.ttf", "영문 로열 세리프 대문자 (럭셔리·ROYAL)"),
+    "block": ("BebasNeue-Regular.ttf", "영문 키 큰 블록 대문자 (스포츠·배너)"),
+    "heavy": ("Anton-Regular.ttf", "영문 묵직한 산세리프 (임팩트)"),
+    "urban": ("Bungee-Regular.ttf", "영문 도시 블록체 (세로쌓기 좋음)"),
 }
 ALIGNS = ("center", "left", "right")
 ENTERS = ("none", "pop", "fade", "slide_up", "slide_left", "drop", "wipe", "zoom")
@@ -33,7 +42,8 @@ SS = 2   # 그릴 때 2배로 그리고 줄임 (가장자리 부드럽게)
 
 
 def font_path(name: str) -> str:
-    return os.path.join(HERE, FONTS.get(name, FONTS["bold"])[0])
+    rec = FONTS.get(name) or DISPLAY_FONTS.get(name) or FONTS["bold"]
+    return os.path.join(HERE, rec[0])
 
 
 def missing_glyphs(text: str, font: str) -> str:

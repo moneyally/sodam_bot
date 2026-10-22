@@ -14,3 +14,11 @@
 | NanumBrushScript-Regular.ttf | Nanum Brush Script | NHN Corporation |
 
 OFL 전문: https://openfontlicense.org/open-font-license-official-text/
+
+## 추가 폰트 (2026-10-22, 전부 OFL-1.1, Google Fonts)
+- SongMyung-Regular.ttf — Song Myung (Kim Ho-min / Google Fonts, OFL)
+- Gugi-Regular.ttf — Gugi (Yoon Design / Google Fonts, OFL)
+- Cinzel.ttf — Cinzel (Natanael Gama / Google Fonts, OFL)
+- BebasNeue-Regular.ttf — Bebas Neue (Dharma Type / Google Fonts, OFL)
+- Anton-Regular.ttf — Anton (Vernon Adams / Google Fonts, OFL)
+- Bungee-Regular.ttf — Bungee (David Jonathan Ross / Google Fonts, OFL)
