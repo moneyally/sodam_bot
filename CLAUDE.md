@@ -909,6 +909,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **분위기 신청 ('잔잔한 플리 틀어줘')**: `music.wants_mix` → MusicError("mix") → worker 가 `Source.mix_for` → 재생목록 검색(검색어 '<분위기> 노래'·'플레이리스트', 각 8개, 최대 14목록 —
   실측: 앞 8개가 전부 1시간 모음 영상일 때 있음) → 8분 안·원곡·`MIX_JUNK`(하루종일·듣기 좋은·플리 …) 아닌 곡 15개, 몇 곡뿐이면 첫 곡 믹스로 채움.
   모르는 말은 MIX_MIN 곡 넘게 제목에 나올 때만 가수로 거름. 서버 실측 5번 다 15곡.
+  **🆕 소담이 판단하는 분위기 신청** (2026-10-23 일루왕 '잠잘 때 섹스하는 노래·자장가 못 찾음 → AI가 판단해서'): `wants_mix` 는 generic/compilation 만 잡아서 '잠잘때 섹스하는 노래'·'자장가'·'운동할 때 듣는 노래' 처럼 **가수/제목으로 오해되는 상황·분위기 말**은 못 걸러 not_found 였음 → AI 도구 `music` 에 **`mix` 불리언** 추가: 소담(큰 모델)이 '특정 곡 아닌 분위기·상황·장르'로 판단하면 `play(query=분위기말, mix=true)` → 일감 payload `mix` → worker `_music_play` 가 resolve 건너뛰고 `_music_mix`(=mix_for 플리)로 바로 (하드코딩 목록 없이 AI 판단, 프레임워크 철학). `.노래 잔잔한 플리` 명령 길은 예전처럼 `wants_mix`→mix 로. tests/test_music_extras.py ai_judged_mix_flag_* · 뮤테이션 1개.
 - **소리 튐 대책 (2026-10-08 고객 '사운드가 튀네요')**: ntgcalls 소스 확인 = 밖에서 넣은 조각을 **버퍼 없이** 바로 WebRTC 로(늦으면 받는 쪽이 메움 → 튐),
   send_frame 은 코어 수만큼 스레드풀(서버 2개), 에코·자동 음량은 꺼져 있음, Opus 모노·음성 모드·ptime 60. 우리 쪽 고침: 크기 바뀜은 조각마다 조금씩(`glide`
   줄임 50ms·키움 250ms, 말 사이 0.3초 틈엔 안 키움), 한계 넘는 소리 `soft_limit`(딱딱 잘림 X), 조각 비면 마지막 조각을 줄이며 끝·다시 0 에서, 곡 시작 전 0.5초 미리 풀기.

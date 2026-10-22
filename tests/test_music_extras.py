@@ -412,6 +412,20 @@ async def mood_request_fills_the_queue_and_says_so():
     await stop_all(w)
 
 
+@test
+async def ai_judged_mix_flag_uses_playlist_without_keyword():
+    """소담이 '분위기·상황 신청' 판단 → play(mix=true): resolve 가 분위기로 안 봐도 플리로 여러 곡.
+    일루왕 '소담아 잠잘 때 섹스하는 노래 틀어줘' → 특정 곡이 아니라 못 찾던 것 (2026-10-23)."""
+    db, w, _, _ = await make_worker()
+    w.music_source = MixSource(tempfile.mkdtemp())
+    # '잠잘때 섹스하는 노래' 는 resolve 가 분위기로 안 봄(MixSource 는 '플리'만 mix) → mix=true 로 플리 강제
+    row = await run_job(db, w, "music_play",
+                        {"query": "잠잘때 섹스하는 노래", "by": 7, "by_name": "손님", "status_msg": 3, "mix": True}, CHAT)
+    assert row["result"] == "playlist", row
+    assert len(await db._all("SELECT id FROM music_queue WHERE by_id=7")) == 6, "분위기 곡 여러 개"
+    await stop_all(w)
+
+
 if __name__ == "__main__":
     run_all()
 
