@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, emojilab, leavelock, mediastore, medialog, modactions
+from . import autoreply, emojilab, leavelock, mediastore, medialog, modactions, ownerlock
 
 from .agent import run_agent
 from .db import disk_full
@@ -490,6 +490,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     admin_states = (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
     if old.status != new.status and (old.status in admin_states or new.status in admin_states):
         svc.perms.forget(cmu.chat.id)  # 관리자 목록 캐시 갱신
+    await ownerlock.on_status_change(context, cmu)  # 🔒 오너 잠금: 관리자가 뮤트·밴 풀면 즉시 다시 (자체 try)
     if not _in_chat(old) and _in_chat(new):
         await handle_new_member(context, cmu.chat.id, cmu.chat.title, new.user, getattr(cmu, "from_user", None), join_how(cmu))
     elif _in_chat(old) and not _in_chat(new):
