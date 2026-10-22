@@ -565,11 +565,12 @@ async def mirror_room_insult_adds_comeback_line_at_the_end_only_when_insulted():
 
 @test
 async def spicy_switch_off_by_default_and_adds_block_and_tail_only_when_on():
-    """오너 요청 2026-09-29: 19금 드립 받아치기 — 방마다 켜는 스위치(기본 꺼짐), 은유 수준·노골적 X."""
+    """오너 요청 2026-09-29: 19금 드립 받아치기 — 방마다 켜는 스위치(기본 꺼짐).
+    2026-10-22 오너 '코드가드 풀어줘': 수위 제한 없앰, 미성년·비동의 멤버만 절대 금지로 남김."""
     from sodam import prompt, settings as S
     import sodam.ai_settings  # noqa: F401
     assert S.DEFAULTS["ai_spicy"] is False
-    assert "노골적" in prompt.SPICY_BANTER and "미성년" in prompt.SPICY_BANTER
+    assert "미성년" in prompt.SPICY_BANTER and "수위 제한 없이" in prompt.SPICY_BANTER
     r = await Room().open()
     u = fake_user(5, "송도현")
     await r.join(u)
@@ -585,7 +586,7 @@ async def spicy_switch_off_by_default_and_adds_block_and_tail_only_when_on():
     await r.say(u, "소담아 오늘 밤 모텔 갈래")
     assert any("19금 드립 받아치기 켜짐" in m["content"] for m in msgs() if m["role"] == "system" and isinstance(m["content"], str))
     last = [m for m in msgs() if m["role"] == "user"][-1]["content"]
-    assert "은유·말장난 수준 19금" in (last if isinstance(last, str) else last[0]["text"])
+    assert "수위 높여" in (last if isinstance(last, str) else last[0]["text"])
 
 
 @test
