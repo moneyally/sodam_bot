@@ -1375,6 +1375,23 @@ def alt_source_refuses_other_versions_and_singerless_titles():
     assert music.mm.kind("린&찬혁이 부르는 AKMU의 '어떻게 이별까지 사랑하겠어'") == "cover"
 
 
+@test
+def search_zero_results_retries_reordered_order():
+    """기본 음원 검색이 0건이면 낱말 순서 바꿔 한 번 더 (실측 2026-10-23 일루왕 'doja cat freaky deaky')."""
+    FakeYDL.SEARCH = {
+        ("yt", "doja cat freaky deaky"): [],                      # 이 순서론 유튜브가 0건
+        ("yt", "freaky deaky doja cat"): [{"id": "frkZ", "title": "Tyga, Doja Cat - Freaky Deaky (Official Video)",
+                                           "duration": 200}],     # 반 바꾸면 찾음
+    }
+    FakeYDL.DRM = set()
+
+    def run():
+        y = music.Source(Path(tempfile.mkdtemp()))
+        got = y.resolve("doja cat freaky deaky")
+        assert got["vid"] == "frkZ", ("검색 0건이면 순서 바꿔 찾아야 함", got)
+    with_fake_ydl(run)
+
+
 if __name__ == "__main__":
     run_all()
 
