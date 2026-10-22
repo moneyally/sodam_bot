@@ -77,7 +77,7 @@ def parts_text() -> str:
     lines.append("공통 start·end(0~1 시간 창). particles angle 0=오른쪽 90=아래 -90=위 · blend add=빛(불티·네온) · 연기=smoke+blur 2~4+grow 2~3 · "
                  f"shape=char 면 char 에 글자(이모지는 비슷한 모양으로). 입자 합계 {SF.PARTICLE_BUDGET}, fx+layers ≤{SF.MAX_LAYERS}(text·shape 는 따로 ≤{SF.MAX_LIGHT}).")
     lines.append("text·shape = 순서대로 겹침(말풍선 → 글자). 피사체 자리·크기 = keyframes 한 점 {t:0,scale,x,y}. "
-                 "부품으로 안 되는 그림은 run_code 로 src_*.png 저장 → 원본.")
+                 "부품 밖 그림은 run_code src_*.png.")
     lines.append("transition = 앞 그림 전체가 사라짐·나타남(direction out|in), to=[r,g,b] 면 그 색이 남음. "
                  "움프 loop:false = 6초 한 번(타서 없어지기), 기본 3초×2.")
     named = sorted(n for n in SF.catalog()["fx"] if n not in prims.LAYERS)   # 같은 이름(flash)은 layers 에선 새 부품

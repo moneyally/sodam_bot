@@ -363,6 +363,20 @@ workshop_setup() {
     log "workshop: 점검 $res"; report workshop_setup.status "workshop_$res"
 }
 
+# 🎨 ImageMagick: 글자 스타일 엔진(sodam/stickerforge/stylefx.py — 금·크롬·네온·불·유리…). 없으면 PIL 폴백이라 본체는 그대로.
+imagemagick_setup() {
+    [ -n "$RUN_AS" ] || return 0
+    if command -v convert >/dev/null 2>&1 || command -v magick >/dev/null 2>&1; then
+        report imagemagick_setup.status "im_ok"; return 0
+    fi
+    local apt=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -y -q)
+    if "${apt[@]}" install imagemagick >/dev/null 2>&1 || { "${apt[@]}" update >/dev/null 2>&1 && "${apt[@]}" install imagemagick >/dev/null 2>&1; }; then
+        log "imagemagick: 설치"; report imagemagick_setup.status "im_ok"
+    else
+        log "imagemagick: 설치 실패 (PIL 폴백이라 본체는 정상)"; report imagemagick_setup.status "im_fail"
+    fi
+}
+
 # 자동 갱신 유닛(시간 제한 등)이 바뀌었으면 설치 — 지금 도는 갱신은 옛 설정 그대로 끝나고 다음부터 적용
 unit_setup() {
     [ -n "$RUN_AS" ] || return 0
@@ -429,6 +443,10 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     if [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-workshop.service" ] \
         && { ! $SYSTEMCTL is-active -q sodam-workshop 2>/dev/null || ! grep -q ' workshop_ok' "$APP_DIR/data/workshop_setup.status" 2>/dev/null; }; then
         workshop_setup
+    fi
+    # ImageMagick 이 없으면 다시 설치 시도 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
+    if [ -n "$RUN_AS" ] && ! command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
+        imagemagick_setup
     fi
     exit 0
 fi
@@ -515,6 +533,7 @@ if restart_and_verify "$VER"; then
     sshws_setup
     warp_setup
     netwatch_setup
+    imagemagick_setup
     workshop_setup
     unit_setup
     exit 0
