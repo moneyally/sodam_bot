@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, TelegramError
 
-from . import fedban, free, knowledge, menu, namehist, persist, protect, stats, subscription
+from . import fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, stats, subscription
 from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
@@ -793,6 +793,74 @@ async def c_protectlist(ctx: CmdCtx) -> None:
     await ctx.reply("🛡️ <b>보호 멤버</b> (소담으로 제재 불가)\n" + "\n".join(names))
 
 
+# ── 🔒 오너 잠금 뮤트/밴 (오너만, sodam/ownerlock.py) ─────────────
+_LOCK_DONE = ("🔒 {kind} {who}님을 <b>영구 잠금</b>했어요.\n오너만 풀 수 있어요 (<code>.잠금해제</code>) — "
+              "관리자가 풀면 소담이 바로 다시 걸어요.")
+
+
+async def _lock_apply(ctx: CmdCtx, kind: str) -> None:
+    t = await _target(ctx)
+    if not t:
+        return
+    uid, name, rest = t
+    reason = " ".join(rest) or "오너 잠금"
+    try:
+        if kind == "ban":
+            await ctx.svc.mod.ban(ctx.bot, ctx.chat_id, uid, ctx.user.id, reason)
+        else:
+            await ctx.svc.mod.mute(ctx.bot, ctx.chat_id, uid, None, ctx.user.id, reason)
+    except TelegramError as e:
+        await ctx.reply(f"실패했어요: {esc(e.message)}\n(봇에게 '사용자 차단' 권한이 있는지 확인해주세요)")
+        return
+    await ownerlock.add(ctx.svc.db, ctx.chat_id, uid, kind, ctx.user.id)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "ownerlock", f"{kind} 잠금")
+    extra = " 방·채팅·음성방 전부 막혀요." if kind == "ban" else " 채팅이 막혀요 (음성방까지 막으려면 <code>.잠금밴</code>)."
+    await ctx.reply(_LOCK_DONE.format(kind="밴(영구 추방)" if kind == "ban" else "뮤트", who=mention(uid, name)) + extra)
+
+
+async def c_lockmute(ctx: CmdCtx) -> None:
+    """오너 잠금 뮤트: 영구 채팅 금지 + 오너만 해제 (관리자가 풀면 소담이 바로 다시 뮤트)."""
+    await _lock_apply(ctx, "mute")
+
+
+async def c_lockban(ctx: CmdCtx) -> None:
+    """오너 잠금 밴: 영구 추방(채팅·음성방 전부) + 오너만 해제 (관리자가 풀면 소담이 바로 다시 밴)."""
+    await _lock_apply(ctx, "ban")
+
+
+async def c_ownerunlock(ctx: CmdCtx) -> None:
+    """오너 잠금 해제 (오너만): 잠금 뮤트/밴을 풀어 준다."""
+    t = await _target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    kind = await ownerlock.locked_kind(ctx.svc.db, ctx.chat_id, uid)
+    if not kind:
+        await ctx.reply(f"{mention(uid, name)}님은 오너 잠금 상태가 아니에요.")
+        return
+    await ownerlock.remove(ctx.svc.db, ctx.chat_id, uid)   # 먼저 풀어야 아래 해제가 관문에 안 막힘
+    try:
+        if kind == "ban":
+            await ctx.svc.mod.unban(ctx.bot, ctx.chat_id, uid, ctx.user.id)
+        else:
+            await ctx.svc.mod.unmute(ctx.bot, ctx.chat_id, uid, ctx.user.id)
+    except TelegramError as e:
+        await ctx.reply(f"잠금은 풀었는데 제한 해제는 실패했어요: {esc(e.message)}")
+        return
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "ownerlock", "해제")
+    await ctx.reply(f"🔓 {mention(uid, name)}님 오너 잠금을 풀었어요.")
+
+
+async def c_locklist(ctx: CmdCtx) -> None:
+    rows = await ownerlock.members(ctx.svc.db, ctx.chat_id)
+    if not rows:
+        await ctx.reply("오너 잠금이 걸린 사람이 없어요. <code>.잠금뮤트 @아이디</code> / <code>.잠금밴 @아이디</code>")
+        return
+    lines = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
+             f"(<code>{r['user_id']}</code>) — {'밴' if r['kind'] == 'ban' else '뮤트'}" for r in rows]
+    await ctx.reply("🔒 <b>오너 잠금</b> (오너만 해제 가능)\n" + "\n".join(lines))
+
+
 async def c_resetwarns(ctx: CmdCtx) -> None:
     t = await _target(ctx, sanction=False)
     if t:
@@ -1516,6 +1584,13 @@ COMMANDS: list[Cmd] = [
     Cmd(("보호해제", "unprotect"), c_unprotect, Role.ADMIN, usage="@user", help="보호 멤버 해제", group="관리자",
         right="restrict"),
     Cmd(("보호목록", "protectlist"), c_protectlist, Role.ADMIN, help="보호 멤버 목록", group="관리자"),
+    Cmd(("잠금뮤트", "오너뮤트", "영구잠금뮤트", "lockmute"), c_lockmute, Role.OWNER, usage="@user [사유]",
+        help="오너 잠금 뮤트 (영구·오너만 해제)", group="오너"),
+    Cmd(("잠금밴", "오너밴", "영구잠금밴", "lockban"), c_lockban, Role.OWNER, usage="@user [사유]",
+        help="오너 잠금 밴 (영구·음성방까지·오너만 해제)", group="오너"),
+    Cmd(("오너잠금해제", "잠금뮤트해제", "잠금밴해제", "ownerunlock"), c_ownerunlock, Role.OWNER, usage="@user",
+        help="오너 잠금(뮤트/밴) 풀기", group="오너"),
+    Cmd(("오너잠금목록", "잠금목록"), c_locklist, Role.OWNER, help="오너 잠금 목록", group="오너"),
     Cmd(("밴", "ban", "벤"), c_ban, Role.ADMIN, usage="@user [사유]", help="영구 추방", group="관리자", right="restrict"),
     Cmd(("밴해제", "unban"), c_unban, Role.ADMIN, usage="@user|ID", help="추방 해제", group="관리자", right="restrict"),
     Cmd(("킥", "kick", "강퇴", "강제퇴장"), c_kick, Role.ADMIN, usage="@user", help="내보내기 (재입장 가능)", group="관리자", right="restrict"),

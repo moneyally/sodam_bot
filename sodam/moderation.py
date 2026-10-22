@@ -103,6 +103,13 @@ class StillBanned(TelegramError):
         super().__init__("밴된 사람이라 밴은 그대로 뒀어요 (풀려면 .밴해제)")
 
 
+class OwnerLocked(TelegramError):
+    """오너가 건 잠금 뮤트/밴 (sodam/ownerlock.py) — 오너만 풀 수 있음. 관리자가 소담으로 풀려 하면 거절."""
+
+    def __init__(self) -> None:
+        super().__init__("🔒 오너만 풀 수 있는 잠금이에요 — 오너에게 요청하세요.")
+
+
 class AdminLocked(BadRequest):
     """관리자라 텔레그램이 뮤트·밴을 막음 — 그 관리자를 임명한 사람·방장만 내릴 수 있음 (can_be_edited False)."""
 
@@ -167,7 +174,14 @@ class Moderator:
         await self.db.log_mod(chat_id, actor_id, user_id, "mute",
                               f"{human_minutes(minutes) if minutes else '무기한'} / {reason}")
 
+    async def _owner_lock_gate(self, chat_id: int, user_id: int, actor_id: int | None, kind: str) -> None:
+        """오너 잠금(뮤트/밴)이 걸린 사람은 오너만 풀 수 있음 — 그 밖은 OwnerLocked 로 거절."""
+        from . import ownerlock   # 늦게 import (순환 방지)
+        if await ownerlock.is_locked(self.db, chat_id, user_id, kind) and actor_id not in await self.perms.owners():
+            raise OwnerLocked()
+
     async def unmute(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
+        await self._owner_lock_gate(chat_id, user_id, actor_id, "mute")
         # 모든 권한 True = 개인 제한 해제 (이후 방 기본 권한을 따름).
         # 방의 현재 권한을 복사해 넣으면, 방이 잠겨 있을 때 그 상태로 개인에게 고정되는 문제가 있다.
         # 밴된 사람(kicked)에게 하면 밴이 풀림 → 밴 해제는 .밴해제(unban)로만.
@@ -208,6 +222,7 @@ class Moderator:
         await self.db.log_mod(chat_id, actor_id, user_id, "ban", reason)
 
     async def unban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
+        await self._owner_lock_gate(chat_id, user_id, actor_id, "ban")
         await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
         await self.db.log_mod(chat_id, actor_id, user_id, "unban")
         if actor_id:   # 사람이 푼 스팸 명단 밴 = 봐준 것 → 이 방에선 다시 안 막음 (.밴해제·오너 버튼으로 풀어도 [↩️ 차단 풀기]와 같게)
