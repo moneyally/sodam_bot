@@ -14,8 +14,9 @@ from datetime import datetime, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from .. import announce, channel, composer, menu, tools
+from .. import announce, cards, channel, composer, menu, tools
 from ..menu import PUBLIC, TG_ADMIN, B, PanelCtx, Route, Screen
+from ..permissions import Role
 from ..security import nonce, wrap
 from ..util import esc, fmt_time, to_int
 from . import composer as composer_panel
@@ -363,3 +364,79 @@ tools.register_tool(tools.Tool(
     "channel_posts",
     "이 방에 연결된 텔레그램 채널의 최근 글(공지)을 읽는다. '어제 채널 공지 뭐였어?', '채널에 뭐 올라왔어?' 같은 질문.",
     {"limit": {"type": "integer", "description": "몇 개 (1~10, 기본 5)"}}, [], t_channel_posts, where="room"), read_only=True)
+
+
+# ── AI 도구: 연결된 채널의 글을 이 방에 그대로 올리기 (관리자·확인 카드) ──
+def _match_posts(rows, query: str):
+    """query 의 모든 낱말이 글(또는 사진 설명)에 들어간 글만, 최근 순 (rows 는 이미 최근 순)."""
+    toks = [t for t in query.lower().split() if t]
+    if not toks:
+        return []
+    return [r for r in rows if all(t in (r["text"] or "").lower() for t in toks)]
+
+
+async def t_channel_repost(ctx: tools.ToolCtx, a: dict) -> str:
+    query = " ".join(str(a.get("query", "")).split())[:100]
+    if not query:
+        return "어느 글을 올릴지 낱말을 못 받음. '○○ 들어간 채널 글' 처럼 찾을 말을 물어볼 것."
+    ch, rows = await channel.recent_posts(ctx.svc, ctx.chat_id, 10)
+    if not ch:
+        return "이 방에 연결된 채널이 없음. 관리자가 1:1 메뉴 📢 내 채널 → 🔗 연결된 방에서 연결할 수 있다고 안내."
+    if not await ctx.svc.paid_features(ctx.chat_id):
+        return "이 방은 이용 기간이 아니라 채널 글을 올릴 수 없음. 그렇게 짧게 안내할 것."
+    hits = _match_posts(rows, query)
+    if not hits:
+        return (f"연결된 채널 '{ch['title']}' 최근 글(14일) 중 '{query}' 들어간 글을 못 찾음. "
+                "소담은 **채널 관리자로 들어온 뒤 올라온 글**만 볼 수 있다고(그 전 과거 글은 못 가져옴) 짧게 안내하고, "
+                "그 글을 소담 1:1 로 전달해 주면 올릴 수 있다고 덧붙일 것.")
+    top = hits[0]
+    spec = {"ch_id": ch["chat_id"], "msg_id": top["msg_id"], "title": ch["title"][:60], "preview": (top["text"] or "")[:200]}
+    kb = await cards.card(ctx.svc, ctx.caller.id, ctx.chat_id, "channel_repost", "cpr_ok", "cpr_no", spec, ok_label="✅ 올리기")
+    more = f"\n(비슷한 글이 {len(hits)}개 있어요 — 다른 글이면 더 구체적으로 말해 주세요)" if len(hits) > 1 else ""
+    await ctx.bot.send_message(
+        ctx.chat_id, f"📢 <b>{esc(ch['title'])}</b> 채널 글을 이 방에 그대로 올릴까요?\n"
+                     f"내용: {esc(spec['preview'])}" + ("…" if len(top["text"] or "") > 200 else "") + more
+                     + f"\n(요청한 {esc(ctx.caller.first_name)}님만 누를 수 있어요)",
+        parse_mode="HTML", reply_markup=kb)
+    return "확인 버튼을 보냈음. 요청한 관리자가 눌러야 방에 올라간다고 짧게 안내할 것. 아직 안 올렸으니 '올렸다'고 말하지 말 것."
+
+
+async def t_cpr_ok(c: PanelCtx, spec) -> Screen:
+    """확인 카드 [✅ 올리기] — 채널 글을 forward_message 로 방에 그대로 (버튼·서식·미디어 유지)."""
+    if not await cards.claim(c.svc, spec, "ok"):
+        return Screen(None, toast=cards.ALREADY)
+    try:
+        ch_id, msg_id = int(spec["ch_id"]), int(spec["msg_id"])      # 토큰(JSON)에 담긴 int
+    except (KeyError, TypeError, ValueError):
+        return Screen("❌ 올릴 글 정보가 없어요. 다시 요청해 주세요.", None, toast="못 올림", alert=True)
+    title = str(spec.get("title", ""))[:60]
+    if not await c.svc.paid_features(c.cid):
+        await cards.pressed(c.svc, c.cid, c.uid, "channel_repost", spec, "⚠️ 채널 글 못 올림 (이용 기간 아님)", done=False)
+        return Screen("이용 기간이 아니라 올리지 못했어요.", None, toast="못 올림", alert=True)
+    try:
+        await c.bot.forward_message(chat_id=c.cid, from_chat_id=ch_id, message_id=msg_id)
+    except TelegramError as e:
+        await cards.pressed(c.svc, c.cid, c.uid, "channel_repost", spec, f"⚠️ 채널 글 못 올림 ({e})", done=False)
+        return Screen("❌ 못 올렸어요. 채널에서 글이 지워졌거나(또는 '저장 제한'이 켜져 있거나) 소담이 그 채널 관리자가 아닐 수 있어요.",
+                      None, toast="못 올림", alert=True)
+    await c.svc.db.log_mod(c.cid, c.uid, None, "channel_repost", f"{title} #{msg_id}")
+    await cards.pressed(c.svc, c.cid, c.uid, "channel_repost", spec, f"✅ 채널 '{title}' 글을 방에 올림", done=True)
+    return Screen(f"✅ <b>{esc(title)}</b> 채널 글을 방에 올렸어요.", None, toast="올렸어요")
+
+
+async def t_cpr_no(c: PanelCtx, spec) -> Screen:
+    if not await cards.claim(c.svc, spec, "no"):
+        return Screen(None, toast=cards.ALREADY)
+    await cards.pressed(c.svc, c.cid, c.uid, "channel_repost", spec, "❌ 채널 글 올리기 취소", done=False)
+    return Screen("올리지 않았어요.", None)
+
+
+tools.register_tool(tools.Tool(
+    "channel_repost",
+    "[관리자] 이 방에 연결된 채널에 올라온 글(공지·제휴)을 찾아 이 방에 그대로 올린다 (확인 버튼을 보냄, 버튼·서식·사진 유지). "
+    "'소담아 ○○채널 □□글 방에 올려줘', '채널에 있는 □□ 끌어와서 올려줘' 같은 요청. "
+    "소담이 채널 관리자로 들어온 뒤 올라온 글만 가능. 새 글을 쓰는 게 아니라 채널 글을 그대로 옮기는 것.",
+    {"query": {"type": "string", "description": "찾을 글의 낱말 (예: 시바벳, 제휴, 이벤트) — 그 말이 글/사진 설명에 들어간 최근 채널 글을 올림"}},
+    ["query"], t_channel_repost, Role.ADMIN, where="room"), read_only=False)
+menu.register_token_action("cpr_ok", t_cpr_ok, fresh=True)
+menu.register_token_action("cpr_no", t_cpr_no)

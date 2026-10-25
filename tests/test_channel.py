@@ -334,5 +334,39 @@ async def ai_draft_needs_button_press():
     assert len(w.svc.llm.calls) == 2                                      # 관리자 아니면 AI 도 안 부름
 
 
+@test
+async def channel_repost_forwards_matched_post():
+    """채널 글을 찾아 방에 그대로 올리기 (확인 카드 → forward_message). 2026-10-25 泰山 '채널에서 끌어와서 올려줘'."""
+    w = await World().open()
+    for mid, text in ((11, "시바벳 신규 가입 이벤트 안내입니다"), (12, "일반 공지 테스트")):
+        m = FakeMsg(CH, None, text, message_id=mid)
+        await handlers.on_channel_post(SimpleNamespace(channel_post=m, edited_channel_post=None), w.ctx)
+    ctx = ToolCtx(w.svc, w.bot, ROOM, fake_user(BOSS), Role.ADMIN, await w.db.get_settings(ROOM))
+    assert "channel_repost" in [t.name for t in tools.available(Role.ADMIN, ctx.settings)]
+    assert "channel_repost" not in [t.name for t in tools.available(Role.MEMBER, ctx.settings)]   # 관리자만
+
+    out = await tools.execute("channel_repost", json.dumps({"query": "시바벳"}), ctx)
+    assert "확인 버튼" in out and "말하지 말 것" in out
+    card = w.sent_to(ROOM)[-1]
+    assert "시바벳" in card[2] and "올릴까요" in card[2]
+    assert not w.bot.named("forward_message")                            # 아직 안 올림 — 눌러야
+
+    ok = next(b.callback_data for r in card[3]["reply_markup"].inline_keyboard for b in r if "올리기" in b.text)
+    await w.press(BOSS, ok)
+    fwd = w.bot.named("forward_message")
+    assert len(fwd) == 1 and fwd[0][1] == ROOM and fwd[0][2] == CH and fwd[0][3] == 11   # 시바벳 글(11)만 그대로
+    await w.press(BOSS, ok)                                              # 두 번 눌러도 한 번만
+    assert len(w.bot.named("forward_message")) == 1
+    assert any("channel_repost" in (r["action"] or "") for r in await w.db.recent_mod_log(ROOM, 20))
+
+    # 못 찾는 말 → 과거 글 못 읽는다고 안내 (추측·지어내기 X)
+    none = await tools.execute("channel_repost", json.dumps({"query": "없는단어zzz"}), ctx)
+    assert "못 찾" in none and "채널 관리자로 들어온 뒤" in none
+
+    # 연결된 채널 없는 방 → 안내
+    nover = ToolCtx(w.svc, w.bot, -100999777, fake_user(BOSS), Role.ADMIN, {})
+    assert "연결된 채널이 없음" in await tools.execute("channel_repost", json.dumps({"query": "x"}), nover)
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

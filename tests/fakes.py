@@ -66,6 +66,13 @@ class FakeBot:
         self.calls.append((kind, chat_id, media, caption, kw))
         return self._msg(chat_id)
 
+    async def forward_message(self, chat_id, from_chat_id, message_id, **kw):
+        if message_id in getattr(self, "forward_fail", ()):
+            from telegram.error import BadRequest
+            raise BadRequest("Message to forward not found")
+        self.calls.append(("forward_message", chat_id, from_chat_id, message_id, kw))
+        return self._msg(chat_id)
+
     files: dict = {}   # file_id → bytes (get_file 로 내려받는 사진)
 
     async def get_file(self, file_id):
