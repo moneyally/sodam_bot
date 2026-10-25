@@ -35,6 +35,30 @@ def parse_weekly_forms():
 
 
 @test
+def anchored_interval_start_time_plus_repeat():
+    p = announce.parse_when
+    assert p("00:15 반복 4시간") == ("interval", "00:15", 240)
+    assert p("매일 00:15부터 4시간마다") == ("interval", "00:15", 240)
+    assert p("0:15 반복 240") == ("interval", "00:15", 240)
+    assert p("반복 120") == ("interval", None, 120)              # 앵커 없는 반복은 그대로
+    assert p("반복 3시간") == ("interval", None, 180)
+    assert p("매일 00:15") == ("daily", "00:15", None)           # 반복 안 붙으면 매일 한 번
+    d = announce.describe_when
+    assert d("interval", "00:15", 240) == "매일 00:15부터 4시간마다"
+    assert d("interval", None, 120) == "2시간마다"
+    # 발송은 00:15·04:15·08:15 에 정렬 (그 사이 시각엔 안 나감)
+    row = {"enabled": 1, "kind": "interval", "at_time": "00:15", "interval_min": 240, "last_sent": None, "at_ts": None}
+    d0 = ts(2026, 9, 28, 0, 15)
+    assert announce.is_due(row, d0 + 30, TZ)                     # 00:15 슬롯
+    assert not announce.is_due(row, d0 + 3600, TZ)               # 01:15 = 슬롯 아님
+    assert announce.is_due(row, d0 + 4 * 3600 + 30, TZ)          # 04:15 슬롯
+    assert not announce.is_due({**row, "last_sent": d0 + 30}, d0 + 60, TZ)   # 같은 슬롯 두 번 X
+    plain = {**row, "at_time": None, "interval_min": 60, "last_sent": d0}    # 앵커 없으면 last_sent 기준
+    assert not announce.is_due(plain, d0 + 1800, TZ)
+    assert announce.is_due(plain, d0 + 3600 + 1, TZ)
+
+
+@test
 def weekly_due_only_on_listed_days():
     row = {"enabled": 1, "kind": "weekly", "at_time": "월수 10:00", "last_sent": None, "interval_min": None, "at_ts": None}
     mon = ts(2026, 9, 28, 10, 0)          # 2026-09-28 = 월요일
