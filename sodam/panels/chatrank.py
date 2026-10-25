@@ -66,12 +66,18 @@ async def board(svc, bot, chat_id: int, cfg: cr.Cfg | None = None, period: str |
                 me: int | None = None) -> str:
     cfg = cfg or await cr.get(svc.db, chat_id)
     label, date, rows = await cr.standings(svc, chat_id, cfg, period, bot)
+    main = [(cr.show_name(r, cfg.names), r["n"]) for r in rows]
     yday, ydate = None, ""
     if cfg.yday and (period or cfg.period) not in ("yesterday", "lastweek"):
         ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
     mine = await cr.my_place(svc, chat_id, me, cfg, period) if me else None
-    return cr.render(cfg, label, date, [(cr.show_name(r, cfg.names), r["n"]) for r in rows], yday or None, ydate, mine,
-                     cr.winners_label(cfg))
+    if cfg.extra and not period:        # 한 카드에 본 기간 + 추가 기간들 (.순위 로 기간 지정하면 그 기간만)
+        secs = [cr.section(cfg, label, date, main)]
+        for p in cfg.extra:
+            l2, d2, r2 = await cr.standings(svc, chat_id, cfg, p, bot)
+            secs.append(cr.section(cfg, l2, d2, [(cr.show_name(r, cfg.names), r["n"]) for r in r2]))
+        return cr.render_sections(cfg, secs, yday or None, ydate, mine, cr.winners_label(cfg))
+    return cr.render(cfg, label, date, main, yday or None, ydate, mine, cr.winners_label(cfg))
 
 
 # ── 방 명령 ───────────────────────────────────────────────
@@ -308,6 +314,7 @@ async def s_crk(c: PanelCtx) -> Screen:
     lines = ["🏆 <b>채팅 순위 꾸미기</b>",
              "숫자는 소담이 세고, 모양은 전부 여기서 정해요. 방에서 <code>.순위</code> · 1:1 메뉴판 🏆 버튼 · 미니앱에 같은 모양으로 나와요.",
              "", f"기간: <b>{cr.PERIODS[cfg.period][1]}</b> · {cfg.top}등까지 · 이름: {cr.NAME_MODES[cfg.names]}",
+             f"➕ 추가 기간(한 카드에 같이): {' + '.join(cr.PERIODS[p][0] for p in cfg.extra) if cfg.extra else '없음'}",
              f"상품: {prizes}",
              f"줄 모양: <code>{esc(html_plain(cfg.line))}</code>",
              f"<code>.나</code> 모양: <code>{esc(html_plain(cfg.me))}</code>",
@@ -319,6 +326,7 @@ async def s_crk(c: PanelCtx) -> Screen:
         lines.append(f"🔄 채팅 수 초기화: {datetime.fromtimestamp(cfg.reset_at, c.svc.cfg.tz):%m/%d %H:%M} 뒤 글만 셈 (대화 기록은 그대로)")
     cid = c.cid
     rows = [[B(f"📅 기간: {cr.PERIODS[cfg.period][1]} ▸", f"m:crkp:{cid}"), B(f"🔢 {cfg.top}등까지 ▸", f"m:crkn:{cid}")],
+            [B(f"➕ 추가 기간 ({len(cfg.extra)}개) ▸", f"m:crkx:{cid}")],
             [B("💰 상품", f"m:in:{cid}:crkpz"), B("✏️ 줄 모양", f"m:in:{cid}:crkln")],
             [B("🏅 등수 그림", f"m:in:{cid}:crkic"), B(f"👤 이름: {cr.NAME_MODES[cfg.names].split(' ')[0]} ▸", f"m:crkm:{cid}")],
             [B("📝 머리말", f"m:in:{cid}:crkhd"), B("📝 꼬리말", f"m:in:{cid}:crkft")],
@@ -352,6 +360,47 @@ async def r_period(c: PanelCtx) -> Screen:
 async def r_top(c: PanelCtx) -> Screen:
     nxt = _next(TOPS, (await cr.get(c.svc.db, c.cid)).top)
     return await _change(c, f"{nxt}등까지", top=nxt)
+
+
+async def r_extra(c: PanelCtx) -> Screen:
+    """➕ 추가 기간: 본 기간 말고 한 카드에 같이 쌓을 기간을 체크 (泰山 봇처럼 일간+주간)."""
+    cfg = await cr.get(c.svc.db, c.cid)
+    cid = c.cid
+    rows = []
+    for p in cr.PERIOD_CHOICES:
+        if p == cfg.period:
+            continue
+        on = p in cfg.extra
+        rows.append([B(("✅ " if on else "⬜ ") + cr.PERIODS[p][1], f"m:crkxt:{cid}:{p}")])
+    now = " + ".join(cr.PERIODS[p][0] for p in cfg.extra) if cfg.extra else "없음"
+    return Screen(f"➕ <b>추가 기간</b> (한 카드에 같이 보여요)\n\n본 기간: <b>{cr.PERIODS[cfg.period][1]}</b>\n"
+                  f"추가: <b>{now}</b> (최대 {cr.EXTRA_MAX}개)\n\n체크한 기간이 본 기간 아래에 섹션으로 쌓여요.",
+                  menu._kb(rows + [[B("⬅️ 뒤로", f"m:crk:{cid}")]]))
+
+
+async def r_extra_toggle(c: PanelCtx) -> Screen:
+    p = c.arg(1)
+    cfg = await cr.get(c.svc.db, c.cid)
+    if p not in cr.PERIOD_CHOICES or p == cfg.period:
+        return await r_extra(c)
+    extra = list(cfg.extra)
+    if p in extra:
+        extra.remove(p)
+        toast = f"{cr.PERIODS[p][0]} 뺌"
+    elif len(extra) >= cr.EXTRA_MAX:
+        sc = await r_extra(c)
+        sc.toast = f"추가 기간은 최대 {cr.EXTRA_MAX}개예요."
+        sc.alert = True
+        return sc
+    else:
+        extra.append(p)
+        toast = f"{cr.PERIODS[p][0]} 추가"
+    cfg.extra = extra
+    await cr.save(c.svc.db, c.cid, cfg, c.uid)
+    await c.svc.db.log_mod(c.cid, c.uid, None, "setting", f"chat_rank extra={extra}")
+    sc = await r_extra(c)
+    sc.toast = toast
+    return sc
 
 
 async def r_names(c: PanelCtx) -> Screen:
@@ -498,6 +547,7 @@ for _code in ("crkpz", "crkln", "crkic", "crkhd", "crkft", "crkme"):
     menu.register_screen(_code, s_crk)
 for _code, _fn in (("crkp", r_period), ("crkn", r_top), ("crkm", r_names), ("crka", r_admin), ("crky", r_yday),
                    ("crkw", r_award), ("crkr", r_reset), ("crkv", r_preview), ("crkpost", r_post),
+                   ("crkx", r_extra), ("crkxt", r_extra_toggle),
                    ("crk0", r_zero_ask), ("crk0y", r_zero), ("crk0x", r_zero_undo)):
     menu.register_route(_code, Route(_fn, ADMIN))
 menu.register_input("crkpz", "💰 등수별 상품을 <b>한 줄에 하나씩</b> 1등부터 보내 주세요.\n예:\n<code>50,000원\n40,000원\n30,000원</code>\n"
@@ -589,6 +639,14 @@ async def t_chat_rank(ctx, a: dict) -> str:
     if a.get("names") in cr.NAME_MODES:
         cfg.names = a["names"]
         done.append("names")
+    if isinstance(a.get("extra"), list):        # 한 카드에 같이 보일 추가 기간 (본 기간 제외·유효한 것만)
+        seen, ok = set(), []
+        for p in a["extra"]:
+            if p in cr.PERIOD_CHOICES and p != cfg.period and p not in seen:
+                seen.add(p)
+                ok.append(p)
+        cfg.extra = ok[:cr.EXTRA_MAX]
+        done.append("extra")
     for k in ("no_admin", "yday"):
         if isinstance(a.get(k), bool):
             setattr(cfg, k, a[k])
@@ -625,7 +683,9 @@ async def t_chat_rank(ctx, a: dict) -> str:
 
 
 def _summary(cfg: cr.Cfg, s: dict) -> str:
-    return (f"[지금 설정] 기간 {cr.PERIODS[cfg.period][1]} · {cfg.top}등까지 · 상품 {cfg.prizes or '없음'} · "
+    return (f"[지금 설정] 기간 {cr.PERIODS[cfg.period][1]}"
+            + (f"(+{','.join(cr.PERIODS[p][0] for p in cfg.extra)})" if cfg.extra else "")
+            + f" · {cfg.top}등까지 · 상품 {cfg.prizes or '없음'} · "
             f"등수 그림 {len(cfg.icons)}개(없으면 🥇🥈🥉…) · 제목 '{html_plain(cfg.head)[:60]}' · 꼬리말 '{html_plain(cfg.foot)[:80]}' · "
             f"이름 {cr.NAME_MODES[cfg.names]} · 관리자 빼기 {cfg.no_admin} · 지난/어제 당첨자 칸 {cfg.yday} · 시상식 {_hour(cfg.award)} · "
             f"{int(s.get('chat_min_chars') or 0)}글자 이상만(0=전부) · 도배 빼기 {bool(s.get('chat_no_repeat'))} · "
@@ -653,7 +713,9 @@ def _register_tool() -> None:
          "foot": {"type": "string", "description": "맨 아래 문구 ('없음' = 지우기)"},
          "line": {"type": "string", "description": "한 줄 모양, 칸 {등수} {이름} {횟수} {상품} (이름 필수)"},
          "me": {"type": "string", "description": ".나 한 줄, 칸 {이름} {등수} {횟수} {기간} (횟수 필수)"},
-         "names": {"type": "string", "enum": list(cr.NAME_MODES), "description": "user 아이디 · name 이름 · mask 가리기"},
+         "names": {"type": "string", "enum": list(cr.NAME_MODES), "description": "user 아이디 · name 이름 · both 이름+아이디 · mask 가리기"},
+         "extra": {"type": "array", "items": {"type": "string", "enum": list(cr.PERIOD_CHOICES)},
+                   "description": f"한 카드에 본 기간과 같이 보일 추가 기간들 (일간+주간처럼, 최대 {cr.EXTRA_MAX}개, []=없음). 예: period=today 에 extra=['week']"},
          "no_admin": {"type": "boolean", "description": "관리자를 순위에서 빼기"},
          "yday": {"type": "boolean", "description": "어제(주 단위면 지난주) 당첨자 칸"},
          "award": {"type": "string", "enum": list(AWARD_WORDS),

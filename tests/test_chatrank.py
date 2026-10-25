@@ -93,6 +93,40 @@ async def render_fills_room_template_with_counts_prizes_and_my_place():
     assert "👤 나 — 7위 · 34회" in out and "어제 당첨자" in out and "1️⃣</tg-emoji> 어제왕 — 5회 50,000원" in out
     assert out.endswith("매일 자정 시상식")
     assert cr.show_name({"username": "sin1n1", "first_name": "가나"}, "mask") == "si***"
+    # both = 이름 + @아이디 (2026-10-26 泰山 '아이디도 나오게')
+    assert cr.show_name({"username": "senjo", "first_name": "센조"}, "both") == "센조 (@senjo)"
+    assert cr.show_name({"username": None, "first_name": "센조"}, "both") == "센조"        # 아이디 없으면 이름만
+    assert cr.show_name({"username": "onlyid", "first_name": ""}, "both") == "@onlyid"       # 이름 없으면 @아이디만
+    assert "both" in cr.NAME_MODES
+
+
+@test
+async def extra_periods_stack_in_one_card():
+    """한 카드에 본 기간 + 추가 기간 섹션 (2026-10-26 泰山 '일간+주간 같이'). render_sections·load extra."""
+    # load: 본 기간 제외·중복·잘못된 기간 빼고 순서 유지·최대 EXTRA_MAX
+    c = cr.load('{"period":"today","extra":["week","today","month","badkey","week"]}')
+    assert c.extra == ["week", "month"], c.extra
+    c2 = cr.load('{"period":"today","extra":["week","month","thisweek","yesterday"]}')
+    assert len(c2.extra) == cr.EXTRA_MAX, c2.extra
+
+    cfg = cr.Cfg(head="🏆 {기간} TOP\n📅 {날짜}", foot="5글자 이상만", extra=["week"])
+    secs = [cr.section(cfg, "오늘", "10/26", [("몽키", 40), ("센조", 36)]),
+            cr.section(cfg, "최근 7일", "10/20~26", [("한방", 3328), ("몽키", 2280)])]
+    out = cr.render_sections(cfg, secs, [(0, "어제왕", 3, "상품")], "10/25", (2, 7))
+    assert "🏆 오늘 TOP" in out and "🏆 최근 7일 TOP" in out, out            # 두 기간 머리말
+    assert out.index("오늘 TOP") < out.index("최근 7일 TOP")                 # 본 기간 먼저
+    assert "몽키 — 40회" in out and "한방 — 3,328회" in out                   # 각 섹션 데이터
+    assert out.count("5글자 이상만") == 1 and "👤 나 — 2위" in out and "어제 당첨자" in out   # 꼬리·나·당첨자 한 번만
+
+    # board() 조립 실측: extra 설정하면 한 카드에 오늘 + 최근 7일 두 섹션
+    e = await setup(counts=[(A, 5), (B_, 3)])
+    await cr.save(e.db, ROOM, cr.Cfg(period="today", extra=["week"], head="🏆 {기간} TOP\n📅 {날짜}"), ADMIN.id)
+    board = await P.board(e.svc, e.bot, ROOM)
+    assert "🏆 오늘 TOP" in board and "🏆 최근 7일 TOP" in board, board
+    assert board.index("오늘 TOP") < board.index("최근 7일 TOP")
+    # 기간 지정(.순위 주간)하면 그 기간만 — 추가 기간 안 쌓음
+    one = await P.board(e.svc, e.bot, ROOM, period="week")
+    assert "최근 7일 TOP" in one and "오늘 TOP" not in one
     assert cr.show_name({"username": None, "first_name": "가나다"}, "user") == "가나다"
     assert cr.show_name({"user_id": 8263231614, "username": None, "first_name": "@"}, "user") == "멤버1614", "'@' 뿐인 이름 (백악관 실제)"
     assert cr.show_name({"user_id": 8019304490, "username": None, "first_name": "\u2063"}, "name") == "멤버4490", "투명 글자뿐인 이름"

@@ -463,6 +463,7 @@
 - 소담을 채널 관리자로 넣으면 등록 + 넣은 사람 1:1 권한 체크리스트. 관리 = 그 채널 TG 관리자 + 오너 (올리기·예약·승인은 매번 텔레그램 재확인).
 - 편집기: 허용 HTML(b,i,u,s,code,pre,a,blockquote,tg-spoiler)만, 깨진 태그는 위치와 함께 거절, 텔레그램 서식 글은 자동 변환. URL 버튼 줄 편집.
   초안은 DB(재시작 OK), 올리기·수정은 DB 차지로 한 번만. 예약은 announce 시각 형식. AI `channel_draft`(1:1, 버튼 눌러야 올라감)·`channel_posts`(방, 읽기).
+- **📢→💬 채널 글 방에 그대로 올리기** (`channel_repost` 도구·`t_cpr_ok`·`_match_posts`, panels/channel.py, tests/test_channel.py channel_repost_* · 뮤테이션 2개, 2026-10-25 泰山 '채널에서 끌어와서 올려줘'): AI 도구 `channel_repost(query)`(관리자·room) → `channel.recent_posts`(연결 채널 최근 14일 글, 글자만 기록) 중 query 낱말 다 든 글 → 방에 확인 카드(cards.card cpr_ok/cpr_no, 요청자만) → 누르면 `forward_message`(원본 그대로 — 버튼·서식·미디어 유지, '전달' 머리말 남음). **봇은 채널 과거 글 못 읽음**(텔레그램 한계) → 소담이 채널 관리자로 들어온 뒤 올라온 글만, 사진만(설명 없는) 글은 text='' 라 검색 안 됨. spec 의 ch_id·msg_id 는 JSON int 라 `int()` 로 (util.to_int 는 문자열 전용 → None 버그 주의). 지도(prompt)에 한 줄.
 - 요금: 예약·AI 초안·방 알림은 이용 중인 방에 연결된 채널 1개(방당). 지금 올리기·가입 신청·구독자 추이는 무료. 방 예약공지는 아직 옛 마법사.
 - **🎛 버튼 메뉴 (리모컨)** (그룹 허브 m:rmc, TG_ADMIN, 2026-10-15 손님 '리모컨처럼'): 같은 편집기가 **그룹방**도 대상(target = 방, 등록 채널이 아니면 방) —
   사진·영상·**움짤(GIF, MEDIA animation)** + 글 + URL 버튼, 📌 올리고 고정(composer_drafts.pin, 방 기본 켬, 고정 실패해도 글은 올림),
@@ -727,7 +728,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 ## 🏆 채팅 순위 꾸미기·시상식 (`chatrank.py`·`panels/chatrank.py`, tests/test_chatrank.py · 뮤테이션 19개, 2026-10-12 고객 'FOX 이벤트 봇처럼 · 하드코딩 없이')
 - 숫자는 소담이 기록에서(db.top_chatters + 📊 세는 기준 stats.min_chars), 모양은 방장 값(rank_rooms.cfg JSON): 기간 today/yesterday/thisweek(월요일 0시부터 = 매주 0부터)/week(최근 7일)/month · 몇 등 3~10 ·
   등수별 상품 글(30자, 링크·@ X) · 줄 모양 `{등수} {이름} — {횟수}회 {상품}` · 등수 그림(띄어 쓴 이모지·움직이는 이모지) · 머리말 `{기간}{날짜}`·꼬리말 ·
-  이름 아이디/이름/가리기 · 관리자 빼기 · 어제(주 단위면 지난주) 당첨자 칸 · 시상식(-1/0/9/12시 = 어제, WEEKLY 100 = 매주 월요일 0시·지난 주 월~일, 기록 열쇠 'w'+월요일 — 백악관 '추첨은 월요일 자정'). 틀은 텔레그램 HTML 로(util.rich_html), 칸만 바꿈(clean_tpl 이 모르는 칸·링크·깨진 서식 거절).
+  이름 아이디/이름/**both 이름+아이디('센조 (@senjo)', 2026-10-26 泰山 '아이디도 나오게', chatrank.show_name·NAME_MODES — _next 순환·AI enum·검증이 NAME_MODES 를 자동으로 써서 모드만 추가하면 토글·말·미니앱 다 됨, 이름 없으면 @아이디만)**/가리기 · 관리자 빼기 · 어제(주 단위면 지난주) 당첨자 칸 · 시상식(-1/0/9/12시 = 어제, WEEKLY 100 = 매주 월요일 0시·지난 주 월~일, 기록 열쇠 'w'+월요일 — 백악관 '추첨은 월요일 자정'). 틀은 텔레그램 HTML 로(util.rich_html), 칸만 바꿈(clean_tpl 이 모르는 칸·링크·깨진 서식 거절).
+- **➕ 추가 기간 (한 카드에 일간+주간)** (`chatrank.Cfg.extra`·`section`·`render_sections`·`panels.board`·허브 ➕ m:crkx·m:crkxt, tests/test_chatrank.py extra_periods_* · 뮤테이션 2개, 2026-10-26 泰山 봇 '일간 TOP5 + 주간 TOP5 한 장에'): 본 기간(period) 말고 같이 쌓을 기간 목록 extra(PERIOD_CHOICES 중 본 기간 제외·중복 제거·최대 EXTRA_MAX 3) → `.순위`·미리보기·올리기·미니앱이 본 섹션 + 추가 섹션들(각 머리말 {기간}{날짜})로, 나/어제 당첨자/꼬리말은 한 번만. `.순위 주간`처럼 기간 지정하면 그 기간 하나만(추가 안 쌓음). render() 는 section()+_tail() 로 쪼갬. AI 도구 chat_rank_setup 에 extra 배열·허브 서브화면(체크 토글). 머리말에 '일간'을 글자로 박으면 기간 바뀌어도 안 바뀜 → {기간} 쓰라고 안내.
 - 보이는 곳: 방 `.순위`(채팅순위·채팅왕, 방마다 20초 1번) · `.나`(내순위·내채팅, 한 사람 10초 1번, 방장 틀 me `{이름}{등수}{횟수}{기간}` — 고객 'FOX 처럼 .나 하면 채팅 몇 개') · 🎁 메뉴판 부품 'rank'(1:1, '👤 나 — N위') · 미니앱 🏆 칸 · 허브 🏆(m:crk). 글 아래 = 🎁 메뉴의 바로가기·문의 버튼(+혜택 메뉴 입구).
   움직이는 이모지가 거절되면 보통 이모지로 다시(send_html).
 - **🔄 채팅 수만 초기화** (백악관 '채팅 수만 초기화돼요?'): cfg.reset_at = 그 시각 뒤 글만 셈 (standings·my_place 의 since=max). 글은 안 지움, [↩️ 초기화 취소]=0, 말로 reset now/undo.

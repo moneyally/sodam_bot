@@ -54,7 +54,7 @@ PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "th
 PERIOD_CHOICES = ("today", "yesterday", "thisweek", "week", "month")    # 방장이 고르는 것 (lastweek 는 시상식·.순위 지난주 용)
 WEEKLY = 100                                 # 시상식 '매주 월요일 0시' (지난 주 월~일 순위) — 고객 2026-10-12 '추첨은 월요일 자정'
 AWARD_LABEL = {-1: "끔", 0: "매일 0시", 9: "매일 9시", 12: "매일 12시", WEEKLY: "매주 월요일 0시"}
-NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "mask": "가리기 (sin***)"}
+NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "both": "이름+아이디", "mask": "가리기 (sin***)"}
 AWARD_HOURS = (-1, 0, 9, 12, WEEKLY)         # 시상식 (한국 시각, -1 = 끔, WEEKLY = 매주 월요일 0시)
 TOP_MIN, TOP_MAX = 3, 20   # 2026-10-20 오너: New world 멤버 '20위까지'
 PRIZE_MAX, LINE_MAX, HEAD_MAX, FOOT_MAX, ICON_MAX = 30, 120, 300, 600, 8
@@ -64,7 +64,8 @@ ME_FIELDS = ("이름", "등수", "횟수", "기간")
 ICONS = ("🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟")
 DEFAULT = {"period": "today", "top": 5, "prizes": [], "line": "{등수} {이름} — {횟수}회 {상품}", "icons": [],
            "head": "🏆 <b>{기간} 채팅 순위</b>\n📅 {날짜}", "foot": "", "names": "user", "no_admin": False,
-           "yday": True, "award": -1, "me": "📊 {이름} 님 — {기간} 채팅 {횟수}회 · {등수}위"}
+           "yday": True, "award": -1, "me": "📊 {이름} 님 — {기간} 채팅 {횟수}회 · {등수}위", "extra": []}
+EXTRA_MAX = 3            # 한 카드에 추가로 쌓는 기간 섹션 최대 (본 기간 + 추가 → 泰山 봇처럼 일간+주간)
 CACHE_SEC = 30
 _CACHE: dict = {}
 _SEQ = itertools.count(1)
@@ -86,6 +87,7 @@ class Cfg:
     yday: bool = True
     award: int = -1
     me: str = DEFAULT["me"]
+    extra: list = field(default_factory=list)   # 한 카드에 추가로 쌓을 기간들 (본 기간 다음 섹션으로, 泰山 봇처럼 일간+주간)
     reset_at: int = 0      # 채팅 수 초기화 시각 — 이 뒤 글만 셈 (글은 안 지움: AI 기억·검색·사칭 확인 기록 그대로). 0 = 안 함
 
     def icon(self, i: int) -> str:
@@ -119,6 +121,13 @@ def load(raw: str | None) -> Cfg:
         c.icons = [str(i) for i in d["icons"][:TOP_MAX]]
     if d.get("names") in NAME_MODES:
         c.names = d["names"]
+    if isinstance(d.get("extra"), list):      # 본 기간과 겹치지 않는 유효한 기간만, 순서 유지·중복 제거
+        seen, ok = set(), []
+        for p in d["extra"]:
+            if p in PERIOD_CHOICES and p != c.period and p not in seen:
+                seen.add(p)
+                ok.append(p)
+        c.extra = ok[:EXTRA_MAX]
     c.no_admin, c.yday = bool(d.get("no_admin", False)), bool(d.get("yday", True))
     if d.get("award") in AWARD_HOURS:
         c.award = d["award"]
@@ -237,10 +246,14 @@ def mask(name: str) -> str:
 
 def show_name(row, mode: str) -> str:
     uname, first = (row["username"] or "").strip(), row["first_name"] or ""
-    if mode == "name":
-        name = display_name(first, None, None) or uname
-    else:
-        name = uname or display_name(first, None, None)
+    nm = display_name(first, None, None)
+    if mode == "both":                    # 이름 + @아이디 (아이디 없으면 이름만, 이름 없으면 @아이디만)
+        real = nm if first.strip() else ""    # 이름 없으면 display_name 이 '알 수 없음' → 대신 @아이디만
+        name = f"{real} (@{uname})" if real and uname else (f"@{uname}" if uname else nm)
+    elif mode == "name":
+        name = nm or uname
+    else:                                 # user / mask
+        name = uname or nm
     if not name_key(name or ""):          # '@'·투명 글자뿐인 이름 (실제 백악관 2026-10-12) → 누군지 알아보게 ID 끝 4자리
         uid = row["user_id"] if "user_id" in row.keys() else None
         name = f"멤버{str(uid)[-4:]}" if uid else "멤버"
@@ -255,15 +268,19 @@ def line_html(cfg: Cfg, i: int, name: str, n: int | None, prize: str | None = No
     return re.sub(r"\s*[—\-·:]\s*$", "", out) if not vals["상품"] and "{상품}" in cfg.line else out
 
 
-def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None, yday_date: str = "",
-           me: tuple[int, int] | None = None, yday_label: str = "어제 당첨자") -> str:
-    """rows = [(이름, 횟수)] 등수 순. yday = [(등수-1, 이름, 횟수, 상품)]. me = (내 등수, 횟수) — 1:1 만."""
+def section(cfg: Cfg, label: str, date: str, rows: list) -> list:
+    """한 기간 섹션 (머리말 + 등수 줄). rows = [(이름, 횟수)]."""
     head = fill(cfg.head, {"기간": esc(label), "날짜": esc(date)})
     out = [head, ""] if head.strip() else []
     if rows:
         out += [line_html(cfg, i, name, n) for i, (name, n) in enumerate(rows)]
     else:
         out.append(f"아직 {esc(label)} 기록이 없어요.")
+    return out
+
+
+def _tail(cfg: Cfg, yday: list | None, yday_date: str, me: tuple[int, int] | None, yday_label: str) -> list:
+    out = []
     if me:
         out += ["", f"👤 나 — {me[0]}위 · {me[1]:,}회" if me[0] else "👤 나 — 아직 기록 없음"]
     if yday:
@@ -271,6 +288,25 @@ def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None
         out += [line_html(cfg, i, name, n, prize) for i, name, n, prize in yday]
     if cfg.foot.strip():
         out += ["", cfg.foot]
+    return out
+
+
+def render(cfg: Cfg, label: str, date: str, rows: list, yday: list | None = None, yday_date: str = "",
+           me: tuple[int, int] | None = None, yday_label: str = "어제 당첨자") -> str:
+    """rows = [(이름, 횟수)] 등수 순. yday = [(등수-1, 이름, 횟수, 상품)]. me = (내 등수, 횟수) — 1:1 만."""
+    out = section(cfg, label, date, rows) + _tail(cfg, yday, yday_date, me, yday_label)
+    return "\n".join(out).strip()
+
+
+def render_sections(cfg: Cfg, sections: list, yday: list | None = None, yday_date: str = "",
+                    me: tuple[int, int] | None = None, yday_label: str = "어제 당첨자") -> str:
+    """여러 기간 섹션을 한 카드에 (본 기간 + 추가 기간들, 泰山 봇처럼 일간+주간). sections = [[줄...], ...]."""
+    out = []
+    for i, sec in enumerate(sections):
+        if i:
+            out.append("")
+        out += sec
+    out += _tail(cfg, yday, yday_date, me, yday_label)
     return "\n".join(out).strip()
 
 
