@@ -58,6 +58,8 @@ _WHEN_DAILY = re.compile(r"^(?:매일|daily)?\s*(\d{1,2}:\d{2})$", re.I)
 DAYS = "월화수목금토일"                  # datetime.weekday() 순서
 _WHEN_WEEKLY = re.compile(r"^(?:매주\s*((?:[월화수목금토일](?:요일)?[,·\s]*)+)|(평일|주말))\s*(\d{1,2}:\d{2})$")
 _WHEN_EVERY = re.compile(r"^(?:반복|매|every)\s*(\d+)\s*(분|m|min|시간|h)?(?:\s*마다)?$", re.I)
+# 시작 시각 맞춰 반복: '00:15 반복 4시간' · '매일 00:15부터 4시간마다' · '00:15 반복 240' (다른 봇처럼 정렬 발송)
+_WHEN_ANCHORED = re.compile(r"^(?:매일\s*)?(\d{1,2}:\d{2})\s*(?:부터)?\s*(?:반복\s*)?(\d+)\s*(분|m|시간|h)?(?:\s*마다)?$", re.I)
 
 
 def parse_when(text: str) -> tuple[str, str | None, int | None]:
@@ -72,14 +74,23 @@ def parse_when(text: str) -> tuple[str, str | None, int | None]:
         days = {"평일": "월화수목금", "주말": "토일"}.get(m.group(2) or "") or "".join(
             d for d in DAYS if d in (m.group(1) or "").replace("요일", ""))
         return "weekly", f"{days} {parse_hhmm(m.group(3))}", None
+    m = _WHEN_ANCHORED.match(t)                       # '00:15 반복 4시간' · '매일 00:15부터 4시간마다' = 그 시각 맞춰 반복
+    if m:
+        minutes = int(m.group(2)) * (60 if (m.group(3) or "").lower() in ("시간", "h") else 1)
+        if not MIN_INTERVAL <= minutes <= MAX_INTERVAL:
+            raise ValueError(f"반복 간격은 {MIN_INTERVAL}분 ~ {MAX_INTERVAL // 1440}일 사이로 해주세요")
+        return "interval", parse_hhmm(m.group(1)), minutes
     m = _WHEN_EVERY.match(t)
     if m:
         minutes = int(m.group(1)) * (60 if (m.group(2) or "").lower() in ("시간", "h") else 1)
         if not MIN_INTERVAL <= minutes <= MAX_INTERVAL:
             raise ValueError(f"반복 간격은 {MIN_INTERVAL}분 ~ {MAX_INTERVAL // 1440}일 사이로 해주세요")
         return "interval", None, minutes
-    raise ValueError("형식: <code>매일 09:00</code> · <code>매주 월 10:00</code> · <code>평일 09:00</code> · "
-                     "<code>반복 120</code> (분) / <code>반복 3시간</code>")
+    raise ValueError("한 줄에 <b>하나만</b> 보내세요 (슬래시·'또는' 같이 쓰지 말고):\n"
+                     "• 매일 그 시각 한 번: <code>매일 09:00</code>\n"
+                     "• 요일: <code>매주 월 10:00</code> · <code>평일 09:00</code>\n"
+                     "• 그냥 N 간격: <code>반복 120</code>(분) · <code>반복 3시간</code>\n"
+                     "• <b>그 시각 맞춰 반복</b>: <code>00:15 반복 4시간</code> (0시15분·4시15분·8시15분…)")
 
 
 _WHEN_AFTER = re.compile(r"^(\d+)\s*(분|시간)\s*(?:뒤|후)(?:에)?$")
@@ -147,9 +158,8 @@ def describe_when(kind: str, at_time: str | None, interval_min: int | None) -> s
         days, hhmm = (at_time or " ").split(" ", 1)
         label = {"월화수목금": "평일", "토일": "주말", DAYS: "매일"}.get(days) or "매주 " + "·".join(days)
         return f"{label} {hhmm}"
-    if interval_min and interval_min % 60 == 0:
-        return f"{interval_min // 60}시간마다"
-    return f"{interval_min}분마다"
+    every = f"{interval_min // 60}시간마다" if interval_min and interval_min % 60 == 0 else f"{interval_min}분마다"
+    return f"매일 {at_time}부터 {every}" if at_time else every
 
 
 def is_due(row, now_ts: int, tz) -> bool:
@@ -167,7 +177,20 @@ def is_due(row, now_ts: int, tz) -> bool:
         if not 0 <= now_ts - sched < DAILY_GRACE:
             return False
         return row["last_sent"] is None or row["last_sent"] < sched
-    return now_ts - (row["last_sent"] or 0) >= (row["interval_min"] or MAX_INTERVAL) * 60
+    interval_min = row["interval_min"] or MAX_INTERVAL
+    anchor = row["at_time"]                                    # interval + 시작 시각 = 그 시각 맞춰 정렬 발송 (00:15 → 00:15·04:15·…)
+    if anchor:
+        hh, mm = map(int, anchor.split(":"))
+        now = datetime.fromtimestamp(now_ts, tz)
+        base = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if base.timestamp() > now_ts:                         # 오늘 그 시각 아직 안 지남 → 어제 시각부터 세어 칸 맞춤
+            base -= timedelta(days=1)
+        step = interval_min * 60
+        slot = int(base.timestamp()) + ((now_ts - int(base.timestamp())) // step) * step
+        if not 0 <= now_ts - slot < DAILY_GRACE:
+            return False
+        return row["last_sent"] is None or row["last_sent"] < slot
+    return now_ts - (row["last_sent"] or 0) >= interval_min * 60
 
 
 def render(title: str, text: str, *, has_media: bool, rules: str, tz, fmt: str = "") -> str:
@@ -564,9 +587,10 @@ class Announcer:
         draft.step = "when"
         now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                f"<code>그대로</code>)") if draft.edit_id is not None else ""
-        await self._say(bot, draft, "<b>4/5 언제</b> 올릴까요?\n"
+        await self._say(bot, draft, "<b>4/5 언제</b> 올릴까요? (한 줄에 하나만)\n"
                                     "• 매일 정해진 시각: <code>매일 09:00</code>\n"
-                                    "• 일정 간격: <code>반복 120</code> (분) / <code>반복 3시간</code>" + now)
+                                    "• 일정 간격: <code>반복 120</code>(분) · <code>반복 3시간</code>\n"
+                                    "• 그 시각 맞춰 반복: <code>00:15 반복 4시간</code> (0시15분·4시15분·…)" + now)
 
     async def on_callback(self, bot: Bot, query: CallbackQuery, parts: list[str]) -> None:
         token = (parts + [""])[0]

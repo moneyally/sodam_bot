@@ -377,9 +377,9 @@ async def r_cp(c: PanelCtx) -> Screen:
         if not ch or not await channel.covered(c.svc, ch):
             return Screen(None, toast="예약 글은 이용 중인 방과 연결된 채널에서 쓸 수 있어요.\n📢 채널 → 🔗 연결된 방에서 연결해 주세요.",
                           alert=True)
-        return _ask(c, d, "cpw", "🗓️ <b>언제</b> 올릴까요?\n• 한 번: <code>30분 뒤</code> · <code>내일 09:00</code> · "
+        return _ask(c, d, "cpw", "🗓️ <b>언제</b> 올릴까요? (한 줄에 하나만)\n• 한 번: <code>30분 뒤</code> · <code>내일 09:00</code> · "
                                  "<code>09-30 18:00</code>\n• 반복: <code>매일 09:00</code> · <code>매주 월,수 10:00</code> · "
-                                 "<code>평일 09:00</code>")
+                                 "<code>평일 09:00</code> · <code>00:15 반복 4시간</code>(그 시각 맞춰)")
     elif act == "del":
         return Screen("🗑 이 글을 버릴까요? (되돌릴 수 없어요)", _kb([[B("🗑 버리기", cp(did, "del1")), B("⬅️ 돌아가기", cp(did))]]))
     elif act == "del1":
