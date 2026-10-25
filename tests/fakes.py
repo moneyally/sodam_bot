@@ -196,13 +196,13 @@ class FakeBot:
 
 class FakeMsg:
     def __init__(self, chat_id, user, text="", *, caption=None, photo=None, video=None, animation=None,
-                 document=None, message_id=1, reply_to=None):
+                 document=None, message_id=1, reply_to=None, entities=None):
         self.chat_id, self.from_user, self.text, self.caption = chat_id, user, text, caption
         self.photo = photo or ()
         self.video, self.animation, self.document = video, animation, document
         self.message_id = message_id
         self.reply_to_message = reply_to
-        self.entities, self.caption_entities = (), ()  # PTB 는 튜플
+        self.entities, self.caption_entities = tuple(entities or ()), ()  # PTB 는 튜플
         self.deleted = False
         self.replies: list[str] = []
         self.reply_kws: list[dict] = []
