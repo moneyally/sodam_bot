@@ -54,7 +54,7 @@ PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "th
 PERIOD_CHOICES = ("today", "yesterday", "thisweek", "week", "month")    # 방장이 고르는 것 (lastweek 는 시상식·.순위 지난주 용)
 WEEKLY = 100                                 # 시상식 '매주 월요일 0시' (지난 주 월~일 순위) — 고객 2026-10-12 '추첨은 월요일 자정'
 AWARD_LABEL = {-1: "끔", 0: "매일 0시", 9: "매일 9시", 12: "매일 12시", WEEKLY: "매주 월요일 0시"}
-NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "mask": "가리기 (sin***)"}
+NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "both": "이름+아이디", "mask": "가리기 (sin***)"}
 AWARD_HOURS = (-1, 0, 9, 12, WEEKLY)         # 시상식 (한국 시각, -1 = 끔, WEEKLY = 매주 월요일 0시)
 TOP_MIN, TOP_MAX = 3, 20   # 2026-10-20 오너: New world 멤버 '20위까지'
 PRIZE_MAX, LINE_MAX, HEAD_MAX, FOOT_MAX, ICON_MAX = 30, 120, 300, 600, 8
@@ -237,10 +237,14 @@ def mask(name: str) -> str:
 
 def show_name(row, mode: str) -> str:
     uname, first = (row["username"] or "").strip(), row["first_name"] or ""
-    if mode == "name":
-        name = display_name(first, None, None) or uname
-    else:
-        name = uname or display_name(first, None, None)
+    nm = display_name(first, None, None)
+    if mode == "both":                    # 이름 + @아이디 (아이디 없으면 이름만, 이름 없으면 @아이디만)
+        real = nm if first.strip() else ""    # 이름 없으면 display_name 이 '알 수 없음' → 대신 @아이디만
+        name = f"{real} (@{uname})" if real and uname else (f"@{uname}" if uname else nm)
+    elif mode == "name":
+        name = nm or uname
+    else:                                 # user / mask
+        name = uname or nm
     if not name_key(name or ""):          # '@'·투명 글자뿐인 이름 (실제 백악관 2026-10-12) → 누군지 알아보게 ID 끝 4자리
         uid = row["user_id"] if "user_id" in row.keys() else None
         name = f"멤버{str(uid)[-4:]}" if uid else "멤버"

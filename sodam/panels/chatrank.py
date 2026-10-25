@@ -653,7 +653,7 @@ def _register_tool() -> None:
          "foot": {"type": "string", "description": "맨 아래 문구 ('없음' = 지우기)"},
          "line": {"type": "string", "description": "한 줄 모양, 칸 {등수} {이름} {횟수} {상품} (이름 필수)"},
          "me": {"type": "string", "description": ".나 한 줄, 칸 {이름} {등수} {횟수} {기간} (횟수 필수)"},
-         "names": {"type": "string", "enum": list(cr.NAME_MODES), "description": "user 아이디 · name 이름 · mask 가리기"},
+         "names": {"type": "string", "enum": list(cr.NAME_MODES), "description": "user 아이디 · name 이름 · both 이름+아이디 · mask 가리기"},
          "no_admin": {"type": "boolean", "description": "관리자를 순위에서 빼기"},
          "yday": {"type": "boolean", "description": "어제(주 단위면 지난주) 당첨자 칸"},
          "award": {"type": "string", "enum": list(AWARD_WORDS),
