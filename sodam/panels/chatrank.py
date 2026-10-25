@@ -10,8 +10,9 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
 from telegram.error import BadRequest, Forbidden, TelegramError
 
-from .. import brand, chatrank as cr, hooks, menu, persist
+from .. import brand, chatrank as cr, hooks, menu, persist, tools
 from ..menu import ADMIN, B, HubItem, PanelCtx, Route, Screen
+from ..permissions import Role
 from ..util import esc, html_plain, rich_html
 
 log = logging.getLogger(__name__)
@@ -104,6 +105,34 @@ async def c_me(ctx) -> None:
     await send_html(ctx.bot, ctx.chat_id, html, reply_to=ctx.msg.message_id)
 
 
+async def c_chatreset(ctx) -> None:
+    """특정 멤버만 채팅 수 0부터 다시 (도배범 순위 초기화). 글·기록은 그대로, .순위·.나·미니앱만."""
+    from .. import commands
+    t = await commands._target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    await cr.member_reset(ctx.svc.db, ctx.chat_id, uid, ctx.user.id)
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "rank_reset", "채팅수 초기화")
+    await ctx.reply(f"🔄 <b>{esc(name)}</b> 님 채팅 수를 지금부터 0으로 다시 세요.\n"
+                    "<code>.순위</code>·<code>.나</code>·미니앱만 바뀌고 대화 기록·AI 기억은 그대로예요. "
+                    "되돌리기: 그 사람에게 <code>.채팅리셋취소</code> (답장/@아이디).")
+
+
+async def c_chatreset_cancel(ctx) -> None:
+    """특정 멤버 채팅 수 초기화 취소 (원래 수로)."""
+    from .. import commands
+    t = await commands._target(ctx, sanction=False)
+    if not t:
+        return
+    uid, name, _ = t
+    if await cr.member_unreset(ctx.svc.db, ctx.chat_id, uid):
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, uid, "rank_unreset", "채팅수 초기화 취소")
+        await ctx.reply(f"↩️ <b>{esc(name)}</b> 님 채팅 수 초기화를 취소했어요 (원래 수로 복구).")
+    else:
+        await ctx.reply(f"<b>{esc(name)}</b> 님은 채팅 수 초기화된 적이 없어요.")
+
+
 def register_commands() -> None:
     from .. import commands
     if any(c.fn is c_rank for c in commands.COMMANDS):
@@ -111,10 +140,41 @@ def register_commands() -> None:
     for cmd in (commands.Cmd(("순위", "채팅순위", "채팅왕"), c_rank, usage="[오늘|어제|이번주|지난주|주간|월간]",
                              help="방장이 꾸민 채팅 순위 (상품·어제 당첨자)", group="집계"),
                 commands.Cmd(("나", "내순위", "내채팅"), c_me, usage="[오늘|어제|주간|월간]",
-                             help="내 채팅 수·등수", group="집계")):
+                             help="내 채팅 수·등수", group="집계"),
+                commands.Cmd(("채팅리셋", "순위리셋", "채팅초기화"), c_chatreset, Role.ADMIN, usage="@user|답장|ID",
+                             help="그 사람만 채팅 수 0부터 다시 (도배범 순위 초기화)", group="집계"),
+                commands.Cmd(("채팅리셋취소", "순위리셋취소", "채팅초기화취소"), c_chatreset_cancel, Role.ADMIN,
+                             usage="@user|답장|ID", help="그 사람 채팅 수 초기화 취소", group="집계")):
         commands.COMMANDS.append(cmd)
         for name in cmd.names:
             commands._INDEX.setdefault(name.lower(), cmd)
+
+
+async def t_chat_reset_member(ctx: tools.ToolCtx, a: dict) -> str:
+    """AI 도구: 특정 멤버만 채팅 수 초기화 / 취소 (관리자·그 방)."""
+    row, err = await tools._resolve(ctx, str(a.get("name", "")))
+    if err:
+        return err
+    uid, name = row["user_id"], tools._row_name(row)
+    on = bool(a.get("on", True))
+    if on:
+        await cr.member_reset(ctx.svc.db, ctx.chat_id, uid, ctx.caller.id)
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, uid, "rank_reset", "채팅수 초기화")
+        return (f"{name}님 채팅 수를 지금부터 0으로 다시 세게 함 (.순위·.나·미니앱만, 글·기록은 그대로). "
+                "짧게 '초기화했어요' 정도로.")
+    if not await cr.member_unreset(ctx.svc.db, ctx.chat_id, uid):
+        return f"{name}님은 채팅 수 초기화된 적이 없음. 그렇게 안내."
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.caller.id, uid, "rank_unreset", "채팅수 초기화 취소")
+    return f"{name}님 채팅 수 초기화를 취소함 (원래 수로). 짧게 안내."
+
+
+tools.register_tool(tools.Tool(
+    "chat_reset_member",
+    "특정 멤버 한 명의 채팅 순위 수(.순위·.나·미니앱)를 지금부터 0으로 다시 세게 한다 (on=true) / 취소한다 (on=false). "
+    "'쟤 채팅 수 초기화해줘', '도배하는 ○○ 순위 0으로', '○○ 채팅 리셋' → on=true. 대화 기록·AI 기억·.통계는 안 건드림. "
+    "방 전체 리셋이 아니라 그 사람만. name 에 이름·@아이디·숫자 ID.",
+    {"name": {"type": "string"}, "on": {"type": "boolean"}},
+    ["name"], t_chat_reset_member, Role.ADMIN, where="room"), read_only=False)
 
 
 # ── 1:1 메뉴판 · 미니앱 ───────────────────────────────────

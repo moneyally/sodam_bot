@@ -121,6 +121,33 @@ async def standings_count_by_room_rules_and_can_skip_admins():
     assert await cr.my_place(e.svc, ROOM, B_.id, c) == (4, 3) and await cr.my_place(e.svc, ROOM, 999, c) == (0, 0)
 
 
+@test
+async def member_reset_zeroes_only_that_person():
+    e = await setup([(ADMIN, 9), (A, 5), (B_, 3), (C, 1)])
+    c = cr.Cfg(top=4)
+    _, _, rows = await cr.standings(e.svc, ROOM, c, None, e.bot)
+    assert [r["user_id"] for r in rows] == [ADMIN.id, A.id, B_.id, C.id]
+    # A(도배범)만 초기화 → A 는 순위에서 빠지고(0), 남들은 그대로
+    await cr.member_reset(e.db, ROOM, A.id, ADMIN.id)
+    _, _, rows = await cr.standings(e.svc, ROOM, c, None, e.bot)
+    ids = [r["user_id"] for r in rows]
+    assert A.id not in ids, "초기화한 사람은 순위에서 빠짐"
+    assert ids == [ADMIN.id, B_.id, C.id], "남들은 그대로"
+    assert await cr.my_place(e.svc, ROOM, A.id, c) == (0, 0), "본인은 0"
+    assert await cr.my_place(e.svc, ROOM, ADMIN.id, c) == (1, 9), "남 등수·수 안 바뀜"
+    assert await cr.my_place(e.svc, ROOM, B_.id, c) == (2, 3), "A 빠져서 B 가 2등으로"
+    # 범위: .통계용 top_chatters(user_cuts 기본 꺼짐)는 A 를 그대로 셈
+    plain = {r["user_id"]: r["n"] for r in await e.db.top_chatters(ROOM, 0, 10)}
+    assert plain.get(A.id) == 5, ".통계/리포트는 영향 없음 (글 안 지움)"
+    cut = {r["user_id"]: r["n"] for r in await e.db.top_chatters(ROOM, 0, 10, user_cuts=True)}
+    assert A.id not in cut, "순위 쿼리만 A 제외"
+    # 취소 → 복구
+    assert await cr.member_unreset(e.db, ROOM, A.id) is True
+    _, _, rows = await cr.standings(e.svc, ROOM, c, None, e.bot)
+    assert [r["user_id"] for r in rows] == [ADMIN.id, A.id, B_.id, C.id], "취소하면 원래 순위"
+    assert await cr.member_unreset(e.db, ROOM, A.id) is False, "두 번째 취소는 없음"
+
+
 # ── 방 명령 · 1:1 · 미니앱 ────────────────────────────────
 @test
 async def room_command_posts_template_with_menu_buttons_and_is_rate_limited():

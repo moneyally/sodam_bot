@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS rank_awards (
     paid_at  INTEGER,
     PRIMARY KEY (chat_id, day, rank)
 );
+CREATE TABLE IF NOT EXISTS rank_user_reset (
+    chat_id  INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    reset_at INTEGER NOT NULL,
+    by_id    INTEGER,
+    ts       INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
 """)
 
 PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "thisweek": ("이번주", "이번 주"), "week": ("주간", "최근 7일"),
@@ -128,6 +136,23 @@ async def save(db, chat_id: int, cfg: Cfg, by: int | None) -> None:
     await db._write("INSERT INTO rank_rooms(chat_id, cfg, updated, updated_by) VALUES(?,?,?,?) "
                     "ON CONFLICT(chat_id) DO UPDATE SET cfg=excluded.cfg, updated=excluded.updated, updated_by=excluded.updated_by",
                     (chat_id, cfg.dump(), int(time.time()), by))
+
+
+async def member_reset(db, chat_id: int, user_id: int, by: int | None) -> None:
+    """특정 멤버만 채팅 수 0부터 다시 — 그 사람의 '초기화 시각'을 지금으로 (글은 안 지움, standings/my_place 가 이 뒤 글만 셈)."""
+    now = int(time.time())
+    await db._write("INSERT INTO rank_user_reset(chat_id, user_id, reset_at, by_id, ts) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(chat_id, user_id) DO UPDATE SET reset_at=excluded.reset_at, by_id=excluded.by_id, ts=excluded.ts",
+                    (chat_id, user_id, now, by, now))
+    _CACHE.clear()        # 순위 캐시 즉시 비워 바로 반영
+
+
+async def member_unreset(db, chat_id: int, user_id: int) -> bool:
+    """특정 멤버 초기화 취소 (원래 수로 복구). 걸려 있던 게 있었으면 True (_write 는 rowcount 가 아니라 lastrowid 라 SELECT 로 확인)."""
+    had = await db._one("SELECT 1 FROM rank_user_reset WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    await db._write("DELETE FROM rank_user_reset WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    _CACHE.clear()
+    return had is not None
 
 
 async def award_rooms(db) -> list[tuple[int, Cfg]]:
@@ -310,7 +335,7 @@ async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=
     if hit and time.monotonic() - hit[0] < CACHE_SEC:   # 미니앱을 여는 사람마다 하루치 글을 다시 세지 않게 (바쁜 방 하루 1만 개↑)
         rows = hit[1]
     else:
-        rows = await svc.db.top_chatters(chat_id, since, cfg.top + extra, until, rule)
+        rows = await svc.db.top_chatters(chat_id, since, cfg.top + extra, until, rule, user_cuts=True)
         if len(_CACHE) > 500:
             _CACHE.clear()
         _CACHE[ck] = (time.monotonic(), rows)
@@ -333,12 +358,16 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     end = until if until is not None else 1 << 62
     m = await stats.min_chars(svc.db, chat_id)
     mine = await svc.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                             + count_filter(), (chat_id, user_id, since, end, *m.args))
+                             "AND ts >= COALESCE((SELECT reset_at FROM rank_user_reset WHERE chat_id=? AND user_id=?),0) "
+                             + count_filter(), (chat_id, user_id, since, end, chat_id, user_id, *m.args))
     n = int(mine["n"] if mine else 0)
     if not n:
         return 0, 0
-    above = await svc.db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? AND ts<? "
-                              "AND is_bot=0 " + count_filter() + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, *m.args, n))
+    above = await svc.db._one("SELECT COUNT(*) n FROM (SELECT messages.user_id, COUNT(*) c FROM messages "
+                              "LEFT JOIN rank_user_reset r ON r.chat_id=messages.chat_id AND r.user_id=messages.user_id "
+                              "WHERE messages.chat_id=? AND messages.ts>=? AND messages.ts<? AND messages.is_bot=0 "
+                              "AND messages.ts >= COALESCE(r.reset_at,0) " + count_filter() + " GROUP BY messages.user_id) WHERE c>?",
+                              (chat_id, since, end, *m.args, n))
     return int(above["n"]) + 1, n
 
 
