@@ -50,6 +50,8 @@ CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
 BOT_WAIT = 10             # greet_reply_bot: 인사 차례에 믿는 봇 글이 아직 없으면 더 기다리는 최대 초
 BOT_LEAD = 5              # 첫 입장보다 이만큼 먼저 올라온 봇 글까지 (입장 알림 순서가 조금 엇갈려도)
 
+_icons_off = [False]      # 이 봇이 버튼 프리미엄 이모지를 못 쓰면(주인 프리미엄 아님) 프로세스 동안 빼고 보냄
+_ICON_REFUSED = re.compile(r"emoji|icon|premium|document_invalid", re.I)
 _URL_BAD = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
 _HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
 # tg:// 는 채널·그룹·사용자 이동만 (proxy·socks 처럼 설정을 바꾸는 링크 금지)
@@ -60,7 +62,7 @@ _LINE = re.compile(r"^(.*\S)\s+-\s+(\S+)$")
 def _render_buttons(value: Any) -> str:
     """`.설정 전체` 표시용 (값이 [글자, 주소] 목록이라 기본 표시로는 안 됨)."""
     good = clean_buttons(value)
-    return ", ".join(f"{t} ({u})" for t, u in good) if good else "(없음)"
+    return ", ".join(f"{t} ({u})" for t, u, _ in good) if good else "(없음)"
 
 
 register_setting("greet_media_type", "", "인사 미디어 종류")
@@ -117,26 +119,74 @@ def clean_button_text(text: str) -> str | None:
     return text
 
 
-def clean_buttons(value: Any) -> list[tuple[str, str]]:
-    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). 형식이 틀린 항목은 조용히 뺀다."""
+def _valid_emoji_id(icon: Any) -> str | None:
+    """custom_emoji_id 는 숫자 문자열. 그 모양만 통과 (저장값·입력 공통)."""
+    return icon if isinstance(icon, str) and icon.isdigit() and 1 <= len(icon) <= 25 else None
+
+
+def clean_buttons(value: Any) -> list[tuple[str, str, str | None]]:
+    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). (글자, 주소, 프리미엄이모지id|None). 틀린 항목은 조용히 뺀다.
+    옛 값([글자, 주소])도 그대로 읽는다 (icon 없음)."""
     out = []
     for item in value if isinstance(value, list) else []:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
             text, url = clean_button_text(item[0]), normalize_url(item[1])
+            icon = _valid_emoji_id(item[2]) if len(item) >= 3 else None
             if text and url:
-                out.append((text, url))
+                out.append((text, url, icon))
     return out[:MAX_BUTTONS]
 
 
-def parse_buttons(raw: str) -> tuple[list[list[str]], str | None]:
-    """관리자가 보낸 `버튼 글자 - https://주소` 줄들 → ([[글자, 주소]], 오류문 HTML). 하나라도 틀리면 전부 거절."""
-    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
-    if not lines:
+def _u16_offsets(text: str) -> list[int]:
+    """out[i] = text[:i] 의 UTF-16 코드단위 길이 (텔레그램 entity 오프셋이 UTF-16 기준이라 변환용)."""
+    out = [0] * (len(text) + 1)
+    u = 0
+    for i, ch in enumerate(text):
+        u += 1 if ord(ch) <= 0xFFFF else 2
+        out[i + 1] = u
+    return out
+
+
+def _line_icons(raw: str, entities) -> dict[int, tuple[int, str]]:
+    """코드포인트 시작 위치 → (이모지 코드포인트 길이, custom_emoji_id). custom_emoji entity 만, 경계에 맞는 것만."""
+    ents = [(e.offset, e.length, e.custom_emoji_id) for e in (entities or [])
+            if getattr(e, "type", None) == "custom_emoji" and getattr(e, "custom_emoji_id", None)]
+    if not ents:
+        return {}
+    off = _u16_offsets(raw)
+    u16_to_cp = {u: i for i, u in enumerate(off)}          # 코드포인트 경계만 (이모지는 경계에서 시작·끝남)
+    starts: dict[int, tuple[int, str]] = {}
+    for o, length, cid in ents:
+        a, b = u16_to_cp.get(o), u16_to_cp.get(o + length)
+        if a is not None and b is not None and b > a and _valid_emoji_id(cid):
+            starts.setdefault(a, (b - a, cid))
+    return starts
+
+
+def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
+    """관리자가 보낸 `[프리미엄이모지] 버튼 글자 - https://주소` 줄들 → ([[글자, 주소] 또는 [글자, 주소, 이모지id]], 오류문 HTML).
+    줄 맨 앞(공백 뒤 첫 글자)의 프리미엄(커스텀) 이모지는 버튼 앞 아이콘(icon_custom_emoji_id)으로 뽑는다. 하나라도 틀리면 전부 거절."""
+    raw = raw or ""
+    icons = _line_icons(raw, entities)
+    rows: list[tuple[str, str | None]] = []          # (이모지 뗀 줄 글자, 이모지id|None)
+    cp = 0
+    for ln in raw.split("\n"):
+        start, cp = cp, cp + len(ln) + 1             # +1 = '\n' (코드포인트 위치 따라가기)
+        if not ln.strip():
+            continue
+        ls = len(ln) - len(ln.lstrip())              # 앞 공백 코드포인트 수
+        icon = None
+        hit = icons.get(start + ls)                  # 공백 뒤 첫 글자가 커스텀 이모지면 아이콘으로
+        if hit:
+            emo_len, icon = hit
+            ln = ln[:ls] + ln[ls + emo_len:]         # 맨 앞 이모지 글자 제거 → 버튼 글자엔 안 남김
+        rows.append((ln.strip(), icon))
+    if not rows:
         return [], "한 줄에 하나씩 <code>버튼 글자 - https://주소</code> 로 보내주세요."
-    if len(lines) > MAX_BUTTONS:
-        return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 줄: {len(lines)}개)"
+    if len(rows) > MAX_BUTTONS:
+        return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 줄: {len(rows)}개)"
     out = []
-    for i, line in enumerate(lines, 1):
+    for i, (line, icon) in enumerate(rows, 1):
         m = _LINE.match(line)
         where = f"{i}번째 줄 <code>{esc(line[:40])}</code>"
         if not m:
@@ -146,7 +196,7 @@ def parse_buttons(raw: str) -> tuple[list[list[str]], str | None]:
             return [], f"{where}: 버튼 글자는 1~{MAX_BUTTON_TEXT}자로 써주세요."
         if not url:
             return [], f"{where}: 주소는 <code>https://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요."
-        out.append([text, url])
+        out.append([text, url, icon] if icon else [text, url])
     return out, None
 
 
@@ -165,8 +215,14 @@ def copy_of(s: dict) -> tuple[int, int] | None:
     return None
 
 
-def button_rows(s: dict) -> list[list[InlineKeyboardButton]]:
-    return [[InlineKeyboardButton(t, url=u)] for t, u in clean_buttons(s.get("greet_buttons"))]
+def button_rows(s: dict, icons: bool = True) -> list[list[InlineKeyboardButton]]:
+    """버튼 앞 프리미엄 이모지(icon_custom_emoji_id)는 PTB 21 이 모르는 칸 → api_kwargs 로 그대로 실림 (brand.py 와 같은 방식).
+    봇 주인이 프리미엄이 아니면 텔레그램이 거절 → send_greeting 이 icons=False 로 다시 보냄."""
+    out = []
+    for t, u, icon in clean_buttons(s.get("greet_buttons")):
+        extra = {"icon_custom_emoji_id": icon} if icons and icon else None
+        out.append([InlineKeyboardButton(t, url=u, api_kwargs=extra)])
+    return out
 
 
 def with_names(template: str, tag: bool = True) -> str:
@@ -292,8 +348,26 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
     미디어가 안 보내지면(지워진 파일 등) 글만 보낸다. reply_to = 그 메시지에 답장으로 (지워졌으면 그냥).
     미디어는 mediastore 로 — 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림."""
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
-    rows = button_rows(s) + (extra_rows or [])
-    kb = InlineKeyboardMarkup(rows) if rows else None
+    extra = extra_rows or []
+    has_icon = any(icon for _, _, icon in clean_buttons(s.get("greet_buttons")))
+
+    def kb(use_icons: bool):
+        rows = button_rows(s, icons=use_icons) + extra
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    async def kb_send(make):
+        """버튼(reply_markup)을 단 전송. 프리미엄 이모지를 텔레그램이 거절하면 이모지 빼고 한 번 다시."""
+        tries = (True, False) if has_icon and not _icons_off[0] else (False,) if has_icon else (True,)
+        for use in tries:
+            try:
+                return await send_retry(lambda: make(kb(use)))
+            except BadRequest as e:
+                if has_icon and use and _ICON_REFUSED.search(str(e)):
+                    log.info("greet button emoji refused (%s) — 이모지 빼고 다시", e)
+                    _icons_off[0] = True
+                    continue
+                raise
+
     media = media_of(s)
     db = db if db is not None else persist.db_of(bot)
     sent = []
@@ -302,16 +376,16 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
         fits = _plain_len(text_html) <= CAPTION_LIMIT
         try:
             if fits:
-                return [await send_retry(lambda: mediastore.send(bot, db, kind, chat_id, file_id, caption=text_html,
-                                                                 parse_mode="HTML", reply_markup=kb, reply_parameters=rp))]
+                return [await kb_send(lambda k: mediastore.send(bot, db, kind, chat_id, file_id, caption=text_html,
+                                                                parse_mode="HTML", reply_markup=k, reply_parameters=rp))]
             # 설명이 너무 길면 미디어 따로, 글+버튼 따로
             sent.append(await send_retry(lambda: mediastore.send(bot, db, kind, chat_id, file_id, reply_parameters=rp)))
         except BadRequest as e:
             log.warning("greet media failed, sending text only: %s", e)
             if isinstance(e, mediastore.MediaLost):
                 await _media_lost_notice(bot, db, chat_id, f"인사 {MEDIA_TYPES.get(kind, '미디어')}")
-    sent.append(await send_retry(lambda: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=kb,
-                                                          reply_parameters=rp)))
+    sent.append(await kb_send(lambda k: bot.send_message(chat_id, text_html, parse_mode="HTML", reply_markup=k,
+                                                         reply_parameters=rp)))
     return sent
 
 

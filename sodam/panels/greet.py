@@ -127,7 +127,7 @@ async def s_buttons(c: PanelCtx) -> Screen:
     btns = clean_buttons(s["greet_buttons"])
     if btns:
         lines = [f"🔗 <b>URL 버튼</b> ({len(btns)}/{MAX_BUTTONS})", ""]
-        lines += [f"{i}. {esc(t)} → <code>{esc(u)}</code>" for i, (t, u) in enumerate(btns, 1)]
+        lines += [f"{i}. {'✨ ' if icon else ''}{esc(t)} → <code>{esc(u)}</code>" for i, (t, u, icon) in enumerate(btns, 1)]
         lines.append("\n아래가 인사에 붙는 실제 모양이에요 (눌러서 주소 확인 가능).")
         rows = button_rows(s) + [[B("✏️ 수정", f"m:in:{c.cid}:wb"), B("🗑 삭제", f"m:wd:{c.cid}:b")]]
     else:
@@ -266,11 +266,13 @@ async def in_media(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 
 
 async def in_buttons(c: PanelCtx, msg: Message) -> tuple[bool, str]:
-    btns, err = parse_buttons(msg.text or "")
+    btns, err = parse_buttons(msg.text or "", msg.entities)
     if err:
         return False, "❌ " + err
-    await _save(c, f"greet_buttons={len(btns)}개 " + ", ".join(u for _, u in btns), greet_buttons=btns)
-    return True, f"✅ URL 버튼 {len(btns)}개를 저장했어요."
+    await _save(c, f"greet_buttons={len(btns)}개 " + ", ".join(b[1] for b in btns), greet_buttons=btns)
+    n_icon = sum(1 for b in btns if len(b) >= 3 and b[2])
+    extra = (f"\n✨ 프리미엄 이모지 {n_icon}개 붙였어요 (봇 주인이 프리미엄이 아니면 텔레그램이 빼고 보여 줘요)." if n_icon else "")
+    return True, f"✅ URL 버튼 {len(btns)}개를 저장했어요.{extra}"
 
 
 async def in_copy(c: PanelCtx, msg: Message) -> tuple[bool, str]:
@@ -313,4 +315,6 @@ menu.register_input("wb", (
     f"🔗 <b>URL 버튼</b>을 한 줄에 하나씩 보내주세요. (최대 {MAX_BUTTONS}개, 기존 버튼은 보낸 것으로 전부 바뀌어요)\n"
     "<code>공지 채널 - https://t.me/sodam_notice</code>\n"
     "<code>홈페이지 - https://example.com</code>\n"
-    "주소는 <code>https://</code> 또는 <code>tg://</code> 만 돼요. 버튼 글자는 30자까지."), "w", in_buttons, s_editor)
+    "주소는 <code>https://</code> 또는 <code>tg://</code> 만 돼요. 버튼 글자는 30자까지.\n"
+    "✨ 버튼 글자 <b>맨 앞에 프리미엄(움직이는) 이모지</b>를 붙여 보내면 그 버튼 앞 아이콘으로 달려요 "
+    "(보통 이모지는 글자에 그냥 쓰면 돼요)."), "w", in_buttons, s_editor)
