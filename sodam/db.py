@@ -595,12 +595,15 @@ class DB:
         return rows
 
     async def top_chatters(self, chat_id: int, since: int, limit: int = 10, until: int | None = None,
-                           min_chars: "int | CountRule" = 0) -> list[aiosqlite.Row]:
+                           min_chars: "int | CountRule" = 0, user_cuts: bool = False) -> list[aiosqlite.Row]:
         rule = as_rule(min_chars)
+        # user_cuts: 멤버별 채팅 수 초기화(chatrank.rank_user_reset) 뒤 글만 — 순위 쪽만 켠다 (.통계·리포트는 끔)
+        join = "LEFT JOIN rank_user_reset rr ON rr.chat_id=msg.chat_id AND rr.user_id=msg.user_id " if user_cuts else ""
+        cut = "AND msg.ts >= COALESCE(rr.reset_at, 0) " if user_cuts else ""
         return await self._all(
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
-            "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + count_filter("msg") +
+            "LEFT JOIN users u ON u.user_id=msg.user_id " + join +
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + cut + count_filter("msg") +
             " GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, _until(until), *rule.args, limit))
 
     async def chat_totals(self, chat_id: int, since: int, until: int | None = None,
