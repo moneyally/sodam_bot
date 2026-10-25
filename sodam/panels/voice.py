@@ -28,6 +28,7 @@ from ..voice import store
 
 log = logging.getLogger(__name__)
 
+VOICE_OFF = os.getenv("VOICE_OFF", "0").strip() == "1"        # 1 = 음성통화만 잠시 끔 (노래 DJ 는 그대로). 끊기는 허용
 MONTH_MIN = int(os.getenv("VOICE_ROOM_MONTH_MIN", "120"))     # 방마다 한 달 통화 분 (요금 보호)
 CALL_MAX_SEC = int(os.getenv("VOICE_CALL_MAX_SEC", "900"))     # 한 통화 최대 15분
 IDLE_SEC = int(os.getenv("VOICE_IDLE_SEC", "60"))              # 아무도 말 안 하면 끝
@@ -223,6 +224,9 @@ async def _promote(bot, chat_id: int, aid: int) -> None:
 
 async def start_call(svc, bot, chat_id: int, uid: int, style: str | None = None) -> None:
     """뒤에서: 초대 → (들어가면) 권한 → 시작 → 결과 한 줄."""
+    if VOICE_OFF:                                # .env VOICE_OFF=1 — 음성통화만 잠시 끔 (버튼·도구 공통 길)
+        await bot.send_message(chat_id, "📴 음성통화는 지금 잠시 꺼놨어요. (노래는 그대로 돼요)")
+        return
     db = svc.db
     a = await store.assistant(db)
     if not a:
@@ -306,6 +310,10 @@ async def t_voice_call(ctx: tools.ToolCtx, a: dict) -> str:
             return "관리자만 끊을 수 있음. 음성채팅에서 '소담아 나가'라고 말하면 나간다고 안내."
         ok = await stop_call(ctx.svc, ctx.chat_id, ctx.caller.id)
         return "음성채팅에서 나가는 중. 짧게 알릴 것." if ok else "지금 음성채팅에 들어가 있지 않음."
+    if VOICE_OFF:                                # 음성통화만 잠시 끔 (.env VOICE_OFF=1) — 노래는 그대로
+        await ctx.bot.send_message(ctx.chat_id, "📴 음성통화는 지금 잠시 꺼놨어요. (노래는 그대로 돼요)")
+        ctx.quiet = True
+        return "음성통화 기능이 지금 꺼져 있음 (.env VOICE_OFF). 거절 안내를 방에 보냈음. 따로 답하지 않음."
     why = await precheck(ctx.svc, ctx.chat_id, ctx.caller.id, ctx.role)
     if why:
         # 안내는 AI 가 바꿔 말하지 않게 그대로 방에 (실제 사례: '도우미 연결 안 됨' → AI 가 '호출 권한이 없다'로 바꿔 말함)
