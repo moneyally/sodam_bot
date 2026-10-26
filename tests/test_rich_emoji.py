@@ -46,6 +46,8 @@ async def wizard(svc, bot, title_msg, body_msg):
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]
     q = FakeQuery(ADMIN, fake_user(ADMIN))
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    if draft.step == "keep":                                   # 반복 공지 → 지난 회차 쌓기 물음 한 단계
+        await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
     return draft, q
 
 

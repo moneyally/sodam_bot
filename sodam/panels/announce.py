@@ -55,7 +55,8 @@ def _when(row) -> str:
 def _flags(row) -> str:
     if row["action"] != "post":
         return " " + cron.describe(row).split()[0]
-    return (" 📌" if row["pin"] else "") + (f" [{MEDIA_LABEL.get(row['media_type'], '파일')}]" if row["media_type"] else "")
+    keep = " 📚" if row["kind"] != "once" and not row["del_prev"] else ""   # 지난 회차 안 지우고 쌓기
+    return (" 📌" if row["pin"] else "") + keep + (f" [{MEDIA_LABEL.get(row['media_type'], '파일')}]" if row["media_type"] else "")
 
 
 def _sid(c: PanelCtx, i: int = 0) -> int | None:
@@ -104,7 +105,8 @@ async def s_item(c: PanelCtx) -> Screen:
     last = datetime.fromtimestamp(r["last_sent"], tz).strftime("%m/%d %H:%M") if r["last_sent"] and r["last_msg_id"] else "아직 없음"
     lines = [f"🗓️ <b>예약공지 #{r['id']}</b>",
              f"상태: {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}",
-             f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else ""),
+             f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else "")
+             + (" · 📚 이전 글 쌓기" if r["kind"] != "once" and not r["del_prev"] else ""),
              f"제목: {_shown(r, 'title', 100) if r['title'] else '(없음)'}",
              f"최근 발송: {last}",
              f"내용:\n<blockquote>{media}{body or '(글 없음)'}</blockquote>"]

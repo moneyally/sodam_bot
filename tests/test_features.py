@@ -369,6 +369,8 @@ async def announce_wizard_create_with_photo():
     assert "관리자만" in stranger.answers[0][0]
     q = FakeQuery(CHAT, admin)
     await svc.announcer.on_callback(bot, q, [draft.token, "pin1"])
+    assert draft.step == "keep"                              # 반복 공지 → 지난 회차 쌓기 물음
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
     preview = bot.named("send_photo")[-1]
     assert preview[2] == "BIG" and "주간 규칙 안내" in preview[3] and preview[4]["reply_markup"]
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
@@ -398,6 +400,7 @@ async def announce_wizard_edit_keep_and_cancel():
     draft = svc.announcer.drafts[(CHAT, 1)]
     q = FakeQuery(CHAT, admin)
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])   # 반복 공지 → 쌓기 물음 (지우고 새로 유지)
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     r = await db.get_schedule(CHAT, sid)
     assert (r["title"], r["text"], r["interval_min"], r["pin"]) == ("원래 제목", "원래 내용", 120, 0)
