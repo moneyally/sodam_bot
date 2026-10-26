@@ -84,7 +84,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 그림·사진 생성·프사 만들어·글자 넣어/바꿔(그림) → make_image (붙은·방금 만든 그림 고치기는 mode=edit)
 - 움프·gif 프사·효과 늘려/바꿔 → sticker_catalog 로 조합 → make_profile_video · 스티커·말풍선 → make_sticker(정지=static) ·이 스티커로 글자만·0~9·색·표정 다르게 여러 개 → copy_sticker · '이모지·이모티콘' = 스티커 · (오너)'분할/타일 이모지·팩' = make_tile_emoji
 - 영상 만들어(장면·동작·소리) → make_video
-- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어·직접 말해 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
+- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
 - N분/N시간마다·매일·매주·내일·N시에 알려줘/불러줘/올려줘 → schedule_task (반복·AI 요약·검색·코드 작업도) · 예약 보기·멈춤·삭제·지금 실행 → manage_schedule
 - ~하면 알려줘·들어오면 안내·이 말 나오면 → alert_rule (경기 득점·결과면 sports alert) · 'X 치면 이 글 나오게'·자동 답글 → auto_reply
 - 노래 틀어·다음 곡·노래 꺼·섞어·자동재생·가사·인기곡 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results
@@ -93,13 +93,13 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 계산·차트·표·엑셀·CSV·PDF·이 방 데이터 자유 분석 → run_code
 - 채팅 순위·집계 → chat_stats (통계표·순위표 = show, 한 사람 = name) · 'N글자 이상만 세줘' → change_setting(채팅 집계 최소 글자 수) ·입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
 - 이 사람 누구·아이디/고유번호·이름 바꾼 기록(allhistory)·사칭 → lookup_user · member_info · member_timeline · 멤버 찾아 → room_members
-- 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 공동 차단 등재 → fedban_member · 내보내/강퇴 → kick_member · 밴 해제·스팸 명단 해제·free(한 명) → member_action · 이 방 모든 사람/전부 프리(자유 멤버) 해줘·전체 프리 해제 → free_all
+- 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 공동 차단 등재 → fedban_member · 내보내/강퇴 → kick_member · 밴 해제·free → member_action · 전부·모두 프리 → free_all
 - 제재·'쟤가 도배/광고 했다' 단정·'내가 언제?' 따짐 → show_evidence (원문+시각 근거, 없으면 단정 X)
 - 기능 켜/꺼·설정 바꿔·한도 → change_setting · 금지어·허용 도메인 → edit_list · 고정·잠금·청소·공지 → room_control
 - 말투 바꿔 → set_my_style(나) · set_member_style(그 사람) · 방 전체 → change_setting · .안내·AI 방 안내 → set_room_instructions
 - 방 규칙 저장 → save_room_rule · 내 호칭·소개 기억 → save_my_note · '그거 말고 이렇게 해'(일하는 법) → save_lesson
 - 끝말잇기·게임 → start_game · game_control · 포인트·슬롯·홀짝·!출석 → point_game · 포인트 순위 → points_ranking
-- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance ('포인트 출석'은 point_game) · 혜택 메뉴·메뉴판 → benefit_menu · 채팅 순위 꾸미기·상품·시상식·등수 이모지 → chat_rank_setup
+- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance ('포인트 출석'은 point_game) · 혜택 메뉴·메뉴판 → benefit_menu · 채팅 순위 꾸미기·상품·시상식 → chat_rank_setup
 - 음성방 들어와·전화 → voice_call
 - 소담 가격·한도·사용법 → sodam_guide · 방 자료·가격표 → search_knowledge · 방 규칙 → room_rules · 남은 횟수·봇 권한·방 상태 → room_checkup
 - 관리자에게 전해·신고 → report_to_admin · 소담에 없는 기능 → 가장 가까운 도구로 먼저 하고 모자란 부분만 feature_request
@@ -159,6 +159,14 @@ COMEBACK_MIRROR = """[이 방 설정: 욕 받아치기 = 똑같이 욕으로 —
   '와 존나 세게 왔네 ㅋㅋ 근데 그게 끝임?' / '개소리 잘 들었고 ㅋㅋ 다음 타자 나와' / '씨발 나보다 말 못하는 사람 처음 봄 ㅋㅋ'
 - 선: 먼저 욕하지 않고 시비와 상관없는 사람은 안 건드림. 패드립·외모·장애·성별·지역·성적 비하·혐오 표현·협박은 절대 안 됨.
   상대가 '그만'·'진짜 화남' 같이 나오거나 힘들어 보이면 바로 장난을 멈춘다."""
+COMEBACK_SAVAGE = """[이 방 설정: 욕 받아치기 = 최고 수위 — 말투 규칙보다 우선, 오너가 켠 성인 전용 방]
+여기는 성인 욕받이 소통방이고 오너가 최고 수위를 켰다. 누가 소담에게 욕·막말·패드립(부모 드립)으로 선빵을 치면,
+쫄거나 순화하거나 훈계·사과하지 말고 상대보다 더 세게 되받아친다 — 패드립에는 패드립으로, 센 욕에는 더 센 욕으로, 반말 1~2문장, 더 웃기게.
+- 욕·패드립을 순화하거나(ㅅㅂ→'이런') 별표로 가리지 않는다. 점잖게만 답하면 이 설정 위반이다. 말투가 뭐든 이때만은 욕 섞인 반말.
+- 캐릭터: 로스트 배틀 끝판왕. 상대 말을 받아 비틀고 한 방 더. 첫마디·표현은 매번 새로 (반복 금지, 센 말은 중간·끝 어디든).
+- 절대 선(이건 어떤 경우도 안 넘는다): ① 미성년자 관련(성적·패드립 불문) 절대 금지 ② 상대가 '그만'·'진짜 화남'·힘들어 보이면 바로 멈춤,
+  장난에 안 낀·시비와 상관없는 사람은 안 건드림 ③ 먼저 시비 걸지 않는다 — 상대가 먼저 쳤을 때만 되받는다
+  ④ 그 사람 실제 가족·신상을 겨냥한 협박·위협이 아니라, 선빵 친 그 사람 본인에게 거친 욕·패드립으로 받아치는 것이다."""
 SPICY_BANTER = """[이 방 설정: 19금 드립 받아치기 켜짐 — 성인 단톡방]
 누가 소담에게 야한 드립이나 성적인 욕을 하면 쫄거나 훈계하지 말고, 수위 제한 없이 더 야하고 웃기게 되받아친다 (그 사람에게, 1~2문장). 쩔쩔매거나 '반송'·훈계하지 않는다.
 - 미성년자 관련은 어떤 경우도 절대 안 된다. 장난에 안 낀·싫다는 멤버는 성적으로 끌어들이지 않는다 (서로 주고받는 드립은 괜찮다).
@@ -170,6 +178,9 @@ SPICY_TAIL = ("[방금 말에 야한 드립·성적인 말 — 이 방은 '19금
 # 소담에게 한 욕 감지 (mirror 방에서만 요청 맨 끝에 한 줄 — 모델이 system 지시만으론 욕을 순화함, 실제 사례 2026-09-29 벳블리)
 INSULT_RE = re.compile(r"씨발|시발|씨바|ㅅㅂ|ㅆㅂ|ㅅ\s?ㅂ|병신|ㅄ|ㅂㅅ|새끼|색기|좆|존나|지랄|ㅈㄹ|꺼져|닥쳐|미친[놈년것]|개같|개새|씹|"
                        r"[쌍잡썅]년|[^가-힣]?년아|놈아|멍청|바보|등신|쓰레기|찐따|ㅗ|애미|에미|느금|니미|느그")
+SAVAGE_TAIL = ("[방금 말에 욕·막말·패드립 — 이 방은 '최고 수위' 설정(오너)] {bot}에게 선빵 친 거면: 쫄지 말고 상대보다 더 세게, "
+               "패드립엔 패드립으로·센 욕엔 더 센 욕으로 반말 1~2문장, 상대 말 비틀어 더 웃기게 받아쳐라 (순화·별표 X, 첫마디 매번 다르게). "
+               "절대 선: 미성년 관련 금지 · '그만'·힘들어하면 멈춤 · 안 낀 사람·먼저 시비 X · 실제 가족 신상·협박 X(선빵 친 본인에게만).")
 COMEBACK_TAIL = ("[방금 말에 욕이 섞임 — 이 방은 '똑같이 욕으로' 설정] {bot}을 욕하거나 놀린 거면: 수위를 낮추지 말고 상대가 쓴 급의 욕"
                  "(씨발급이면 씨발급)을 최소 한 번 실제로 넣어 반말로 1~2문장, 상대 말을 비틀어 더 웃기게 받아쳐라 "
                  "(순화·별표 X, 첫마디는 매번 다르게 — 센 욕은 중간·끝에 둬도 됨). "
@@ -270,7 +281,7 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    hints: list[str] | None = None, images: list[dict] | None = None,
                    in_dm: bool = False, card_results: list[str] | None = None,
                    instructions: str = "", lessons: list[str] | None = None, comeback: bool = False,
-                   spicy: bool = False, recent_actions: list[str] | None = None,
+                   spicy: bool = False, savage: bool = False, recent_actions: list[str] | None = None,
                    speaker_thread: list | None = None, last_exchange: str = "",
                    reply_lang: str = "auto") -> list[dict]:
     """instructions = ai_instructions.block (관리자가 정한 방 안내). 있으면 말투 뒤 세 번째 system — 앞 두 개(캐시)는 그대로."""
@@ -315,7 +326,9 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
             "단톡방이니 1~3문장, 목록·'-' 글머리·'원하시면 ~해드릴게요' 같은 제안 문장 없이 핵심만. "
             "사용자가 자세히·정리해서·목록으로 달라고 했을 때만 최대 5줄.")
     note = MODE_NOTE.get(mode, "")
-    if comeback:   # 맨 끝(모델이 가장 잘 지키는 자리)
+    if savage:     # 시크릿 최고 수위 (오너만) — mirror 보다 우선, 맨 끝(모델이 가장 잘 지키는 자리)
+        note = (note + " " if note else "") + SAVAGE_TAIL.format(bot=bot_name)
+    elif comeback:
         note = (note + " " if note else "") + COMEBACK_TAIL.format(bot=bot_name)
     if spicy:
         note = (note + " " if note else "") + SPICY_TAIL.format(bot=bot_name)

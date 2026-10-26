@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 
 from openai import BadRequestError
 
-from . import agentlog, ai_instructions, costs, lessons, mediaintent, memory, route
+from . import agentlog, ai_instructions, costs, lessons, mediaintent, memory, route, savage
 from .llm import BudgetExceeded
 from .permissions import Role
-from .prompt import COMEBACK_MIRROR, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
+from .prompt import COMEBACK_MIRROR, COMEBACK_SAVAGE, INSULT_RE, SEX_RE, SPICY_BANTER, build_messages
 from .security import nonce, strip_unsafe, wrap
 from .tools import FIND_TOOL, READ_ONLY, ToolCtx, available, execute, find_tools_schema, offered, split_core
 from .util import clip_mid, name_key, user_name
@@ -403,8 +403,12 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
     except Exception:
         log.exception("ai instructions failed")
         instructions = ""
-    comeback = False
-    if ctx.settings.get("ai_comeback") == "mirror":   # 방 설정: 욕하면 똑같이 욕으로 (세 번째 system — 앞 두 개 캐시 그대로)
+    comeback = savage_hit = False
+    savage_on = await savage.on(svc.db, ctx.chat_id)   # 시크릿 최고 수위 (오너만, chat_state — 지시문으로 못 바꿈)
+    if savage_on:                                       # mirror 보다 우선, 세 번째 system (앞 두 개 캐시 그대로)
+        instructions = (instructions + "\n\n" + COMEBACK_SAVAGE).strip()
+        savage_hit = bool(INSULT_RE.search(request or ""))   # 욕/패드립이면 요청 끝에도 한 줄 (system 만으론 순화됨)
+    elif ctx.settings.get("ai_comeback") == "mirror":   # 방 설정: 욕하면 똑같이 욕으로 (세 번째 system — 앞 두 개 캐시 그대로)
         instructions = (instructions + "\n\n" + COMEBACK_MIRROR).strip()
         comeback = bool(INSULT_RE.search(request or ""))   # 이번 말이 욕이면 요청 끝에도 한 줄 (system 만으론 순화됨)
     spicy = False
@@ -420,7 +424,7 @@ async def _run(ctx: ToolCtx, run: agentlog.Run, *, style_key: str, notes: dict, 
         bot_name=svc.cfg.bot_name, bot_id=ctx.bot.id, style_key=style_key, tz=svc.cfg.tz,
         caller=ctx.caller, role_label=role_label, notes=notes, history=history,
         reply_to=reply_to, request=request, mode=mode, hints=hints, images=images, in_dm=ctx.chat_id > 0,
-        instructions=instructions, lessons=room_lessons, comeback=comeback, spicy=spicy,
+        instructions=instructions, lessons=room_lessons, comeback=comeback, spicy=spicy, savage=savage_hit,
         reply_lang=ctx.settings.get("ai_reply_lang", "auto"), **extras)
     # 모델에 싣는 목록 = 역할·대화 종류로만 (방 설정과 무관 → 방마다 같아 캐시 유지), 부를 수 있는 건 방 설정까지 본 것만
     shown = offered(ctx.role, ctx.chat_id > 0)
