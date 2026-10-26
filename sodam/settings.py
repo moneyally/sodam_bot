@@ -38,6 +38,7 @@ DEFAULTS: dict[str, Any] = {
     # 보안
     "injection_guard": True,
     "injection_warn": True,         # 인젝션 시도하면 경고 1회
+    "injection_lock": False,        # 인젝션 시도하면 오너 잠금 뮤트 (오너만 해제, 기본 꺼짐)
     "impersonation_guard": True,    # 관리자 사칭 닉네임 입장 차단
     # 기능
     "games_enabled": True,
@@ -74,6 +75,7 @@ LABELS: dict[str, str] = {
     "warn_ban_at": "경고 N회 밴",
     "injection_guard": "인젝션 방어",
     "injection_warn": "인젝션 시 경고",
+    "injection_lock": "인젝션 시 잠금 뮤트",
     "impersonation_guard": "사칭 차단",
     "games_enabled": "게임",
     "sports_enabled": "스포츠 알림",

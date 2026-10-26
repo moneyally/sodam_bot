@@ -60,7 +60,7 @@ CANCEL = {"취소", "cancel", "/cancel"}
 FEATURE_TOGGLES = ["ai_enabled", "games_enabled", "sports_enabled", "daily_report"]
 JOIN_TOGGLES = ["greet_enabled", "captcha_enabled", "recent_account_captcha", "cas_enabled", "delete_join_message",
                 "impersonation_guard"]
-SEC_TOGGLES = ["link_filter", "injection_guard", "injection_warn"]
+SEC_TOGGLES = ["link_filter", "injection_guard", "injection_warn", "injection_lock"]
 TOGGLES = FEATURE_TOGGLES + JOIN_TOGGLES + SEC_TOGGLES
 
 # 버튼으로 고르는 값: 설정 키 → [(저장값 문자열, 버튼 글자)]. 여기 없는 값은 콜백으로 와도 무시
