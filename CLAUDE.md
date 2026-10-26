@@ -553,7 +553,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 오탐 빼기 (2026-10-07 아침 보고, tests/test_whyfail.py): 같은 도구를 다시 불러 된 오류 · 확인 카드·버튼을 올린 실행 뒤 다시 말함 ·
   '다른걸로·하나 더·또 추천'(whyfail.NEXT_ONE) 은 실수로 안 셈.
 - 2026-10-03 why 로 찾은 실수 고침 (tests/test_improve_1003.py): '태그해서 ~해 줘' = mention_members(인사 아님, greet 은 인사만) ·
-  route 'continue' 는 이어짐 말(_FOLLOW)이 있을 때만 · 관리자 추론은 route.THINK_WHY(일·분석·여러 단계·1:1) 일 때만 ·
+  route 'continue' 는 이어짐 말(_FOLLOW)이 있을 때만 · 관리자 추론은 route.THINK_WHY(일·분석·여러 단계·1:1) 일 때만 (2026-10-26 '느리다': 'do'(처리해·설정바꿔·없애줘)·'remind'(알람) 를 THINK_WHY 에서 뺌 — 1초면 될 단순 실행을 41초 추론하던 것, 복잡한 건 agent._WHY/_CHAIN 가드가 잡아 추론 유지, tests/test_improve_1003.py simple_do_* · 뮤테이션 1개) ·
   끝말잇기 소담 말 뒤 흔한 말 최소(wordbot.MIN_COMMON 쉬움 8·보통 3·어려움 1), '소담아 X' 도 게임 답, 지어낸 말엔 예시 한 번 ·
   음성 no_voice_right 안내 = 할 일 두 가지, 'not in a call' = chat_closed · 제재 거절엔 tools.REFUSE_SAY · 영상 대기자 끝나면 태그(videogen.WAITING) ·
   whyfail 'redo' 는 잘 된 게임·그림 뒤 재요청(AGAIN_OK)·이름만 부름 제외.
