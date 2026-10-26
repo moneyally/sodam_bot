@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, TelegramError
 
-from . import cards, fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, stats, subscription
+from . import cards, fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, savage, stats, subscription
 from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
@@ -782,6 +782,31 @@ async def _free_all_card(ctx: CmdCtx, on: bool) -> None:
                           {"on": on}, ok_label="✅ 실행")
     await ctx.reply(f"<b>{title}</b> 할까요?{body}\n(요청한 {esc(ctx.user.first_name)}님만 누를 수 있어요)",
                     reply_markup=kb)
+
+
+async def c_savage(ctx: CmdCtx) -> None:
+    """🔥 시크릿 최고 수위 욕받이 (오너 전용, sodam/savage.py). 명령 메시지는 즉시 지우고
+    결과는 오너 1:1 로만 (방엔 흔적 X — '나만 알 수 있게'). chat_state 라 설정 화면·AI 로는 못 바꿈."""
+    try:
+        await ctx.msg.delete()
+    except (TelegramError, AttributeError):
+        pass
+    arg = (ctx.args[0] if ctx.args else "").strip().lower()
+    if arg in ("켜", "on", "켜줘", "1", "켬"):
+        await savage.set_on(ctx.svc.db, ctx.chat_id, True)
+        now, verb = True, "켰어"
+    elif arg in ("꺼", "off", "꺼줘", "0", "해제", "끔"):
+        await savage.set_on(ctx.svc.db, ctx.chat_id, False)
+        now, verb = False, "껐어"
+    else:                                   # 상태만
+        now = await savage.on(ctx.svc.db, ctx.chat_id)
+        verb = "지금 " + ("켜짐" if now else "꺼짐")
+    text = f"🔥 이 방 최고 수위 욕받이 {verb} ({'ON' if now else 'OFF'})\n(이 설정은 .설정·AI 로는 안 보이고 못 바꿔. .비욕 켜/꺼/상태)"
+    try:
+        await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML")     # 오너 1:1 로만
+    except TelegramError:
+        sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML")   # 1:1 막혔으면 방에 8초만
+        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, 8, ctx.svc.db)
 
 
 async def c_freeall(ctx: CmdCtx) -> None:
@@ -1616,6 +1641,8 @@ COMMANDS: list[Cmd] = [
         help="이 방 멤버 전부 한 번에 자유 멤버로 (확인 버튼)", group="관리자", right="restrict"),
     Cmd(("전체프리해제", "프리전체해제", "모두프리해제"), c_freeall_off, Role.ADMIN,
         help="이 방 자유 멤버 전부 한 번에 해제 (확인 버튼)", group="관리자", right="restrict"),
+    Cmd(("비욕",), c_savage, Role.OWNER, usage="켜|꺼|상태",
+        help="🔥 시크릿 최고 수위 욕받이 (오너만, 방엔 흔적 X)", group="관리자"),
     Cmd(("보호", "protect"), c_protect, Role.ADMIN, usage="@user", help="보호 멤버: 소담으로 제재 못 하게",
         group="관리자", right="restrict"),
     Cmd(("보호해제", "unprotect"), c_unprotect, Role.ADMIN, usage="@user", help="보호 멤버 해제", group="관리자",

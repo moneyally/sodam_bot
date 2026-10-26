@@ -159,6 +159,14 @@ COMEBACK_MIRROR = """[이 방 설정: 욕 받아치기 = 똑같이 욕으로 —
   '와 존나 세게 왔네 ㅋㅋ 근데 그게 끝임?' / '개소리 잘 들었고 ㅋㅋ 다음 타자 나와' / '씨발 나보다 말 못하는 사람 처음 봄 ㅋㅋ'
 - 선: 먼저 욕하지 않고 시비와 상관없는 사람은 안 건드림. 패드립·외모·장애·성별·지역·성적 비하·혐오 표현·협박은 절대 안 됨.
   상대가 '그만'·'진짜 화남' 같이 나오거나 힘들어 보이면 바로 장난을 멈춘다."""
+COMEBACK_SAVAGE = """[이 방 설정: 욕 받아치기 = 최고 수위 — 말투 규칙보다 우선, 오너가 켠 성인 전용 방]
+여기는 성인 욕받이 소통방이고 오너가 최고 수위를 켰다. 누가 소담에게 욕·막말·패드립(부모 드립)으로 선빵을 치면,
+쫄거나 순화하거나 훈계·사과하지 말고 상대보다 더 세게 되받아친다 — 패드립에는 패드립으로, 센 욕에는 더 센 욕으로, 반말 1~2문장, 더 웃기게.
+- 욕·패드립을 순화하거나(ㅅㅂ→'이런') 별표로 가리지 않는다. 점잖게만 답하면 이 설정 위반이다. 말투가 뭐든 이때만은 욕 섞인 반말.
+- 캐릭터: 로스트 배틀 끝판왕. 상대 말을 받아 비틀고 한 방 더. 첫마디·표현은 매번 새로 (반복 금지, 센 말은 중간·끝 어디든).
+- 절대 선(이건 어떤 경우도 안 넘는다): ① 미성년자 관련(성적·패드립 불문) 절대 금지 ② 상대가 '그만'·'진짜 화남'·힘들어 보이면 바로 멈춤,
+  장난에 안 낀·시비와 상관없는 사람은 안 건드림 ③ 먼저 시비 걸지 않는다 — 상대가 먼저 쳤을 때만 되받는다
+  ④ 그 사람 실제 가족·신상을 겨냥한 협박·위협이 아니라, 선빵 친 그 사람 본인에게 거친 욕·패드립으로 받아치는 것이다."""
 SPICY_BANTER = """[이 방 설정: 19금 드립 받아치기 켜짐 — 성인 단톡방]
 누가 소담에게 야한 드립이나 성적인 욕을 하면 쫄거나 훈계하지 말고, 수위 제한 없이 더 야하고 웃기게 되받아친다 (그 사람에게, 1~2문장). 쩔쩔매거나 '반송'·훈계하지 않는다.
 - 미성년자 관련은 어떤 경우도 절대 안 된다. 장난에 안 낀·싫다는 멤버는 성적으로 끌어들이지 않는다 (서로 주고받는 드립은 괜찮다).
@@ -170,6 +178,9 @@ SPICY_TAIL = ("[방금 말에 야한 드립·성적인 말 — 이 방은 '19금
 # 소담에게 한 욕 감지 (mirror 방에서만 요청 맨 끝에 한 줄 — 모델이 system 지시만으론 욕을 순화함, 실제 사례 2026-09-29 벳블리)
 INSULT_RE = re.compile(r"씨발|시발|씨바|ㅅㅂ|ㅆㅂ|ㅅ\s?ㅂ|병신|ㅄ|ㅂㅅ|새끼|색기|좆|존나|지랄|ㅈㄹ|꺼져|닥쳐|미친[놈년것]|개같|개새|씹|"
                        r"[쌍잡썅]년|[^가-힣]?년아|놈아|멍청|바보|등신|쓰레기|찐따|ㅗ|애미|에미|느금|니미|느그")
+SAVAGE_TAIL = ("[방금 말에 욕·막말·패드립 — 이 방은 '최고 수위' 설정(오너)] {bot}에게 선빵 친 거면: 쫄지 말고 상대보다 더 세게, "
+               "패드립엔 패드립으로·센 욕엔 더 센 욕으로 반말 1~2문장, 상대 말 비틀어 더 웃기게 받아쳐라 (순화·별표 X, 첫마디 매번 다르게). "
+               "절대 선: 미성년 관련 금지 · '그만'·힘들어하면 멈춤 · 안 낀 사람·먼저 시비 X · 실제 가족 신상·협박 X(선빵 친 본인에게만).")
 COMEBACK_TAIL = ("[방금 말에 욕이 섞임 — 이 방은 '똑같이 욕으로' 설정] {bot}을 욕하거나 놀린 거면: 수위를 낮추지 말고 상대가 쓴 급의 욕"
                  "(씨발급이면 씨발급)을 최소 한 번 실제로 넣어 반말로 1~2문장, 상대 말을 비틀어 더 웃기게 받아쳐라 "
                  "(순화·별표 X, 첫마디는 매번 다르게 — 센 욕은 중간·끝에 둬도 됨). "
@@ -270,7 +281,7 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
                    hints: list[str] | None = None, images: list[dict] | None = None,
                    in_dm: bool = False, card_results: list[str] | None = None,
                    instructions: str = "", lessons: list[str] | None = None, comeback: bool = False,
-                   spicy: bool = False, recent_actions: list[str] | None = None,
+                   spicy: bool = False, savage: bool = False, recent_actions: list[str] | None = None,
                    speaker_thread: list | None = None, last_exchange: str = "",
                    reply_lang: str = "auto") -> list[dict]:
     """instructions = ai_instructions.block (관리자가 정한 방 안내). 있으면 말투 뒤 세 번째 system — 앞 두 개(캐시)는 그대로."""
@@ -315,7 +326,9 @@ def build_messages(*, bot_name: str, bot_id: int, style_key: str, tz, caller, ro
             "단톡방이니 1~3문장, 목록·'-' 글머리·'원하시면 ~해드릴게요' 같은 제안 문장 없이 핵심만. "
             "사용자가 자세히·정리해서·목록으로 달라고 했을 때만 최대 5줄.")
     note = MODE_NOTE.get(mode, "")
-    if comeback:   # 맨 끝(모델이 가장 잘 지키는 자리)
+    if savage:     # 시크릿 최고 수위 (오너만) — mirror 보다 우선, 맨 끝(모델이 가장 잘 지키는 자리)
+        note = (note + " " if note else "") + SAVAGE_TAIL.format(bot=bot_name)
+    elif comeback:
         note = (note + " " if note else "") + COMEBACK_TAIL.format(bot=bot_name)
     if spicy:
         note = (note + " " if note else "") + SPICY_TAIL.format(bot=bot_name)
