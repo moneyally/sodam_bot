@@ -91,6 +91,7 @@
 - **다른 봇 이름(SangMata·GroupHelp 등)을 사용자에게 보이는 문구·버튼·명령어 별칭에 넣지 않는다** (사용자 결정). 코드엔 참고용으로도 쓰지 않음.
 - AI 기억(멤버·방)은 항상 user 메시지의 nonce 태그 안 '데이터'로만 넣는다 (system 에 넣지 않음 → 캐시·인젝션 안전).
   기억에는 본인 얘기만, 인젝션 판정 메시지·다른 멤버 이름·링크·전화번호는 저장 안 함. 멤버는 `.기억 지우기`.
+- **🧠 방 넘어 기억 공유** (방 설정 `ai_memory_shared` **기본 ON**, `memory.shared_facts`·`recent_turns(shared=)`, tests/test_shared_memory.py · 뮤테이션 4개, 2026-10-26 오너 'ChatGPT 쓰레드처럼 방마다 기억공유'): 한 사람의 **본인 사실(member_memory)·본인 Q&A(ai_turns)** 를 **같은 봇의 방들끼리** 공유 — A방에서 알게 되면 B방에서도 앎. 각 방 = 쓰레드. 두 표에 `shared` 칸(기본 1, register_columns) = 쓸 때 그 방 ai_memory_shared 값(`_extract_from`·`record_turn(shared=)` handlers/social 이 `s` 에서 넘김), 읽을 때 `context_for` 가 `shared_facts`(지금 방 전부 ∪ 딴 방 shared=1, `_key` 중복 제거·MAX_FACTS)·`recent_turns(shared=True)`(딴 방 턴은 `t["chat_id"]!=chat_id` 라 oldest 필터 건너뜀) 로 합침. **끈 방은 대칭 완전 격리**(주지도 받지도). **방 흐름 요약(room_memory)·speaker_thread 는 방 전용**(남 얘기·방 분위기 누출 방지 — 공유 X). 사실은 원래 `clean_fact`(남 이름·링크·전화 거름) 통과분이라 전역 공유 안전. 화이트라벨 클론끼리는 별도 DB라 자동 차단. 🧠 aip 토글(SOCIAL_TOGGLES)·change_setting. 설계 docs/SHARED_MEMORY_DESIGN.md.
 - 이름 없이 이어 말하기(`social.follow_up`)는 같은 사람이 3분 안·그 사이 남이 안 끼었을 때, 연속 방 설정 ai_follow_max(기본 10, 예전 3) 번까지 (2026-10-16 오너). 소담 글에 답장은 횟수 제한 없음.
 - 먼저 끼어들기(`ai_chime_in`)는 **기본 꺼짐**. 켜도 120분 간격·하루 4회, 관리자 공지 직후·게임 중엔 안 함.
 - 단톡방 답 길이: 요청 맨 끝(tail)에 '1~3문장, 목록·제안 문장 없이' 를 매번 붙인다 (실측: 평균 ~110자).

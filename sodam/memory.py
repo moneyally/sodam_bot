@@ -79,8 +79,9 @@ CREATE TABLE IF NOT EXISTS memory_queue (      -- 예약된 기억 정리 (재�
               "memory_queue": "composite"})
 # 예전 DB (컬럼 없던 member_memory) 는 DB.open 의 _migrate 가 추가
 register_columns("member_memory", {"used_n": "INTEGER NOT NULL DEFAULT 0", "used_ts": "INTEGER",
-                                   "inferred": "INTEGER NOT NULL DEFAULT 0"})
-register_columns("ai_turns", {"media": "TEXT"})
+                                   "inferred": "INTEGER NOT NULL DEFAULT 0",
+                                   "shared": "INTEGER NOT NULL DEFAULT 1"})  # 1 = 방 넘어 공유(ai_memory_shared)
+register_columns("ai_turns", {"media": "TEXT", "shared": "INTEGER NOT NULL DEFAULT 1"})
 QUEUE_MAX_AGE = 3 * 86400    # 이보다 오래된 예약은 버림 (_candidate_messages 도 3일만 봄)
 
 MAX_FACTS = 12              # 넘으면 덜 쓰인 것(used_n) → 오래 안 쓰인 것부터 지움
@@ -187,6 +188,26 @@ async def get_facts(db, chat_id: int, user_id: int) -> list:
                          "WHERE chat_id=? AND user_id=? ORDER BY id", (chat_id, user_id))
 
 
+async def shared_facts(db, chat_id: int, user_id: int) -> list:
+    """방 넘어 공유 기억 (ChatGPT 쓰레드처럼 사람 중심): 지금 방 전부 ∪ 딴 방 중 shared=1.
+    같은 사실(_key)은 지금 방 것·더 자주 쓰인 것·최신 순으로 하나만, 최대 MAX_FACTS. 사람에 대한 사실뿐이라 전역 공유해도 안전."""
+    rows = await db._all("SELECT id, fact, ts, used_n, used_ts, inferred, chat_id FROM member_memory "
+                         "WHERE user_id=? AND (chat_id=? OR shared=1) ORDER BY id", (user_id, chat_id))
+    best: dict[str, tuple] = {}
+    for r in rows:
+        k = _key(r["fact"])
+        if not k:
+            continue
+        score = (r["chat_id"] == chat_id, r["used_n"] or 0, r["ts"])   # 지금 방 > 자주 쓰임 > 최신
+        if k not in best or score > best[k][0]:
+            best[k] = (score, r)
+    chosen = [v[1] for v in best.values()]
+    chosen.sort(key=lambda r: (r["used_n"] or 0, r["ts"]), reverse=True)   # 넘치면 덜 쓰인·오래된 것부터 버림
+    chosen = chosen[:MAX_FACTS]
+    chosen.sort(key=lambda r: r["ts"])   # 보여줄 땐 시간순 (get_facts 와 같은 모양)
+    return chosen
+
+
 async def clear_facts(db, chat_id: int, user_id: int, keyword: str = "") -> int:
     rows = await get_facts(db, chat_id, user_id)
     keyword = keyword.strip()
@@ -273,7 +294,7 @@ _EXPIRE_SQL = "DELETE FROM member_memory WHERE chat_id=? AND user_id=? AND COALE
 
 
 async def add_facts(db, chat_id: int, user_id: int, facts: list, *, remove_ids=(),
-                    replace: dict | None = None) -> list[str]:
+                    replace: dict | None = None, shared: int = 1) -> list[str]:
     """기억 갱신을 한 번의 db.atomic 으로 (중간에 실패하면 전부 없던 일 — CLAUDE.md DB 안전 규칙).
     - facts: '문장' 또는 ('문장', 추정 여부). 중복(포함 관계)은 건너뛰고, 더 자세한 새 문장은 옛것을 교체.
     - remove_ids: 지울 기억 id (끝난 근황) · replace: {id: ('문장', 추정)} = 정정 (새 줄이 아니라 그 줄을 고침).
@@ -294,8 +315,8 @@ async def add_facts(db, chat_id: int, user_id: int, facts: list, *, remove_ids=(
             k = _key(text)
             if not k:
                 continue
-            cur = c.execute("UPDATE member_memory SET fact=?, inferred=?, ts=? WHERE id=? AND chat_id=? AND user_id=?",
-                            (text, int(inferred), now, i, chat_id, user_id))
+            cur = c.execute("UPDATE member_memory SET fact=?, inferred=?, ts=?, shared=? WHERE id=? AND chat_id=? AND user_id=?",
+                            (text, int(inferred), now, shared, i, chat_id, user_id))
             if not cur.rowcount:             # 그 사이 지워진 줄 → 새 기억으로
                 items.append((text, inferred))
                 continue
@@ -324,8 +345,8 @@ async def add_facts(db, chat_id: int, user_id: int, facts: list, *, remove_ids=(
                     c.execute("DELETE FROM member_memory WHERE id=?", (oid,))
             if skip:
                 continue
-            cur = c.execute("INSERT INTO member_memory(chat_id, user_id, fact, ts, used_n, inferred) VALUES(?,?,?,?,?,?)",
-                            (chat_id, user_id, text, now, carried, int(inferred)))
+            cur = c.execute("INSERT INTO member_memory(chat_id, user_id, fact, ts, used_n, inferred, shared) "
+                            "VALUES(?,?,?,?,?,?,?)", (chat_id, user_id, text, now, carried, int(inferred), shared))
             fresh.add(cur.lastrowid)
             added.append(text)
         rows = c.execute("SELECT id, used_n, COALESCE(used_ts, ts) FROM member_memory WHERE chat_id=? AND user_id=?",
@@ -492,7 +513,8 @@ async def _extract_from(svc: Services, chat_id: int, user_id: int, texts: list[s
             replace[target] = entry
         else:
             facts.append(entry)
-    return await add_facts(db, chat_id, user_id, facts, remove_ids=remove_ids, replace=replace)
+    shared = int(bool((await db.get_settings(chat_id)).get("ai_memory_shared", True)))  # 끈 방 기억은 딴 방이 못 봄 (대칭)
+    return await add_facts(db, chat_id, user_id, facts, remove_ids=remove_ids, replace=replace, shared=shared)
 
 
 def observe(svc: Services, chat_id: int, user_id: int, text: str) -> bool:
@@ -634,10 +656,11 @@ async def maybe_refresh_room(svc: Services, chat_id: int) -> None:
 
 # ── 대화 기록 (이어 말하기용) ──────────────────────────────
 async def record_turn(db, chat_id: int, user_id: int, via: str, request: str, answer: str,
-                      bot_msg_id: int | None, media: str | None = None) -> None:
+                      bot_msg_id: int | None, media: str | None = None, shared: bool = True) -> None:
     await db._write(
-        "INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id, media) VALUES(?,?,?,?,?,?,?,?)",
-        (chat_id, user_id, _now(), via, request[:500], answer[:800], bot_msg_id, media))
+        "INSERT INTO ai_turns(chat_id, user_id, ts, via, request, answer, bot_msg_id, media, shared) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (chat_id, user_id, _now(), via, request[:500], answer[:800], bot_msg_id, media, int(shared)))
     await db._write("DELETE FROM ai_turns WHERE chat_id=? AND ts<?", (chat_id, _now() - 14 * 86400))
     try:   # 이 답에 쓰인 기억 표시 (덜 쓰인 기억부터 밀려나게). 실패해도 답·기록은 그대로
         await mark_used(db, chat_id, user_id, answer)
@@ -649,9 +672,13 @@ async def last_turn(db, chat_id: int):
     return await db._one("SELECT * FROM ai_turns WHERE chat_id=? ORDER BY id DESC LIMIT 1", (chat_id,))
 
 
-async def recent_turns(db, chat_id: int, user_id: int, since: int, limit: int = 5) -> list:
-    rows = await db._all("SELECT * FROM ai_turns WHERE chat_id=? AND user_id=? AND ts>=? ORDER BY id DESC LIMIT ?",
-                         (chat_id, user_id, since, limit))
+async def recent_turns(db, chat_id: int, user_id: int, since: int, limit: int = 5, shared: bool = False) -> list:
+    if shared:   # 방 넘어: 지금 방 ∪ 딴 방 중 shared=1 (이 사람 본인의 Q&A 만)
+        rows = await db._all("SELECT * FROM ai_turns WHERE user_id=? AND (chat_id=? OR shared=1) AND ts>=? "
+                             "ORDER BY id DESC LIMIT ?", (user_id, chat_id, since, limit))
+    else:
+        rows = await db._all("SELECT * FROM ai_turns WHERE chat_id=? AND user_id=? AND ts>=? ORDER BY id DESC LIMIT ?",
+                             (chat_id, user_id, since, limit))
     return list(reversed(rows))
 
 
@@ -716,9 +743,11 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
     """build_messages 에 넘길 user_memory / room_memory / past_turns. 실패해도 빈 값."""
     tz = svc.cfg.tz
     out: dict = {"user_memory": [], "room_memory": "", "past_turns": [], "card_results": [], "recent_actions": []}
+    share = settings.get("ai_memory_shared", True)   # 방 넘어 기억 공유 (ChatGPT 쓰레드처럼, 사람 본인 것만)
     if settings.get("ai_memory", True):
+        facts = await (shared_facts(svc.db, chat_id, user_id) if share else get_facts(svc.db, chat_id, user_id))
         out["user_memory"] = [f"{fact_line(r)} ({datetime.fromtimestamp(r['ts'], tz).strftime('%m/%d')})"
-                              for r in await get_facts(svc.db, chat_id, user_id)]
+                              for r in facts]
     if settings.get("ai_room_memory", True) and chat_id < 0:
         out["room_memory"] = await get_room(svc.db, chat_id)
     # chat_log 에 이미 보이는 시점 이전의, 이 사람과의 대화만 (중복 방지)
@@ -730,11 +759,12 @@ async def context_for(svc: Services, chat_id: int, user_id: int, settings: dict,
             log.debug("speaker thread failed: %r", e)
     if out.get("speaker_thread"):   # 그 안에 보이는 소담 답은 past_turns 에서 빼고 (같은 말 두 번)
         oldest = min(oldest, out["speaker_thread"][0]["ts"])
-    turns = await recent_turns(svc.db, chat_id, user_id, _now() - TURN_WINDOW)
+    turns = await recent_turns(svc.db, chat_id, user_id, _now() - TURN_WINDOW, shared=share)
+    # 지금 방 턴은 chat_log 중복 방지로 oldest 이전만, 딴 방 턴(방 넘어 공유)은 이 방 chat_log 에 없으니 그대로
     out["past_turns"] = [
         f"[{datetime.fromtimestamp(t['ts'], tz).strftime('%m/%d %H:%M')}] 상대: {t['request'][:200]} → "
         f"{svc.cfg.bot_name}: {t['answer'][:200]}"
-        for t in turns if t["ts"] < oldest][-3:]
+        for t in turns if t["chat_id"] != chat_id or t["ts"] < oldest][-3:]
     if chat_id < 0:   # 🎙 최근 음성채팅에서 이 사람과 한 대화 ('아까 통화에서 한 얘기')
         from .voice import context as voice_context   # 늦게 import (voice → memory)
         out["past_turns"] += await voice_context.voice_turns(svc.db, chat_id, user_id, tz)

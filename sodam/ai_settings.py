@@ -6,6 +6,9 @@ from .settings import register_setting
 
 register_setting("ai_memory", True, "AI 멤버 기억")                   # 멤버가 자기 얘기한 것 기억
 register_setting("ai_room_memory", True, "AI 방 흐름 기억")            # 방 대화 흐름 요약
+# 방 넘어 기억 공유 (2026-10-26 오너 'ChatGPT 쓰레드처럼 방마다 기억공유', 기본 ON): 한 사람의 본인 사실·본인 Q&A 를
+# 같은 봇의 방들끼리 공유 (A방에서 알게 되면 B방에서도 앎). 방 분위기 요약·남 얘기는 공유 안 함. 끈 방은 주지도 받지도 않음(대칭).
+register_setting("ai_memory_shared", True, "🧠 방 넘어 기억 공유")
 register_setting("ai_follow_up", True, "이름 없이 이어 말하기")         # 방금 대화한 사람이 이어서 물으면 호출어 없이 답
 # 이름 안 부르고 연달아 이어 말할 수 있는 횟수 (2026-10-16 오너 '태그 걸리면 1회 말고 10회로', 예전 3 고정)
 register_setting("ai_follow_max", 10, "이름 없이 이어 말하기 최대 횟수", range_=(1, 30))
