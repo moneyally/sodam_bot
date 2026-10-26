@@ -18,7 +18,7 @@ from datetime import datetime
 from telegram.error import TelegramError
 
 from .. import cards, cron, menu, persist
-from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, describe_when, parse_time
+from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, _col, describe_limits, describe_when, parse_time
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, html_balanced, html_plain, html_truncate, rich_html
 
@@ -103,10 +103,13 @@ async def s_item(c: PanelCtx) -> Screen:
     body = _shown(r, "text", PREVIEW_CHARS)
     media = f"[{MEDIA_LABEL.get(r['media_type'], '파일')}] " if r["media_type"] else ""
     last = datetime.fromtimestamp(r["last_sent"], tz).strftime("%m/%d %H:%M") if r["last_sent"] and r["last_msg_id"] else "아직 없음"
+    lim = describe_limits(_col(r, "start_ts", None), _col(r, "end_ts", None),
+                          _col(r, "active_from", None), _col(r, "active_to", None), tz)
     lines = [f"🗓️ <b>예약공지 #{r['id']}</b>",
              f"상태: {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}",
              f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else "")
-             + (" · 📚 이전 글 쌓기" if r["kind"] != "once" and not r["del_prev"] else ""),
+             + (" · 📚 이전 글 쌓기" if r["kind"] != "once" and not r["del_prev"] else "")
+             + (" · " + lim if lim else ""),
              f"제목: {_shown(r, 'title', 100) if r['title'] else '(없음)'}",
              f"최근 발송: {last}",
              f"내용:\n<blockquote>{media}{body or '(글 없음)'}</blockquote>"]

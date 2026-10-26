@@ -260,7 +260,9 @@
   멤버(고객)도 schedule_task remind+to=me 만, 카드 없이 바로 저장(카드 버튼은 관리자 전용), 한 사람 3개(MEMBER_MAX). cron.fire 는 내 알람(remind+me)엔
   관리자 검사 안 함, 1:1 Forbidden 이면 방에서 이름 불러 알림.
 - 예약 시각: 매일 HH:MM · 매주 월,수 HH:MM · 평일/주말 HH:MM (kind weekly, at_time '월수 10:00', `announce.is_due` 가 요일 확인) ·
-  반복 N분 · N분 뒤 · 오늘/내일/MM-DD HH:MM. AI 스킬 joins = 입장·퇴장 통계(AI 없음, 지난 실행 이후·최대 31일).
+  **매월 N일 HH:MM** (kind monthly, at_time 'N HH:MM', 없는 날은 calendar.monthrange 말일로) · 반복 N분 · N분 뒤 · 오늘/내일/MM-DD HH:MM. AI 스킬 joins = 입장·퇴장 통계(AI 없음, 지난 실행 이후·최대 31일).
+- **📅 유효 기간·⏰ 하루 시간대 제한** (schedules.start_ts·end_ts·active_from·active_to, 마법사 7/7 단계 nolimit/parse_limits, `announce._within_limits`·describe_limits, tests/test_announce_panel.py monthly_and_limits_* · 뮤테이션 4개, 2026-10-26 泰山 '시작/종료 날짜·시간 범위'):
+  반복 공지를 특정 기간(`10-01~10-31`)·하루 시간대(`9시~18시`, 자정 넘김 22~6 지원)에만 올림. is_due 가 `_within_limits` 로 거르고, run_due 가 종료일 지나면 enabled=0. parse_limits 는 날짜(`-/.`)와 시간대(`~`·`시`)를 줄·쉼표로 여럿. 마법사 keep 다음 7/7 선택 단계([⏭ 제한 없음] or 입력). 목록·상세에 📅·⏰ 표시.
 - **🗑 지난 회차 지우기/📚 쌓기** (schedules.del_prev, 마법사 6/6 단계 keep1/keep0, tests/test_announce_panel.py del_prev_* · wizard_keep_* · 뮤테이션 3개, 2026-10-26 泰山 루디 '이전 글 안 지워지게'):
   반복 공지는 새 회차 올릴 때 지난 회차를 지움(기본 del_prev=1, last_msg_id)이 원래 동작. del_prev=0 이면 `announce.publish` 가 안 지워서 글이 쌓임. 마법사는 반복만(once 는 parse_when 거부)이라 pin 다음에 늘 keep 단계. 목록·상세에 📚 표시. 다른 봇 '🗑 마지막 메시지 삭제 ❌' 와 같은 선택.
 - **움직이는 이모지·서식 보관** (tests/test_rich_emoji.py · 뮤테이션 11개, 2026-09-30 — 예약공지에 넣은 움직이는 이모지가 보통 이모지로 올라감):

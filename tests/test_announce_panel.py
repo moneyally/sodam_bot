@@ -222,6 +222,8 @@ async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "
     await svc.announcer.on_callback(bot, q, [draft.token, pin])
     if draft.step == "keep":                                               # 반복 공지는 '지난 회차 지울지' 한 단계 더
         await svc.announcer.on_callback(bot, q, [draft.token, keep])
+    if draft.step == "limits":                                             # 기간·시간대 제한 (선택) → 제한 없음
+        await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
     if save:
         await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     return draft, q
@@ -236,7 +238,7 @@ async def dm_wizard_creates_schedule_in_group_not_dm():
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]                            # 1:1 키 (menu.r_input 과 같은 약속)
     assert (draft.ui_chat_id, draft.chat_id, draft.user_id) == (ADMIN, CHAT, ADMIN)
     first = sent_to(bot, ADMIN)[-1][2]
-    assert "1/6 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
+    assert "1/7 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
 
     await _run_wizard(svc, bot, dm)
     rows = await db.schedules(CHAT)
@@ -261,7 +263,7 @@ async def dm_wizard_takes_photo_as_separate_step():
     await dm("규칙 공지")
     await dm("규칙 잘 지켜요")
     ask = sent_to(bot, ADMIN)[-1]
-    assert "3/6 사진" in ask[2] and [b.text for b in buttons(ask[3]["reply_markup"])] == ["⏭ 사진 없이"]
+    assert "3/7 사진" in ask[2] and [b.text for b in buttons(ask[3]["reply_markup"])] == ["⏭ 사진 없이"]
     msg = await dm("이건 사진 아님")                                          # 글만 오면 다시 물어봄
     assert not msg.replies and "사진·영상·GIF" in sent_to(bot, ADMIN)[-1][2]
     await dm(video=SimpleNamespace(file_id="VID"))
@@ -376,6 +378,8 @@ async def group_wizard_still_runs_in_group():
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
     assert draft.step == "keep"                                            # 반복 공지 → 지난 회차 쌓기 물음
     await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
+    assert draft.step == "limits"                                          # 기간·시간대 제한 (선택)
+    await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
     assert sent_to(bot, CHAT)[-1][0] == "send_message" and "그룹 공지" in sent_to(bot, CHAT)[-1][2]  # 미리보기도 방에
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     assert [r["title"] for r in await db.schedules(CHAT)] == ["그룹 공지"]
@@ -454,6 +458,81 @@ async def harness_seeds_schedules():
     db, svc, bot = await harness.make_world()
     rows = await db.schedules(harness.CHAT)
     assert len(rows) == 2 and [bool(r["enabled"]) for r in rows] == [True, False]
+    await db.close()
+
+
+@test
+async def monthly_and_limits_parse_and_due():
+    """매월 N일 + 유효 기간·시간대 제한 (2026-10-26 泰山 '매월·시작/종료 날짜·시간 범위')."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Seoul")
+
+    # 매월 파싱
+    assert announce.parse_when("매월 15일 09:00") == ("monthly", "15 09:00", None)
+    assert announce.parse_when("매달 1일 10:30") == ("monthly", "1 10:30", None)
+    for bad in ("매월 0일 09:00", "매월 32일 09:00"):
+        try:
+            announce.parse_when(bad); raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert "매월 15일 09:00" == announce.describe_when("monthly", "15 09:00", None)
+
+    # 제한 파싱: 기간·시간대
+    base = int(datetime(2026, 6, 10, 0, 0, tzinfo=tz).timestamp())
+    s, e, af, at = announce.parse_limits("10-01~10-31", tz, base)
+    assert datetime.fromtimestamp(s, tz).strftime("%m-%d") == "10-01"
+    assert datetime.fromtimestamp(e, tz).strftime("%m-%d %H:%M") == "10-31 23:59"
+    assert (af, at) == (None, None)
+    s, e, af, at = announce.parse_limits("9시~18시", tz, base)
+    assert (s, e, af, at) == (None, None, 9, 18)
+    s, e, af, at = announce.parse_limits("10-01~10-31\n9시~18시", tz, base)
+    assert s and e and (af, at) == (9, 18)                       # 둘 다
+    assert announce.parse_limits("22시~6시", tz, base)[2:] == (22, 6)   # 자정 넘김
+    for bad in ("아무말", "10-01", "25시~30시"):
+        try:
+            announce.parse_limits(bad, tz, base); raise AssertionError(bad)
+        except ValueError:
+            pass
+
+    # is_due: 매월 15일 (오늘이 15일 09:00 직후면 발사)
+    db = await make_db()
+    await db.ensure_chat(CHAT, "방")
+    now = datetime(2026, 6, 15, 9, 0, 30, tzinfo=tz)             # 6/15 09:00:30
+    sid = await db.add_schedule(CHAT, kind="monthly", at_time="15 09:00", interval_min=None,
+                                title="월간", text="본문", media_type=None, media_id=None, pin=False, created_by=ADMIN)
+    r = await db.get_schedule(CHAT, sid)
+    assert announce.is_due(r, int(now.timestamp()), tz)
+    assert not announce.is_due(r, int(now.replace(day=14).timestamp()), tz)   # 14일엔 안 함
+    # 31일 지정 + 6월(30일) = 말일 30일에
+    sid2 = await db.add_schedule(CHAT, kind="monthly", at_time="31 09:00", interval_min=None,
+                                 title="말일", text="x", media_type=None, media_id=None, pin=False, created_by=ADMIN)
+    r2 = await db.get_schedule(CHAT, sid2)
+    assert announce.is_due(r2, int(now.replace(day=30).timestamp()), tz)
+
+    # 유효 기간·시간대 제한 (daily 09:00, 6/1~6/30, 8~10시만)
+    start = int(datetime(2026, 6, 1, 0, 0, tzinfo=tz).timestamp())
+    end = int(datetime(2026, 6, 30, 23, 59, 59, tzinfo=tz).timestamp())
+    sid3 = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="d", text="x",
+                                 media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                 start_ts=start, end_ts=end, active_from=8, active_to=10)
+    r3 = await db.get_schedule(CHAT, sid3)
+    assert announce.is_due(r3, int(now.timestamp()), tz)                       # 6/15 09:00 = 기간·시간대 안
+    assert not announce.is_due(r3, int(datetime(2026, 7, 15, 9, 0, 30, tzinfo=tz).timestamp()), tz)  # 7월 = 기간 밖
+    # 시간대 밖: 20시 발사 안 함 (기간은 안)
+    sid4 = await db.add_schedule(CHAT, kind="daily", at_time="20:00", interval_min=None, title="d2", text="x",
+                                 media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                 start_ts=start, end_ts=end, active_from=8, active_to=10)
+    r4 = await db.get_schedule(CHAT, sid4)
+    assert not announce.is_due(r4, int(datetime(2026, 6, 15, 20, 0, 30, tzinfo=tz).timestamp()), tz)
+    # 자정 넘김 시간대 (22~6시): 23시 발사 OK, 낮 12시 안 함
+    sid5 = await db.add_schedule(CHAT, kind="interval", at_time=None, interval_min=60, title="밤", text="x",
+                                 media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                 active_from=22, active_to=6)
+    r5 = await db.get_schedule(CHAT, sid5)
+    assert announce._within_limits(r5, int(datetime(2026, 6, 15, 23, 30, tzinfo=tz).timestamp()), tz)
+    assert announce._within_limits(r5, int(datetime(2026, 6, 15, 3, 30, tzinfo=tz).timestamp()), tz)
+    assert not announce._within_limits(r5, int(datetime(2026, 6, 15, 12, 0, tzinfo=tz).timestamp()), tz)
     await db.close()
 
 

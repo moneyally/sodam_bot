@@ -1,14 +1,15 @@
 """예약·반복 공지.
 
 관리자가 단계별로 만든다 — 방 안에서(.예약공지 만들기) 또는 1:1 버튼 메뉴(🗓️ 예약공지 → ➕/✏️)에서:
-  1) 제목 → 2) 내용 (글 또는 사진·영상·GIF·파일 + 설명) → 3) 시간 (매일 09:00 / 반복 120)
-  → 4) 고정 여부 버튼 → 미리보기 → 저장
+  1) 제목 → 2) 내용 → 3) 사진·영상 → 4) 시간 (매일 09:00 / 매주 월 / 매월 15일 / 반복 120)
+  → 5) 고정 → 6) 지난 회차 지우기/쌓기 → 7) 기간·시간대 제한(선택) → 미리보기 → 저장
 Draft.ui_chat_id = 대화가 오가는 곳(방 또는 관리자 1:1), Draft.chat_id = 공지를 올릴 방.
 drafts 키는 (ui_chat_id, user_id) → 1:1 에선 (uid, uid) 라서 1:1 메시지로 찾을 수 있다.
 만드는 동안 오간 메시지는 저장/취소 시 지워서 채팅을 깨끗하게 둔다. 저장할 때 그 방 관리자인지 다시 확인한다.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import re
@@ -57,6 +58,7 @@ def extract_media(msg: Message) -> tuple[str | None, str | None]:
 _WHEN_DAILY = re.compile(r"^(?:매일|daily)?\s*(\d{1,2}:\d{2})$", re.I)
 DAYS = "월화수목금토일"                  # datetime.weekday() 순서
 _WHEN_WEEKLY = re.compile(r"^(?:매주\s*((?:[월화수목금토일](?:요일)?[,·\s]*)+)|(평일|주말))\s*(\d{1,2}:\d{2})$")
+_WHEN_MONTHLY = re.compile(r"^(?:매월|매달|monthly)\s*(\d{1,2})\s*일?\s*(\d{1,2}:\d{2})$", re.I)
 _WHEN_EVERY = re.compile(r"^(?:반복|매|every)\s*(\d+)\s*(분|m|min|시간|h)?(?:\s*마다)?$", re.I)
 # 시작 시각 맞춰 반복: '00:15 반복 4시간' · '매일 00:15부터 4시간마다' · '00:15 반복 240' (다른 봇처럼 정렬 발송)
 _WHEN_ANCHORED = re.compile(r"^(?:매일\s*)?(\d{1,2}:\d{2})\s*(?:부터)?\s*(?:반복\s*)?(\d+)\s*(분|m|시간|h)?(?:\s*마다)?$", re.I)
@@ -83,6 +85,12 @@ def parse_when(text: str) -> tuple[str, str | None, int | None]:
         days = {"평일": "월화수목금", "주말": "토일"}.get(m.group(2) or "") or "".join(
             d for d in DAYS if d in (m.group(1) or "").replace("요일", ""))
         return "weekly", f"{days} {parse_hhmm(m.group(3))}", None
+    m = _WHEN_MONTHLY.match(t)                        # '매월 15일 09:00' · '매달 1일 10:00' = 매달 그 날짜
+    if m:
+        day = int(m.group(1))
+        if not 1 <= day <= 31:
+            raise ValueError("날짜는 1일~31일 사이로 해주세요 (없는 날은 그 달 말일에 올라가요)")
+        return "monthly", f"{day} {parse_hhmm(m.group(2))}", None
     m = _WHEN_ANCHORED.match(t)                       # '00:15 반복 4시간' · '매일 00:15부터 4시간마다' = 그 시각 맞춰 반복
     if m:
         minutes = int(m.group(2)) * (60 if (m.group(3) or "").lower() in ("시간", "h") else 1)
@@ -98,6 +106,7 @@ def parse_when(text: str) -> tuple[str, str | None, int | None]:
     raise ValueError("한 줄에 <b>하나만</b> 보내세요 (슬래시·'또는' 같이 쓰지 말고):\n"
                      "• 매일 그 시각 한 번: <code>매일 09:00</code>\n"
                      "• 요일: <code>매주 월 10:00</code> · <code>평일 09:00</code>\n"
+                     "• 매월 정해진 날: <code>매월 15일 09:00</code>\n"
                      "• 그냥 N 간격: <code>반복 120</code>(분) · <code>반복 3시간</code>\n"
                      "• <b>그 시각 맞춰 반복</b>: <code>00:15 반복 4시간</code> (0시15분·4시15분·8시15분…)")
 
@@ -167,8 +176,88 @@ def describe_when(kind: str, at_time: str | None, interval_min: int | None) -> s
         days, hhmm = (at_time or " ").split(" ", 1)
         label = {"월화수목금": "평일", "토일": "주말", DAYS: "매일"}.get(days) or "매주 " + "·".join(days)
         return f"{label} {hhmm}"
+    if kind == "monthly":
+        day, hhmm = (at_time or " ").split(" ", 1)
+        return f"매월 {day}일 {hhmm}"
     every = f"{interval_min // 60}시간마다" if interval_min and interval_min % 60 == 0 else f"{interval_min}분마다"
     return f"매일 {at_time}부터 {every}" if at_time else every
+
+
+def describe_limits(start_ts, end_ts, active_from, active_to, tz) -> str:
+    """시작/종료 날짜·시간대 제한을 사람이 읽는 한 줄로 (없으면 '')."""
+    parts = []
+    if start_ts or end_ts:
+        a = datetime.fromtimestamp(start_ts, tz).strftime("%m-%d") if start_ts else "지금"
+        b = datetime.fromtimestamp(end_ts, tz).strftime("%m-%d") if end_ts else "계속"
+        parts.append(f"📅 {a}~{b}")
+    if active_from is not None and active_to is not None:
+        parts.append(f"⏰ {active_from}~{active_to}시만")
+    return " · ".join(parts)
+
+
+_LIM_DATE = re.compile(r"(\d{1,2})[-/.](\d{1,2})\s*[~\-]\s*(\d{1,2})[-/.](\d{1,2})")   # 10-01~10-31
+_LIM_ONE = re.compile(r"(시작|종료|부터|까지)\s*(\d{1,2})[-/.](\d{1,2})")                # 시작 10-01 / 종료 10-31
+_LIM_HOUR = re.compile(r"(\d{1,2})\s*시\s*[-~]\s*(\d{1,2})\s*시?|(\d{1,2})\s*~\s*(\d{1,2})")  # 9시~18시 / 9~18 ('-'는 날짜라 시엔 ~만)
+
+
+def parse_limits(text: str, tz, now_ts: int | None = None):
+    """'10-01~10-31' 기간 · '9시~18시' 시간대 (줄·쉼표로 여럿) → (start_ts, end_ts, active_from, active_to).
+    날짜 범위와 시간대 둘 다 넣을 수 있다. 하나도 못 읽으면 ValueError."""
+    now = datetime.fromtimestamp(now_ts or time.time(), tz)
+    start_ts = end_ts = active_from = active_to = None
+    found = False
+
+    def md_ts(mon: int, day: int, *, end: bool):
+        if not (1 <= mon <= 12 and 1 <= day <= 31):
+            raise ValueError("없는 날짜예요 (월·일을 확인해 주세요)")
+        year = now.year if (mon, day) >= (now.month, now.day) else now.year + 1   # 지난 날짜 = 내년
+        day = min(day, calendar.monthrange(year, mon)[1])
+        t = now.replace(year=year, month=mon, day=day, hour=23 if end else 0,
+                        minute=59 if end else 0, second=59 if end else 0, microsecond=0)
+        return int(t.timestamp())
+
+    for part in re.split(r"[\n,]+", text):
+        part = part.strip()
+        if not part or part in KEEP:
+            continue
+        if m := _LIM_DATE.search(part):
+            start_ts = md_ts(int(m.group(1)), int(m.group(2)), end=False)
+            end_ts = md_ts(int(m.group(3)), int(m.group(4)), end=True)
+            found = True
+        elif m := _LIM_ONE.search(part):
+            ts = md_ts(int(m.group(2)), int(m.group(3)), end=m.group(1) in ("종료", "까지"))
+            if m.group(1) in ("종료", "까지"):
+                end_ts = ts
+            else:
+                start_ts = ts
+            found = True
+        elif m := _LIM_HOUR.search(part):
+            a, b = int(m.group(1) or m.group(3)), int(m.group(2) or m.group(4))
+            if not (0 <= a <= 23 and 0 <= b <= 24) or a == b:
+                raise ValueError("시간대는 0~23시 사이·시작≠끝 으로 해주세요 (예: 9시~18시)")
+            active_from, active_to = a, b % 24
+            found = True
+        else:
+            raise ValueError("기간은 <code>10-01~10-31</code>, 시간대는 <code>9시~18시</code> 모양으로 보내주세요.")
+    if not found:
+        raise ValueError("기간·시간대를 못 읽었어요. <code>10-01~10-31</code> 또는 <code>9시~18시</code>")
+    if start_ts and end_ts and end_ts <= start_ts:
+        raise ValueError("종료일이 시작일보다 빨라요.")
+    return start_ts, end_ts, active_from, active_to
+
+
+def _within_limits(row, now_ts: int, tz) -> bool:
+    """유효 기간(start_ts~end_ts)·하루 시간대(active_from~active_to) 안인지. 없으면 늘 True."""
+    s, e = _col(row, "start_ts", None), _col(row, "end_ts", None)
+    if (s and now_ts < s) or (e and now_ts > e):
+        return False
+    af, at = _col(row, "active_from", None), _col(row, "active_to", None)
+    if af is not None and at is not None:
+        hr = datetime.fromtimestamp(now_ts, tz).hour
+        inside = af <= hr < at if af < at else (hr >= af or hr < at)   # 자정 넘김 (22~6) 지원
+        if not inside:
+            return False
+    return True
 
 
 def is_due(row, now_ts: int, tz) -> bool:
@@ -176,11 +265,24 @@ def is_due(row, now_ts: int, tz) -> bool:
         return False
     if row["kind"] == "once":
         return row["last_sent"] is None and 0 <= now_ts - (row["at_ts"] or 0) < ONCE_GRACE
+    if not _within_limits(row, now_ts, tz):                   # 기간·시간대 밖 (once 는 at_ts 로 이미 정해져 제외)
+        return False
     if row["kind"] in ("daily", "weekly"):
         days, _, hhmm = row["at_time"].rpartition(" ")          # weekly: '월수금 10:00' · daily: '10:00'
         hh, mm = map(int, hhmm.split(":"))
         now = datetime.fromtimestamp(now_ts, tz)
         if days and DAYS[now.weekday()] not in days:
+            return False
+        sched = int(now.replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp())
+        if not 0 <= now_ts - sched < DAILY_GRACE:
+            return False
+        return row["last_sent"] is None or row["last_sent"] < sched
+    if row["kind"] == "monthly":
+        day_s, _, hhmm = row["at_time"].rpartition(" ")         # '15 09:00'
+        target, (hh, mm) = int(day_s), map(int, hhmm.split(":"))
+        now = datetime.fromtimestamp(now_ts, tz)
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        if now.day != min(target, last_day):                    # 31일 지정 + 30일 달 = 말일에
             return False
         sched = int(now.replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp())
         if not 0 <= now_ts - sched < DAILY_GRACE:
@@ -246,6 +348,10 @@ class Draft:
     interval_min: int | None = None
     pin: bool = False
     del_prev: bool = True         # True = 새 회차 올릴 때 지난 회차 지움(기본) / False = 그대로 쌓기
+    start_ts: int | None = None   # 유효 기간 시작/끝 (None=무제한)
+    end_ts: int | None = None
+    active_from: int | None = None  # 하루 중 올릴 시간대 [from,to) 한국 시 (None=종일)
+    active_to: int | None = None
     token: str = field(default_factory=lambda: secrets.token_hex(3))
     expires: float = field(default_factory=lambda: time.time() + WIZARD_TTL)
     cleanup: list[int] = field(default_factory=list)
@@ -397,6 +503,9 @@ class Announcer:
                 await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
                 from . import opsdesk   # 📥 운영 인박스용 기록 (sodam/opsdesk.py)
                 await opsdesk.schedule_failed(self.svc, row, "missed")
+            elif row["enabled"] and row["kind"] != "once" and _col(row, "end_ts", None) \
+                    and now_ts > row["end_ts"]:                                          # 종료일 지남 → 깔끔하게 끔
+                await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
             elif is_due(row, now_ts, self.svc.cfg.tz) and await self.svc.paid_features(row["chat_id"]):
                 await self.publish(bot, row)
 
@@ -458,6 +567,8 @@ class Announcer:
                 setattr(draft, k, edit_row[k])
             draft.pin = bool(edit_row["pin"])
             draft.del_prev = bool(_col(edit_row, "del_prev", 1))
+            for k in ("start_ts", "end_ts", "active_from", "active_to"):
+                setattr(draft, k, _col(edit_row, k, None))
             draft.fmt = edit_row["fmt"] or ""
         if trigger_msg_id is not None:
             draft.cleanup.append(trigger_msg_id)
@@ -472,7 +583,7 @@ class Announcer:
         now_title = draft.title if draft.fmt == "html" else esc(draft.title)
         keep = f"\n(지금: {now_title or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
-                                    f"<b>1/6 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
+                                    f"<b>1/7 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
         self._saved(draft.key)
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
@@ -521,7 +632,7 @@ class Announcer:
             draft.step = "body"
             keep = " · 그대로 두려면 <code>그대로</code>" if editing else ""
             await self._say(bot, draft,
-                            "<b>2/6 내용</b>을 보내주세요.\n"
+                            "<b>2/7 내용</b>을 보내주세요.\n"
                             "• 글만 보내면 다음 단계에서 사진·영상을 따로 받아요 (사진에 설명을 붙여 한 번에 보내도 돼요)\n"
                             "• <code>{규칙}</code> 을 쓰면 방 규칙이, <code>{날짜}</code> 를 쓰면 오늘 날짜가 들어가요"
                             + keep)
@@ -566,6 +677,19 @@ class Announcer:
             await self._ask_when(bot, draft)
             return True
 
+        if draft.step == "limits":
+            if text in ("없음", "-", "건너뛰기", "패스") or text in KEEP:
+                draft.start_ts = draft.end_ts = draft.active_from = draft.active_to = None
+            else:
+                try:
+                    draft.start_ts, draft.end_ts, draft.active_from, draft.active_to = \
+                        parse_limits(text, self.svc.cfg.tz)
+                except ValueError as e:
+                    await self._say(bot, draft, f"❌ {e}")
+                    return True
+            await self._ask_confirm(bot, draft)
+            return True
+
         # step == "when"
         if not (editing and text in KEEP):
             try:
@@ -578,26 +702,38 @@ class Announcer:
             InlineKeyboardButton("📌 고정해서 올리기", callback_data=f"an:{draft.token}:pin1"),
             InlineKeyboardButton("고정 안 함", callback_data=f"an:{draft.token}:pin0"),
         ]])
-        await self._say(bot, draft, "<b>5/6 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
+        await self._say(bot, draft, "<b>5/7 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
         return True
 
     async def _ask_keep(self, bot: Bot, draft: Draft) -> None:
-        """6/6 반복 공지: 새 회차 올릴 때 지난 회차 글을 지울지(기본) 그대로 쌓을지."""
+        """6/7 반복 공지: 새 회차 올릴 때 지난 회차 글을 지울지(기본) 그대로 쌓을지."""
         draft.step = "keep"
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🗑 지우고 새로 (기본)", callback_data=f"an:{draft.token}:keep1"),
             InlineKeyboardButton("📚 그대로 쌓기", callback_data=f"an:{draft.token}:keep0"),
         ]])
-        await self._say(bot, draft, "<b>6/6 지난 회차 글</b>을 어떻게 할까요? (반복 공지일 때)\n"
+        await self._say(bot, draft, "<b>6/7 지난 회차 글</b>을 어떻게 할까요? (반복 공지일 때)\n"
                                     "• <b>지우고 새로</b> = 새 글 올릴 때 이전 회차 글을 지워요 (하나만 남음)\n"
                                     "• <b>그대로 쌓기</b> = 이전 글을 안 지워요 (글이 계속 쌓여요)", kb)
+
+    async def _ask_limits(self, bot: Bot, draft: Draft) -> None:
+        """7/7 (선택) 유효 기간·하루 시간대 제한. 안 쓰면 [⏭ 제한 없음]."""
+        draft.step = "limits"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ 제한 없음 (계속·종일)", callback_data=f"an:{draft.token}:nolimit")]])
+        await self._say(bot, draft, "<b>7/7 기간·시간대 제한</b> (선택)\n"
+                                    "특정 기간·시간대에만 올리고 싶으면 보내주세요 (둘 다 가능, 한 줄에 하나):\n"
+                                    "• 기간: <code>10-01~10-31</code> (이 기간만 올림)\n"
+                                    "• 하루 시간대: <code>9시~18시</code> (그 시간대에만)\n"
+                                    "• 없으면 아래 버튼 또는 <code>없음</code>", kb)
 
     async def _ask_confirm(self, bot: Bot, draft: Draft) -> None:
         draft.step = "confirm"
         keep = "" if draft.del_prev else " · 📚 이전 글 쌓기"
+        lim = describe_limits(draft.start_ts, draft.end_ts, draft.active_from, draft.active_to, self.svc.cfg.tz)
         await self._say(bot, draft, "👀 <b>미리보기</b> — "
                                     f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
-                                    f"{' · 📌 고정' if draft.pin else ''}{keep}")
+                                    f"{' · 📌 고정' if draft.pin else ''}{keep}"
+                                    f"{' · ' + lim if lim else ''}")
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
             InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
@@ -613,7 +749,7 @@ class Announcer:
             self.drafts.pop(draft.key, None)
 
     async def _ask_media(self, bot: Bot, draft: Draft) -> None:
-        """3/6 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
+        """3/7 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
         draft.step = "media"
         what = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}.get(draft.media_type or "", "")
         rows = [[InlineKeyboardButton("⏭ 사진 없이", callback_data=f"an:{draft.token}:nomedia")]]
@@ -621,7 +757,7 @@ class Announcer:
         if draft.media_id:
             rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 {what} 그대로", callback_data=f"an:{draft.token}:keepmedia"))
             now = f"\n(지금 붙은 {what}이 있어요 · 그대로 두려면 <code>그대로</code>)"
-        await self._say(bot, draft, "<b>3/6 사진·영상</b>을 같이 올릴까요?\n"
+        await self._say(bot, draft, "<b>3/7 사진·영상</b>을 같이 올릴까요?\n"
                                     "• 사진·영상·GIF·파일을 보내주세요 (공지 글이 그 설명으로 붙어요)\n"
                                     "• 없으면 <code>없음</code> 또는 아래 버튼" + now, InlineKeyboardMarkup(rows))
 
@@ -629,8 +765,10 @@ class Announcer:
         draft.step = "when"
         now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                f"<code>그대로</code>)") if draft.edit_id is not None else ""
-        await self._say(bot, draft, "<b>4/6 언제</b> 올릴까요? (한 줄에 하나만)\n"
+        await self._say(bot, draft, "<b>4/7 언제</b> 올릴까요? (한 줄에 하나만)\n"
                                     "• 매일 정해진 시각: <code>매일 09:00</code>\n"
+                                    "• 요일: <code>매주 월 10:00</code> · <code>평일 09:00</code>\n"
+                                    "• <b>매월 정해진 날</b>: <code>매월 15일 09:00</code> (없는 날은 말일)\n"
                                     "• 일정 간격: <code>반복 120</code>(분) · <code>반복 3시간</code>\n"
                                     "• 그 시각 맞춰 반복: <code>00:15 반복 4시간</code> (0시15분·4시15분·…)" + now)
 
@@ -677,6 +815,11 @@ class Announcer:
         if action in ("keep1", "keep0") and draft.step == "keep":
             draft.del_prev = action == "keep1"
             await query.answer()
+            await self._ask_limits(bot, draft)
+            return
+        if action == "nolimit" and draft.step == "limits":
+            draft.start_ts = draft.end_ts = draft.active_from = draft.active_to = None
+            await query.answer()
             await self._ask_confirm(bot, draft)
             return
         if action == "cancel":
@@ -703,7 +846,9 @@ class Announcer:
             return
         fields = dict(kind=draft.kind, at_time=draft.at_time, interval_min=draft.interval_min,
                       title=draft.title, text=draft.text, media_type=draft.media_type,
-                      media_id=draft.media_id, pin=int(draft.pin), del_prev=int(draft.del_prev), fmt=draft.fmt)
+                      media_id=draft.media_id, pin=int(draft.pin), del_prev=int(draft.del_prev),
+                      start_ts=draft.start_ts, end_ts=draft.end_ts,
+                      active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
                 await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")
