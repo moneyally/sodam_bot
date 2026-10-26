@@ -47,6 +47,7 @@ async def announce_save_double_press_creates_one_schedule():
     d = svc.announcer.drafts[(ADMIN, ADMIN)]
     q0 = FakeQuery(ADMIN, fake_user(ADMIN), "")
     await svc.announcer.on_callback(bot, q0, [d.token, "pin0"])
+    await svc.announcer.on_callback(bot, q0, [d.token, "keep1"])   # 반복 → 쌓기 물음 한 단계
     q1, q2 = FakeQuery(ADMIN, fake_user(ADMIN), ""), FakeQuery(ADMIN, fake_user(ADMIN), "")
     await asyncio.gather(svc.announcer.on_callback(bot, q1, [d.token, "save"]),
                          svc.announcer.on_callback(bot, q2, [d.token, "save"]))

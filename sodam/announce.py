@@ -62,6 +62,15 @@ _WHEN_EVERY = re.compile(r"^(?:반복|매|every)\s*(\d+)\s*(분|m|min|시간|h)?
 _WHEN_ANCHORED = re.compile(r"^(?:매일\s*)?(\d{1,2}:\d{2})\s*(?:부터)?\s*(?:반복\s*)?(\d+)\s*(분|m|시간|h)?(?:\s*마다)?$", re.I)
 
 
+def _col(row, name: str, default):
+    """예전 DB·테스트 행에 없는 컬럼을 안전하게 (마이그레이션 전/가짜 행 대비)."""
+    try:
+        v = row[name]
+        return default if v is None else v
+    except (KeyError, IndexError):
+        return default
+
+
 def parse_when(text: str) -> tuple[str, str | None, int | None]:
     """'매일 09:00' → ('daily','09:00',None) / '반복 120' '반복 2시간' → ('interval',None,120)
     '매주 월 10:00' '매주 월,수,금 10:00' '매주 월요일 10:00' '평일 09:00' '주말 11:00' → ('weekly','월수금 10:00',None)"""
@@ -236,6 +245,7 @@ class Draft:
     at_time: str | None = None
     interval_min: int | None = None
     pin: bool = False
+    del_prev: bool = True         # True = 새 회차 올릴 때 지난 회차 지움(기본) / False = 그대로 쌓기
     token: str = field(default_factory=lambda: secrets.token_hex(3))
     expires: float = field(default_factory=lambda: time.time() + WIZARD_TTL)
     cleanup: list[int] = field(default_factory=list)
@@ -341,7 +351,7 @@ class Announcer:
             await self.svc.db.mark_schedule_sent(row["id"], now_ts, None)   # 먼저 기록: AI 가 느려도 다음 틱에 또 안 돌게
             await cron.fire(self.svc, bot, row)
             return
-        if row["last_msg_id"]:
+        if row["last_msg_id"] and _col(row, "del_prev", 1):   # del_prev=0 이면 지난 회차 글을 안 지우고 쌓음 (泰山 루디)
             try:
                 await bot.delete_message(row["chat_id"], row["last_msg_id"])
             except TelegramError:
@@ -447,6 +457,7 @@ class Announcer:
             for k in ("title", "text", "media_type", "media_id", "kind", "at_time", "interval_min"):
                 setattr(draft, k, edit_row[k])
             draft.pin = bool(edit_row["pin"])
+            draft.del_prev = bool(_col(edit_row, "del_prev", 1))
             draft.fmt = edit_row["fmt"] or ""
         if trigger_msg_id is not None:
             draft.cleanup.append(trigger_msg_id)
@@ -461,7 +472,7 @@ class Announcer:
         now_title = draft.title if draft.fmt == "html" else esc(draft.title)
         keep = f"\n(지금: {now_title or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
-                                    f"<b>1/5 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
+                                    f"<b>1/6 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
         self._saved(draft.key)
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
@@ -510,7 +521,7 @@ class Announcer:
             draft.step = "body"
             keep = " · 그대로 두려면 <code>그대로</code>" if editing else ""
             await self._say(bot, draft,
-                            "<b>2/5 내용</b>을 보내주세요.\n"
+                            "<b>2/6 내용</b>을 보내주세요.\n"
                             "• 글만 보내면 다음 단계에서 사진·영상을 따로 받아요 (사진에 설명을 붙여 한 번에 보내도 돼요)\n"
                             "• <code>{규칙}</code> 을 쓰면 방 규칙이, <code>{날짜}</code> 를 쓰면 오늘 날짜가 들어가요"
                             + keep)
@@ -567,11 +578,42 @@ class Announcer:
             InlineKeyboardButton("📌 고정해서 올리기", callback_data=f"an:{draft.token}:pin1"),
             InlineKeyboardButton("고정 안 함", callback_data=f"an:{draft.token}:pin0"),
         ]])
-        await self._say(bot, draft, "<b>5/5 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
+        await self._say(bot, draft, "<b>5/6 고정</b>할까요? (고정하면 지난 회차 공지는 지우고 새로 고정해요)", kb)
         return True
 
+    async def _ask_keep(self, bot: Bot, draft: Draft) -> None:
+        """6/6 반복 공지: 새 회차 올릴 때 지난 회차 글을 지울지(기본) 그대로 쌓을지."""
+        draft.step = "keep"
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🗑 지우고 새로 (기본)", callback_data=f"an:{draft.token}:keep1"),
+            InlineKeyboardButton("📚 그대로 쌓기", callback_data=f"an:{draft.token}:keep0"),
+        ]])
+        await self._say(bot, draft, "<b>6/6 지난 회차 글</b>을 어떻게 할까요? (반복 공지일 때)\n"
+                                    "• <b>지우고 새로</b> = 새 글 올릴 때 이전 회차 글을 지워요 (하나만 남음)\n"
+                                    "• <b>그대로 쌓기</b> = 이전 글을 안 지워요 (글이 계속 쌓여요)", kb)
+
+    async def _ask_confirm(self, bot: Bot, draft: Draft) -> None:
+        draft.step = "confirm"
+        keep = "" if draft.del_prev else " · 📚 이전 글 쌓기"
+        await self._say(bot, draft, "👀 <b>미리보기</b> — "
+                                    f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
+                                    f"{' · 📌 고정' if draft.pin else ''}{keep}")
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
+            InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
+        ]])
+        try:
+            preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
+                                      media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
+                                      rules_chat=draft.chat_id, fmt=draft.fmt)
+            draft.cleanup.append(preview.message_id)
+        except TelegramError as e:
+            again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
+            await self._say(bot, draft, f"미리보기 실패: {esc(e.message)}\n{again}.")
+            self.drafts.pop(draft.key, None)
+
     async def _ask_media(self, bot: Bot, draft: Draft) -> None:
-        """3/5 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
+        """3/6 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
         draft.step = "media"
         what = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}.get(draft.media_type or "", "")
         rows = [[InlineKeyboardButton("⏭ 사진 없이", callback_data=f"an:{draft.token}:nomedia")]]
@@ -579,7 +621,7 @@ class Announcer:
         if draft.media_id:
             rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 {what} 그대로", callback_data=f"an:{draft.token}:keepmedia"))
             now = f"\n(지금 붙은 {what}이 있어요 · 그대로 두려면 <code>그대로</code>)"
-        await self._say(bot, draft, "<b>3/5 사진·영상</b>을 같이 올릴까요?\n"
+        await self._say(bot, draft, "<b>3/6 사진·영상</b>을 같이 올릴까요?\n"
                                     "• 사진·영상·GIF·파일을 보내주세요 (공지 글이 그 설명으로 붙어요)\n"
                                     "• 없으면 <code>없음</code> 또는 아래 버튼" + now, InlineKeyboardMarkup(rows))
 
@@ -587,7 +629,7 @@ class Announcer:
         draft.step = "when"
         now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                f"<code>그대로</code>)") if draft.edit_id is not None else ""
-        await self._say(bot, draft, "<b>4/5 언제</b> 올릴까요? (한 줄에 하나만)\n"
+        await self._say(bot, draft, "<b>4/6 언제</b> 올릴까요? (한 줄에 하나만)\n"
                                     "• 매일 정해진 시각: <code>매일 09:00</code>\n"
                                     "• 일정 간격: <code>반복 120</code>(분) · <code>반복 3시간</code>\n"
                                     "• 그 시각 맞춰 반복: <code>00:15 반복 4시간</code> (0시15분·4시15분·…)" + now)
@@ -629,24 +671,13 @@ class Announcer:
             return
         if action in ("pin1", "pin0") and draft.step == "pin":
             draft.pin = action == "pin1"
-            draft.step = "confirm"
             await query.answer()
-            await self._say(bot, draft, "👀 <b>미리보기</b> — "
-                                        f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
-                                        f"{' · 📌 고정' if draft.pin else ''}")
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
-                InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
-            ]])
-            try:
-                preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
-                                          media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
-                                          rules_chat=draft.chat_id, fmt=draft.fmt)
-                draft.cleanup.append(preview.message_id)
-            except TelegramError as e:
-                again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
-                await self._say(bot, draft, f"미리보기 실패: {esc(e.message)}\n{again}.")
-                self.drafts.pop(draft.key, None)
+            await self._ask_keep(bot, draft)   # 예약공지 마법사는 반복만 (once 는 parse_when 거부) → 늘 '쌓기' 물음
+            return
+        if action in ("keep1", "keep0") and draft.step == "keep":
+            draft.del_prev = action == "keep1"
+            await query.answer()
+            await self._ask_confirm(bot, draft)
             return
         if action == "cancel":
             await query.answer()
@@ -672,7 +703,7 @@ class Announcer:
             return
         fields = dict(kind=draft.kind, at_time=draft.at_time, interval_min=draft.interval_min,
                       title=draft.title, text=draft.text, media_type=draft.media_type,
-                      media_id=draft.media_id, pin=int(draft.pin), fmt=draft.fmt)
+                      media_id=draft.media_id, pin=int(draft.pin), del_prev=int(draft.del_prev), fmt=draft.fmt)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
                 await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")

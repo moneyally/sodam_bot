@@ -213,13 +213,15 @@ async def delete_needs_single_use_token():
 
 
 # ── 1:1 마법사 ────────────────────────────────────────────
-async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "없음", "매일 21:30"), pin="pin1", save=True):
+async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "없음", "매일 21:30"), pin="pin1", keep="keep1", save=True):
     for a in answers:
         msg = await dm(a)
         assert not msg.replies, msg.replies                                # 마법사가 받음 (AI 로 새지 않음)
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]
     q = FakeQuery(ADMIN, fake_user(ADMIN))
     await svc.announcer.on_callback(bot, q, [draft.token, pin])
+    if draft.step == "keep":                                               # 반복 공지는 '지난 회차 지울지' 한 단계 더
+        await svc.announcer.on_callback(bot, q, [draft.token, keep])
     if save:
         await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     return draft, q
@@ -234,7 +236,7 @@ async def dm_wizard_creates_schedule_in_group_not_dm():
     draft = svc.announcer.drafts[(ADMIN, ADMIN)]                            # 1:1 키 (menu.r_input 과 같은 약속)
     assert (draft.ui_chat_id, draft.chat_id, draft.user_id) == (ADMIN, CHAT, ADMIN)
     first = sent_to(bot, ADMIN)[-1][2]
-    assert "1/5 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
+    assert "1/6 제목" in first and "내 방" in first                          # 어느 방에 올릴지 보여줌
 
     await _run_wizard(svc, bot, dm)
     rows = await db.schedules(CHAT)
@@ -252,14 +254,14 @@ async def dm_wizard_creates_schedule_in_group_not_dm():
 
 @test
 async def dm_wizard_takes_photo_as_separate_step():
-    """오너 요청 2026-10-05: 글을 먼저 쓰고 사진·영상을 따로 올리는 단계 (3/5). 사진에 설명을 붙여 한 번에 보내면 건너뜀."""
+    """오너 요청 2026-10-05: 글을 먼저 쓰고 사진·영상을 따로 올리는 단계 (3/6). 사진에 설명을 붙여 한 번에 보내면 건너뜀."""
     db, svc, bot, _ = await setup()
     dm = dm_ctx(svc, bot)
     await press(svc, bot, f"m:scn:{CHAT}")
     await dm("규칙 공지")
     await dm("규칙 잘 지켜요")
     ask = sent_to(bot, ADMIN)[-1]
-    assert "3/5 사진" in ask[2] and [b.text for b in buttons(ask[3]["reply_markup"])] == ["⏭ 사진 없이"]
+    assert "3/6 사진" in ask[2] and [b.text for b in buttons(ask[3]["reply_markup"])] == ["⏭ 사진 없이"]
     msg = await dm("이건 사진 아님")                                          # 글만 오면 다시 물어봄
     assert not msg.replies and "사진·영상·GIF" in sent_to(bot, ADMIN)[-1][2]
     await dm(video=SimpleNamespace(file_id="VID"))
@@ -327,6 +329,40 @@ async def dm_wizard_edit_of_deleted_schedule_is_not_resurrected():
 
 
 @test
+async def wizard_keep_step_sets_del_prev():
+    """마법사 6/6 '📚 그대로 쌓기'(keep0) → del_prev=0 / '🗑 지우고 새로'(keep1) → 1 저장."""
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    d, _ = await _run_wizard(svc, bot, dm, keep="keep0")          # 반복(매일 21:30) → keep 단계 나옴
+    assert d.del_prev is False and (await db.schedules(CHAT))[0]["del_prev"] == 0
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await _run_wizard(svc, bot, dm, keep="keep1")
+    assert (await db.schedules(CHAT))[-1]["del_prev"] == 1
+    await db.close()
+
+
+@test
+async def del_prev_zero_keeps_previous_posts():
+    """반복 공지 del_prev=0 이면 새 회차 올릴 때 지난 회차를 안 지움 (글이 쌓임 — 泰山 루디 2026-10-26)."""
+    db, svc, bot, _ = await setup()
+    clear = await add(db, CHAT, "지우는 공지", del_prev=True)     # 기본: 지우고 새로
+    pile = await add(db, CHAT, "쌓는 공지", del_prev=False)       # 쌓기
+    for sid in (clear, pile):
+        row = await db.get_schedule(CHAT, sid)
+        await svc.announcer.publish(bot, row)                     # 1회차 (아직 last_msg_id 없음 → 삭제 안 함)
+    assert not any(c[0] == "delete" for c in bot.calls)           # 첫 회차엔 지울 게 없음
+    for sid in (clear, pile):
+        row = await db.get_schedule(CHAT, sid)                    # last_msg_id 가 1회차 메시지로 채워짐
+        assert row["last_msg_id"]
+        await svc.announcer.publish(bot, row)                     # 2회차
+    dels = [c for c in bot.calls if c[0] == "delete"]
+    assert len(dels) == 1 and dels[0][1] == CHAT, dels            # '지우는 공지' 것만 지움, '쌓는 공지'는 안 지움
+    assert len(sent_to(bot, CHAT)) == 4                           # 둘 다 두 번씩 올라감 (쌓는 쪽은 둘 다 남음)
+    await db.close()
+
+
+@test
 async def group_wizard_still_runs_in_group():
     db, svc, bot, _ = await setup()
     admin = fake_user(ADMIN, "방장")
@@ -338,6 +374,8 @@ async def group_wizard_still_runs_in_group():
     assert not await svc.announcer.handle_message(bot, FakeMsg(ADMIN, admin, "1:1 메시지"))  # 1:1 은 별개
     q = FakeQuery(CHAT, admin)
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    assert draft.step == "keep"                                            # 반복 공지 → 지난 회차 쌓기 물음
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
     assert sent_to(bot, CHAT)[-1][0] == "send_message" and "그룹 공지" in sent_to(bot, CHAT)[-1][2]  # 미리보기도 방에
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     assert [r["title"] for r in await db.schedules(CHAT)] == ["그룹 공지"]
