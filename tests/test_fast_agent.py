@@ -15,6 +15,34 @@ test, run_all = runner()
 
 
 @test
+async def a_hung_model_call_is_cut_at_cap_not_hanging_13min():
+    # 2026-10-26 실측: 스트리밍 추론 한 호출이 783초 매달림 (DEADLINE 은 라운드 사이에서만 재서 못 끊음)
+    r = await Room().open(admins={BOSS.id})
+    await r.join(A)
+    old_cap = agent.CALL_CAP
+    agent.CALL_CAP = 0.1
+
+    async def slow(*a, **k):
+        r.llm.calls.append({"kind": "chat", "tool_choice": k.get("tool_choice", "auto")})
+        await asyncio.sleep(5)        # 매달림 흉내 (CALL_CAP 0.1초보다 훨씬 김)
+        return reply("늦은 답")
+    r.llm.chat = slow
+    try:
+        ctx = ToolCtx(r.svc, r.bot, r.CHAT, A, Role.MEMBER, await r.db.get_settings(r.CHAT))
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        # 상한이 안 걸리면 5초 sleep 에 막혀 이 2초 타임아웃에 걸림 → 시험 실패(= 버그 잡음)
+        text = await asyncio.wait_for(
+            run_agent(ctx, style_key="polite", notes={}, history=[], reply_to=None, request="뭐해", extras={}),
+            timeout=2)
+        dt = loop.time() - t0
+    finally:
+        agent.CALL_CAP = old_cap
+    assert dt < 1.5, f"호출 상한에 안 걸리고 매달림: {dt:.2f}s"
+    assert "밀려서" in text or text == "", text     # 끊긴 뒤 짧게 돌려보냄
+
+
+@test
 async def deadline_stops_searching_and_answers_with_what_it_has():
     r = await Room().open(admins={BOSS.id})
     await r.join(A)

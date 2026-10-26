@@ -808,6 +808,8 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - make_image 로 그린 그림은 같은 답변의 원본(ctx.image) → '새 그림 → 움프/스티커' 한 번에. prompt 규칙 9 = 안 되는 것(영상 새로 생성 —
   OpenAI Sora API 2026-09-24 종료, 20MB, 남의 봇 버튼·프사, 같은 얼굴 보장)은 꾸미지 말고 대안 하나.
 - 빠른 답: AI 답 만드는 동안 '입력 중' 4초마다(`handlers._keep_typing`), 벽시계 상한 `agent.DEADLINE` 그룹 25초·1:1 45초 → 넘으면 지금까지로 답.
+  **한 호출 상한 `agent.CALL_CAP` 90초** (`capped`→asyncio.wait_for, tests/test_fast_agent.py a_hung_model_call_* · 뮤테이션 1개, 2026-10-26 '느리다' 실측):
+  DEADLINE 은 라운드 **사이**에서만 재서, 한 번의 모델 호출(특히 **스트리밍 추론** think)이 매달리면 못 끊었다 — 실측 한 호출이 **783초(13분)**. OpenAI timeout=60 은 조각 간격만이라 스트림이 찔끔찔끔 오면 무한. → 호출 하나를 CALL_CAP 로 감싸 넘으면 끊고 지금까지로(마무리 호출도 끊기면 '지금 좀 밀려서' 한 줄). 정상 추론은 90초 안에 끝남. (느림 분석: banter 2초·light 4~6초 vs admin:think 평균 41초 — 관리자 요청 추론 과다가 다음 과제.)
   **병렬 도구 호출 켬 (2026-10-06, tests/test_agent_parallel.py · 뮤테이션 5개)**: 에이전트만 parallel_tool_calls=True. 한 라운드의 **맨 앞부터 이어지는
   조회 도구(READ_ONLY)만 동시에** 실행(Codex parallel.rs), 쓰기 도구·그 뒤 조회·find_tools 는 차례대로 하나씩, 결과는 부른 순서대로 (events 'parallel').
 - **💭 라이브 생각 보여주기** (`llm.think` on_think·`llm._stream_think`, `agent._Thinker`, 방 설정 `ai_thinking` 기본 꺼짐, tests/test_thinking.py 11개 · 뮤테이션 6개, 2026-10-21 오너 'Claude 처럼'): 느린(생각) 답에서 OpenAI reasoning summary 를 보여 줌 (Codex 방식 — 요약만, 원문 CoT 는 안 옴). `reasoning={"summary":"auto"}` + `stream=True`(on_think 줄 때만 — 나머지 호출은 예전처럼 한 번에, 회귀 0) → `response.reasoning_summary_text.delta` 를 모아 on_think 콜백, `response.completed` 의 response 로 멀티라운드·암호화추론·usage 그대로.
