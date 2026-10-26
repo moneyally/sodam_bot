@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, TelegramError
 
-from . import fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, stats, subscription
+from . import cards, fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, stats, subscription
 from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
@@ -137,7 +137,8 @@ EXAMPLES_MEMBER: list[tuple[str, list[str]]] = [
     ("🎮 게임", ["끝말잇기 시작"]),
 ]
 EXAMPLES_ADMIN: list[tuple[str, list[str]]] = [
-    ("👮 관리", ["철수 최근 경고 내역 보여줘", "쓰잔 밴 못하게 보호해줘", "쟤 뭐 했는지 근거 보여줘 (답장)"]),
+    ("👮 관리", ["철수 최근 경고 내역 보여줘", "쓰잔 밴 못하게 보호해줘", "쟤 뭐 했는지 근거 보여줘 (답장)",
+                "이 방 모든 사람 프리(자유 멤버) 해줘"]),
     ("🏆 순위 관리", ["도배하는 철수 채팅 수 초기화해줘", "쟤 순위 0으로 (답장)"]),
     ("🚨 수배", ["이 사람 사기꾼이야 수배 올려 (답장)"]),
     ("💬 자동답글", ["'공지' 치면 이 글 자동으로 보내줘 (답장)"]),
@@ -758,6 +759,37 @@ async def c_freelist(ctx: CmdCtx) -> None:
     names = [f"• {esc(display_name(r['first_name'], r['last_name'], r['username']) or str(r['user_id']))} "
              f"(<code>{r['user_id']}</code>)" for r in rows]
     await ctx.reply("🕊️ <b>자유 멤버</b> (자동 통제 안 받음)\n" + "\n".join(names))
+
+
+async def _free_all_card(ctx: CmdCtx, on: bool) -> None:
+    """방 전체 자유 멤버 지정/해제 — 한 번에 하는 건 영향이 커서 확인 버튼 한 장 (admintools.freeall_ok 가 처리)."""
+    from .panels import admintools
+    if on:
+        targets = await admintools.free_all_targets(ctx.svc, ctx.bot, ctx.chat_id)
+        if not targets:
+            await ctx.reply("이 방 멤버가 이미 다 자유 멤버예요 (관리자·봇은 원래 제외).")
+            return
+        title = f"🕊️ 이 방 멤버 {len(targets)}명을 한 번에 자유 멤버로 지정"
+        body = "\n관리자·봇은 빼요. 앞으로 새로 들어올 사람은 포함 안 돼요."
+    else:
+        n = len(await free.members(ctx.svc.db, ctx.chat_id))
+        if not n:
+            await ctx.reply("이 방엔 자유 멤버가 없어요.")
+            return
+        title = f"🕊️ 이 방 자유 멤버 {n}명을 한 번에 전부 해제"
+        body = "\n모두 다시 자동 통제를 받게 돼요."
+    kb = await cards.card(ctx.svc, ctx.user.id, ctx.chat_id, "free_all", "freeall_ok", "freeall_no",
+                          {"on": on}, ok_label="✅ 실행")
+    await ctx.reply(f"<b>{title}</b> 할까요?{body}\n(요청한 {esc(ctx.user.first_name)}님만 누를 수 있어요)",
+                    reply_markup=kb)
+
+
+async def c_freeall(ctx: CmdCtx) -> None:
+    await _free_all_card(ctx, True)
+
+
+async def c_freeall_off(ctx: CmdCtx) -> None:
+    await _free_all_card(ctx, False)
 
 
 async def c_protect(ctx: CmdCtx) -> None:
@@ -1580,6 +1612,10 @@ COMMANDS: list[Cmd] = [
     Cmd(("free해제", "unfree", "프리해제"), c_unfree, Role.ADMIN, usage="@user", help="자유 멤버 해제", group="관리자",
         right="restrict"),
     Cmd(("free목록", "freelist", "프리목록"), c_freelist, Role.ADMIN, help="자유 멤버 목록", group="관리자"),
+    Cmd(("전체프리", "모두프리", "전원프리", "프리전체"), c_freeall, Role.ADMIN,
+        help="이 방 멤버 전부 한 번에 자유 멤버로 (확인 버튼)", group="관리자", right="restrict"),
+    Cmd(("전체프리해제", "프리전체해제", "모두프리해제"), c_freeall_off, Role.ADMIN,
+        help="이 방 자유 멤버 전부 한 번에 해제 (확인 버튼)", group="관리자", right="restrict"),
     Cmd(("보호", "protect"), c_protect, Role.ADMIN, usage="@user", help="보호 멤버: 소담으로 제재 못 하게",
         group="관리자", right="restrict"),
     Cmd(("보호해제", "unprotect"), c_unprotect, Role.ADMIN, usage="@user", help="보호 멤버 해제", group="관리자",

@@ -244,8 +244,10 @@ def button_rows(s: dict, icons: bool = True) -> list[list[InlineKeyboardButton]]
 
 
 def with_names(template: str, tag: bool = True) -> str:
-    """{names} 가 없는 인사말: 태그 켜짐 → 앞에 이름을 붙임, 꺼짐 → 인사말 그대로 (이름 없이)."""
-    return template if "{names}" in template or not tag else "{names} " + template
+    """{names}/{name} 가 없는 인사말: 태그 켜짐 → 앞에 이름을 붙임, 꺼짐 → 인사말 그대로 (이름 없이).
+    이미 {name}·{names} 로 이름을 쓴 인사말(사용자명 칸 등)엔 앞에 또 안 붙임 — '{name' 둘 다 잡음
+    (2026-10-26 泰山: '• 사용자명 : {name}' 인데 맨 앞에 이름이 또 나옴)."""
+    return template if "{name" in template or not tag else "{names} " + template
 
 
 def rich_template(s: dict) -> str | None:

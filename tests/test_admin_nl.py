@@ -342,6 +342,51 @@ async def unwarn_reset_free_unfree_and_captcha_pass_go_through_cards():
 
 
 @test
+async def free_all_frees_every_member_at_once_with_card():
+    from sodam.panels import admintools
+    db, svc, bot = await setup()
+    # 멤버(20·21·22)는 자유 아님, 관리자(1·2·3)는 제외 대상
+    targets = await admintools.free_all_targets(svc, bot, A)
+    assert set(targets) == {MEMBER, T1, T2} and CREATOR not in targets and STRONG not in targets, targets
+    # 카드만, 아직 안 바뀜
+    out = await run(ctx(svc, bot), "free_all", on=True)
+    assert "확인 버튼을 보냈음" in out and not await free.is_free(db, A, MEMBER), out
+    ok, no = buttons(last_card(bot))[:2]
+    await press_token(svc, bot, CREATOR, ok.callback_data)                      # 요청자(STRONG)만
+    assert not await free.is_free(db, A, MEMBER), "남이 누르면 안 됨"
+    await press_token(svc, bot, STRONG, ok.callback_data)
+    assert await free.is_free(db, A, MEMBER) and await free.is_free(db, A, T1) and await free.is_free(db, A, T2)
+    assert not await free.is_free(db, A, CREATOR), "관리자는 제외"
+    # 이미 다 자유 → 새로 지정할 사람 없음 (카드 안 뜸)
+    assert "이미 다 자유" in await run(ctx(svc, bot), "free_all", on=True)
+    # 전체 해제
+    out = await run(ctx(svc, bot), "free_all", on=False)
+    assert "확인 버튼을 보냈음" in out and await free.is_free(db, A, MEMBER), out
+    ok, _ = buttons(last_card(bot))[:2]
+    await press_token(svc, bot, STRONG, ok.callback_data)
+    assert not await free.is_free(db, A, MEMBER) and not await free.is_free(db, A, T1)
+    assert not (await free.members(db, A)), "전부 해제"
+    assert "자유 멤버가 없" in await run(ctx(svc, bot), "free_all", on=False)
+    # 권한 없는 관리자(WEAK)는 카드도 안 뜸
+    assert NO_RIGHT in await run(ctx(svc, bot, WEAK), "free_all", on=True)
+    # 다른 방(B)은 안 건드림
+    assert not (await free.members(db, B))
+
+
+@test
+async def free_all_command_posts_card_and_frees():
+    db, svc, bot = await setup()
+    user = fake_user(STRONG, "사람2")
+    cmd, args, argstr = commands.parse(".전체프리", bot.username)
+    msg = FakeMsg(A, user, ".전체프리")
+    await commands.dispatch(commands.CmdCtx(svc, bot, msg, A, user, Role.ADMIN, args, argstr), cmd)
+    kb = msg.reply_kws[-1]["reply_markup"]
+    ok = kb.inline_keyboard[0][0]
+    await press_token(svc, bot, STRONG, ok.callback_data)
+    assert await free.is_free(db, A, MEMBER) and await free.is_free(db, A, T1)
+
+
+@test
 async def rights_roles_protected_tainted_and_one_card_per_answer():
     db, svc, bot = await setup()
     weak = ctx(svc, bot, WEAK)

@@ -7,7 +7,7 @@ from fakes import FakeBot, FakeJobQueue, FakeMsg, FakeQuery, fake_user, make_db,
 from telegram.error import BadRequest
 
 from sodam import handlers, menu
-from sodam.greet import Greeter, clean_buttons, normalize_url, parse_buttons
+from sodam.greet import Greeter, clean_buttons, normalize_url, parse_buttons, with_names
 from sodam.settings import render
 
 test, run_all = runner()
@@ -63,6 +63,18 @@ def dm_sender(svc, bot):
 
 async def mod_details(db):
     return [r["detail"] for r in await db.recent_mod_log(CHAT, 50)]
+
+
+@test
+def with_names_does_not_double_prepend_when_name_placeholder_present():
+    # 泰山 2026-10-26: '• 사용자명 : {name}' 인데 맨 앞에 이름이 또 붙던 것
+    tpl = "泰山 에 오신 것을 환영합니다.\n• 사용자명 : {name}"
+    assert with_names(tpl, True) == tpl, "이미 {name} 이 있으면 앞에 또 안 붙여야 함"
+    assert with_names("{names} 환영!", True) == "{names} 환영!"       # {names} 도 그대로
+    # 이름 placeholder 가 하나도 없으면 태그 켜졌을 때만 앞에 붙임
+    assert with_names("환영합니다", True) == "{names} 환영합니다"
+    assert with_names("환영합니다", False) == "환영합니다"               # 태그 끄면 안 붙임
+    assert with_names("• 사용자명 : {name}", False) == "• 사용자명 : {name}"
 
 
 @test
