@@ -398,6 +398,75 @@ async def room_no(c: PanelCtx, spec) -> Screen:
     return Screen("그대로 뒀어요.", None)
 
 
+# ── 🕊️ 방 전체 자유 멤버 (한 번에) ──────────────────────────
+def _free_on(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "off", "0", "no", "해제", "끄기", "취소", "제외")
+    return bool(v)
+
+
+async def free_all_targets(svc, bot, chat_id: int) -> list[int]:
+    """이 방에서 소담이 본 멤버(봇·관리자 제외) 중 아직 자유가 아닌 user_id 목록."""
+    admins = await svc.perms.telegram_admins(bot, chat_id)
+    rows = await svc.db.member_names(chat_id)       # is_bot=0 멤버
+    free_now = frozenset(r["user_id"] for r in await free.members(svc.db, chat_id))
+    return [r["user_id"] for r in rows if r["user_id"] not in admins and r["user_id"] not in free_now]
+
+
+async def t_free_all(ctx: tools.ToolCtx, a: dict) -> str:
+    on = _free_on(a.get("on", True))
+    if not await may(ctx.svc.perms, ctx.bot, ctx.chat_id, ctx.caller.id, "restrict"):
+        return "요청한 관리자에게 텔레그램 '사용자 차단' 권한이 없어서 못 함. 그렇게 짧게 안내할 것."
+    if on:
+        targets = await free_all_targets(ctx.svc, ctx.bot, ctx.chat_id)
+        if not targets:
+            return "이 방 멤버가 이미 다 자유 멤버이거나, 소담이 아직 본 멤버가 없음 (관리자·봇은 원래 제외). 그렇게 안내할 것."
+        title = f"🕊️ 이 방 멤버 {len(targets)}명을 한 번에 자유 멤버로 지정"
+        body = "\n관리자·봇은 빼요. 앞으로 새로 들어올 사람은 포함 안 돼요 (그 사람은 따로 지정)."
+    else:
+        n = len(await free.members(ctx.svc.db, ctx.chat_id))
+        if not n:
+            return "이 방엔 자유 멤버가 없음. 그렇게 안내할 것."
+        title = f"🕊️ 이 방 자유 멤버 {n}명을 한 번에 전부 해제"
+        body = "\n모두 다시 자동 통제(도배·링크·금지어·잠금·캡차)를 받게 돼요."
+    kb = await cards.card(ctx.svc, ctx.caller.id, ctx.chat_id, "free_all", "freeall_ok", "freeall_no",
+                          {"on": on}, ok_label="✅ 실행")
+    await ctx.bot.send_message(ctx.chat_id, f"<b>{title}</b> 할까요?{body}\n(요청한 {esc(ctx.caller.first_name)}님만 "
+                                            "누를 수 있어요)", parse_mode="HTML", reply_markup=kb)
+    return "확인 버튼을 보냈음. " + DONE_NOTE
+
+
+async def freeall_ok(c: PanelCtx, spec) -> Screen:
+    on = spec.get("on") if isinstance(spec, dict) else None
+    if on is None:
+        return Screen(None, toast="만료된 카드예요.", alert=True)
+    if not await may(c.svc.perms, c.bot, c.cid, c.uid, "restrict"):     # 누를 때 다시 (그 사이 권한이 빠졌을 수도)
+        if await cards.claim(c.svc, spec, "no"):
+            await cards.pressed(c.svc, c.cid, c.uid, "free_all", spec, "⚠️ 전체 자유 멤버 못 함 (권한 없음)", done=False)
+        return Screen(f"⚠️ {no_right_text('restrict')}", None, toast="권한이 없어요", alert=True)
+    if not await cards.claim(c.svc, spec, "ok"):
+        return Screen(None, toast=cards.ALREADY)
+    if on:
+        targets = await free_all_targets(c.svc, c.bot, c.cid)
+        n = await free.add_many(c.svc.db, c.cid, targets, c.uid)
+        await c.svc.db.log_mod(c.cid, c.uid, None, "free", f"전체 지정 {n}명")
+        text = (f"🕊️ 이 방 멤버 {n}명을 자유 멤버로 지정했어요. 앞으로 도배·링크·금지어·잠금·캡차 같은 자동 통제를 안 받아요. "
+                "(관리자 권한은 아니에요 · 새로 들어올 사람은 따로)") if n else "새로 지정할 멤버가 없었어요 (이미 다 자유 멤버)."
+    else:
+        n = await free.clear_all(c.svc.db, c.cid)
+        await c.svc.db.log_mod(c.cid, c.uid, None, "free", f"전체 해제 {n}명")
+        text = f"🕊️ 자유 멤버 {n}명을 전부 해제했어요. 이제 다시 자동 통제를 받아요." if n else "해제할 자유 멤버가 없었어요."
+    await cards.pressed(c.svc, c.cid, c.uid, "free_all", spec, f"✅ 전체 자유 멤버 {'지정' if on else '해제'} {n}명", done=True)
+    return Screen(text, None, toast="처리했어요")
+
+
+async def freeall_no(c: PanelCtx, spec) -> Screen:
+    if not await cards.claim(c.svc, spec, "no"):
+        return Screen(None, toast=cards.ALREADY)
+    await cards.pressed(c.svc, c.cid, c.uid, "free_all", spec, "❌ 전체 자유 멤버 취소", done=False)
+    return Screen("그대로 뒀어요.", None)
+
+
 # ── 도구 등록 ──────────────────────────────────────────────
 NAMES = tools.NAMES_PARAM
 TOOLS = [
@@ -430,6 +499,11 @@ TOOLS = [
                 "count": {"type": "integer", "description": f"purge: 1~{PURGE_MAX}"},
                 "text": {"type": "string", "description": "notice: 올릴 공지 글 그대로"}},
                ["action"], t_room_control, Role.ADMIN, where="room"),
+    tools.Tool("free_all", "[관리자] 이 방 멤버를 **한 번에** 자유 멤버로 지정(on=true)하거나 전부 해제(on=false) — 확인 버튼 한 장. "
+               "'이 방 모든 사람/전부/다 프리(자유 멤버) 해줘' = on true, '전체 프리 해제/다 풀어' = on false. 관리자·봇은 원래 제외, "
+               "새로 들어올 사람은 포함 안 됨. 한 명만은 member_action(free/unfree).",
+               {"on": {"type": "boolean", "description": "true=전부 자유 멤버로 · false=자유 멤버 전부 해제"}},
+               [], t_free_all, Role.ADMIN, where="room"),
 ]
 for _t in TOOLS:
     tools.register_tool(_t)
@@ -437,3 +511,5 @@ menu.register_token_action("sched_ok", sched_ok, fresh=True)
 menu.register_token_action("sched_no", sched_no)
 menu.register_token_action("room_ok", room_ok, fresh=True)
 menu.register_token_action("room_no", room_no)
+menu.register_token_action("freeall_ok", freeall_ok, fresh=True)
+menu.register_token_action("freeall_no", freeall_no)

@@ -45,3 +45,27 @@ async def remove(db: DB, chat_id: int, user_id: int) -> bool:
 async def members(db: DB, chat_id: int) -> list:
     return await db._all("SELECT f.user_id, u.first_name, u.last_name, u.username FROM free_members f "
                          "LEFT JOIN users u ON u.user_id=f.user_id WHERE f.chat_id=? ORDER BY f.ts", (chat_id,))
+
+
+async def add_many(db: DB, chat_id: int, user_ids, by_id: int) -> int:
+    """여러 명을 한 번에 자유 멤버로 (이미 자유인 사람은 그대로 둠). 새로 더해진 수를 돌려준다."""
+    ids = [int(u) for u in dict.fromkeys(user_ids)]
+    if not ids:
+        return 0
+    before = frozenset(r["user_id"] for r in
+                       await db._all("SELECT user_id FROM free_members WHERE chat_id=?", (chat_id,)))
+    rows = [(chat_id, u, by_id, int(time.time())) for u in ids if u not in before]
+    if rows:
+        await db.atomic(lambda c: c.executemany(
+            "INSERT OR IGNORE INTO free_members(chat_id, user_id, by_id, ts) VALUES(?, ?, ?, ?)", rows))
+        db.uncache(("free_members", chat_id))
+    return len(rows)
+
+
+async def clear_all(db: DB, chat_id: int) -> int:
+    """이 방 자유 멤버 전부 해제. 지운 수를 돌려준다."""
+    n = (await db._one("SELECT COUNT(*) AS n FROM free_members WHERE chat_id=?", (chat_id,)))["n"]
+    if n:
+        await db._write("DELETE FROM free_members WHERE chat_id=?", (chat_id,))
+        db.uncache(("free_members", chat_id))
+    return int(n)
