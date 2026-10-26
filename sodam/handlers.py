@@ -900,11 +900,21 @@ async def _injection_blocked(context: ContextTypes.DEFAULT_TYPE, msg: Message, r
         return False
     await svc.db.flag_message(chat_id, msg.message_id)  # 이후 AI 맥락에서 제외
     text, kb = "🛡️ 그 요청은 들어드릴 수 없어요.", None
-    # 경고·제재는 그룹방에서만 (1:1 은 양수 ID), 자유 멤버는 경고 없이 거절만
-    if s["injection_warn"] and role < Role.ADMIN and chat_id < 0 and not await free.is_free(svc.db, chat_id, user.id):
-        warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id,
-                                    f"봇 조작 시도 ({reason.split(',')[0].strip()[:20] or '규칙 위반'})")
-        text, kb = text + "\n" + warned, unmute_kb(warned)
+    why = reason.split(",")[0].strip()[:20] or "규칙 위반"
+    # 경고·제재는 그룹방에서만 (1:1 은 양수 ID), 자유 멤버·관리자는 제외
+    if role < Role.ADMIN and chat_id < 0 and not await free.is_free(svc.db, chat_id, user.id):
+        if s.get("injection_lock"):     # 인젝션 시도 = 오너 잠금 뮤트 (무기한, 오너만 해제) — 오너 결정 2026-10-26
+            owner = next(iter(await svc.perms.owners()), bot.id)
+            try:
+                await svc.mod.mute(bot, chat_id, user.id, None, owner, f"봇 조작 시도 ({why})")
+                await ownerlock.add(svc.db, chat_id, user.id, "mute", owner)
+                await svc.db.log_mod(chat_id, owner, user.id, "owner_lock", f"인젝션 자동 잠금 ({why})")
+                text = "🛡️ 봇 조작(인젝션) 시도라 잠금 뮤트했어요. 운영자만 풀 수 있어요."
+            except TelegramError as e:
+                text = text + f"\n(잠금 뮤트는 못 했어요: {esc(e.message)} — 봇의 '사용자 차단' 권한 확인)"
+        elif s["injection_warn"]:
+            warned = await svc.mod.warn(bot, chat_id, user.id, user_name(user), bot.id, f"봇 조작 시도 ({why})")
+            text, kb = text + "\n" + warned, unmute_kb(warned)
     await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
     await svc.mod.report(bot, f"[인젝션 차단] chat {chat_id} / {esc(user_name(user))}({user.id}): "
                               f"{esc(request[:200])} / {esc(reason)}")
