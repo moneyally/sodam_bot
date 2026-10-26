@@ -559,6 +559,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   숫자·시각·@아이디 원문 그대로 + '찾을 낱말'.
 - **📏 채팅 집계 최소 글자 수** 방 설정 chat_min_chars(0=전부, 📊 화면 프리셋 2·3·5·10, 2026-10-10 뉴월드 '5글자부터'): 띄어쓰기·줄바꿈 빼고 셈, db.MIN_CHARS 를
   top_chatters·chat_totals·hourly_counts·stats.member_text 가 같이 씀 (.랭킹·.통계·하루 리포트·chat_stats). tests/test_chat_min_chars.py.
+- **⏰ 채팅 집계 제외 시간대** 방 설정 chat_quiet_hours(기본 off, 📊 화면 프리셋 새벽1-7·0-6·밤23-7·2-8, 2026-10-26 뉴월드 '새벽 1~7시 채팅 집계 X'): 그 시간대(한국 시각, 끝 미포함) 글은 순위·통계·리포트·미니앱에서 안 셈. 부품은 `db.CountRule.quiet` + `count_filter` 끝에 `CASE WHEN 시작<끝 THEN 시 in [시작,끝) ELSE in [시작,24)∪[0,끝)` (자정 넘김 23-7 지원), 한국시 = `strftime('%H', ts+db.KST_SEC)`. **count_filter 쓰는 모든 쿼리가 `*rule.args` 를 같은 자리에 써서 자동 적용**(순위·.나·통계·over·my_place·chatrank standings·미니앱). 설정 파싱 `stats.parse_quiet`('1-7'→(1,7)·'off'/''→None)·검증 `valid_quiet`. 글은 안 지움(집계만 뺌). tests/test_chat_min_chars.py quiet_hours_* · 뮤테이션 2개.
 - 채팅 집계 chat_stats name('나'·이름) = 그 기간 수·순위 (상위 5명만 줘서 랭킹 밖 사람을 0개로 지어내던 것).
   **over=N** = 'N개 이상(넘는) 친 사람 몇 명' 을 코드가 바로 셈(`stats.over_text`, 참여 수·해당 사람 이름, min_chars·no_repeat 반영) — 멤버도 되고 run_code 불필요 (2026-10-20 뉴월드 '100개 넘는 사람 몇명' → 소담이 run_code 로 세려다 멤버 권한에 막힘). tests/test_chat_min_chars.py over_*.
 - 재시작: 실행 중 이어 보낸 말도 ai_queue 줄에 덧붙임(aiqueue.append) · 다시 보낸 답은 실제 글로 기록 + ai_turns. 1.5초 몰아 받기·사진 3분 기억·끝난 게임 10분은

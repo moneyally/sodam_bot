@@ -1,17 +1,20 @@
 """📏 채팅 집계 최소 글자 수 (방 설정 chat_min_chars, sodam/stats.py · db.MIN_CHARS). 2026-10-10 뉴월드 '5글자부터만 세야 하는데 그 아래도 셈'.
 python tests/run_all.py chat_min_chars"""
 import time
+from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from fakes import fake_user, make_db, make_svc, runner
 
 from sodam import stats
+from sodam.db import CountRule
 from sodam.panels import reports as P
 
 test, run_all = runner()
 TZ = ZoneInfo("Asia/Seoul")
 CHAT = -1004444
+QCHAT = -1004445
 
 
 async def setup():
@@ -26,6 +29,42 @@ async def setup():
     for i, t in enumerate(["반갑습니다 대표님", "공지 확인했어요", "다섯글자다"]):
         await db.log_message(CHAT, 2, 200 + i, t, ts=now - 60)
     return db
+
+
+@test
+async def quiet_hours_excluded_from_count():
+    """새벽 등 특정 시간대(한국 시각) 글은 집계에서 뺌 (2026-10-26 뉴월드 '새벽 1~7시 X')."""
+    assert stats.parse_quiet("1-7") == (1, 7) and stats.parse_quiet("23-7") == (23, 7)
+    assert stats.parse_quiet("off") is None and stats.parse_quiet("") is None and stats.parse_quiet("5-5") is None
+    assert stats.valid_quiet("1-7") == "1-7" and stats.valid_quiet("없음") == "off"
+    for bad in ("99-7", "1", "abc"):
+        try:
+            stats.valid_quiet(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+
+    db = await make_db()
+    await db.ensure_chat(QCHAT, "밤방")
+    await db.upsert_user(fake_user(1, "밤이"))
+    base = datetime(2026, 10, 20, 0, 0, tzinfo=TZ)                 # 월요일 0시 KST
+    for i, hour in enumerate([0, 2, 5, 7, 9, 23]):                # 한국 시각 그 시에 글 하나씩
+        await db.log_message(QCHAT, 1, 300 + i, f"글 {hour}시 내용입니다", ts=int(base.replace(hour=hour, minute=30).timestamp()))
+    since, until = int(base.timestamp()), int(base.replace(hour=23, minute=59, second=59).timestamp()) + 1
+
+    async def top(rule):
+        rows = await db.top_chatters(QCHAT, since, 10, until, rule)
+        return rows[0]["n"] if rows else 0
+    assert await top(CountRule()) == 6                            # 제외 없음 = 전부
+    assert await top(CountRule(quiet=(1, 7))) == 4                 # 2·5시 빠짐 (0·7·9·23 남음)
+    assert await top(CountRule(quiet=(23, 7))) == 2               # 자정 넘김: 23·0·2·5 빠짐 (7·9 남음)
+
+    await db.set_setting(QCHAT, "chat_quiet_hours", "1-7")        # 설정 연동
+    rule = await stats.min_chars(db, QCHAT)
+    assert rule.quiet == (1, 7) and await top(rule) == 4
+    assert "1~7시 빼고" in stats._rule(rule)
+    await db.set_setting(QCHAT, "chat_quiet_hours", "off")
+    assert (await stats.min_chars(db, QCHAT)).quiet is None and await top(await stats.min_chars(db, QCHAT)) == 6
 
 
 @test

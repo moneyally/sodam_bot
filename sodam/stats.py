@@ -1,4 +1,5 @@
 """채팅 집계 문구. 명령어·AI 도구·일일 리포트가 같이 쓴다."""
+import re
 from datetime import datetime
 
 from .db import DB, CountRule, count_filter
@@ -13,18 +14,46 @@ register_setting("chat_min_chars", 0, "채팅 집계 최소 글자 수 (0=전부
 register_setting("chat_no_repeat", False, "채팅 집계 도배 빼기")
 
 
+# 2026-10-26 뉴월드 '새벽 1~7시 채팅 집계 X' — 이 시간대(한국 시각) 글은 순위·통계·리포트·미니앱에서 안 셈. '' = 없음.
+_QUIET = re.compile(r"\s*(\d{1,2})\s*[-~]\s*(\d{1,2})\s*")
+
+
+def parse_quiet(v) -> "tuple[int, int] | None":
+    """'1-7' → (1, 7) (한국 시각, 끝 미포함). 빈 값·형식 오류·같은 시각 = None (제외 없음)."""
+    m = _QUIET.fullmatch(v) if isinstance(v, str) else None
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    return (a, b) if 0 <= a <= 23 and 0 <= b <= 23 and a != b else None
+
+
+def valid_quiet(v) -> str:
+    """설정 검사: 'off'(끔) 또는 '1-7' 꼴. 빈 값·'없음'·'끔'·'0' = off. parse_quiet 가 'off'·빈 값은 None 으로 읽음."""
+    s = str(v or "").strip()
+    if not s or s in ("없음", "끔", "off", "0"):
+        return "off"
+    q = parse_quiet(s)
+    if not q:
+        raise ValueError("시간대는 '1-7' 처럼 써 주세요 (0~23시, 끝 시각 미포함, 같은 시각 X)")
+    return f"{q[0]}-{q[1]}"
+
+
+register_setting("chat_quiet_hours", "", "채팅 집계 제외 시간대 (예: 1-7, 빈 값=없음)", validator=valid_quiet)
+
+
 async def min_chars(db: DB, chat_id: int) -> CountRule:
-    """이 방 채팅 집계 거르기 (최소 글자 수 + 도배 빼기)."""
+    """이 방 채팅 집계 거르기 (최소 글자 수 + 도배 빼기 + 제외 시간대)."""
     s = await db.get_settings(chat_id)
     try:
         n = max(0, int(s.get("chat_min_chars") or 0))
     except (TypeError, ValueError):
         n = 0
-    return CountRule(n, bool(s.get("chat_no_repeat")))
+    return CountRule(n, bool(s.get("chat_no_repeat")), parse_quiet(s.get("chat_quiet_hours")))
 
 
 def _rule(r: CountRule) -> str:
-    bits = ([f"{r.min_chars}글자 이상만"] if r.min_chars > 0 else []) + (["도배 빼고"] if r.no_repeat else [])
+    bits = ([f"{r.min_chars}글자 이상만"] if r.min_chars > 0 else []) + (["도배 빼고"] if r.no_repeat else []) \
+        + ([f"{r.quiet[0]}~{r.quiet[1]}시 빼고"] if r.quiet else [])
     return f" ({' · '.join(bits)})" if bits else ""
 
 

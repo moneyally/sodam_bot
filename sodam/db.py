@@ -211,15 +211,21 @@ MIN_CHARS = "AND (?<=0 OR length(replace(replace(text,' ',''),char(10),''))>=?)"
 REPEAT_SEC = 600
 
 
+KST_SEC = 32400      # 집계 시간대 기준 = 한국 (봇 tz 는 항상 Asia/Seoul). 시간대 빼기에서 ts → 한국 시(時) 변환용
+
+
 class CountRule(NamedTuple):
-    """채팅 집계 거르기 (방 설정 chat_min_chars · chat_no_repeat). no_repeat = 같은 사람이 같은 글을 10분 안에 또 쓴 건 1번만
-    (2026-10-11 FOX '채팅집계 도배 X'). 매개변수는 count_filter(...) 뒤에 rule.args."""
+    """채팅 집계 거르기 (방 설정 chat_min_chars · chat_no_repeat · chat_quiet_hours). no_repeat = 같은 사람이 같은 글을
+    10분 안에 또 쓴 건 1번만 (2026-10-11 FOX). quiet = (시작시, 끝시) 한국 시각, 이 시간대 글은 집계에서 뺌
+    (2026-10-26 뉴월드 '새벽 1~7시 집계 X'). 매개변수는 count_filter(...) 자리에 rule.args."""
     min_chars: int = 0
     no_repeat: bool = False
+    quiet: "tuple[int, int] | None" = None
 
     @property
     def args(self) -> tuple:
-        return (self.min_chars, self.min_chars, int(self.no_repeat))
+        s, e = self.quiet if self.quiet else (0, 0)
+        return (self.min_chars, self.min_chars, int(self.no_repeat), 1 if self.quiet else 0, s, e, s, e, s, e)
 
 
 def as_rule(rule) -> CountRule:
@@ -227,10 +233,13 @@ def as_rule(rule) -> CountRule:
 
 
 def count_filter(t: str = "messages") -> str:
-    """집계 WHERE 뒤에 붙일 조건 (t = messages 표 이름·별명). 반복 검사는 (chat_id, user_id, ts) 색인으로."""
+    """집계 WHERE 뒤에 붙일 조건 (t = messages 표 이름·별명). 반복 검사는 (chat_id, user_id, ts) 색인으로.
+    끝: 시간대 빼기 — 한국 시가 [시작, 끝) 안이면 제외 (시작<끝 = 그 사이, 시작>끝 = 자정 넘김)."""
+    h = f"CAST(strftime('%H', {t}.ts+{KST_SEC}, 'unixepoch') AS INTEGER)"
     return (MIN_CHARS.replace("text", f"{t}.text") +
             f" AND (?=0 OR NOT EXISTS (SELECT 1 FROM messages rp WHERE rp.chat_id={t}.chat_id AND rp.user_id={t}.user_id "
-            f"AND rp.ts>={t}.ts-{REPEAT_SEC} AND rp.ts<={t}.ts AND rp.id<{t}.id AND rp.text={t}.text))")
+            f"AND rp.ts>={t}.ts-{REPEAT_SEC} AND rp.ts<={t}.ts AND rp.id<{t}.id AND rp.text={t}.text))"
+            f" AND (?=0 OR NOT (CASE WHEN ?<? THEN ({h}>=? AND {h}<?) ELSE ({h}>=? OR {h}<?) END))")
 
 
 def _until(until: int | None) -> int:
