@@ -1007,7 +1007,8 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
                                      reply_to_msg_id=msg.message_id if group else None,
                                      reply_to_user=user.id if group else None))
     asked = "\n".join([request, *steer.taken])   # 실행 중 이어 보낸 말까지 (한 답이 둘 다 반영)
-    await memory.record_turn(svc.db, chat_id, user.id, via, asked, out, sent.message_id)  # 이어 말하기·'아까 그거'용
+    await memory.record_turn(svc.db, chat_id, user.id, via, asked, out, sent.message_id,  # 이어 말하기·'아까 그거'용
+                             shared=bool(s.get("ai_memory_shared", True)))  # 끈 방 턴은 딴 방 맥락에 안 뜸 (대칭)
 
 
 # ── 버튼 ──────────────────────────────────────────────────

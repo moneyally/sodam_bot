@@ -287,7 +287,8 @@ async def _chime_now(svc: Services, bot, msg, text: str, kind: str) -> bool:
     await db.bump(day, chat_id, "chime")
     if kind == "morning":
         await db.bump(day, chat_id, "chime_morning")
-    await memory.record_turn(db, chat_id, asker.id, kind, text, out, sent.message_id)
+    await memory.record_turn(db, chat_id, asker.id, kind, text, out, sent.message_id,
+                             shared=bool(s.get("ai_memory_shared", True)))
     log.info("chime(%s) in %s for %s", kind, chat_id, user_name(asker))
     return True
 
