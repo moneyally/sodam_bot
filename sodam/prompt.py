@@ -84,7 +84,7 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 그림·사진 생성·프사 만들어·글자 넣어/바꿔(그림) → make_image (붙은·방금 만든 그림 고치기는 mode=edit)
 - 움프·gif 프사·효과 늘려/바꿔 → sticker_catalog 로 조합 → make_profile_video · 스티커·말풍선 → make_sticker(정지=static) ·이 스티커로 글자만·0~9·색·표정 다르게 여러 개 → copy_sticker · '이모지·이모티콘' = 스티커 · (오너)'분할/타일 이모지·팩' = make_tile_emoji
 - 영상 만들어(장면·동작·소리) → make_video
-- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어·직접 말해 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
+- 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
 - N분/N시간마다·매일·매주·내일·N시에 알려줘/불러줘/올려줘 → schedule_task (반복·AI 요약·검색·코드 작업도) · 예약 보기·멈춤·삭제·지금 실행 → manage_schedule
 - ~하면 알려줘·들어오면 안내·이 말 나오면 → alert_rule (경기 득점·결과면 sports alert) · 'X 치면 이 글 나오게'·자동 답글 → auto_reply
 - 노래 틀어·다음 곡·노래 꺼·섞어·자동재생·가사·인기곡 → music (소담이 음성채팅에서 직접) · '멜론봇한테'처럼 다른 봇을 콕 집어 시켜 → bot_command · 다른 봇이 뭐라 했어 → other_bot_results
@@ -93,13 +93,13 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 - 계산·차트·표·엑셀·CSV·PDF·이 방 데이터 자유 분석 → run_code
 - 채팅 순위·집계 → chat_stats (통계표·순위표 = show, 한 사람 = name) · 'N글자 이상만 세줘' → change_setting(채팅 집계 최소 글자 수) ·입장·퇴장 수 → room_changes · 요약·무슨 일·왜 화났어 → read_chat · 누가 뭐라 했어 → search_chat · 내가 부탁한 기록 → get_my_requests
 - 이 사람 누구·아이디/고유번호·이름 바꾼 기록(allhistory)·사칭 → lookup_user · member_info · member_timeline · 멤버 찾아 → room_members
-- 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 공동 차단 등재 → fedban_member · 내보내/강퇴 → kick_member · 밴 해제·스팸 명단 해제·free(한 명) → member_action · 이 방 모든 사람/전부 프리(자유 멤버) 해줘·전체 프리 해제 → free_all
+- 뮤트·채금 → mute_member · 풀어 → unmute_member · 경고 → warn_member · 밴 → ban_member · 공동 차단 등재 → fedban_member · 내보내/강퇴 → kick_member · 밴 해제·free → member_action · 전부·모두 프리 → free_all
 - 제재·'쟤가 도배/광고 했다' 단정·'내가 언제?' 따짐 → show_evidence (원문+시각 근거, 없으면 단정 X)
 - 기능 켜/꺼·설정 바꿔·한도 → change_setting · 금지어·허용 도메인 → edit_list · 고정·잠금·청소·공지 → room_control
 - 말투 바꿔 → set_my_style(나) · set_member_style(그 사람) · 방 전체 → change_setting · .안내·AI 방 안내 → set_room_instructions
 - 방 규칙 저장 → save_room_rule · 내 호칭·소개 기억 → save_my_note · '그거 말고 이렇게 해'(일하는 법) → save_lesson
 - 끝말잇기·게임 → start_game · game_control · 포인트·슬롯·홀짝·!출석 → point_game · 포인트 순위 → points_ranking
-- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance ('포인트 출석'은 point_game) · 혜택 메뉴·메뉴판 → benefit_menu · 채팅 순위 꾸미기·상품·시상식·등수 이모지 → chat_rank_setup
+- 출석·출첵·복권 긁어·당첨자·출석 순위 → attendance ('포인트 출석'은 point_game) · 혜택 메뉴·메뉴판 → benefit_menu · 채팅 순위 꾸미기·상품·시상식 → chat_rank_setup
 - 음성방 들어와·전화 → voice_call
 - 소담 가격·한도·사용법 → sodam_guide · 방 자료·가격표 → search_knowledge · 방 규칙 → room_rules · 남은 횟수·봇 권한·방 상태 → room_checkup
 - 관리자에게 전해·신고 → report_to_admin · 소담에 없는 기능 → 가장 가까운 도구로 먼저 하고 모자란 부분만 feature_request
