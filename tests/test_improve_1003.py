@@ -60,6 +60,26 @@ async def admin_small_talk_after_heavy_goes_light_and_no_reasoning():
 
 
 @test
+async def simple_do_requests_skip_reasoning_analysis_keeps_it():
+    # 2026-10-26 '느리다': 프리해줘·설정바꿔 같은 단순 실행은 추론 빼서 빠르게, 분석·여러 단계만 추론
+    assert "do" not in route.THINK_WHY and "remind" not in route.THINK_WHY
+    assert {"think", "chain", "dm_manage"} <= route.THINK_WHY
+    assert route.decide(route.Req("처리해줘", Role.ADMIN), light_model=LIGHT).why == "do"   # 여전히 heavy·why=do
+    old = fast_timers()
+    try:
+        # 관리자 '처리해줘'(단순 실행) → 추론 호출하면 터지게 (think=None) → 안 터져야 통과
+        llm = ScriptedLLM([reply("처리했어")])
+        llm.think = None
+        r = await _room(llm, think="auto")
+        r.llm.script = [reply("처리했어")]
+        await r.say(BOSS, "소담아 처리해줘")
+        run = await r.db._one("SELECT purpose FROM agent_runs ORDER BY id DESC LIMIT 1")
+        assert run["purpose"] == "agent:admin", run["purpose"]      # :think 없음 = 추론 안 함
+    finally:
+        restore_timers(old)
+
+
+@test
 async def sanction_refusal_tells_the_reason():
     r = Room()
     await r.open(admins=(BOSS.id,), settings={"captcha_enabled": False})

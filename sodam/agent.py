@@ -30,6 +30,10 @@ RUN_USD_CAP = 0.15     # 한 실행(도구 안 AI 포함, 그림·영상 만들�
 MAKES = frozenset({"make_image", "make_sticker", "make_profile_video", "run_code", "copy_sticker"})
 MEDIA_DEADLINE = 90
 DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금까지로 답 (OpenAI Agents SDK max_turns 같은 벽시계 상한 — 단톡방은 빨리)
+# 한 번의 모델 호출(스트리밍 추론 포함) 벽시계 상한. DEADLINE 은 라운드 '사이'에서만 재므로,
+# 한 호출이 매달리면 못 끊었다 (실측 2026-10-26: 스트리밍 추론 한 호출이 783초 — OpenAI timeout=60 은 조각 간격만).
+# 정상 추론은 이 안에 끝남 → 넘으면 그 호출을 끊고 지금까지로 답한다 (asyncio.wait_for).
+CALL_CAP = 90
 TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
 MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
@@ -637,6 +641,10 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                                   purpose=call_purpose, chat_id=ctx.chat_id, model=model, effort=effort,
                                   allowed=restrict, cache_key=ts.key(tag), cache_tail=tail, parallel=True)
 
+    async def capped(tool_choice: str = "auto"):
+        """모델 호출 하나에 벽시계 상한 (CALL_CAP). 넘으면 끊음 — 스트리밍 추론이 매달려 783초 가던 것 방지."""
+        return await asyncio.wait_for(call(tool_choice), CALL_CAP)
+
     def inject() -> None:
         """모델을 부르기 직전: 실행 중 이어 보낸 말을 새 user 메시지로 (nonce 태그 안 데이터, 멤버 글과 같게)."""
         for text in steer.drain() if steer is not None else ():
@@ -662,7 +670,12 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
             run.event("cap", kind="time", round=step)
             break
         inject()
-        msg = await call()
+        try:
+            msg = await capped()
+        except (asyncio.TimeoutError, TimeoutError):   # 한 호출이 CALL_CAP 넘게 매달림 → 지금까지로 마무리
+            log.warning("에이전트 모델 호출 상한 %d초 (chat=%s, %d라운드) → 지금까지로 답", CALL_CAP, ctx.chat_id, step)
+            run.event("cap", kind="call", round=step)
+            break
         calls = [c for c in (msg.tool_calls or []) if c.type == "function"]
         if banter and calls:   # 말싸움 길엔 실을 도구가 없음 — 무엇이든 부르면 진짜 일이 섞인 것 → 도구 다 가진 큰 모델이 처음부터
             raise _Escalate("banter " + ", ".join(c.function.name for c in calls)[:120], done)
@@ -760,7 +773,11 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     # 그래도 남으면 steer.pending 에 남아 handlers 가 새 실행으로)
     for i in range(1 + STEER_FINAL):
         inject()
-        text = (await call("none")).content or ""
+        try:
+            text = (await capped("none")).content or ""
+        except (asyncio.TimeoutError, TimeoutError):   # 마무리 호출까지 매달리면 짧게 돌려보냄 (매달린 채 안 끝나게)
+            run.event("cap", kind="call_final")
+            return "" if used else "지금 좀 밀려서 늦었어 ㅠㅠ 다시 한 번 말해줄래?"
         if steer is None or not steer.pending or i == STEER_FINAL:
             return text
         messages.append({"role": "assistant", "content": text})
