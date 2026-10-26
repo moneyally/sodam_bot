@@ -57,12 +57,19 @@ _HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}
 # tg:// 는 채널·그룹·사용자 이동만 (proxy·socks 처럼 설정을 바꾸는 링크 금지)
 _TG = re.compile(r"^tg://(?:resolve|join|openmessage|privatepost|user)(?:\?[A-Za-z0-9_.=&%+-]{0,400})?$")
 _LINE = re.compile(r"^(.*\S)\s+-\s+(\S+)$")
+# URL 버튼 색 (Bot API 9.4 style) — 줄 맨 앞에 이 이모지를 붙이면 그 색 (brand.py 와 같은 이름)
+BTN_STYLES = ("primary", "success", "danger")
+BTN_COLORS = {"🔵": "primary", "🟦": "primary", "🟢": "success", "🟩": "success", "🔴": "danger", "🟥": "danger"}
+
+
+def _valid_style(v: Any) -> str | None:
+    return v if v in BTN_STYLES else None
 
 
 def _render_buttons(value: Any) -> str:
     """`.설정 전체` 표시용 (값이 [글자, 주소] 목록이라 기본 표시로는 안 됨)."""
     good = clean_buttons(value)
-    return ", ".join(f"{t} ({u})" for t, u, _ in good) if good else "(없음)"
+    return ", ".join(f"{t} ({u})" for t, u, _, _ in good) if good else "(없음)"
 
 
 register_setting("greet_media_type", "", "인사 미디어 종류")
@@ -124,16 +131,17 @@ def _valid_emoji_id(icon: Any) -> str | None:
     return icon if isinstance(icon, str) and icon.isdigit() and 1 <= len(icon) <= 25 else None
 
 
-def clean_buttons(value: Any) -> list[tuple[str, str, str | None]]:
-    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). (글자, 주소, 프리미엄이모지id|None). 틀린 항목은 조용히 뺀다.
-    옛 값([글자, 주소])도 그대로 읽는다 (icon 없음)."""
+def clean_buttons(value: Any) -> list[tuple[str, str, str | None, str | None]]:
+    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). (글자, 주소, 프리미엄이모지id|None, 색|None). 틀린 항목은 조용히 뺀다.
+    옛 값([글자, 주소]·[글자, 주소, 이모지])도 그대로 읽는다 (없는 칸은 None)."""
     out = []
     for item in value if isinstance(value, list) else []:
         if isinstance(item, (list, tuple)) and len(item) >= 2:
             text, url = clean_button_text(item[0]), normalize_url(item[1])
             icon = _valid_emoji_id(item[2]) if len(item) >= 3 else None
+            style = _valid_style(item[3]) if len(item) >= 4 else None
             if text and url:
-                out.append((text, url, icon))
+                out.append((text, url, icon, style))
     return out[:MAX_BUTTONS]
 
 
@@ -180,13 +188,18 @@ def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
         if hit:
             emo_len, icon = hit
             ln = ln[:ls] + ln[ls + emo_len:]         # 맨 앞 이모지 글자 제거 → 버튼 글자엔 안 남김
-        rows.append((ln.strip(), icon))
+        text_part, style = ln.strip(), None
+        for mark, st in BTN_COLORS.items():          # 줄 맨 앞 색 이모지(🔵🟢🔴) → 버튼 색, 글자엔 안 남김
+            if text_part.startswith(mark):
+                style, text_part = st, text_part[len(mark):].strip()
+                break
+        rows.append((text_part, icon, style))
     if not rows:
         return [], "한 줄에 하나씩 <code>버튼 글자 - https://주소</code> 로 보내주세요."
     if len(rows) > MAX_BUTTONS:
         return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 줄: {len(rows)}개)"
     out = []
-    for i, (line, icon) in enumerate(rows, 1):
+    for i, (line, icon, style) in enumerate(rows, 1):
         m = _LINE.match(line)
         where = f"{i}번째 줄 <code>{esc(line[:40])}</code>"
         if not m:
@@ -196,7 +209,12 @@ def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
             return [], f"{where}: 버튼 글자는 1~{MAX_BUTTON_TEXT}자로 써주세요."
         if not url:
             return [], f"{where}: 주소는 <code>https://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요."
-        out.append([text, url, icon] if icon else [text, url])
+        if style:
+            out.append([text, url, icon, style])       # 색 있으면 4칸 (icon 없으면 None)
+        elif icon:
+            out.append([text, url, icon])
+        else:
+            out.append([text, url])
     return out, None
 
 
@@ -219,9 +237,9 @@ def button_rows(s: dict, icons: bool = True) -> list[list[InlineKeyboardButton]]
     """버튼 앞 프리미엄 이모지(icon_custom_emoji_id)는 PTB 21 이 모르는 칸 → api_kwargs 로 그대로 실림 (brand.py 와 같은 방식).
     봇 주인이 프리미엄이 아니면 텔레그램이 거절 → send_greeting 이 icons=False 로 다시 보냄."""
     out = []
-    for t, u, icon in clean_buttons(s.get("greet_buttons")):
+    for t, u, icon, style in clean_buttons(s.get("greet_buttons")):
         extra = {"icon_custom_emoji_id": icon} if icons and icon else None
-        out.append([InlineKeyboardButton(t, url=u, api_kwargs=extra)])
+        out.append([InlineKeyboardButton(t, url=u, style=style or None, api_kwargs=extra)])
     return out
 
 
@@ -349,7 +367,7 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
     미디어는 mediastore 로 — 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림."""
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     extra = extra_rows or []
-    has_icon = any(icon for _, _, icon in clean_buttons(s.get("greet_buttons")))
+    has_icon = any(icon for _, _, icon, _ in clean_buttons(s.get("greet_buttons")))
 
     def kb(use_icons: bool):
         rows = button_rows(s, icons=use_icons) + extra
