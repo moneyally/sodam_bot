@@ -304,6 +304,55 @@ def is_due(row, now_ts: int, tz) -> bool:
     return now_ts - (row["last_sent"] or 0) >= interval_min * 60
 
 
+_EMOJI_TAG = re.compile(r'<tg-emoji emoji-id="([^"]+)">(.*?)</tg-emoji>', re.S)
+
+
+async def _emoji_sendable(bot: Bot, chat_id: int, html: str) -> bool:
+    """html 한 덩이를 조용히 보냈다 지워서 '봇이 보낼 수 있는지' 확인 (못 보내는 커스텀 이모지 탐지용)."""
+    try:
+        m = await bot.send_message(chat_id, html, parse_mode="HTML", disable_notification=True)
+    except BadRequest:
+        return False                       # Document_invalid 등 = 못 보냄
+    except TelegramError:
+        return True                        # 네트워크·1:1 막힘 등 = 판정 불가 → 통과로 봄
+    try:
+        await bot.delete_message(chat_id, m.message_id)
+    except TelegramError:
+        pass
+    return True
+
+
+async def unsendable_emojis(bot: Bot, test_chat: int | None, text_html: str) -> list[tuple[str, int]]:
+    """공지 글에서 '봇이 못 올리는' 커스텀 이모지를 (보이는 글자, 줄번호) 목록으로. 없으면 [].
+    getCustomEmojiStickers 로는 못 거른다(삭제·특수 이모지도 조회는 '살아있음' 으로 나옴, 2026-10-27 실측:
+    죽은 💎 가 조회엔 있는데 send 는 Document_invalid) → 관리자 1:1 로 실제 보냈다 지워서 확인."""
+    pairs = _EMOJI_TAG.findall(text_html or "")
+    if not pairs or not test_chat:
+        return []
+    uniq: dict[str, str] = {}
+    for eid, ch in pairs:
+        uniq.setdefault(eid, ch)
+    whole = "".join(f'<tg-emoji emoji-id="{i}">{c}</tg-emoji>' for i, c in uniq.items())
+    if await _emoji_sendable(bot, test_chat, whole):
+        return []                          # 통째로 OK → 문제 없음 (대부분 여기서 끝, 호출 1번)
+    bad = {i for i, c in uniq.items()
+           if not await _emoji_sendable(bot, test_chat, f'<tg-emoji emoji-id="{i}">{c}</tg-emoji>')}
+    if not bad:
+        return []                          # 개별론 다 되는데 통째 안 됨(개수 등) → 여기선 못 집음
+    lines = html_plain(text_html).split("\n")
+    out: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for eid in bad:
+        ch = uniq[eid]
+        if ch in seen:
+            continue
+        seen.add(ch)
+        ln = next((n for n, line in enumerate(lines, 1) if ch and ch in line), 0)
+        out.append((ch, ln))
+    out.sort(key=lambda x: x[1])
+    return out
+
+
 def render(title: str, text: str, *, has_media: bool, rules: str, tz, fmt: str = "") -> str:
     """HTML 본문. 사용자 입력은 전부 escape 하고 자리표시자만 치환.
     길이는 escape '전' 글자를 줄여서 맞춘다 (escape 후에 자르면 &amp; 같은 기호가 반쯤 잘려 발송이 실패함).
@@ -542,6 +591,24 @@ class Announcer:
         sent = await bot.send_message(draft.ui_chat_id, text, parse_mode="HTML", reply_markup=markup)
         draft.cleanup.append(sent.message_id)
 
+    async def _warn_bad_emoji(self, bot: Bot, draft: Draft) -> None:
+        """내용에 '봇이 못 올리는 커스텀 이모지'(삭제됐거나 특수 이모지)가 있으면 어느 이모지·몇 번째 줄인지
+        콕 집어 알려 준다 (2026-10-27 오너: 예약공지가 Document_invalid 로 조용히 씹히던 걸, 원인을 사람 말로).
+        막지는 않음 — 발송 땐 글자로 폴백되니, 경고만 하고 다음 단계로 진행. 경고는 지우지 않고 남긴다."""
+        if draft.fmt != "html":
+            return
+        try:
+            bad = await unsendable_emojis(bot, draft.user_id, draft.text)
+        except TelegramError:
+            return
+        if not bad:
+            return
+        lst = "\n".join(f"• {ch} — {ln}번째 줄" if ln else f"• {ch}" for ch, ln in bad)
+        await bot.send_message(draft.ui_chat_id,
+                               "⚠️ <b>텔레그램이 못 올리는 이모지</b>가 있어요 (삭제됐거나 봇이 못 쓰는 특수 이모지):\n"
+                               f"{lst}\n\n이대로 올리면 그 이모지는 <b>글자로 바뀌어</b> 나가요. 원래 모양으로 올리려면 "
+                               "그 이모지를 빼거나 키보드 이모지로 바꿔서 <b>내용을 다시 보내주세요</b>.", parse_mode="HTML")
+
     async def start(self, bot: Bot, msg: Message, edit_row=None) -> None:
         """방 안에서 .예약공지 만들기/수정 (대화도 그 방에서)."""
         chat_id = msg.chat_id
@@ -652,6 +719,7 @@ class Announcer:
                                                 f"{' (사진·영상 설명은 텔레그램 제한이 1024자예요)' if media_id else ''}.")
                     return True
                 draft.text = self._take(draft, text, rich_html(msg), "text")
+                await self._warn_bad_emoji(bot, draft)   # 못 올리는 커스텀 이모지면 어느 줄인지 콕 집어 알림 (막진 않음)
                 if media_id:   # 사진에 설명을 붙여 한 번에 → 사진 단계 건너뜀 (글만이면 지금 붙은 사진은 다음 단계에서 정함)
                     draft.media_type, draft.media_id = media_type, media_id
                     mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본

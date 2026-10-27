@@ -11,7 +11,7 @@ from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, run
 from telegram import MessageEntity
 from telegram.error import BadRequest, NetworkError
 
-from sodam import cron
+from sodam import announce as announce_mod, cron
 from sodam.panels import announce as panel
 
 test, run_all = runner()
@@ -289,6 +289,61 @@ async def badrequest_not_misreported_as_network_error():
     assert any("연결 일시 오류" in s and "Connection reset" in s for s in seen), seen   # 진짜 네트워크
     assert not any("Message is not modified" in s for s in seen), seen                  # 흔한 무해 → 조용히
     assert not any("연결 일시 오류" in s and "Document_invalid" in s for s in seen), seen  # 오분류 X
+
+
+@test
+async def unsendable_emoji_pinpointed_by_line():
+    """못 올리는 커스텀 이모지(삭제·특수)를 '어느 글자·몇 번째 줄'인지 콕 집는다 (2026-10-27 오너 요청).
+    getCustomEmojiStickers 로는 못 거르니(조회는 됨) 실제 발송 테스트로 (죽은 id 는 send 거부)."""
+    DEAD = "5388803751559586023"
+    GOOD = "5368324170671202286"
+
+    class PickyBot(FakeBot):
+        async def send_message(self, chat_id, text, **kw):
+            if f'emoji-id="{DEAD}"' in (text or ""):
+                raise BadRequest("Document_invalid")
+            return await super().send_message(chat_id, text, **kw)
+
+        async def delete_message(self, chat_id, message_id):
+            return True
+
+    bot = PickyBot()
+    good = f'<tg-emoji emoji-id="{GOOD}">🔥</tg-emoji>'
+    dead = f'<tg-emoji emoji-id="{DEAD}">💎</tg-emoji>'
+    html = f"첫 줄 {good}\n둘째 줄\n{dead} 셋째 줄 수수료"
+    bad = await announce_mod.unsendable_emojis(bot, 777, html)
+    assert bad == [("💎", 3)], bad                      # 💎 가 3번째 줄 — 콕 집음
+    # 전부 멀쩡하면 빈 목록 (호출 1번으로 통과)
+    assert await announce_mod.unsendable_emojis(bot, 777, f"줄1 {good}\n줄2 {good}") == []
+    # test_chat 없거나 커스텀 이모지 없으면 검사 안 함
+    assert await announce_mod.unsendable_emojis(bot, None, html) == []
+    assert await announce_mod.unsendable_emojis(bot, 777, "그냥 글자 💎 (키보드 이모지)") == []
+
+
+@test
+async def wizard_warns_which_emoji_blocks():
+    """마법사 2/7 내용에 못 올리는 이모지가 있으면 어느 줄인지 경고 (막지는 않고 다음 단계로)."""
+    from sodam import announce as amod
+    DEAD = "5388803751559586023"
+
+    class PickyBot(FakeBot):
+        async def send_message(self, chat_id, text, **kw):
+            if f'emoji-id="{DEAD}"' in (text or ""):
+                raise BadRequest("Document_invalid")
+            return await super().send_message(chat_id, text, **kw)
+
+        async def delete_message(self, chat_id, message_id):
+            return True
+
+    db, svc, bot_unused = await setup()
+    bot = PickyBot(admins=[ADMIN])
+    draft = amod.Draft(CHAT, ADMIN, ui_chat_id=ADMIN)
+    draft.fmt = "html"
+    draft.text = f'안내 {EMO}\n둘째 줄\n<tg-emoji emoji-id="{DEAD}">💎</tg-emoji> 수수료 10%'
+    await svc.announcer._warn_bad_emoji(bot, draft)
+    warns = [c for c in bot.named("send_message") if "못 올리는 이모지" in c[2]]
+    assert warns and "💎" in warns[0][2] and "3번째 줄" in warns[0][2], warns
+    await db.close()
 
 
 if __name__ == "__main__":
