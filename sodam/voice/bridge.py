@@ -175,6 +175,7 @@ class Bridge:
         self._send_evt = asyncio.Event()
         self._done = asyncio.Event()
         self.result = Result()
+        self._tool_tasks: set = set()                   # 도구 호출 태스크 참조 보관 (안 잡으면 GC 로 사라져 호출 유실 — live.py 와 같은 패턴)
         self.transcript: list[tuple[str, str]] = []     # (who, text) — 저장은 on_line 이 (worker → voice_lines 7일)
         self.on_line = on_line                          # (who, text, ssrc) — user·sodam·tool
         self._item_ssrc: dict[str, int | None] = {}     # 말 item → 그 말의 주인 ssrc (받아쓰기는 늦게 옴)
@@ -398,7 +399,9 @@ class Bridge:
             self._last_reply = self._last_voice = self.clock()
         elif t == "response.function_call_arguments.done":
             meta = {"ssrc": self.speaker, "response_id": getattr(ev, "response_id", None)}
-            asyncio.create_task(self._call_tool(ev.call_id, ev.name, ev.arguments, meta))   # 듣기·말하기는 계속
+            task = asyncio.create_task(self._call_tool(ev.call_id, ev.name, ev.arguments, meta))   # 듣기·말하기는 계속
+            self._tool_tasks.add(task)                 # 참조를 잡아 둠 (안 그러면 도중에 GC 될 수 있음)
+            task.add_done_callback(self._tool_tasks.discard)
         elif t == "response.created":
             self._responding, self._pending = True, None
         elif t == "response.done":

@@ -83,6 +83,28 @@ async def migrate_drops_admin_cache():
     assert not await db._all("SELECT 1 FROM chat_admins WHERE chat_id IN (?, ?)", (A, -1009))
 
 
+@test
+async def deleted_room_badrequest_records_empty_not_stale():
+    """BadRequest(방 없음/접근불가)는 NetworkError 하위라, except 순서가 틀리면 '네트워크'로 삼켜져
+    오래된 목록을 그대로 쓰고 방을 후보에서 안 뺐다 → 방 없음은 빈 목록을 DB 에 남겨야 (2026-10-27 조사)."""
+    from telegram.error import BadRequest, NetworkError
+    assert issubclass(BadRequest, NetworkError)        # 이 전제가 버그의 뿌리
+    db, c, bot = await setup()
+    p = Permissions(c, db)
+    assert await p.is_admin(bot, A, 1)                 # 먼저 정상 조회 → 캐시에 {1}
+
+    class GoneBot(CountingBot):
+        async def get_chat_administrators(self, chat_id):
+            raise BadRequest("Chat not found")
+
+    gone = GoneBot(bot.by_chat)
+    p2 = Permissions(c, db)
+    await db._write("UPDATE chat_admins_fetched SET ts=?", (int(time.time()) - ADMIN_TTL - 1,))   # 캐시 만료 → 새로 조회
+    assert not await p2.is_admin(gone, A, 1)           # 방이 없어졌으니 관리자 아님 (stale {1} 을 쓰면 True → 버그)
+    # 빈 목록이 DB 에 기록돼야 (candidate_chats 에서 빠지게)
+    assert not await db._all("SELECT user_id FROM chat_admins WHERE chat_id=?", (A,))
+
+
 async def _async(v):
     return v
 

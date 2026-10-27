@@ -140,6 +140,15 @@ class Permissions:
                 return ids
         try:
             admins = await bot.get_chat_administrators(chat_id)
+        except (Forbidden, BadRequest) as e:
+            # ⚠️ BadRequest 는 NetworkError 의 하위 클래스라 이 블록을 '네트워크'보다 먼저 둬야 한다
+            # (아니면 아래 (TimedOut, NetworkError) 가 BadRequest 까지 삼켜 이 처리가 죽은 코드가 됨 — 2026-10-27 조사).
+            # 봇이 강퇴됐거나 없어진 방: 조회 시각만 DB 에 남겨 '내 그룹' 후보(candidate_chats)에서 하루 뺀다.
+            # 예전엔 기록이 안 남아 메인 메뉴를 열 때마다(누구든) 이런 방들을 텔레그램에 다시 물었음.
+            # 메모리엔 안 둠 → 봇이 다시 들어오면 다음 확인에서 바로 새로 받음 (DB 에 권한 줄이 없어서)
+            log.info("관리자 목록 조회 불가(%s): chat %s", e, chat_id)
+            await self._store_admins(chat_id, set(), int(now), {})
+            return set()
         except (TimedOut, NetworkError) as e:
             # 텔레그램 연결이 잠깐 끊겨도 메시지 처리가 통째로 죽지 않게: 오래된 목록이라도 쓴다
             stale = cached[1] if cached else await self._stored_admins(chat_id)
@@ -147,13 +156,6 @@ class Permissions:
                 raise
             log.warning("관리자 목록 조회 실패(%s) → 저장된 목록 사용: chat %s", e, chat_id)
             return stale
-        except (Forbidden, BadRequest) as e:
-            # 봇이 강퇴됐거나 없어진 방: 조회 시각만 DB 에 남겨 '내 그룹' 후보(candidate_chats)에서 하루 뺀다.
-            # 예전엔 기록이 안 남아 메인 메뉴를 열 때마다(누구든) 이런 방들을 텔레그램에 다시 물었음.
-            # 메모리엔 안 둠 → 봇이 다시 들어오면 다음 확인에서 바로 새로 받음 (DB 에 권한 줄이 없어서)
-            log.info("관리자 목록 조회 불가(%s): chat %s", e, chat_id)
-            await self._store_admins(chat_id, set(), int(now), {})
-            return set()
         ids = {a.user.id for a in admins if a.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)}
         rights = {a.user.id: _rights_of(a) for a in admins if a.user.id in ids}
         if self.on_admins is not None:  # 관리자 이름도 이름 기록에 (namehist)

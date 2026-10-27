@@ -110,6 +110,13 @@ class OwnerLocked(TelegramError):
         super().__init__("🔒 오너만 풀 수 있는 잠금이에요 — 오너에게 요청하세요.")
 
 
+class Protected(TelegramError):
+    """🛡️ 보호 멤버(sodam/protect.py) — 오너 말곤 소담으로 제재 불가. 자동탐지 버튼까지 막는 단일 관문."""
+
+    def __init__(self) -> None:
+        super().__init__("🛡️ 보호 멤버라 소담으로는 제재할 수 없어요. (해제: .보호해제 또는 🛡️ 보호 멤버 화면)")
+
+
 class AdminLocked(BadRequest):
     """관리자라 텔레그램이 뮤트·밴을 막음 — 그 관리자를 임명한 사람·방장만 내릴 수 있음 (can_be_edited False)."""
 
@@ -130,6 +137,14 @@ class Moderator:
         self._chat_kind: dict[str, tuple[float, bool]] = {}   # @아이디 → (조회 시각, 채널·그룹인지)
 
     # ── 제재 실행 ─────────────────────────────────────────
+    async def _protect_gate(self, chat_id: int, user_id: int, actor_id: int | None) -> None:
+        """🛡️ 보호 멤버는 오너 말곤 소담으로 제재 불가 (permissions.shield 와 같은 규칙).
+        밴·뮤트·강퇴 맨 앞에 둬서 명령·AI·확인 카드뿐 아니라 자동탐지 버튼(스팸방패·사기의심·수배·패드립)도
+        통과 못 하게 하는 '단일 관문' (2026-10-27 버그 조사: 자동탐지 경로가 shield 를 안 거쳐 보호 멤버가 밴되던 것)."""
+        from . import protect   # 늦게 import (순환 방지)
+        if actor_id not in await self.perms.owners() and await protect.is_protected(self.db, chat_id, user_id):
+            raise Protected()
+
     async def _unadmin(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None) -> None:
         """관리자는 텔레그램이 뮤트·밴을 거절함 → 소담이 임명한 관리자(can_be_edited)면 먼저 강등, 아니면 AdminLocked.
         여기까지 오는 관리자는 오너 우선권(permissions.shield)으로 허락된 경우뿐."""
@@ -166,6 +181,7 @@ class Moderator:
 
     async def mute(self, bot: Bot, chat_id: int, user_id: int, minutes: int | None,
                    actor_id: int | None, reason: str) -> None:
+        await self._protect_gate(chat_id, user_id, actor_id)
         await self._unadmin(bot, chat_id, user_id, actor_id)
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes) if minutes else None
         await bot.restrict_chat_member(chat_id, user_id, ChatPermissions.no_permissions(), until_date=until)
@@ -215,6 +231,7 @@ class Moderator:
         await self.db.log_mod(chat_id, actor_id, None, "unlock")
 
     async def ban(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
+        await self._protect_gate(chat_id, user_id, actor_id)
         await self._unadmin(bot, chat_id, user_id, actor_id)
         await bot.ban_chat_member(chat_id, user_id)
         await self._ensure(bot, chat_id, user_id, {"kicked", "left"},
@@ -233,6 +250,7 @@ class Moderator:
                 await self.db.set_state(chat_id, ALLOW_KEY.format(user_id), 1)
 
     async def kick(self, bot: Bot, chat_id: int, user_id: int, actor_id: int | None, reason: str) -> None:
+        await self._protect_gate(chat_id, user_id, actor_id)
         await self._unadmin(bot, chat_id, user_id, actor_id)
         await bot.ban_chat_member(chat_id, user_id)
         await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)

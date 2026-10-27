@@ -89,6 +89,27 @@ async def open_close_toggles_card_in_place():
 
 
 @test
+async def open_falls_back_to_plain_when_html_rejected():
+    """박제 원글에 깨진 커스텀 이모지가 있어 HTML 발송이 거부돼도, '📄 원글 보기' 가 글자로라도 펼쳐진다
+    (2026-10-27 버그 조사: 폴백 없이 조용히 씹히던 것)."""
+    from telegram.error import BadRequest
+    db, svc, bot = await setup()
+    await register_with_evidence(svc, bot, caption='입금하면 2배 <tg-emoji emoji-id="999">💎</tg-emoji> 사기')
+
+    class PickyQuery(FakeQuery):
+        async def edit_message_text(self, text, **kw):
+            if kw.get("parse_mode") == "HTML" and "tg-emoji" in text:
+                raise BadRequest("Document_invalid")
+            self.edits.append(text)
+            self.kb = kw.get("reply_markup")
+
+    q = PickyQuery(A, fake_user(MEMBER))
+    await fedban.on_wanted(svc, bot, q, ["open", str(TARGET)])
+    assert q.edits and "사기" in q.edits[-1] and "tg-emoji" not in q.edits[-1], q.edits   # 글자로 펼쳐짐
+    _drain()
+
+
+@test
 async def media_button_sends_original_to_anyone():
     db, svc, bot = await setup()
     await register_with_evidence(svc, bot)

@@ -20,7 +20,7 @@ from . import free, hooks, incidents, mediastore, persist
 from .db import register_columns, register_schema
 from .permissions import Role, may
 from .settings import register_setting
-from .util import esc, mention, post_temp
+from .util import esc, html_plain, html_truncate, mention, post_temp
 
 log = logging.getLogger(__name__)
 
@@ -155,7 +155,8 @@ def capture_evidence(reply_msg):
         if fid:
             kind, media_id = k, fid
             break
-    return (text[:3000] if text else None), kind, media_id
+    # HTML 을 글자수로 자르면 <tg-emoji …> 태그 중간이 잘려 나중에 발송 거부됨 → 보이는 글자로 안전하게
+    return (html_truncate(text, 3000) if text else None), kind, media_id
 
 
 async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, actor_id: int,
@@ -341,8 +342,14 @@ async def on_wanted(svc, bot, q, parts: list) -> None:
                        has_evidence=bool(info.get("evidence")))
         try:
             await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
-        except BadRequest:
-            pass
+        except BadRequest as e:
+            # 박제 원글은 '필터 없이 그대로' 라 깨진 커스텀 이모지·망가진 HTML 이 있으면 거부될 수 있다
+            # → 글자로라도 펼쳐 '원글 보기' 가 씹히지 않게 (2026-10-27 버그 조사)
+            if "not modified" not in str(e).lower():
+                try:
+                    await q.edit_message_text(html_plain(text), reply_markup=kb)
+                except BadRequest:
+                    pass
         await q.answer()
         return
     if act == "media":
