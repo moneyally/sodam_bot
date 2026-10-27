@@ -368,5 +368,20 @@ def greet_placeholders_time_id_username():
     assert fill("{name}님 <안녕>", "X") == "X님 &lt;안녕&gt;"
 
 
+
+@test
+async def color_or_emoji_buttons_save_without_unpack_error():
+    """색 이모지(🔵)·프리미엄 이모지가 든 퇴장 버튼(3·4칸)도 저장된다 — 옛 '_, u' 2칸 unpack 은 터졌음
+    (2026-10-27 실제 ValueError: too many values to unpack, 泰山 꼬부기 제휴문의 버튼)."""
+    from sodam.menu import PanelCtx
+    from sodam.panels import farewell as FP
+    svc, bot, _ = await setup()
+    c = PanelCtx(svc, bot, ADMIN, CHAT, [])
+    msg = FakeMsg(CHAT, fake_user(ADMIN), "🔵 공지 - https://t.me/notice\n문의 - https://t.me/ask")
+    ok, out = await FP.in_buttons(c, msg)
+    assert ok and "2개" in out, out
+    saved = (await svc.db.get_settings(CHAT))["farewell_buttons"]
+    assert len(saved) == 2 and saved[0][1] == "https://t.me/notice", saved
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
