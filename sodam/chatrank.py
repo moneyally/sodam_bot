@@ -381,12 +381,45 @@ async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=
         except Exception:
             admins = set()
         rows = [r for r in rows if r["user_id"] not in admins]
+    rows = await _apply_fixed(svc, chat_id, cfg, key, date, rows)   # 🏆 순위 고정 지정(오너) — 집계는 그대로, 보일 때만 상단 고정
     rows = rows[:cfg.top]
     return PERIODS[key][1], date, rows
 
 
+async def _apply_fixed(svc, chat_id: int, cfg: Cfg, key: str, date: str, rows: list) -> list:
+    """오너가 지정한 1~N등을 상단에 고정 (sodam/rankfix.py). 보이는 횟수는 그날 실제 1등보다 자동으로
+    조금 높게 (날짜 시드로 당일 고정). 실제 사람들은 그 아래로 밀린다. 안 걸려 있으면 그대로."""
+    from . import rankfix
+    ids = await rankfix.get(svc.db, chat_id)
+    if not ids:
+        return rows
+    ids = ids[:cfg.top]
+    rest = [r for r in rows if r["user_id"] not in ids]      # 겹치면 실제 쪽 빼고 고정 쪽으로
+    real_max = rest[0]["n"] if rest else 0                   # rows 는 횟수 내림차순
+    counts = rankfix.display_counts(chat_id, f"{key}:{date}", len(ids), real_max)
+    info = {}
+    if ids:
+        ph = ",".join("?" * len(ids))
+        for u in await svc.db._all(f"SELECT user_id, username, first_name FROM users WHERE user_id IN ({ph})", tuple(ids)):
+            info[u["user_id"]] = u
+    synth = []
+    for i, uid in enumerate(ids):
+        u = info.get(uid)
+        synth.append({"user_id": uid, "n": counts[i],
+                      "username": (u["username"] if u else None), "first_name": (u["first_name"] if u else "")})
+    return synth + rest
+
+
 async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None = None) -> tuple[int, int]:
     """(내 등수, 횟수). 기록 없으면 (0, 0). 관리자 빼기는 등수에 반영 안 함 (대략)."""
+    from . import rankfix
+    fixed = await rankfix.get(svc.db, chat_id)
+    if fixed:
+        fixed = fixed[:cfg.top]
+        if user_id in fixed:                                # 고정 지정된 사람 → 그 등수·보이는 횟수
+            _, _, rows = await standings(svc, chat_id, cfg, period)
+            n = next((r["n"] for r in rows if r["user_id"] == user_id), 0)
+            return fixed.index(user_id) + 1, n
     from . import stats
     from .db import count_filter
     since, until, _ = span(period or cfg.period, svc.cfg.tz)
@@ -404,7 +437,10 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
                               "WHERE messages.chat_id=? AND messages.ts>=? AND messages.ts<? AND messages.is_bot=0 "
                               "AND messages.ts >= COALESCE(r.reset_at,0) " + count_filter() + " GROUP BY messages.user_id) WHERE c>?",
                               (chat_id, since, end, *m.args, n))
-    return int(above["n"]) + 1, n
+    rank = int(above["n"]) + 1
+    if fixed:                             # 고정 지정이 걸려 있으면 일반 사람은 그 수만큼 아래로 밀림
+        rank += len([u for u in fixed if u != user_id])
+    return rank, n
 
 
 def winners_label(cfg: Cfg) -> str:
