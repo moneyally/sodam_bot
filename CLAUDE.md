@@ -277,6 +277,7 @@
   msg.text 만 저장하면 custom_emoji 엔티티가 버려짐 → `util.rich_html(msg)` 로 텔레그램 HTML(<tg-emoji>) 보관, schedules.fmt='html'
   (예약공지 제목·내용·⏰ 알람·`.공지`). 목록·요약엔 `util.html_plain`. HTML 은 태그 중간을 자르지 말 것(길이는 보이는 글자로).
   봇이 움직이는 이모지를 쓰려면 봇 주인 텔레그램 프리미엄(또는 Fragment 아이디) — 거절(BadRequest)되면 글자로 다시 보냄.
+  **'글자' 커스텀 이모지 abc 깨짐** (`util._TOFU_EMOJI`·`html_plain`, tests/test_rich_emoji.py html_plain_drops_abc_* · refused_send_drops_abc_* · 뮤테이션 2개, 2026-10-27 New world AMEX 대리결제 광고): 프리미엄 '글자(폰트)' 커스텀 이모지는 fallback 이 네모(🔠🔡🔢🔣🔤 = U+1F520~U+1F524)라, 봇 주인이 프리미엄 아니면 텔레그램이 발송 거절(`Document_invalid`) → 글자 폴백 때 그 네모가 **'abc abc'** 로 떠서 글 깨짐. **봇API 2026-02: 봇 주인 계정 프리미엄이면 봇도 커스텀 이모지 발송 가능** — 프리미엄 없으면 전부 fallback(💰💗😀 는 정상, 🔤 만 abc). `html_plain` 이 `<tg-emoji ...>[네모]</tg-emoji>` 를 통째로 뺌 → 발송 폴백(announce.send)·목록 미리보기 다 깨끗. 이모지 자체는 멀쩡(getCustomEmojiStickers 조회됨). 이미 저장된 공지는 DB 에서 그 tg-emoji 만 제거(6건 처리).
 - **🗂️ 미디어 보관** (`mediastore.py`, tests/test_mediastore.py · 뮤테이션 6개, 2026-10-04 봇 토큰 교체 사고): 텔레그램 file_id 는 **봇마다 달라서**
   봇이 바뀌면 예약공지·인사 미디어가 'Wrong file identifier'. 저장할 때 `remember_soon`(원본 data/media/<sha256>, 20MB·전체 500MB) +
   30초 틱 `mediastore.tick`(시작 뒤 1번·6시간마다 backfill, 30일 안 쓰는 보관 정리) → 보낼 때 `mediastore.send` 가 파일 id 오류면 원본 업로드 +

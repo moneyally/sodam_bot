@@ -37,9 +37,16 @@ def html_balanced(s: str) -> bool:
     return not stack
 
 
+# 프리미엄 '글자' 커스텀 이모지의 fallback 네모 (🔠🔡🔢🔣🔤 = U+1F520~U+1F524). 봇 주인이 프리미엄이 아니면
+# 텔레그램이 커스텀 이모지 발송을 거절(Document_invalid) → 글자로 폴백할 때 이 네모가 'abc' 처럼 떠서 글이 깨져 보인다.
+# 그래서 글자 폴백·목록 표시에선 이 '글자 이모지'를 통째로 뺀다 (보통 이모지 💰💗😀 는 그 기본 이모지로 그대로).
+_TOFU_EMOJI = re.compile(r"<tg-emoji\b[^>]*>[\U0001F520-\U0001F524]</tg-emoji>")
+
+
 def html_plain(s: str) -> str:
-    """텔레그램 HTML → 보이는 글자 (길이 재기·목록 표시용). 움직이는 이모지는 대신 보이는 기본 이모지로."""
-    return html.unescape(_TAG.sub("", s or ""))
+    """텔레그램 HTML → 보이는 글자 (길이 재기·목록 표시용). 움직이는 이모지는 대신 보이는 기본 이모지로.
+    단 봇이 못 띄우는 '글자' 커스텀 이모지(fallback 이 🔤 등 네모)는 통째로 뺀다 (예전: 글이 'abc abc' 로 깨짐)."""
+    return html.unescape(_TAG.sub("", _TOFU_EMOJI.sub("", s or "")))
 
 
 _HTML_TOKEN = re.compile(r"<tg-emoji\b[^>]*>.*?</tg-emoji>|<[^>]+>|&#?\w+;|[^<&]", re.S)

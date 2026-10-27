@@ -114,6 +114,41 @@ async def refused_rich_send_falls_back_to_plain_text():
 
 
 @test
+async def html_plain_drops_abc_lettering_emoji():
+    """봇 주인이 프리미엄이 아니면 '글자' 커스텀 이모지(🔤 등)가 못 떠서 'abc' 로 깨짐 → 글자 변환 때 통째로 뺀다
+    (보통 이모지 💰💗😀 는 그 기본 이모지로 그대로). 2026-10-27 New world AMEX 광고."""
+    from sodam.util import html_plain
+    ABC = '<tg-emoji emoji-id="5900093657955967434">🔤</tg-emoji>'
+    MONEY = '<tg-emoji emoji-id="4983234121556820510">💰</tg-emoji>'
+    assert html_plain(ABC + ABC + ABC + MONEY + "안녕") == "💰안녕"
+    assert html_plain(MONEY + "값 10%") == "💰값 10%"
+    for box in "🔠🔡🔢🔣🔤":                                 # U+1F520~U+1F524 네모 글자 이모지 전부
+        assert html_plain(f'<tg-emoji emoji-id="1">{box}</tg-emoji>X') == "X", box
+
+
+@test
+async def refused_send_drops_abc_lettering_emoji():
+    """봇이 커스텀 이모지를 못 보내 글자로 폴백할 때 '글자' 이모지는 'abc' 로 안 뜨고 빠진다 (New world AMEX 공지)."""
+    db, svc, bot = await setup()
+    ABC = '<tg-emoji emoji-id="5900093657955967434">🔤</tg-emoji>'
+    MONEY = '<tg-emoji emoji-id="4983234121556820510">💰</tg-emoji>'
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="",
+                                text=ABC + ABC + MONEY + "안녕하세요 아멕스" + MONEY,
+                                media_type=None, media_id=None, pin=False, created_by=ADMIN, fmt="html")
+    real = bot.send_message
+
+    async def picky(chat_id, text, **kw):
+        if "tg-emoji" in text:
+            raise BadRequest("Document_invalid")
+        return await real(chat_id, text, **kw)
+    bot.send_message = picky
+    await svc.announcer.publish(bot, await db.get_schedule(CHAT, sid))
+    sent = [c for c in bot.calls if c[0] == "send_message" and c[1] == CHAT]
+    assert len(sent) == 1 and "🔤" not in sent[0][2] and "💰안녕하세요 아멕스💰" in sent[0][2], sent
+    await db.close()
+
+
+@test
 async def plain_schedules_and_long_rich_text_still_work():
     db, svc, bot = await setup()
     from sodam.announce import render
