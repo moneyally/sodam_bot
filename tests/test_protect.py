@@ -62,6 +62,27 @@ async def admin_cannot_sanction_protected_but_owner_can():
 
 
 @test
+async def auto_detect_sanction_also_blocked_on_protected():
+    """자동탐지 버튼(스팸방패·사기의심·수배·패드립)은 shield 를 안 거치고 svc.mod.ban/mute 를 바로 부른다.
+    그래도 보호 멤버는 막혀야 함 — moderation._protect_gate 가 단일 관문 (2026-10-27 버그 조사)."""
+    from sodam.moderation import Protected
+    db, svc, bot = await setup()
+    await protect.add(db, CHAT, MEMBER, OWNER)
+    # 관리자가 누른 자동탐지 밴/뮤트 (mod.ban/mute 직접 호출) → Protected 로 거절
+    for call in (svc.mod.ban(bot, CHAT, MEMBER, ADMIN, "스팸 의심"),
+                 svc.mod.mute(bot, CHAT, MEMBER, 60, ADMIN, "패드립"),
+                 svc.mod.kick(bot, CHAT, MEMBER, ADMIN, "수배")):
+        try:
+            await call
+            assert False, "보호 멤버인데 제재가 실행됨"
+        except Protected:
+            pass
+    # 오너가 누르면 통과 (보호 우선권)
+    await svc.mod.ban(bot, CHAT, MEMBER, OWNER, "오너 제재")
+    assert bot.member_status.get((CHAT, MEMBER)) in ("kicked", "left"), bot.member_status
+
+
+@test
 async def protect_command_sets_and_lists():
     db, svc, bot = await setup()
     user = fake_user(ADMIN, "문주")

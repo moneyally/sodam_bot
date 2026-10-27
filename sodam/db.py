@@ -447,15 +447,19 @@ class DB:
         return self._settings_cache[chat_id]
 
     async def set_setting(self, chat_id: int, key: str, value: Any) -> None:
-        settings = dict(await self.get_settings(chat_id))
-        settings[key] = value
-        changed = {k: v for k, v in settings.items() if DEFAULTS.get(k) != v}
-        await self._write(
-            "INSERT INTO chats(chat_id, settings) VALUES(?, ?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET settings=excluded.settings",
-            (chat_id, json.dumps(changed, ensure_ascii=False)),
-        )
-        self._settings_cache[chat_id] = settings
+        # atomic 안에서 DB 를 다시 읽어 merge — 캐시 복사본을 고쳐 쓰면 두 코루틴이 동시에 다른 키를 바꿀 때
+        # 나중 쓰기가 앞 변경을 통째로 덮어 유실됐다 (돈 한도 설정이 조용히 원복될 수 있었음, 2026-10-27 조사).
+        def fn(cn: sqlite3.Connection) -> dict:
+            row = cn.execute("SELECT settings FROM chats WHERE chat_id=?", (chat_id,)).fetchone()
+            cur = {**DEFAULTS, **(json.loads(row[0]) if row and row[0] else {}), key: value}
+            changed = {k: v for k, v in cur.items() if DEFAULTS.get(k) != v}
+            cn.execute(
+                "INSERT INTO chats(chat_id, settings) VALUES(?, ?) "
+                "ON CONFLICT(chat_id) DO UPDATE SET settings=excluded.settings",
+                (chat_id, json.dumps(changed, ensure_ascii=False)),
+            )
+            return {**DEFAULTS, **changed}
+        self._settings_cache[chat_id] = await self.atomic(fn)
 
     # ── 사용자 / 멤버 ─────────────────────────────────────
     async def upsert_user(self, user, commit: bool = False) -> None:

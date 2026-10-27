@@ -1018,34 +1018,44 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = q.data or ""
     prefix, _, rest = data.partition(":")
     parts = rest.split(":") if rest else []
-    if prefix == "cap":
-        await svc.captcha.on_callback(bot, q, parts)
-    elif prefix == "an":
-        await svc.announcer.on_callback(bot, q, parts)
-    elif prefix == "pay":
-        await subscription.on_callback(svc, bot, q, parts)
-    elif prefix == "m":
-        await menu.on_callback(svc, bot, q, parts)
-    elif prefix == "nh":
-        await namehist.on_callback(svc, bot, q, parts)
-    elif prefix == "act":
-        await _confirm_action(svc, bot, q, parts)
-    elif prefix == "cs":
-        await casino.on_callback(svc, bot, q, parts)
-    elif prefix == "ow":
-        await _owner_action(svc, bot, q, parts)
-    elif prefix == "jr":
-        await joinreq.on_callback(svc, bot, q, parts)
-    elif prefix == "um":
-        await _unmute_button(svc, bot, q, parts)
-    elif prefix == "cas":
-        await _cas_button(svc, bot, q, parts)
-    elif prefix == "wc":
-        await svc.games.on_callback(q, parts)
-    elif prefix in hooks.CALLBACK_HANDLERS:   # 기능 모듈이 등록한 버튼 (hooks.add_callback_handler)
-        await hooks.CALLBACK_HANDLERS[prefix](svc, bot, q, parts)
-    else:
-        await q.answer()
+    # 안전망: 어떤 핸들러가 무슨 예외로 터지든, 버튼이 '뱅뱅 돌며 씹히지' 않게 스피너부터 끈다
+    # (menu._show 는 이미 글자 폴백 있지만, casino 등 일부는 TelegramError 아닌 예외에 무방비 — 2026-10-27 조사).
+    # 끈 뒤 re-raise → on_error 가 BadRequest(내용)·네트워크를 구분해 로그 (이미 분리됨).
+    try:
+        if prefix == "cap":
+            await svc.captcha.on_callback(bot, q, parts)
+        elif prefix == "an":
+            await svc.announcer.on_callback(bot, q, parts)
+        elif prefix == "pay":
+            await subscription.on_callback(svc, bot, q, parts)
+        elif prefix == "m":
+            await menu.on_callback(svc, bot, q, parts)
+        elif prefix == "nh":
+            await namehist.on_callback(svc, bot, q, parts)
+        elif prefix == "act":
+            await _confirm_action(svc, bot, q, parts)
+        elif prefix == "cs":
+            await casino.on_callback(svc, bot, q, parts)
+        elif prefix == "ow":
+            await _owner_action(svc, bot, q, parts)
+        elif prefix == "jr":
+            await joinreq.on_callback(svc, bot, q, parts)
+        elif prefix == "um":
+            await _unmute_button(svc, bot, q, parts)
+        elif prefix == "cas":
+            await _cas_button(svc, bot, q, parts)
+        elif prefix == "wc":
+            await svc.games.on_callback(q, parts)
+        elif prefix in hooks.CALLBACK_HANDLERS:   # 기능 모듈이 등록한 버튼 (hooks.add_callback_handler)
+            await hooks.CALLBACK_HANDLERS[prefix](svc, bot, q, parts)
+        else:
+            await q.answer()
+    except Exception:
+        try:
+            await q.answer()   # 스피너라도 끈다 (이미 answer 됐으면 'query too old' → 무시)
+        except TelegramError:
+            pass
+        raise
 
 
 OWNER_ACTIONS = {"u": "채팅 금지를 풀었어요", "x": "1일 채팅 금지로 바꿨어요", "b": "밴(영구 추방)했어요", "n": "밴을 풀었어요"}

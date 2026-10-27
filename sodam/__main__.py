@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from telegram import Update
-from telegram.error import NetworkError, TelegramError
+from telegram.error import BadRequest, NetworkError, TelegramError
 from telegram.ext import Application, ApplicationBuilder, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -150,8 +150,16 @@ class ErrorNotifier:
 
     async def __call__(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         err = context.error
-        if err is None or isinstance(err, NetworkError):  # TimedOut 은 NetworkError 의 하위 클래스
+        if err is None:
             return
+        # ⚠️ BadRequest 는 NetworkError 의 하위 클래스라, 먼저 걸러내지 않으면 Document_invalid(깨진 이모지) 같은
+        # 내용 오류가 '네트워크'로 분류돼 오너 알림에서 영영 빠진다 (on_error 와 짝인데 여기만 안 고쳐졌던 것, 2026-10-27).
+        if isinstance(err, NetworkError) and not isinstance(err, BadRequest):
+            return                                    # 진짜 네트워크(TimedOut 포함) → 자동 재시도, 알림 안 함
+        if isinstance(err, BadRequest):
+            from .handlers import _HARMLESS_BADREQ     # 흔한 무해(not modified·이미 지워짐·오래된 콜백)는 제외
+            if any(s in str(err).lower() for s in _HARMLESS_BADREQ):
+                return
         kind = type(err).__name__
         now = self.clock()
         if kind in self.last and now - self.last[kind] < self.gap:

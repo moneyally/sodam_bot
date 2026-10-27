@@ -5,6 +5,7 @@ t.me/addemoji 링크. 하드코딩 아님: text·style·frame·font 전부 값. 
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 
@@ -83,7 +84,7 @@ async def t_make_tile_emoji(ctx: ToolCtx, a: dict) -> str:
     spec = build_spec(text, style, frame, font)
     if not spec["layers"]:
         return "만들 글자가 없어요."
-    r = banner.build_tiles(spec)
+    r = await asyncio.to_thread(banner.build_tiles, spec)   # ImageMagick·PIL 렌더가 무거워 메인 루프를 막지 않게
     # 미리보기 먼저
     try:
         await ctx.bot.send_photo(ctx.caller.id, photo=_png(r["preview"]),

@@ -455,11 +455,16 @@ async def error_notifier_throttles_and_skips_network():
     await n(None, ctx(ValueError("b")))           # 같은 종류 10분 안 → 무시
     await n(None, ctx(KeyError("k")))             # 다른 종류 → 알림
     await n(None, ctx(TimedOut()))
-    await n(None, ctx(NetworkError("x")))         # 네트워크 오류 제외
+    await n(None, ctx(NetworkError("x")))         # 진짜 네트워크 오류 제외
     assert len(reports) == 2 and "ValueError" in reports[0] and "KeyError" in reports[1], reports
+    # BadRequest(내용 오류)는 NetworkError 하위지만 오너에게 알려야 함 (단 흔한 무해는 제외) — 2026-10-27
+    from telegram.error import BadRequest
+    await n(None, ctx(BadRequest("Message is not modified")))   # 무해 → 제외
+    await n(None, ctx(BadRequest("Document_invalid")))          # 내용 오류 → 알림
+    assert len(reports) == 3 and "Document_invalid" in reports[2], reports
     now[0] += main_mod.ERROR_NOTIFY_GAP + 1
     await n(None, ctx(ValueError("<c>")))
-    assert len(reports) == 3 and "&lt;c&gt;" in reports[2]
+    assert len(reports) == 4 and "&lt;c&gt;" in reports[3]
 
 
 @test
