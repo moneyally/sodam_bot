@@ -234,5 +234,40 @@ async def schedule_detail_screen_shows_animated_emoji_not_squares():
     await db.close()
 
 
+@test
+async def dead_emoji_screen_falls_back_to_plain_not_crash():
+    """실제 2026-10-27 New world: 죽은 💎 커스텀 이모지(Document_invalid)가 든 예약공지의 수정 화면 버튼이 '씹혔음'.
+    _show 가 HTML 거절 때 raise 하면 콜백이 터져 버튼 무반응 → 글자로라도 화면·버튼을 띄운다."""
+    from sodam import menu
+    from sodam.menu import Screen
+
+    class DeadQuery(FakeQuery):
+        async def edit_message_text(self, text, **kw):
+            if kw.get("parse_mode") == "HTML" and "tg-emoji" in text:
+                raise BadRequest("Document_invalid")   # 죽은 커스텀 이모지 → 전체 거절
+            self.edits.append(text)
+            self.kb = kw.get("reply_markup")
+
+    DEAD = '<tg-emoji emoji-id="5388803751559586023">💎</tg-emoji>'
+    q = DeadQuery(ADMIN, fake_user(ADMIN, "방장"))
+    q.message = SimpleNamespace(message_id=50)
+    screen = Screen(text=f"{DEAD} 아멕스 공지 수정", kb=None)
+    await menu._show(None, q, ADMIN, screen)
+    assert q.edits == ["💎 아멕스 공지 수정"], q.edits     # 글자로 떴고(= 버튼 살아있음), 안 터짐
+
+    # 서식 문제가 아닌 다른 BadRequest 는 그대로 올라간다 (숨기면 진짜 버그를 놓침)
+    class OtherBad(FakeQuery):
+        async def edit_message_text(self, text, **kw):
+            raise BadRequest("CHAT_WRITE_FORBIDDEN")
+
+    q2 = OtherBad(ADMIN, fake_user(ADMIN, "방장"))
+    q2.message = SimpleNamespace(message_id=51)
+    try:
+        await menu._show(None, q2, ADMIN, Screen(text="평범한 글", kb=None))
+        assert False, "서식 무관 오류는 올라와야"
+    except BadRequest:
+        pass
+
+
 if __name__ == "__main__":
     run_all()
