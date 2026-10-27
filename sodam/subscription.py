@@ -143,7 +143,10 @@ async def on_callback(svc: Services, bot: Bot, q: CallbackQuery, parts: list[str
     if action == "cancel":
         await svc.db.cancel_invoice(inv["id"])
         await q.answer("취소했어요.")
-        await q.edit_message_reply_markup(None)
+        try:
+            await q.edit_message_reply_markup(None)
+        except TelegramError:
+            pass   # 오래됐거나 지워진 결제 메시지면 버튼만 못 떼도 조용히 (취소는 이미 처리됨)
         return
 
     if action == "check":

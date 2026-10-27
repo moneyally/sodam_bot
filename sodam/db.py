@@ -519,14 +519,17 @@ class DB:
         await self._write("UPDATE members SET style=? WHERE chat_id=? AND user_id=?", (style, chat_id, user_id))
 
     async def set_member_note(self, chat_id: int, user_id: int, key: str, value: str) -> None:
-        row = await self._one("SELECT notes FROM members WHERE chat_id=? AND user_id=?", (chat_id, user_id))
-        notes = json.loads(row["notes"]) if row else {}
-        if value:
-            notes[key] = value
-        else:
-            notes.pop(key, None)
-        await self._write("UPDATE members SET notes=? WHERE chat_id=? AND user_id=?",
-                          (json.dumps(notes, ensure_ascii=False), chat_id, user_id))
+        # atomic 안에서 재읽어 merge — 같은 멤버에 동시 두 메모가 들어오면 한쪽 유실되던 것 (set_setting 과 같은 부류, 2026-10-27)
+        def fn(cn: sqlite3.Connection) -> None:
+            row = cn.execute("SELECT notes FROM members WHERE chat_id=? AND user_id=?", (chat_id, user_id)).fetchone()
+            notes = json.loads(row[0]) if row and row[0] else {}
+            if value:
+                notes[key] = value
+            else:
+                notes.pop(key, None)
+            cn.execute("UPDATE members SET notes=? WHERE chat_id=? AND user_id=?",
+                       (json.dumps(notes, ensure_ascii=False), chat_id, user_id))
+        await self.atomic(fn)
 
     async def add_points(self, chat_id: int, user_id: int, n: int) -> None:
         await self._write(

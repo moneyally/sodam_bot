@@ -1178,7 +1178,10 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         except TelegramError as e:
             log.warning("sanction %s failed: chat %s user %s: %s", action.kind, action.chat_id, uid, e)
             lines.append(f"❌ {who}님 실패: {esc(e.message)} (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)")
-    await q.edit_message_text("\n".join(lines) + f"\n(처리: {by})", parse_mode="HTML")
+    try:
+        await q.edit_message_text("\n".join(lines) + f"\n(처리: {by})", parse_mode="HTML")
+    except TelegramError:
+        pass   # 제재는 이미 실행됨 — 카드 메시지가 지워졌거나 오래돼 못 고쳐도 조용히 (결과는 기록됨)
     failed = len(action.targets) - len(done)
     await cards.record(svc, card_chat, action.requested_by, action.kind,
                        (f"✅ {label} 실행됨 — {len(done)}명" if done else f"⚠️ {label} 실행 안 됨") + f" — {names}"
