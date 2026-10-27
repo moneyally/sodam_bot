@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from telegram.error import BadRequest, TelegramError
 
-from . import cards, fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, savage, stats, subscription
+from . import cards, fedban, free, knowledge, menu, namehist, ownerlock, persist, protect, rankfix, savage, stats, subscription
 from .moderation import StillBanned
 from .permissions import Role, may, no_right_text
 from .services import Services
@@ -807,6 +807,89 @@ async def c_savage(ctx: CmdCtx) -> None:
     except TelegramError:
         sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML")   # 1:1 막혔으면 방에 8초만
         _delete_later(ctx.bot, ctx.chat_id, sent.message_id, 8, ctx.svc.db)
+
+
+async def _rankfix_resolve(ctx: CmdCtx, token: str) -> int | None:
+    """토큰 하나 → user_id. 긴 숫자 = ID 그대로, 아니면 이 방 멤버·@아이디로. 못 찾거나 여럿이면 None."""
+    tk = token.strip()
+    if tk.lstrip("-").isdigit() and len(tk.lstrip("-")) >= 6:      # 6자리↑ = 텔레그램 ID
+        return int(tk)
+    rows = await ctx.svc.db.find_members(ctx.chat_id, tk)
+    if len(rows) == 1:
+        return rows[0]["user_id"]
+    if not rows:                                                   # 이 방 기록엔 없어도 @아이디로 users 에서
+        g = await ctx.svc.db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (tk.lstrip("@"),))
+        return g["user_id"] if g else None
+    return None                                                    # 같은 이름 여럿 → ID 로 콕 집으라고 못 찾음 처리
+
+
+async def _rankfix_names(ctx: CmdCtx, ids: list[int]) -> list[str]:
+    out = []
+    for uid in ids:
+        u = await ctx.svc.db._one("SELECT username, first_name FROM users WHERE user_id=?", (uid,))
+        nm = display_name(u["first_name"], None, u["username"]) if u else str(uid)
+        out.append(f"{esc(nm)} (<code>{uid}</code>)")
+    return out
+
+
+async def c_rankfix(ctx: CmdCtx) -> None:
+    """🏆 순위 고정 지정 (오너 전용, sodam/rankfix.py). 명령 메시지는 지우고 결과는 오너 1:1 로만
+    (방엔 흔적 X). chat_state 라 설정 화면·AI 로는 못 바꿈. '.순위고정 @1등 @2등 @3등 [일수]' / 해제 / 상태.
+    실제 집계는 그대로 두고 보일 때만 상단 고정 (초활발방에서 가짜 채팅 수십만 행 안 넣게)."""
+    try:
+        await ctx.msg.delete()
+    except (TelegramError, AttributeError):
+        pass
+
+    async def tell(text: str) -> None:
+        try:
+            await ctx.bot.send_message(ctx.user.id, text, parse_mode="HTML")       # 오너 1:1 로만
+        except TelegramError:
+            sent = await ctx.bot.send_message(ctx.chat_id, text, parse_mode="HTML")
+            _delete_later(ctx.bot, ctx.chat_id, sent.message_id, 10, ctx.svc.db)
+
+    arg0 = (ctx.args[0] if ctx.args else "").strip().lower()
+    if arg0 in ("해제", "off", "끄기", "취소", "클리어", "리셋"):
+        await rankfix.clear(ctx.svc.db, ctx.chat_id)
+        await tell("🏆 순위 고정 지정을 해제했어 — 이제 실제 집계대로 보여.")
+        return
+    if not ctx.args or arg0 in ("상태", "status", "?"):
+        ids, until = await rankfix.status(ctx.svc.db, ctx.chat_id)
+        if not ids:
+            await tell("🏆 순위 고정 지정: <b>꺼짐</b>\n쓰는 법: <code>.순위고정 @1등 @2등 @3등 [일수]</code> · "
+                       "<code>.순위고정 해제</code> · <code>.순위고정 상태</code>\n(이 방에서 실제 집계랑 무관하게 1~N등을 지정해. 설정·AI 로는 안 보임.)")
+            return
+        when = datetime.fromtimestamp(until, ctx.svc.cfg.tz).strftime("%Y-%m-%d %H:%M") if until else "무기한"
+        names = await _rankfix_names(ctx, ids)
+        await tell(f"🏆 순위 고정 지정 <b>켜짐</b> (~{when})\n" + "\n".join(f"{i + 1}등 — {nm}" for i, nm in enumerate(names)))
+        return
+
+    toks = list(ctx.args)
+    days = 30
+    if len(toks) >= 2 and toks[-1].isdigit() and 1 <= int(toks[-1]) <= rankfix.MAX_DAYS:
+        days = int(toks[-1])
+        toks = toks[:-1]
+    ids: list[int] = []
+    miss: list[str] = []
+    for tk in toks[:rankfix.MAX_IDS]:
+        uid = await _rankfix_resolve(ctx, tk)
+        if uid and uid not in ids:
+            ids.append(uid)
+        elif not uid:
+            miss.append(tk)
+    if not ids:
+        await tell("아무도 못 찾았어. @아이디나 숫자 ID 로 써줘: <code>.순위고정 @1등 @2등 @3등 [일수]</code>\n"
+                   "(같은 이름이 여럿이면 ID 로 콕 집어줘.)")
+        return
+    until = await rankfix.set_fixed(ctx.svc.db, ctx.chat_id, ids, days)
+    when = datetime.fromtimestamp(until, ctx.svc.cfg.tz).strftime("%Y-%m-%d %H:%M")
+    names = await _rankfix_names(ctx, ids)
+    out = [f"🏆 순위 고정 지정 완료 ({days}일, ~{when})"] + [f"{i + 1}등 — {nm}" for i, nm in enumerate(names)]
+    if miss:
+        out.append("⚠️ 못 찾음: " + ", ".join(esc(m) for m in miss) + " (ID 로 다시)")
+    out.append("실제 집계는 그대로 두고 <b>보일 때만</b> 상단 고정 · 횟수는 그날 실제 1등보다 자동으로 조금 높게 · "
+               "자정 시상식도 같이 적용 · 해제: <code>.순위고정 해제</code>")
+    await tell("\n".join(out))
 
 
 async def c_freeall(ctx: CmdCtx) -> None:
@@ -1643,6 +1726,8 @@ COMMANDS: list[Cmd] = [
         help="이 방 자유 멤버 전부 한 번에 해제 (확인 버튼)", group="관리자", right="restrict"),
     Cmd(("비욕",), c_savage, Role.OWNER, usage="켜|꺼|상태",
         help="🔥 시크릿 최고 수위 욕받이 (오너만, 방엔 흔적 X)", group="관리자"),
+    Cmd(("순위고정", "순위지정", "채팅고정"), c_rankfix, Role.OWNER, usage="@1등 @2등 @3등 [일수] | 해제 | 상태",
+        help="🏆 채팅 순위 1~N등 고정 지정 (오너만, 방엔 흔적 X)", group="관리자"),
     Cmd(("보호", "protect"), c_protect, Role.ADMIN, usage="@user", help="보호 멤버: 소담으로 제재 못 하게",
         group="관리자", right="restrict"),
     Cmd(("보호해제", "unprotect"), c_unprotect, Role.ADMIN, usage="@user", help="보호 멤버 해제", group="관리자",
