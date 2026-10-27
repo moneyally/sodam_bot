@@ -30,7 +30,7 @@ from .services import MenuToken, PendingInput
 from .settings import LABELS, coerce, over_cap, render
 from .styles import STYLES
 from .subscription import STATE_LABEL, chat_title, panel as sub_panel
-from .util import esc, human_minutes, iyeyo, josa, to_int
+from .util import esc, html_plain, human_minutes, iyeyo, josa, to_int
 
 if TYPE_CHECKING:
     from .services import Services
@@ -852,6 +852,16 @@ async def _show(bot: Bot, q: CallbackQuery, uid: int, screen: Screen, svc: Servi
             else:
                 await send()
             return
+        # 서식(움직이는 이모지 등)이 거절되면 — 죽은 커스텀 이모지·깨진 태그 — 글자로라도 화면을 띄운다.
+        # (2026-10-27 New world AMEX 공지: 죽은 💎 이모지가 든 공지의 수정 화면이 안 열리고 버튼이 '씹혔음'.
+        #  여기서 raise 하면 콜백이 터져 버튼이 아무 반응 없음 → 글자 폴백으로 화면·버튼은 늘 살린다)
+        plain = html_plain(screen.text)
+        if plain and plain != screen.text:
+            try:
+                await q.edit_message_text(plain, reply_markup=screen.kb)
+                return
+            except BadRequest:
+                pass
         raise
     msg_id = getattr(q.message, "message_id", None)
     if svc is not None and msg_id is not None and screen.kb is not None:

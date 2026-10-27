@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-MAX_PER_CHAT = 20
+MAX_PER_CHAT = 120            # 방당 예약공지 수 (2026-10-27 오너 '100개 넘게')
 WIZARD_TTL = 600
 DAILY_GRACE = 15 * 60          # 정각을 놓쳤을 때(재시작 등) 이 시간 안이면 늦게라도 보냄
 MIN_INTERVAL, MAX_INTERVAL = 30, 7 * 1440
