@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from fake_llm import Room
 from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, runner
 from telegram import MessageEntity
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 
 from sodam import cron
 from sodam.panels import announce as panel
@@ -267,6 +267,28 @@ async def dead_emoji_screen_falls_back_to_plain_not_crash():
         assert False, "서식 무관 오류는 올라와야"
     except BadRequest:
         pass
+
+
+@test
+async def badrequest_not_misreported_as_network_error():
+    """PTB 에선 BadRequest 가 NetworkError 의 하위 클래스라, on_error 가 먼저 안 걸러내면
+    Document_invalid(깨진 이모지) 같은 내용 오류가 '연결 일시 오류'로 묻혀 버튼이 조용히 씹힌다
+    (2026-10-27 NASA·New world 공지). 콘텐츠 오류와 진짜 네트워크 오류를 구분해야 함."""
+    from sodam import handlers
+    assert issubclass(BadRequest, NetworkError)        # 이 전제가 버그의 뿌리
+    seen = []
+    real = handlers.log.warning
+    handlers.log.warning = lambda msg, *a: seen.append(msg % a if a else msg)
+    try:
+        await handlers.on_error(None, SimpleNamespace(error=BadRequest("Document_invalid")))
+        await handlers.on_error(None, SimpleNamespace(error=NetworkError("Connection reset")))
+        await handlers.on_error(None, SimpleNamespace(error=BadRequest("Message is not modified")))
+    finally:
+        handlers.log.warning = real
+    assert any("요청 거절" in s and "Document_invalid" in s for s in seen), seen       # 내용 오류로 드러남
+    assert any("연결 일시 오류" in s and "Connection reset" in s for s in seen), seen   # 진짜 네트워크
+    assert not any("Message is not modified" in s for s in seen), seen                  # 흔한 무해 → 조용히
+    assert not any("연결 일시 오류" in s and "Document_invalid" in s for s in seen), seen  # 오분류 X
 
 
 if __name__ == "__main__":
