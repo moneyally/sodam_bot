@@ -108,7 +108,8 @@ async def in_buttons(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     btns, err = parse_buttons(msg.text or "")
     if err:
         return False, "❌ " + err
-    await _save(c, f"farewell_buttons={len(btns)}개 " + ", ".join(u for _, u in btns), farewell_buttons=btns)
+    # 버튼은 [글자, 주소] 또는 [글자, 주소, 이모지id(, 색)] — 주소는 늘 2번째 칸 (2칸 unpack 하면 3·4칸에서 터짐)
+    await _save(c, f"farewell_buttons={len(btns)}개 " + ", ".join(b[1] for b in btns), farewell_buttons=btns)
     return True, f"✅ URL 버튼 {len(btns)}개를 저장했어요."
 
 
