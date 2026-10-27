@@ -19,7 +19,7 @@ from openai import OpenAIError
 from telegram import (Bot, BotCommand, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Message,
                       ReplyParameters, Update, User)
 from telegram.constants import ChatAction, ChatMemberStatus, ChatType
-from telegram.error import NetworkError, TelegramError, TimedOut
+from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError, TimedOut
 from telegram.ext import (Application, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
@@ -1324,12 +1324,27 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log.exception("channel post failed")
 
 
+# 흔하고 무해한 BadRequest (이미 지워졌거나·수정 안 바뀜·오래된 콜백) → 조용히
+_HARMLESS_BADREQ = ("not modified", "message to edit not found", "message to delete not found",
+                    "message to reply not found", "message can't be edited", "query is too old",
+                    "message_id_invalid", "chat not found")
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # 잠깐 끊겼다 다시 붙는 네트워크 오류는 봇이 자동 재시도하므로 한 줄만 남긴다
-    if isinstance(context.error, (NetworkError, TimedOut)):
-        log.warning("텔레그램 연결 일시 오류 (자동 재시도): %s", context.error)
+    err = context.error
+    # ⚠️ PTB 에선 BadRequest 가 NetworkError 의 '하위 클래스' 라, 먼저 걸러내지 않으면
+    # Document_invalid(깨진 커스텀 이모지)·parse 오류 같은 '내용 오류'가 '연결 일시 오류'로 묻혀
+    # 버튼이 조용히 씹힌다 (2026-10-27 NASA·New world 공지). 콘텐츠 오류는 재시도해도 소용없다.
+    if isinstance(err, (BadRequest, Forbidden)):
+        low = str(err).lower()
+        if not any(s in low for s in _HARMLESS_BADREQ):
+            log.warning("요청 거절(%s): %s", type(err).__name__, err)
         return
-    log.error("unhandled error", exc_info=context.error)
+    # 잠깐 끊겼다 다시 붙는 진짜 네트워크 오류는 봇이 자동 재시도하므로 한 줄만 남긴다
+    if isinstance(err, (NetworkError, TimedOut)):
+        log.warning("텔레그램 연결 일시 오류 (자동 재시도): %s", err)
+        return
+    log.error("unhandled error", exc_info=err)
 
 
 async def on_any_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
