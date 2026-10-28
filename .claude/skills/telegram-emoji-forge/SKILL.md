@@ -21,7 +21,8 @@ description: '긴 배너를 100x100 조각으로 나눠 이어 치는 텔레그�
 - 금색 토큰(ChatGPT 로얄클럽 역설계): colors `[[240,240,179],[242,217,23],[130,113,42]]`, frames fill `[17,18,20]`·border_color `[172,143,47]`·inset `[213,173,19]`. PIL 금속은 `band·bevel·inner` 로 반사밴드·베벨·안쪽그림자.
 
 ## ① 처음부터 만들기
-**소담/오너용(제일 쉬움)**: 오너 1:1 에서 "소담아 로얄클럽 금색 이모지 만들어" → AI 도구 `make_tile_emoji(text, name, style, frame, font)` 가 글자당 타일 → 팩 생성 → addemoji 링크. (오너 전용)
+**누구나(2026-10-28)**: 방/1:1 에서 "소담아 제휴업체 이모지 만들어"·"내 프사로 이모지" → AI 도구 `make_emoji(text|source=photo, style, frame)` — 멤버도, 하루 한도(emoji_daily), **개인 팩**(sodamemoji<uid>) 에 쌓고 addemoji 링크 + (봇 주인 프리미엄이면) 인라인 시연. 사진 모드 = keying 배경빼기 → `stickerforge/emoji.py image_to_emoji`. `panels/tileemoji.py t_make_emoji`·`emojipack.py`.
+**오너 named 공유 팩**: 오너 1:1 에서 `make_tile_emoji(text, name, style, frame, font)` — 로얄클럽 같은 **이름 있는 배포용 팩** (오너 전용).
 
 **클로드가 ssh 로 직접**:
 1. spec JSON 작성 (`banner.py` 머리말 참고): `{cols, rows, bg:"transparent", frames, layers:[{type:"text", text:"로", style:"gold", font:"bold", at:[x,y], height}]}` — 글자 한 개당 layer 하나, at 은 그 타일 중심(0~1).

@@ -191,7 +191,7 @@ def can_map_covers_real_refusals():
     lines = _can_map().splitlines()
     for word, tool in (("깨워", "mention_members"), ("N분/N시간마다", "schedule_task"), ("효과 늘려", "sticker_catalog"),
                        ("환율", "web_search"), ("차트", "run_code"), ("소담에 없는 기능", "feature_request"),
-                       ("이모지", "copy_sticker"), ("0~9", "copy_sticker")):
+                       ("이모지", "make_emoji"), ("0~9", "copy_sticker")):
         assert any(word in ln and tool in ln for ln in lines), (word, tool)
 
 
