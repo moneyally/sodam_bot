@@ -8,12 +8,19 @@ from __future__ import annotations
 import asyncio
 import io
 import re
+from datetime import datetime
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
+
+from .. import emojipack
 from ..permissions import Role
-from ..stickerforge import banner, layout, stylefx
+from ..settings import register_setting
+from ..stickerforge import banner, emoji as emojifx, layout, stylefx
 from ..tools import Tool, ToolCtx, register_tool
 
 STYLES = ("gold", "chrome", "fire", "neon", "glass")
+register_setting("emoji_daily", 5, "하루 커스텀 이모지 만들기(개)", range_=(0, 30))   # 0 = 끔. 글자는 비용 거의 0, 사진은 하루 한도만
 MAX_TILES = 24
 FIRST_MAX = 50                      # createNewStickerSet 한 번에 올리는 최대
 
@@ -110,6 +117,116 @@ def _png(img) -> bytes:
     buf = io.BytesIO()
     img.convert("RGBA").save(buf, "PNG")
     return buf.getvalue()
+
+
+# ── 일반 make_emoji (멤버도·방/1:1·글자 또는 사진) ─────────────────────────────
+async def _demo_inline(bot, chat_id: int, ids: list) -> bool:
+    """봇 주인 프리미엄이면 방에 실제 커스텀 이모지를 인라인으로 시연 (Bot API 9.4). 안 되면 조용히 False."""
+    if chat_id >= 0 or not ids:                 # 채널·1:1 은 인라인 커스텀 이모지 불가 (9.4: 그룹·슈퍼그룹만)
+        return False
+    tag = "".join(f'<tg-emoji emoji-id="{i}">⭐</tg-emoji>' for i in ids[:5])
+    try:
+        await bot.send_message(chat_id, f"{tag} ← 이렇게 채팅 옆에 붙여 써요 (쓰는 사람은 프리미엄 필요)", parse_mode="HTML")
+        return True
+    except TelegramError:
+        return False                            # 봇 주인이 프리미엄 아님 → 링크만
+
+
+async def t_make_emoji(ctx: ToolCtx, a: dict) -> str:
+    uid, db, chat_id = ctx.caller.id, ctx.svc.db, ctx.chat_id
+    source = str(a.get("source") or ("photo" if a.get("photo_of") else "text")).strip().lower()
+    style = a.get("style") if a.get("style") in STYLES else "gold"
+    frame = a.get("frame") if a.get("frame") in FRAMES else ("none" if source == "photo" else "gold")
+    emoji = (str(a.get("emoji") or "⭐").strip() or "⭐")[:8]
+
+    # 하루 한도 (글자는 거의 공짜지만 팩 도배 방지, 사진은 특히) — 오너는 면제
+    cap = int(ctx.settings.get("emoji_daily", 5) or 0)
+    if cap <= 0 and ctx.role < Role.OWNER:
+        return "이 방은 커스텀 이모지 만들기가 꺼져 있어요 (emoji_daily 0). 방 관리자·오너만 켤 수 있어요."
+    day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
+    if ctx.role < Role.OWNER and await db.counter(day, 0, f"emo:{uid}") >= cap:
+        return f"커스텀 이모지는 한 사람 하루 {cap}개까지예요. 내일 다시 된다고 안내."
+
+    # 렌더: 사진 모드 = 배경 빼고 100×100 한 장 · 글자 모드 = 글자당 타일
+    try:
+        if source == "photo":
+            from .avatar import source_photo
+            src, err = await source_photo(ctx, a)
+            if not src:
+                return err or "원본 사진이 없어요."
+            img = await asyncio.to_thread(emojifx.image_to_emoji, src)
+            webps, preview, count = [emojifx.to_webp(img)], img, 1
+            title = str(a.get("title") or "소담 이모지")
+        else:
+            text = str(a.get("text", "")).strip()
+            if not text:
+                return "만들 글자(text)나 사진(source='photo')이 필요해요. 예: text='제휴업체' / '🔥HOT' / '?'"
+            font = a.get("font") if a.get("font") in {**layout.FONTS, **layout.DISPLAY_FONTS} else None
+            spec = build_spec(text, style, frame, font)
+            if not spec["layers"]:
+                return "만들 글자가 없어요."
+            r = await asyncio.to_thread(banner.build_tiles, spec)   # IM·PIL 렌더가 무거워 메인 루프 안 막게
+            webps = [_webp(t) for t in r["tiles"]]
+            preview, count = r["preview"], r["count"]
+            title = str(a.get("title") or text)
+    except Exception as e:                       # noqa: BLE001 — 렌더 실패는 사용자에게 한 줄로
+        return f"이모지 그리기 실패: {str(e)[:120]}. 글자를 줄이거나 다른 사진으로 다시."
+
+    # 미리보기 먼저 (방에 보이게 — 작으면 커 보이게)
+    try:
+        pv = preview.convert("RGBA")
+        if max(pv.size) < 160:
+            pv = pv.resize((pv.width * 3, pv.height * 3))
+        await ctx.bot.send_photo(chat_id, photo=_png(pv),
+                                 caption=f"🧩 커스텀 이모지 {count}개 만드는 중… ({'사진' if source == 'photo' else style})")
+    except TelegramError:
+        pass
+
+    # 커스텀 이모지 팩에 올리기
+    try:
+        name, total, ids = await emojipack.add_emojis(ctx.bot, db, uid, title, webps, emoji)
+    except emojipack.NeedsDM:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ 1:1 열고 다시 만들기", url=f"https://t.me/{ctx.bot.username}")]])
+        try:
+            await ctx.bot.send_message(chat_id, "먼저 소담 1:1 을 한 번 열어야 이모지 팩을 만들 수 있어요 (텔레그램 규칙). "
+                                                "아래 버튼으로 열고 다시 '이모지 만들어줘' 해 주세요.", reply_markup=kb)
+        except TelegramError:
+            pass
+        ctx.quiet = True
+        return "이 사람이 소담 1:1 을 안 열어 팩을 못 만들었어요 (1:1 열기 버튼을 방에 보냈음). 짧게 안내만."
+    except Exception as e:                       # noqa: BLE001
+        return f"이모지 팩에 못 올렸어요: {str(e)[:140]}. 다른 name·사진으로 다시 하자고 안내."
+
+    await db.bump(day, 0, f"emo:{uid}")
+    link = emojipack.add_url(name)
+    try:
+        await ctx.bot.send_message(chat_id, f"✅ 커스텀 이모지 {count}개 준비됐어요 (내 팩 {total}개)\n{link}\n"
+                                   "추가하면 채팅 글자 옆에 붙여 쓸 수 있어요 (쓰는 사람은 텔레그램 프리미엄 필요).")
+    except TelegramError:
+        pass
+    await _demo_inline(ctx.bot, chat_id, ids)
+    ctx.quiet = True
+    return (f"커스텀 이모지 {count}개를 만들어 팩 링크를 방에 보냈어요: {link}. "
+            + ("글자당 한 칸씩이라 이모지 칸에서 순서대로 이어 치면 한 줄이 돼요. " if source == "text" and count > 1 else "")
+            + "한마디만 짧게.")
+
+
+_EDESC = ("커스텀 이모지(채팅 글자 옆에 붙여 쓰는 100×100 프리미엄 이모지)를 만들어 팩 링크를 방에 보낸다 — "
+          "'제휴업체 이모지 만들어'·'🔥HOT 금색 이모지'·'내 프사로 이모지'. source='text'(기본)면 text 를 한 글자씩 타일로 "
+          "style(gold 금속·chrome·fire·neon·glass)·frame(gold 금테·silver·neon·none)로 꾸밈. source='photo'면 "
+          "photo_of(이 방 누구 프사)·붙은·답장한 사진의 배경을 빼서 한 장. 누구나 쓸 수 있고 하루 한도가 있다(emoji_daily). "
+          "쓰는 사람은 텔레그램 프리미엄 필요. 여러 글자는 이모지 칸에서 이어 치면 한 줄 배너가 됨. 스티커(512)와 다름(이모지는 글 속에 붙음).")
+EMOJI_TOOL = Tool("make_emoji", _EDESC,
+                  {"text": {"type": "string", "description": "글자 모드: 타일로 만들 글자/단어 (한 글자당 한 타일, 최대 24자). 기호·?·!·HOT 도 됨"},
+                   "source": {"type": "string", "enum": ["text", "photo"], "description": "text(기본, 글자 꾸미기) 또는 photo(사진 배경 빼서 이모지)"},
+                   "photo_of": {"type": "string", "description": "photo 모드: 이 방 멤버 프사로 — 이름·@아이디·ID (없으면 붙은·답장한 사진 > 요청자 프사)"},
+                   "style": {"type": "string", "enum": list(STYLES), "description": "글자 스타일 (기본 gold)"},
+                   "frame": {"type": "string", "enum": list(FRAMES), "description": "타일 테두리 배지 (기본 글자=gold·사진=none)"},
+                   "font": {"type": "string", "description": "글꼴 (안 주면 한글=굵게·영문=스타일에 맞춰 자동)"},
+                   "emoji": {"type": "string", "description": "이 이모지의 뜻(검색용 기준 이모지 1개, 기본 ⭐)"},
+                   "title": {"type": "string", "description": "팩 제목 (안 주면 글자/‘소담 이모지’)"}},
+                  [], t_make_emoji, Role.MEMBER)   # setting 으로 숨기지 않음(캐시 일관성) — 0 한도는 핸들러가 안내
+register_tool(EMOJI_TOOL, read_only=False)
 
 
 _DESC = ("[오너] 분할 커스텀 이모지 팩을 만든다 — '로얄클럽 금색 이모지 만들어'. text 를 한 글자씩 타일로 쪼개 "

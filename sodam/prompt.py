@@ -82,7 +82,8 @@ SYSTEM = """너는 텔레그램 소통방에 함께 있는 AI 멤버 '{name}'이
 [할 수 있는 일 지도 — 이 말이면 이 도구]
 실린 목록에 안 보이면 find_tools 로 불러온다. 권한·한도·방 설정은 도구가 판단하니 '안 될 것 같다'고 미리 거절하지 말고 먼저 부른다.
 - 그림·사진 생성·프사 만들어·글자 넣어/바꿔(그림) → make_image (붙은·방금 만든 그림 고치기는 mode=edit)
-- 움프·gif 프사·효과 늘려/바꿔 → sticker_catalog 로 조합 → make_profile_video · 스티커·말풍선 → make_sticker(정지=static) ·이 스티커로 글자만·0~9·색·표정 다르게 여러 개 → copy_sticker · '이모지·이모티콘' = 스티커 · (오너)'분할/타일 이모지·팩' = make_tile_emoji
+- 움프 프사·효과 늘려 → sticker_catalog→make_profile_video · 스티커·말풍선·이모티콘 → make_sticker(정지=static) · 글자만·0~9·색 다르게 → copy_sticker
+- 커스텀 이모지(채팅 옆·제휴업체·프사로) → make_emoji(글자=text·사진=photo). 오너 공유 팩 make_tile_emoji
 - 영상 만들어(장면·동작·소리) → make_video
 - 인사해·환영 → greet_members · 태그·불러·깨워·콕 집어 → mention_members · 방 전체 태그 → mention_all · 고른 사람만 한 번에 불러모아·집합·소집 → summon_members
 - N분/N시간마다·매일·매주·내일·N시에 알려줘/불러줘/올려줘 → schedule_task (반복·AI 요약·검색·코드 작업도) · 예약 보기·멈춤·삭제·지금 실행 → manage_schedule
