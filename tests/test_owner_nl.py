@@ -101,7 +101,9 @@ async def grant_days_card_then_only_owner_press_extends():
     q = await press(svc, bot, OWNER, ok)
     after = await paid_until(db, CHAT)
     assert after == before + 30 * DAY, (before, after)
-    assert "새 만료" in q.edits[-1][0] and time.strftime("%Y") in q.edits[-1][0], q.edits
+    from sodam.util import fmt_time
+    exp_date = fmt_time(after, svc.cfg.tz, "%Y-%m-%d")                         # 실제 새 만료 날짜 (연말엔 다음 해가 되므로 '올해'로 가정 안 함)
+    assert "새 만료" in q.edits[-1][0] and exp_date in q.edits[-1][0], (q.edits, exp_date)
     assert [r for r in await mod_actions(db, CHAT, "sub_grant") if "AI 1:1" in r["detail"]]
     q = await press(svc, bot, OWNER, ok)                     # 두 번 눌러도 한 번
     assert await paid_until(db, CHAT) == after

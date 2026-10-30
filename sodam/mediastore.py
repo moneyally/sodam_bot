@@ -179,6 +179,22 @@ async def send(bot, db, kind: str, chat_id: int, file_id: str, **kw):
     return sent
 
 
+async def aliased(db, bot, file_id: str) -> str:
+    """이 봇이 이 file_id 대신 쓰는 id (media_alias 에 기억된 게 있으면), 없으면 그대로.
+    앨범(send_media_group)은 한 번에 보내서 send() 의 재시도 경로를 못 타므로, 보내기 전에 미리 바꿔 끼운다."""
+    if db is None:
+        return file_id
+    row = await db._one("SELECT new_id FROM media_alias WHERE bot_id=? AND file_id=?", (_bot_id(bot), file_id))
+    return row["new_id"] if row else file_id
+
+
+async def record_alias(db, bot, file_id: str, new_id: str) -> None:
+    """원본을 다시 올려 받은 새 file_id 를 기억 (다음부터 바로 쓰게)."""
+    if db is not None and new_id and new_id != file_id:
+        await db._write("INSERT OR REPLACE INTO media_alias(bot_id, file_id, new_id, ts) VALUES(?,?,?,?)",
+                        (_bot_id(bot), file_id, new_id, int(time.time())))
+
+
 async def notify_lost(bot, db, key: str, user_id: int | None, text: str) -> bool:
     """원본이 없어 미디어를 못 붙였을 때 관리자 1:1 에 하루 한 번 (key 마다)."""
     if not user_id or db is None:
@@ -199,6 +215,13 @@ async def references(db) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for r in await db._all("SELECT media_type, media_id FROM schedules WHERE media_id IS NOT NULL AND media_id<>''"):
         out.append((r["media_type"], r["media_id"]))
+    try:   # 여러 장(앨범) 예약공지는 둘째 장부터도 봇 바뀌면 깨지니 같이 받아 둠
+        for r in await db._all("SELECT media_list FROM schedules WHERE media_list IS NOT NULL AND media_list<>''"):
+            for it in json.loads(r["media_list"]):
+                if isinstance(it, dict) and it.get("id"):
+                    out.append((it.get("t"), it["id"]))
+    except Exception:   # media_list 컬럼 없는 옛 DB·깨진 JSON
+        pass
     for r in await db._all("SELECT settings FROM chats WHERE settings LIKE '%greet_%'"):
         try:
             s = json.loads(r["settings"] or "{}")

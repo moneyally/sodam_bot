@@ -267,17 +267,20 @@ async def dm_wizard_takes_photo_as_separate_step():
     msg = await dm("이건 사진 아님")                                          # 글만 오면 다시 물어봄
     assert not msg.replies and "사진·영상·GIF" in sent_to(bot, ADMIN)[-1][2]
     await dm(video=SimpleNamespace(file_id="VID"))
+    d = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert d.step == "media" and len(d.media) == 1 and "담겼어요" in sent_to(bot, ADMIN)[-1][2]  # 사진·영상은 '더 넣기' 단계
+    await svc.announcer.on_callback(bot, FakeQuery(ADMIN, fake_user(ADMIN)), [d.token, "mdone"])  # ✅ 이대로 다음
     draft, _ = await _run_wizard(svc, bot, dm, answers=("반복 40",))
     r = (await db.schedules(CHAT))[0]
-    assert (r["title"], r["text"], r["media_type"], r["media_id"], r["interval_min"]) == \
-        ("규칙 공지", "규칙 잘 지켜요", "video", "VID", 40), dict(r)
+    assert (r["title"], r["text"], r["media_type"], r["media_id"], r["media_list"], r["interval_min"]) == \
+        ("규칙 공지", "규칙 잘 지켜요", "video", "VID", None, 40), dict(r)   # 한 장이면 media_list 는 비움
 
     # 수정: 글은 그대로 두고 영상만 새로 (봇이 바뀌어 미디어를 다시 넣는 대표님 — 2026-10-04 백악관)
     await press(svc, bot, f"m:sce:{CHAT}:{r['id']}")
     for a in ("그대로", "그대로"):
         await dm(a)
     ask = sent_to(bot, ADMIN)[-1]
-    assert "지금 붙은 영상" in ask[2] and "지금 영상 그대로" in buttons(ask[3]["reply_markup"])[0].text
+    assert "담긴 게 있어요" in ask[2] and "지금 영상 그대로" in buttons(ask[3]["reply_markup"])[0].text
     await dm(animation=SimpleNamespace(file_id="GIF2"))
     await _run_wizard(svc, bot, dm, answers=("그대로",))
     r = await db.get_schedule(CHAT, r["id"])
@@ -533,6 +536,170 @@ async def monthly_and_limits_parse_and_due():
     assert announce._within_limits(r5, int(datetime(2026, 6, 15, 23, 30, tzinfo=tz).timestamp()), tz)
     assert announce._within_limits(r5, int(datetime(2026, 6, 15, 3, 30, tzinfo=tz).timestamp()), tz)
     assert not announce._within_limits(r5, int(datetime(2026, 6, 15, 12, 0, tzinfo=tz).timestamp()), tz)
+    await db.close()
+
+
+@test
+async def wizard_collects_many_photos_into_album():
+    """사진 여러 장을 담으면 media_list 에 전부·media_id 는 첫 장. 앨범 담는 중엔 안내 하나를 고쳐 수만 갱신 (도배 방지)."""
+    import json
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("여러장 공지")
+    await dm("사진 많아요")                                                    # 글만 → 3/7 사진 단계
+    assert "여러 장" in sent_to(bot, ADMIN)[-1][2] and "10장" in sent_to(bot, ADMIN)[-1][2]
+    for i in range(1, 4):                                                      # 사진 3장
+        await dm(photo=(SimpleNamespace(file_id=f"P{i}"),))
+    d = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert [m["id"] for m in d.media] == ["P1", "P2", "P3"] and d.media_type == "photo" and d.media_id == "P1"
+    prompts = [c for c in bot.calls if c[0] == "send_message" and c[1] == ADMIN and "담겼어요" in c[2]]
+    edits = [c for c in bot.calls if c[0] == "edit_text" and "담겼어요" in c[2]]
+    assert len(prompts) == 1 and len(edits) == 2, (len(prompts), len(edits))   # 안내는 1번만 보내고 나머지는 고침
+    await svc.announcer.on_callback(bot, FakeQuery(ADMIN, fake_user(ADMIN)), [d.token, "mdone"])
+    await _run_wizard(svc, bot, dm, answers=("반복 30",))
+    r = (await db.schedules(CHAT))[0]
+    assert r["media_type"] == "photo" and r["media_id"] == "P1"
+    assert [x["id"] for x in json.loads(r["media_list"])] == ["P1", "P2", "P3"]
+    await db.close()
+
+
+@test
+async def wizard_caps_album_at_ten():
+    """11장째는 안 담고 '최대 10장' 안내 (뮤테이션: MAX_MEDIA 한도 빼면 실패)."""
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("많이")
+    await dm("글")
+    for i in range(12):
+        await dm(photo=(SimpleNamespace(file_id=f"Q{i}"),))
+    d = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert len(d.media) == 10 and [m["id"] for m in d.media] == [f"Q{i}" for i in range(10)]
+    full = [c for c in bot.calls if c[0] in ("send_message", "edit_text") and "최대 10장" in (c[2] or "")]
+    assert full                                                                # 11장째 '최대 10장' 안내 (안내 고침에 담김)
+    assert d.add_media("photo", "Q99") is False                               # 꽉 차면 거부 (뮤테이션: add_media 한도 빼면 True)
+    from sodam.announce import Draft, MAX_MEDIA
+    big = Draft(CHAT, ADMIN)
+    big.set_media([{"t": "photo", "id": f"Z{i}"} for i in range(MAX_MEDIA + 5)])
+    assert len(big.media) == MAX_MEDIA                                         # set_media 절단 (뮤테이션: [:MAX_MEDIA] 빼면 15)
+    await db.close()
+
+
+@test
+async def gif_stays_single_not_album():
+    """GIF·파일은 앨범 불가 → 한 개로 교체, media_list 는 비움. 사진 담던 중 GIF 를 보내도 그거 하나로."""
+    import json
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("움짤 공지")
+    await dm("글")
+    await dm(photo=(SimpleNamespace(file_id="PA"),))                           # 사진 1장 담김
+    await dm(animation=SimpleNamespace(file_id="G1"))                          # GIF → 교체 + 바로 다음 단계
+    d = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert d.step == "when" and d.media == [{"t": "animation", "id": "G1"}]
+    await _run_wizard(svc, bot, dm, answers=("반복 30",))
+    r = (await db.schedules(CHAT))[0]
+    assert (r["media_type"], r["media_id"], r["media_list"]) == ("animation", "G1", None)
+    await db.close()
+
+
+@test
+async def publish_album_sends_media_group_caption_first_pins_first():
+    """여러 장 예약공지는 앨범(send_media_group) 한 번 · 설명은 첫 장에만 · 고정은 첫 장 · last_msg_ids 저장."""
+    import json
+    db, svc, bot, _ = await setup()
+    sid = await add(db, CHAT, "앨범공지", text="세 장 공지", pin=True,
+                    media_type="photo", media_id="A1",
+                    media_list=json.dumps([{"t": "photo", "id": "A1"}, {"t": "photo", "id": "A2"},
+                                           {"t": "video", "id": "A3"}]))
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)
+    groups = [c for c in bot.calls if c[0] == "send_media_group"]
+    assert len(groups) == 1 and groups[0][1] == CHAT
+    media = groups[0][2]
+    assert len(media) == 3                                                     # 사진 3장 (뮤테이션: 단일로 보내면 실패)
+    caps = [m.caption for m in media]
+    assert caps[0] and caps[1] is None and caps[2] is None                     # 설명은 첫 장에만 (뮤테이션: 전부에 붙이면 실패)
+    assert "세 장 공지" in caps[0]
+    pins = [c for c in bot.calls if c[0] == "pin"]
+    r = await db.get_schedule(CHAT, sid)
+    saved = json.loads(r["last_msg_ids"])
+    assert pins and pins[0][2] == r["last_msg_id"] == saved[0]                 # 첫 장 고정
+    assert len(saved) == 3                                                     # 세 글 id 다 기록 (지우고 새로 올릴 때 다 지움)
+    await db.close()
+
+
+@test
+async def publish_album_deletes_all_previous_on_next_round():
+    """del_prev 기본: 2회차 올릴 때 지난 앨범 세 글을 전부 지움 (뮤테이션: 첫 글만 지우면 실패)."""
+    db, svc, bot, _ = await setup()
+    import json
+    sid = await add(db, CHAT, "앨범", text="x", media_type="photo", media_id="B1",
+                    media_list=json.dumps([{"t": "photo", "id": "B1"}, {"t": "photo", "id": "B2"},
+                                           {"t": "photo", "id": "B3"}]))
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)                                      # 1회차
+    first_ids = json.loads((await db.get_schedule(CHAT, sid))["last_msg_ids"])
+    assert len(first_ids) == 3
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)                                      # 2회차 → 1회차 세 글 지움
+    deleted = [c[2] for c in bot.calls if c[0] == "delete"]
+    assert sorted(deleted) == sorted(first_ids), (deleted, first_ids)
+    await db.close()
+
+
+@test
+async def album_media_lost_falls_back_to_text_only():
+    """봇이 바뀌어 앨범 file_id 가 안 먹고 보관 원본도 없음 → 글만 올리고 '사라졌어요' 알림 (공지 자체는 안 끊김)."""
+    import json
+    db, svc, bot, _ = await setup()
+    bot.album_bad = True                                                       # 첫 send_media_group 이 bad_file 로 실패
+    # 보관 원본 없음 → load None → MediaLost → 글만
+    sid = await add(db, CHAT, "잃음", text="사진 공지", media_type="photo", media_id="C1",
+                    media_list=json.dumps([{"t": "photo", "id": "C1"}, {"t": "photo", "id": "C2"}]))
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)
+    msgs = [c for c in bot.calls if c[0] == "send_message" and c[1] == CHAT]
+    assert msgs and "사진 공지" in msgs[-1][2]                                  # 글은 올라감
+    assert not any(c[0] == "send_media_group" and c[1] == CHAT for c in bot.calls[bot.calls.index(msgs[-1]):])
+    await db.close()
+
+
+@test
+async def album_refused_reuploads_from_store_and_records_alias():
+    """앨범 file_id 가 안 먹지만 보관 원본이 있으면 원본으로 다시 올리고 새 id 를 media_alias 에 기억."""
+    import json
+    from sodam import mediastore
+    db, svc, bot, _ = await setup()
+    bot.files = {"D1": b"img1", "D2": b"img2"}
+    await mediastore.remember(bot, db, "photo", "D1")                          # 원본 보관
+    await mediastore.remember(bot, db, "photo", "D2")
+    bot.album_bad = True                                                       # 첫 앨범 전송은 bad_file → 원본 재업로드 경로
+    sid = await add(db, CHAT, "재업", text="x", media_type="photo", media_id="D1",
+                    media_list=json.dumps([{"t": "photo", "id": "D1"}, {"t": "photo", "id": "D2"}]))
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)
+    groups = [c for c in bot.calls if c[0] == "send_media_group"]
+    assert len(groups) == 1                                                    # 재업로드 1번 성공 (MediaLost 아님)
+    alias = await db._one("SELECT COUNT(*) AS n FROM media_alias")
+    assert alias["n"] == 2                                                     # 두 장 새 id 기억 (뮤테이션: record_alias 빼면 0)
+    await db.close()
+
+
+@test
+async def album_items_backfilled_by_mediastore():
+    """앨범 둘째 장부터도 봇 바뀌면 깨지니 references 가 전부 돌려줘 backfill 대상이 됨 (뮤테이션: media_list 안 읽으면 빠짐)."""
+    import json
+    from sodam import mediastore
+    db, svc, bot, _ = await setup()
+    await add(db, CHAT, "앨범", text="x", media_type="photo", media_id="E1",
+              media_list=json.dumps([{"t": "photo", "id": "E1"}, {"t": "photo", "id": "E2"},
+                                     {"t": "video", "id": "E3"}]))
+    refs = await mediastore.references(db)
+    ids = {f for _, f in refs}
+    assert {"E1", "E2", "E3"} <= ids, ids
     await db.close()
 
 

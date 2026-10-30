@@ -122,7 +122,9 @@ async def dm_wizard_accepts_photo_without_caption():
     photo = FakeMsg(ADMIN, fake_user(ADMIN), "", photo=(SimpleNamespace(file_id="PH"),))
     await handlers.on_private(SimpleNamespace(message=photo), ctx)
     d = svc.announcer.drafts[(ADMIN, ADMIN)]
-    assert d.step == "when" and d.media_id == "PH", f"step={d.step} media={d.media_id}"
+    # 사진은 여러 장 담을 수 있어 '더 넣기' 단계로 (✅ 이대로 버튼으로 끝) — media 에 담김
+    assert d.step == "media" and d.media_id == "PH" and d.media == [{"t": "photo", "id": "PH"}], \
+        f"step={d.step} media={d.media}"
 
 
 # 6. an:x deletes ANY bot message it is attached to, including in groups, pressed by anyone
