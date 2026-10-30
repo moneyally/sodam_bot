@@ -92,6 +92,23 @@ class FakeBot:
     async def send_video(self, chat_id, video, caption=None, **kw):
         return await self._send_media("send_video", chat_id, video, caption, **kw)
 
+    async def send_media_group(self, chat_id, media, **kw):
+        # 앨범(여러 장): media = InputMediaPhoto/Video 목록. 보낸 글마다 다른 message_id 를 돌려줌.
+        if getattr(self, "album_bad", False):   # 테스트: file_id 가 이 봇에서 안 먹는 상황 (보관 원본으로 다시 올림 경로)
+            from telegram.error import BadRequest
+            self.album_bad = False               # 두 번째(원본 재업로드) 호출은 통과
+            raise BadRequest("wrong file identifier")
+        self.calls.append(("send_media_group", chat_id, list(media), kw))
+        out = []
+        for m in media:   # 보낸 글마다 새 file_id (봇 바뀌어 다시 올린 뒤 media_alias 기록 경로 확인용)
+            msg = self._msg(chat_id)
+            if getattr(m, "type", "") == "video":
+                msg.video = SimpleNamespace(file_id=f"NEW_V{msg.message_id}")
+            else:
+                msg.photo = (SimpleNamespace(file_id=f"NEW_P{msg.message_id}"),)
+            out.append(msg)
+        return out
+
     async def edit_message_text(self, text, chat_id=None, message_id=None, **kw):
         self.calls.append(("edit_text", chat_id, text, kw))
 

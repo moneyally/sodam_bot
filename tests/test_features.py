@@ -358,8 +358,10 @@ async def announce_wizard_create_with_photo():
     assert not await _answer(svc, bot, admin, ".도움말")  # 명령어는 마법사가 가로채지 않음
     photo = [SimpleNamespace(file_id="small"), SimpleNamespace(file_id="BIG")]
     assert await _answer(svc, bot, admin, caption="{규칙}\n꼭 지켜주세요", photo=photo)
-    assert await _answer(svc, bot, admin, "매일 25:00")  # 잘못된 시간 → 다시 물어봄
     draft = svc.announcer.drafts[(CHAT, 1)]
+    assert draft.step == "media" and draft.media == [{"t": "photo", "id": "BIG"}]  # 사진은 '더 넣기' 단계
+    await svc.announcer.on_callback(bot, FakeQuery(CHAT, admin), [draft.token, "mdone"])  # ✅ 이대로 다음
+    assert await _answer(svc, bot, admin, "매일 25:00")  # 잘못된 시간 → 다시 물어봄
     assert draft.step == "when"
     assert await _answer(svc, bot, admin, "매일 09:00")
     assert draft.step == "pin"

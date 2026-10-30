@@ -19,7 +19,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from telegram import (Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+                      InputMediaPhoto, InputMediaVideo, Message)
 from telegram.error import BadRequest, TelegramError
 
 from . import mediastore, persist
@@ -38,6 +39,8 @@ DAILY_GRACE = 15 * 60          # 정각을 놓쳤을 때(재시작 등) 이 시�
 MIN_INTERVAL, MAX_INTERVAL = 30, 7 * 1440
 CAPTION_LIMIT, TEXT_LIMIT = 1024, 4096
 MEDIA_LABEL = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}
+MAX_MEDIA = 10                # 텔레그램 앨범(미디어 그룹) 한 번에 2~10개
+ALBUM_KINDS = ("photo", "video")   # 앨범에 섞어 넣을 수 있는 건 사진·영상뿐 (GIF·파일은 한 개만)
 KEEP = {"그대로", "유지", "="}
 CANCEL = {"취소", ".취소", "/cancel"}
 
@@ -53,6 +56,39 @@ def extract_media(msg: Message) -> tuple[str | None, str | None]:
     if msg.document:
         return "document", msg.document.file_id
     return None, None
+
+
+def media_json(items: list) -> str | None:
+    """여러 장(2개 이상)일 때만 JSON 으로 저장 (한 개·없음은 media_type/media_id 로만 — 단일 경로 그대로)."""
+    return json.dumps(items, ensure_ascii=False) if items and len(items) >= 2 else None
+
+
+def media_items(row) -> list[dict]:
+    """예약공지 행에서 미디어 목록을 꺼낸다: 여러 장이면 media_list, 아니면 [첫 장] 또는 []."""
+    raw = _col(row, "media_list", None)
+    if raw:
+        try:
+            got = [it for it in json.loads(raw) if isinstance(it, dict) and it.get("id")]
+            if got:
+                return got
+        except (ValueError, TypeError):
+            pass
+    mid, mt = _col(row, "media_id", None), _col(row, "media_type", None)
+    return [{"t": mt, "id": mid}] if mid else []
+
+
+def _prev_msg_ids(row) -> list[int]:
+    """지난 회차에 올린 글 id 들 (앨범이면 전부, 아니면 [첫 글])."""
+    raw = _col(row, "last_msg_ids", None)
+    if raw:
+        try:
+            got = [int(x) for x in json.loads(raw) if isinstance(x, int)]
+            if got:
+                return got
+        except (ValueError, TypeError):
+            pass
+    last = _col(row, "last_msg_id", None)
+    return [last] if last else []
 
 
 _WHEN_DAILY = re.compile(r"^(?:매일|daily)?\s*(\d{1,2}:\d{2})$", re.I)
@@ -389,8 +425,10 @@ class Draft:
     step: str = "title"
     title: str = ""
     text: str = ""
-    media_type: str | None = None
+    media_type: str | None = None   # 첫 장 (여러 장이면 media 의 [0])
     media_id: str | None = None
+    media: list = field(default_factory=list)   # 여러 장(앨범): [{"t":종류,"id":file_id}, …] 사진·영상만, 최대 MAX_MEDIA
+    media_prompt_id: int | None = None          # "N장 담겼어요" 안내 메시지 (앨범 여러 장 올 때 새 글 대신 그걸 고침)
     fmt: str = ""                 # 'html' = 제목·내용이 텔레그램 HTML (움직이는 이모지·서식 보관)
     kind: str | None = None
     at_time: str | None = None
@@ -409,6 +447,19 @@ class Draft:
     def __post_init__(self):
         if self.ui_chat_id is None:
             self.ui_chat_id = self.chat_id
+
+    def set_media(self, items: list) -> None:
+        """미디어 목록을 정하고 첫 장을 media_type/media_id 에 맞춘다 (기존 단일 경로·목록·미리보기 호환)."""
+        self.media = items[:MAX_MEDIA]
+        self.media_type = self.media[0]["t"] if self.media else None
+        self.media_id = self.media[0]["id"] if self.media else None
+
+    def add_media(self, kind: str, fid: str) -> bool:
+        """사진·영상 한 장 더. 넣었으면 True (중복·한도 초과·종류 안 맞으면 False)."""
+        if kind not in ALBUM_KINDS or len(self.media) >= MAX_MEDIA or any(m["id"] == fid for m in self.media):
+            return False
+        self.set_media(self.media + [{"t": kind, "id": fid}])
+        return True
 
     @property
     def key(self) -> tuple[int, int]:
@@ -496,6 +547,55 @@ class Announcer:
             return await mediastore.send(bot, self.svc.db, media_type, chat_id, media_id, caption=html, **kw)
         return await bot.send_message(chat_id, html, **kw)
 
+    async def send_album(self, bot: Bot, chat_id: int, items: list, *, title: str, text: str,
+                         rules_chat: int | None = None, fmt: str = "") -> list[Message]:
+        """여러 장(사진·영상)을 앨범(미디어 그룹)으로. 설명은 첫 장에만 (텔레그램 규칙). 서식 거절이면 글자만으로 다시.
+        앨범은 send() 의 '안 먹으면 다시 올리기'를 못 타므로 미리 alias 로 바꿔 끼우고, 그래도 안 먹으면 보관 원본으로."""
+        rules = await self._rules(rules_chat if rules_chat is not None else chat_id)
+        html = render(title, text, has_media=True, rules=rules, tz=self.svc.cfg.tz, fmt=fmt)
+        try:
+            return await self._send_album_html(bot, chat_id, items, html)
+        except mediastore.MediaLost:
+            raise
+        except BadRequest as e:
+            if fmt != "html":
+                raise
+            log.warning("announce album rich send refused, plain retry: %s", e)
+            plain = render(html_plain(title), html_plain(text), has_media=True, rules=rules, tz=self.svc.cfg.tz)
+            return await self._send_album_html(bot, chat_id, items, plain)
+
+    async def _send_album_html(self, bot: Bot, chat_id: int, items: list, caption: str) -> list[Message]:
+        db = self.svc.db
+
+        async def build(resolver):
+            out = []
+            for i, it in enumerate(items):
+                cls = InputMediaVideo if it["t"] == "video" else InputMediaPhoto
+                cap = caption if i == 0 else None          # 설명은 첫 장에만 (앨범은 첫 장 설명이 전체에 보임)
+                out.append(cls(await resolver(it["id"]), caption=cap,
+                               parse_mode="HTML" if cap else None))
+            return out
+
+        try:
+            media = await build(lambda fid: mediastore.aliased(db, bot, fid))
+            return list(await bot.send_media_group(chat_id, media))
+        except BadRequest as e:
+            if not mediastore.is_bad_file(e):
+                raise
+        # 이 봇에서 file_id 가 안 먹음 → 보관 원본으로 다시 올림 (하나라도 원본 없으면 MediaLost → 글만)
+        async def from_store(fid):
+            data = await mediastore.load(db, fid)
+            if data is None:
+                raise mediastore.MediaLost("album media id refused and no kept original")
+            return InputFile(data, filename="photo.jpg")
+        media = await build(from_store)
+        sent = list(await bot.send_media_group(chat_id, media))
+        for it, m in zip(items, sent):   # 새 봇의 file_id 를 기억 (다음부터 바로)
+            new = mediastore.new_file_id(m, it["t"])
+            if new:
+                await mediastore.record_alias(db, bot, it["id"], new)
+        return sent
+
     async def publish(self, bot: Bot, row) -> None:
         """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire."""
         now_ts = int(time.time())
@@ -506,24 +606,39 @@ class Announcer:
             await self.svc.db.mark_schedule_sent(row["id"], now_ts, None)   # 먼저 기록: AI 가 느려도 다음 틱에 또 안 돌게
             await cron.fire(self.svc, bot, row)
             return
-        if row["last_msg_id"] and _col(row, "del_prev", 1):   # del_prev=0 이면 지난 회차 글을 안 지우고 쌓음 (泰山 루디)
-            try:
-                await bot.delete_message(row["chat_id"], row["last_msg_id"])
-            except TelegramError:
-                pass
-        msg_id = None
+        if _col(row, "del_prev", 1):   # del_prev=0 이면 지난 회차 글을 안 지우고 쌓음 (泰山 루디)
+            for mid in _prev_msg_ids(row):   # 앨범이면 지난 회차 글 전부 지움
+                try:
+                    await bot.delete_message(row["chat_id"], mid)
+                except TelegramError:
+                    pass
+        items = media_items(row)
+        msg_id, msg_ids = None, None
         try:
-            try:
-                sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                       media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
-            except mediastore.MediaLost:
-                # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 공지는 글만이라도 올리고 만든 관리자에게 하루 한 번 알림
-                sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                       media_type=None, media_id=None, fmt=row["fmt"] or "")
-                await self._media_lost(bot, row)
-            msg_id = sent.message_id
+            if len(items) >= 2:   # 여러 장 → 앨범
+                try:
+                    sent = await self.send_album(bot, row["chat_id"], items, title=row["title"],
+                                                 text=row["text"], fmt=row["fmt"] or "")
+                except mediastore.MediaLost:
+                    # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 글만이라도
+                    sent = [await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                            media_type=None, media_id=None, fmt=row["fmt"] or "")]
+                    await self._media_lost(bot, row)
+                ids = [m.message_id for m in sent]
+                msg_id = ids[0] if ids else None
+                msg_ids = json.dumps(ids) if len(ids) >= 2 else None
+            else:
+                try:
+                    sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                           media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
+                except mediastore.MediaLost:
+                    # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 공지는 글만이라도 올리고 만든 관리자에게 하루 한 번 알림
+                    sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                           media_type=None, media_id=None, fmt=row["fmt"] or "")
+                    await self._media_lost(bot, row)
+                msg_id = sent.message_id
             await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
-            if row["pin"]:
+            if row["pin"] and msg_id:   # 앨범이면 첫 장을 고정
                 try:
                     await bot.pin_chat_message(row["chat_id"], msg_id, disable_notification=True)
                 except TelegramError as e:
@@ -533,7 +648,7 @@ class Announcer:
             from . import opsdesk   # 📥 운영 인박스용 기록 (sodam/opsdesk.py, 늦게 import — 순환 방지)
             await opsdesk.schedule_failed(self.svc, row, "send", e.message)
         # 실패해도 기록: 안 그러면 다음 틱마다 계속 재시도하며 에러를 쏟아냄
-        await self.svc.db.mark_schedule_sent(row["id"], now_ts, msg_id)
+        await self.svc.db.mark_schedule_sent(row["id"], now_ts, msg_id, msg_ids)
 
     async def _media_lost(self, bot: Bot, row) -> None:
         from . import opsdesk   # 늦게 import (순환 방지)
@@ -566,7 +681,10 @@ class Announcer:
                     "차례로 설정할 수 있어요.")
         lines = ["🗓️ <b>예약공지</b>"]
         for r in rows:
-            flags = ("📌" if r["pin"] else "") + (f"[{MEDIA_LABEL[r['media_type']]}]" if r["media_type"] else "")
+            nmedia = len(media_items(r))
+            flags = ("📌" if r["pin"] else "") + (
+                f"[{MEDIA_LABEL.get(r['media_type'], '미디어')}{('×' + str(nmedia)) if nmedia >= 2 else ''}]"
+                if r["media_type"] else "")
             state = "" if r["enabled"] else " (꺼짐)"
             title, body = (html_plain(r["title"]), html_plain(r["text"])) if r["fmt"] == "html" else (r["title"], r["text"])
             name = title or (body[:20] + ("…" if len(body) > 20 else "")) or "(내용 없음)"
@@ -587,9 +705,10 @@ class Announcer:
     def active(self, ui_chat_id: int, user_id: int) -> bool:
         return self._get(ui_chat_id, user_id) is not None
 
-    async def _say(self, bot: Bot, draft: Draft, text: str, markup=None) -> None:
+    async def _say(self, bot: Bot, draft: Draft, text: str, markup=None) -> Message:
         sent = await bot.send_message(draft.ui_chat_id, text, parse_mode="HTML", reply_markup=markup)
         draft.cleanup.append(sent.message_id)
+        return sent
 
     async def _warn_bad_emoji(self, bot: Bot, draft: Draft) -> None:
         """내용에 '봇이 못 올리는 커스텀 이모지'(삭제됐거나 특수 이모지)가 있으면 어느 이모지·몇 번째 줄인지
@@ -630,8 +749,9 @@ class Announcer:
                      where: str | None = None) -> None:
         if edit_row is not None:
             draft.edit_id = edit_row["id"]
-            for k in ("title", "text", "media_type", "media_id", "kind", "at_time", "interval_min"):
+            for k in ("title", "text", "kind", "at_time", "interval_min"):
                 setattr(draft, k, edit_row[k])
+            draft.set_media(media_items(edit_row))   # 여러 장(앨범)이면 전부 불러옴 (media_type/id 는 첫 장)
             draft.pin = bool(edit_row["pin"])
             draft.del_prev = bool(_col(edit_row, "del_prev", 1))
             for k in ("start_ts", "end_ts", "active_from", "active_to"):
@@ -720,10 +840,15 @@ class Announcer:
                     return True
                 draft.text = self._take(draft, text, rich_html(msg), "text")
                 await self._warn_bad_emoji(bot, draft)   # 못 올리는 커스텀 이모지면 어느 줄인지 콕 집어 알림 (막진 않음)
-                if media_id:   # 사진에 설명을 붙여 한 번에 → 사진 단계 건너뜀 (글만이면 지금 붙은 사진은 다음 단계에서 정함)
-                    draft.media_type, draft.media_id = media_type, media_id
+                if media_id:   # 사진에 설명을 붙여 한 번에
                     mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본
-                    await self._ask_when(bot, draft)
+                    if media_type in ALBUM_KINDS:   # 사진·영상 → 한 장 담고 '더 넣기' 단계로 (여러 장 가능)
+                        draft.step = "media"
+                        draft.add_media(media_type, media_id)
+                        await self._collect_prompt(bot, draft, first=True)
+                    else:                           # GIF·파일 → 한 개만 → 다음 단계
+                        draft.set_media([{"t": media_type, "id": media_id}])
+                        await self._ask_when(bot, draft)
                     return True
             await self._ask_media(bot, draft)
             return True
@@ -731,18 +856,29 @@ class Announcer:
         if draft.step == "media":
             media_type, media_id = extract_media(msg)
             if media_id:
-                if len(html_plain(draft.text) if draft.fmt == "html" else draft.text) > CAPTION_LIMIT - 150:
+                if not draft.media and len(html_plain(draft.text) if draft.fmt == "html" else draft.text) > CAPTION_LIMIT - 150:
                     await self._say(bot, draft, f"내용이 길어서 사진·영상 설명으로 못 붙여요 (텔레그램 제한 1024자 → "
                                                 f"{CAPTION_LIMIT - 150}자 이내). 사진 없이 하려면 <code>없음</code>")
                     return True
-                draft.media_type, draft.media_id = media_type, media_id
                 mediastore.remember_soon(bot, self.svc.db, media_type, media_id)   # 봇이 바뀌어도 다시 올릴 원본
-            elif text in ("없음", "-", "건너뛰기", "패스"):
-                draft.media_type = draft.media_id = None
-            elif text not in KEEP:   # 그대로 = 지금 상태 (붙은 게 있으면 그것, 없으면 없이)
-                await self._say(bot, draft, "사진·영상·GIF·파일을 보내주세요. 사진 없이 하려면 <code>없음</code>")
+                if media_type not in ALBUM_KINDS:   # GIF·파일은 앨범 불가 → 그거 하나로 교체하고 다음
+                    draft.set_media([{"t": media_type, "id": media_id}])
+                    await self._ask_when(bot, draft)
+                    return True
+                if not draft.add_media(media_type, media_id):   # 사진·영상 한 장 더 (중복·10장 초과면 안내만)
+                    await self._collect_prompt(bot, draft, full=len(draft.media) >= MAX_MEDIA)
+                    return True
+                await self._collect_prompt(bot, draft, first=not draft.media_prompt_id)
                 return True
-            await self._ask_when(bot, draft)
+            if text in ("없음", "-", "건너뛰기", "패스"):
+                draft.set_media([])
+                await self._ask_when(bot, draft)
+            elif text in KEEP:                       # 그대로 = 지금 담긴 것으로 다음
+                await self._ask_when(bot, draft)
+            elif draft.media:                        # 사진 담는 중 딴 글 → 버튼 누르라고 안내만 (실수로 안 넘어가게)
+                await self._collect_prompt(bot, draft)
+            else:
+                await self._say(bot, draft, "사진·영상·GIF·파일을 보내주세요. 사진 없이 하려면 <code>없음</code>")
             return True
 
         if draft.step == "limits":
@@ -807,27 +943,56 @@ class Announcer:
             InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
         ]])
         try:
-            preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
-                                      media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
-                                      rules_chat=draft.chat_id, fmt=draft.fmt)
-            draft.cleanup.append(preview.message_id)
-        except TelegramError as e:
+            if len(draft.media) >= 2:   # 앨범은 버튼을 못 달아 → 앨범 미리보기 + 저장/취소 버튼은 바로 다음 메시지
+                album = await self.send_album(bot, draft.ui_chat_id, draft.media, title=draft.title,
+                                              text=draft.text, rules_chat=draft.chat_id, fmt=draft.fmt)
+                for m in album:
+                    draft.cleanup.append(m.message_id)
+                await self._say(bot, draft, f"👆 위가 미리보기예요 (사진 {len(draft.media)}장). 저장할까요?", kb)
+            else:
+                preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
+                                          media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
+                                          rules_chat=draft.chat_id, fmt=draft.fmt)
+                draft.cleanup.append(preview.message_id)
+        except (TelegramError, mediastore.MediaLost) as e:
             again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
-            await self._say(bot, draft, f"미리보기 실패: {esc(e.message)}\n{again}.")
+            await self._say(bot, draft, f"미리보기 실패: {esc(getattr(e, 'message', str(e)))}\n{again}.")
             self.drafts.pop(draft.key, None)
 
     async def _ask_media(self, bot: Bot, draft: Draft) -> None:
-        """3/7 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05)."""
+        """3/7 사진·영상 (선택) — 글을 먼저 쓰고 사진을 따로 올리는 관리자가 많음 (오너 요청 2026-10-05).
+        사진·영상은 여러 장(최대 10장) 담을 수 있어요 (앨범). GIF·파일은 한 개만."""
         draft.step = "media"
-        what = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}.get(draft.media_type or "", "")
         rows = [[InlineKeyboardButton("⏭ 사진 없이", callback_data=f"an:{draft.token}:nomedia")]]
         now = ""
-        if draft.media_id:
+        if draft.media:
+            what = f"{MEDIA_LABEL.get(draft.media[0]['t'], '미디어')} {len(draft.media)}개" if len(draft.media) >= 2 \
+                else MEDIA_LABEL.get(draft.media[0]["t"], "미디어")
             rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 {what} 그대로", callback_data=f"an:{draft.token}:keepmedia"))
-            now = f"\n(지금 붙은 {what}이 있어요 · 그대로 두려면 <code>그대로</code>)"
+            now = f"\n(지금 담긴 게 있어요: {what} · 그대로 두려면 <code>그대로</code>)"
         await self._say(bot, draft, "<b>3/7 사진·영상</b>을 같이 올릴까요?\n"
-                                    "• 사진·영상·GIF·파일을 보내주세요 (공지 글이 그 설명으로 붙어요)\n"
+                                    "• 사진·영상을 보내주세요 — <b>여러 장(최대 10장)</b>도 돼요 (앨범으로 올라가요)\n"
+                                    "• GIF·파일은 한 개만 · 공지 글이 설명으로 붙어요\n"
                                     "• 없으면 <code>없음</code> 또는 아래 버튼" + now, InlineKeyboardMarkup(rows))
+
+    async def _collect_prompt(self, bot: Bot, draft: Draft, *, first: bool = False, full: bool = False) -> None:
+        """사진을 담는 동안 '📸 N장 담겼어요 · 더 보내거나 [✅ 이대로]'. 앨범을 여러 장 보내면 새 글을 계속 띄우지 않고
+        이 안내 하나를 고쳐서 수를 갱신한다 (앨범은 메시지가 한꺼번에 와서 안내가 도배되는 걸 막음)."""
+        n = len(draft.media)
+        cap = " (최대 10장까지예요)" if full else ""
+        body = (f"📸 <b>{n}장</b> 담겼어요{cap}. 더 보내거나, 이대로 다음으로 가려면 아래 버튼을 눌러주세요.\n"
+                "(사진 없이 하려면 <code>없음</code>)")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ 이대로 ({n}장) 다음", callback_data=f"an:{draft.token}:mdone")]])
+        if draft.media_prompt_id and not first:   # 이미 안내가 있으면 수만 고침 (도배 방지)
+            try:
+                await bot.edit_message_text(body, chat_id=draft.ui_chat_id, message_id=draft.media_prompt_id,
+                                            parse_mode="HTML", reply_markup=kb)
+                return
+            except TelegramError:
+                pass   # 지워졌거나 못 고치면 새로
+        sent = await self._say(bot, draft, body, kb)
+        if sent is not None:
+            draft.media_prompt_id = sent.message_id
 
     async def _ask_when(self, bot: Bot, draft: Draft) -> None:
         draft.step = "when"
@@ -869,10 +1034,11 @@ class Announcer:
             await query.answer("만들고 있는 관리자만 누를 수 있어요.", show_alert=True)
             return
         draft.expires = time.time() + WIZARD_TTL
-        if action in ("nomedia", "keepmedia") and draft.step == "media":
+        if action in ("nomedia", "keepmedia", "mdone") and draft.step == "media":
             await query.answer()
             if action == "nomedia":
-                draft.media_type = draft.media_id = None
+                draft.set_media([])
+            draft.media_prompt_id = None   # 담기 끝 → 다음에 또 쓰지 않게
             await self._ask_when(bot, draft)
             return
         if action in ("pin1", "pin0") and draft.step == "pin":
@@ -914,7 +1080,8 @@ class Announcer:
             return
         fields = dict(kind=draft.kind, at_time=draft.at_time, interval_min=draft.interval_min,
                       title=draft.title, text=draft.text, media_type=draft.media_type,
-                      media_id=draft.media_id, pin=int(draft.pin), del_prev=int(draft.del_prev),
+                      media_id=draft.media_id, media_list=media_json(draft.media),
+                      pin=int(draft.pin), del_prev=int(draft.del_prev),
                       start_ts=draft.start_ts, end_ts=draft.end_ts,
                       active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt)
         if draft.edit_id:
