@@ -359,6 +359,17 @@ SETUP_STEPS = ("🛠 <b>처음 설정하는 법 (관리자)</b>\n"
 SETUP_HINT_KEEP = 30 * 86400     # 관리자 지정 뒤 '이제 설정 눌러 주세요' 는 방마다 한 번 (30일)
 
 
+def _welcome_intro(svc, in_trial: bool, days: int) -> str:
+    """봇 초대 때 방에 올리는 첫 인사 (처음 설정하는 법 + 체험 안내 + 문의처). AI 안 씀 — 정해진 문구."""
+    sup = (svc.cfg.support_contact or "").strip()
+    return (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n\n"
+            + SETUP_STEPS + "\n\n"
+            "🕵️ 이제 멤버가 이름·@아이디를 바꾸면 알려드려요. 누구든 <code>.기록</code> 으로 변경 기록을 볼 수 있어요.\n"
+            + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if in_trial and days else "")
+            + "명령어는 <code>.도움말</code>"
+            + (f"\n\n❓ 쓰는 법이 궁금하거나 도움이 필요하면 <b>{esc(sup)}</b> 로 문의하세요." if sup else ""))
+
+
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """봇이 방에 초대됐을 때: 무료 체험 시작 + 방엔 짧은 인사와 '⚙️ 봇 설정' 버튼만, 결제 정보는 초대한 사람 1:1 로."""
     cmu = update.my_chat_member
@@ -385,11 +396,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # 다시 초대한 방엔 체험이 다시 생기지 않음 → 지금 막 시작한 체험일 때만 '3일 무료' (끝난 방에 약속하던 것)
     st = await svc.billing.status(chat.id) if svc.billing and svc.billing.enabled else None
     in_trial = bool(st and st.state == "trial" and st.until and st.until - time.time() > (days - 1) * 86400)
-    intro = (f"👋 안녕하세요, 소통방 AI 비서 {iyeyo(svc.cfg.bot_name)}!\n\n"
-             + SETUP_STEPS + "\n\n"
-             "🕵️ 이제 멤버가 이름·@아이디를 바꾸면 알려드려요. 누구든 <code>.기록</code> 으로 변경 기록을 볼 수 있어요.\n"
-             + (f"지금부터 {days}일 동안 모든 기능을 써보실 수 있어요. " if in_trial and days else "")
-             + "명령어는 <code>.도움말</code>")
+    intro = _welcome_intro(svc, in_trial, days)
     markup = subscription.setup_button(bot.username, chat.id) if svc.billing and svc.billing.enabled else None
     try:
         await bot.send_message(chat.id, intro, parse_mode="HTML", reply_markup=markup)
