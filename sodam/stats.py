@@ -2,6 +2,7 @@
 import re
 from datetime import datetime
 
+from . import rankboost   # 집계 부스트 구간 (DB 열기 전에 register_schema 되게 top-level import)
 from .db import DB, CountRule, count_filter
 from .settings import register_setting
 from .util import display_name, esc, fmt_time, period_range
@@ -42,13 +43,14 @@ register_setting("chat_quiet_hours", "", "채팅 집계 제외 시간대 (예: 1
 
 
 async def min_chars(db: DB, chat_id: int) -> CountRule:
-    """이 방 채팅 집계 거르기 (최소 글자 수 + 도배 빼기 + 제외 시간대)."""
+    """이 방 채팅 집계 거르기 (최소 글자 수 + 도배 빼기 + 제외 시간대 + 부스트 구간 여부)."""
     s = await db.get_settings(chat_id)
     try:
         n = max(0, int(s.get("chat_min_chars") or 0))
     except (TypeError, ValueError):
         n = 0
-    return CountRule(n, bool(s.get("chat_no_repeat")), parse_quiet(s.get("chat_quiet_hours")))
+    boosted = await rankboost.has_boost(db, chat_id)
+    return CountRule(n, bool(s.get("chat_no_repeat")), parse_quiet(s.get("chat_quiet_hours")), boosted)
 
 
 def _rule(r: CountRule) -> str:
@@ -80,14 +82,14 @@ async def member_text(db: DB, chat_id: int, tz, period: str, user_id: int, name:
     end = until if until is not None else 1 << 62
     m = await min_chars(db, chat_id)
     mine = await db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                         + count_filter(), (chat_id, user_id, since, end, *m.args))
+                         + count_filter("messages", m), (chat_id, user_id, since, end, *m.args))
     n = int(mine["n"] if mine else 0)
     people = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                           + count_filter(), (chat_id, since, end, *m.args))
+                           + count_filter("messages", m), (chat_id, since, end, *m.args))
     if not n:
         return f"📊 {esc(name)} — {label} 채팅 0개{_rule(m)} (기록 기준, 참여 {people['n'] if people else 0}명)"
     above = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? AND ts<? "
-                          "AND is_bot=0 " + count_filter() + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, *m.args, n))
+                          "AND is_bot=0 " + count_filter("messages", m) + " GROUP BY user_id) WHERE c>?", (chat_id, since, end, *m.args, n))
     return f"📊 {esc(name)} — {label} 채팅 {n}개{_rule(m)} · {int(above['n']) + 1}위 (참여 {people['n']}명 중)"
 
 
@@ -99,11 +101,11 @@ async def over_text(db: DB, chat_id: int, tz, period: str, threshold: int) -> st
     thr = max(1, int(threshold))
     m = await min_chars(db, chat_id)
     row = await db._one("SELECT COUNT(*) n FROM (SELECT user_id, COUNT(*) c FROM messages WHERE chat_id=? AND ts>=? "
-                        "AND ts<? AND is_bot=0 " + count_filter() + " GROUP BY user_id) WHERE c>=?",
+                        "AND ts<? AND is_bot=0 " + count_filter("messages", m) + " GROUP BY user_id) WHERE c>=?",
                         (chat_id, since, end, *m.args, thr))
     cnt = int(row["n"]) if row else 0
     ppl = await db._one("SELECT COUNT(DISTINCT user_id) n FROM messages WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                        + count_filter(), (chat_id, since, end, *m.args))
+                        + count_filter("messages", m), (chat_id, since, end, *m.args))
     total = int(ppl["n"]) if ppl else 0
     if cnt == 0:
         return f"📊 {label} 채팅 {thr}개 이상 친 사람은 없어요{_rule(m)} (참여 {total}명)"
