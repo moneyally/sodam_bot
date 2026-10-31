@@ -62,6 +62,8 @@ class Config:
     mtproto_api_hash: str = ""
     # 로마자/영어 호출어 (외국인 번역기 — 'Sodam help me …'), 대소문자 무시. 비우면 영어 호출 꺼짐
     call_names_en: tuple[str, ...] = ("sodam",)
+    # 문의처 (봇 초대 인사·새 관리자 안내에 표시). 비우면 안 보임. .env BOT_SUPPORT_CONTACT
+    support_contact: str = ""
 
 
 def load_config() -> Config:
@@ -121,6 +123,7 @@ def load_config() -> Config:
         light_model=os.getenv("AGENT_LIGHT_MODEL", "gpt-5.4-mini").strip(),
         mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
         mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
+        support_contact=os.getenv("BOT_SUPPORT_CONTACT", "@ban_1599").strip(),
     )
 
 

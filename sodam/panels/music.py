@@ -101,6 +101,14 @@ async def can_end(svc, chat_id: int, uid: int, role: Role) -> bool:
 
 
 # ── 신청 ──────────────────────────────────────────────
+def _no_helper_msg(tag: str, need_invite: bool) -> str:
+    """노래 도우미(자이)가 방에 없을 때 — 그 계정 아이디를 콕 집어서 초대·문의하게 (오너 요청 2026-11-01)."""
+    if need_invite:
+        return (f"🎵 노래를 틀려면 음성 도우미 <b>{tag}</b> 가 이 방에 있어야 해요.\n"
+                f"{tag} 를 방에 초대해 주시거나, 봇에 '사용자 초대' 권한을 주세요.")
+    return f"🎵 음성 도우미 <b>{tag}</b> 가 이 방에 없어요. {tag} 를 방에 초대해 주세요."
+
+
 async def _helper_ready(svc, bot, chat_id: int, uid: int) -> str | None:
     """도우미 계정이 방에 없으면 넣고 '음성채팅 관리' 권한까지 (AI 음성채팅과 같은 길). 실패면 방에 보일 이유."""
     if await musicq.active_session(svc.db, chat_id) or await store.active_call(svc.db, chat_id):
@@ -108,15 +116,16 @@ async def _helper_ready(svc, bot, chat_id: int, uid: int) -> str | None:
     a = await store.assistant(svc.db)
     if not a:
         return voice.RESULT_TEXT["no_assistant"]
+    tag = ("@" + a["username"]) if a.get("username") else "노래 도우미"   # 자이 아이디를 안내에 콕
     prep = await voice._prepare_member(bot, chat_id, a["id"])
     if prep in ("banned", "no_invite_right"):
-        return voice.RESULT_TEXT["banned"] if prep == "banned" else "🎵 봇에 '사용자 초대' 권한이 없어서 노래 도우미를 방에 못 넣어요."
+        return voice.RESULT_TEXT["banned"] if prep == "banned" else _no_helper_msg(tag, True)
     if prep:
         jid = await store.add_job(svc.db, chat_id, "join", prep, uid)
         if jid:
             st, res = await voice._wait(svc.db, jid)
             if st != "done":
-                return voice._result_text(res)
+                return _no_helper_msg(tag, False) if res in ("not_member", "bad_link", "no_peer") else voice._result_text(res)
     await voice._promote(bot, chat_id, a["id"])
     return None
 
