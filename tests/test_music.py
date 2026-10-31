@@ -1602,6 +1602,63 @@ async def closed_voice_chat_keeps_the_queue_and_rejoins_when_reopened():
 
 
 @test
+async def flapping_voice_chat_gives_up_after_one_rejoin():
+    """VC 가 열렸다 바로 닫히길 반복(플래핑): 재입장은 한 번 시도하고 포기 — 예전엔 finally 가 매번 데드라인을 새로 만들어
+    15분 컷오프를 영영 못 넘겨 무한 재입장했음. 재입장으로 띄운 DJ(from_rejoin)가 또 닫히면 데드라인을 안 만든다."""
+    bot = FakeBot()
+    db, w, _, _ = await make_worker(bot)
+    FakeDecoder.LEN = 100000
+    try:
+        await play(db, w, "플래핑곡")
+        await until(lambda: CHAT in w.players and w.players[CHAT].pos_ms >= 300)
+        w.players[CHAT].stop("chat_closed")             # 사용자 세션이 닫힘 → 재입장 대기
+        await until(lambda: CHAT not in w.players)
+        assert str(CHAT) in (await db.get_state(0, musicq.REJOIN_KEY)), "정상 세션 닫힘은 재입장 대기"
+        w.client = CallClient()
+        w.client.open = True
+        await w._music_rejoin()                          # 재입장 (from_rejoin DJ)
+        await until(lambda: CHAT in w.players)
+        assert not (await db.get_state(0, musicq.REJOIN_KEY)), "재입장 성공 = 키 제거"
+        w.players[CHAT].stop("chat_closed")              # 재입장하자마자 또 닫힘 (플래핑)
+        await until(lambda: CHAT not in w.players)
+        assert not (await db.get_state(0, musicq.REJOIN_KEY)), "재입장 DJ 가 또 닫힘 → 데드라인 안 만들고 포기"
+        n0 = len(FakeDecoder.opened)
+        await w._music_rejoin()                          # 다음 틱: 열려 있어도 자동 재입장 안 함
+        assert CHAT not in w.players and len(FakeDecoder.opened) == n0, "포기한 방은 더 자동 재입장 안 함"
+    finally:
+        FakeDecoder.LEN = 40
+    await stop_all(w)
+
+
+@test
+async def health_does_not_hang_on_stuck_rpc():
+    """하트비트 타임아웃(#1): 도우미 RPC 가 응답을 안 주면 health 가 영원히 매달리지 않고 타임아웃 뒤 돌아온다.
+    타임아웃은 세션 풀림(REVOKED)이 아니므로 세션을 지우지 않고 '다음에 다시' 로 둔다."""
+    import sodam.voice.worker as W
+    db, w, _, _ = await make_worker()
+    orig = W.RPC_TIMEOUT
+    W.RPC_TIMEOUT = 0.1
+
+    class Stuck:
+        def is_connected(self):
+            return True
+
+        async def __call__(self, *a):
+            await asyncio.sleep(30)
+
+        async def is_user_authorized(self):
+            await asyncio.sleep(30)
+
+    w.client = Stuck()
+    try:
+        await asyncio.wait_for(w.health(), timeout=5)    # wait_for 없으면(뮤테이션) 여기서 30초 hang → 테스트 timeout
+    finally:
+        W.RPC_TIMEOUT = orig
+    assert w.client is not None, "타임아웃은 REVOKED 아님 → 세션 유지"
+    await stop_all(w)
+
+
+@test
 async def a_left_over_queue_restarts_on_same_request_or_resume():
     """2026-10-11 벳블리: 통화가 끊겨 DJ 가 멈췄는데 곡은 대기열에 남음 → '갓질라 틀어' 5번 = '이미 대기열에 있어요',
     '다시 틀어' = '틀고 있는 노래가 없어요' 만 나오고 아무도 못 틀었음. 남은 곡이 있고 DJ 가 없으면 그 말로 다시 튼다."""
