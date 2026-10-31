@@ -54,6 +54,8 @@ from . import rates as _rates  # noqa: E402
 _rates.register_commands()      # .시세 · .환율 (USDT↔원 실시간)
 from .panels import summon as _summon  # noqa: E402
 _summon.register_commands()     # .집합 (선택형 소집)
+from .panels import rankboost as _rankboost  # noqa: E402
+_rankboost.register_commands()  # .채팅부스트 (집계 부스트 구간)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다

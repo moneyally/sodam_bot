@@ -428,14 +428,14 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     m = await stats.min_chars(svc.db, chat_id)
     mine = await svc.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
                              "AND ts >= COALESCE((SELECT reset_at FROM rank_user_reset WHERE chat_id=? AND user_id=?),0) "
-                             + count_filter(), (chat_id, user_id, since, end, chat_id, user_id, *m.args))
+                             + count_filter("messages", m), (chat_id, user_id, since, end, chat_id, user_id, *m.args))
     n = int(mine["n"] if mine else 0)
     if not n:
         return 0, 0
     above = await svc.db._one("SELECT COUNT(*) n FROM (SELECT messages.user_id, COUNT(*) c FROM messages "
                               "LEFT JOIN rank_user_reset r ON r.chat_id=messages.chat_id AND r.user_id=messages.user_id "
                               "WHERE messages.chat_id=? AND messages.ts>=? AND messages.ts<? AND messages.is_bot=0 "
-                              "AND messages.ts >= COALESCE(r.reset_at,0) " + count_filter() + " GROUP BY messages.user_id) WHERE c>?",
+                              "AND messages.ts >= COALESCE(r.reset_at,0) " + count_filter("messages", m) + " GROUP BY messages.user_id) WHERE c>?",
                               (chat_id, since, end, *m.args, n))
     rank = int(above["n"]) + 1
     if fixed:                             # 고정 지정이 걸려 있으면 일반 사람은 그 수만큼 아래로 밀림

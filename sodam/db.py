@@ -219,26 +219,42 @@ KST_SEC = 32400      # 집계 시간대 기준 = 한국 (봇 tz 는 항상 Asia/
 class CountRule(NamedTuple):
     """채팅 집계 거르기 (방 설정 chat_min_chars · chat_no_repeat · chat_quiet_hours). no_repeat = 같은 사람이 같은 글을
     10분 안에 또 쓴 건 1번만 (2026-10-11 FOX). quiet = (시작시, 끝시) 한국 시각, 이 시간대 글은 집계에서 뺌
-    (2026-10-26 뉴월드 '새벽 1~7시 집계 X'). 매개변수는 count_filter(...) 자리에 rule.args."""
+    (2026-10-26 뉴월드 '새벽 1~7시 집계 X'). boosted = 이 방에 채팅 부스트 구간(rank_boost)이 있어 글 ts 에 따라
+    구간별 최소 글자수를 쓴다 (2026-10-31 뉴월드). 매개변수는 count_filter(...) 자리에 rule.args."""
     min_chars: int = 0
     no_repeat: bool = False
     quiet: "tuple[int, int] | None" = None
+    boosted: bool = False
 
     @property
     def args(self) -> tuple:
         s, e = self.quiet if self.quiet else (0, 0)
-        return (self.min_chars, self.min_chars, int(self.no_repeat), 1 if self.quiet else 0, s, e, s, e, s, e)
+        # boosted 면 최소 글자수가 COALESCE((부스트 구간), ?) 하나뿐, 아니면 (?<=0 OR … >=?) 로 둘
+        mc = (self.min_chars,) if self.boosted else (self.min_chars, self.min_chars)
+        return (*mc, int(self.no_repeat), 1 if self.quiet else 0, s, e, s, e, s, e)
 
 
 def as_rule(rule) -> CountRule:
     return rule if isinstance(rule, CountRule) else CountRule(int(rule or 0))
 
 
-def count_filter(t: str = "messages") -> str:
+# 글 ts 가 부스트 구간(rank_boost) 안이면 그 구간 min_chars, 아니면 방 기본값(?). 구간 없는 방은 이 경로 안 탐.
+def _boost_min(t: str) -> str:
+    return (f"COALESCE((SELECT b.min_chars FROM rank_boost b WHERE b.chat_id={t}.chat_id "
+            f"AND {t}.ts>=b.from_ts AND {t}.ts<COALESCE(b.to_ts,{1 << 62}) ORDER BY b.from_ts DESC LIMIT 1), ?)")
+
+
+def count_filter(t: str = "messages", rule=None) -> str:
     """집계 WHERE 뒤에 붙일 조건 (t = messages 표 이름·별명). 반복 검사는 (chat_id, user_id, ts) 색인으로.
-    끝: 시간대 빼기 — 한국 시가 [시작, 끝) 안이면 제외 (시작<끝 = 그 사이, 시작>끝 = 자정 넘김)."""
+    끝: 시간대 빼기 — 한국 시가 [시작, 끝) 안이면 제외 (시작<끝 = 그 사이, 시작>끝 = 자정 넘김).
+    rule.boosted 면 최소 글자수를 글 ts 의 부스트 구간별로 (rank_boost). SQL 모양이 rule.args 와 짝이라 둘 다 boosted 로 분기."""
+    r = as_rule(rule) if rule is not None else CountRule()
     h = f"CAST(strftime('%H', {t}.ts+{KST_SEC}, 'unixepoch') AS INTEGER)"
-    return (MIN_CHARS.replace("text", f"{t}.text") +
+    if r.boosted:   # 부스트 구간 있는 방: 글 ts 의 구간 min 이상만 (구간 밖은 방 기본 min)
+        mc = f"AND length(replace(replace({t}.text,' ',''),char(10),''))>={_boost_min(t)}"
+    else:
+        mc = MIN_CHARS.replace("text", f"{t}.text")
+    return (mc +
             f" AND (?=0 OR NOT EXISTS (SELECT 1 FROM messages rp WHERE rp.chat_id={t}.chat_id AND rp.user_id={t}.user_id "
             f"AND rp.ts>={t}.ts-{REPEAT_SEC} AND rp.ts<={t}.ts AND rp.id<{t}.id AND rp.text={t}.text))"
             f" AND (?=0 OR NOT (CASE WHEN ?<? THEN ({h}>=? AND {h}<?) ELSE ({h}>=? OR {h}<?) END))")
@@ -625,22 +641,25 @@ class DB:
         return await self._all(
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
             "LEFT JOIN users u ON u.user_id=msg.user_id " + join +
-            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + cut + count_filter("msg") +
+            "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + cut + count_filter("msg", rule) +
             " GROUP BY msg.user_id ORDER BY n DESC LIMIT ?", (chat_id, since, _until(until), *rule.args, limit))
 
     async def chat_totals(self, chat_id: int, since: int, until: int | None = None,
                           min_chars: "int | CountRule" = 0) -> aiosqlite.Row:
+        rule = as_rule(min_chars)
         return await self._one(
             "SELECT COUNT(*) AS messages, COUNT(DISTINCT user_id) AS users FROM messages "
-            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + count_filter(),
-            (chat_id, since, _until(until), *as_rule(min_chars).args))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + count_filter("messages", rule),
+            (chat_id, since, _until(until), *rule.args))
 
     async def hourly_counts(self, chat_id: int, since: int, tz_offset_sec: int, until: int | None = None,
                             min_chars: "int | CountRule" = 0) -> list[aiosqlite.Row]:
+        rule = as_rule(min_chars)
         return await self._all(
             "SELECT ((ts + ?) / 3600) % 24 AS hour, COUNT(*) AS n FROM messages "
-            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + count_filter() + " GROUP BY hour ORDER BY hour",
-            (tz_offset_sec, chat_id, since, _until(until), *as_rule(min_chars).args))
+            "WHERE chat_id=? AND ts>=? AND ts<? AND is_bot=0 " + count_filter("messages", rule) +
+            " GROUP BY hour ORDER BY hour",
+            (tz_offset_sec, chat_id, since, _until(until), *rule.args))
 
     async def user_message_count(self, chat_id: int, user_id: int, since: int = 0) -> int:
         row = await self._one(
