@@ -93,6 +93,7 @@ STUTTER_EVERY = 60
 STUTTER_WIN = 300
 STUTTER_ALERT_SEC = 3600
 VC_TITLE_TIMEOUT = 15.0     # 음성채팅 제목 바꾸기 — 텔레그램 답 기다리는 최대 초
+RPC_TIMEOUT = 15.0          # step() 안 텔레그램 RPC(음성채팅 열림 확인·세션 점검) 최대 대기 — RPC 가 매달려 하트비트가 밀리면 '음성 담당 꺼졌어요' 오안내가 났었음
 STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
 STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
 STUTTER_KEY = "music_stutter_alert"
@@ -143,6 +144,7 @@ class Worker:
         self.music_decoder = music_decoder or music.Decoder
         self.music_opts = music_opts or {}          # 테스트: 가짜 시계·짧은 대기
         self.players: dict[int, music.Player] = {}
+        self._rejoin_said: dict[int, int] = {}   # 방별 마지막 '재입장 안내' 보낸 시각 (플래핑 방 스팸 방지)
         self.ptasks: dict[int, asyncio.Task] = {}
         self._ptasks_all: set[asyncio.Task] = set()
         self._plocks: dict[int, asyncio.Lock] = {}
@@ -597,8 +599,8 @@ class Worker:
             # is_user_authorized 는 처음 확인한 값을 기억해서 나중에 세션이 풀려도 계속 True 라 실제로 한 번 물어봄
             # (2026-10-15 블랙컴퍼니: 도우미 세션 폐기 뒤에도 '연결됨' 으로 남아 노래 신청이 조용히 실패)
             from telethon.tl.functions.updates import GetStateRequest
-            await self.client(GetStateRequest())
-            if await self.client.is_user_authorized():
+            await asyncio.wait_for(self.client(GetStateRequest()), timeout=RPC_TIMEOUT)
+            if await asyncio.wait_for(self.client.is_user_authorized(), timeout=RPC_TIMEOUT):
                 return
         except Exception as e:
             if type(e).__name__ not in REVOKED:
@@ -690,13 +692,16 @@ class Worker:
             if mine:
                 self.players.pop(chat_id, None)
                 self.ptasks.pop(chat_id, None)
-            if reason not in music.RESUME_REASONS and mine and chat_id not in self.players:   # 재시작·닫힘이 아니면 남은 곡은 정리
-                await musicq.clear(self.db, chat_id, "removed")
-            if reason == "chat_closed" and mine and chat_id not in self.players and await musicq.has_queue(self.db, chat_id):
-                st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}      # 다시 열리면 이어서 (15분 안)
-                st[str(chat_id)] = int(time.time()) + musicq.REJOIN_SEC
-                await self.db.set_state(0, musicq.REJOIN_KEY, st)
-            await musicq.session_end(self.db, sid, reason, pl.tracks, dict(pl.stats))
+            if self.db.conn is not None:       # 종료(배포 재시작·시험 teardown)로 DB 가 이미 닫혔으면 남길 게 없음
+                if reason not in music.RESUME_REASONS and mine and chat_id not in self.players:   # 재시작·닫힘이 아니면 남은 곡은 정리
+                    await musicq.clear(self.db, chat_id, "removed")
+                if (reason == "chat_closed" and mine and chat_id not in self.players
+                        and not getattr(pl, "from_rejoin", False)      # 재입장했는데 또 바로 닫힘(플래핑)이면 데드라인 안 만듦 → 다음 틱에 자동 재입장 안 함 (무한 재입장 방지)
+                        and await musicq.has_queue(self.db, chat_id)):
+                    st = await self.db.get_state(0, musicq.REJOIN_KEY) or {}      # 사용자가 틀던 중 닫힘 = 정상 → 다시 열리면 이어서 (15분 안)
+                    st.setdefault(str(chat_id), int(time.time()) + musicq.REJOIN_SEC)
+                    await self.db.set_state(0, musicq.REJOIN_KEY, st)
+                await musicq.session_end(self.db, sid, reason, pl.tracks, dict(pl.stats))
             if mine:
                 self._swin.pop(chat_id, None)
             if mine and chat_id not in self.players:
@@ -987,7 +992,8 @@ class Worker:
         """그 방에 음성채팅이 열려 있나 (우리가 켜지 않고 보기만 — 관리자가 닫은 걸 다시 켜면 안 됨)."""
         try:
             from telethon.tl.functions.channels import GetFullChannelRequest
-            full = await self.client(GetFullChannelRequest(await self.client.get_input_entity(chat_id)))
+            ent = await asyncio.wait_for(self.client.get_input_entity(chat_id), timeout=RPC_TIMEOUT)
+            full = await asyncio.wait_for(self.client(GetFullChannelRequest(ent)), timeout=RPC_TIMEOUT)
             return bool(full.full_chat.call)
         except Exception as e:
             log.info("음성채팅 열림 확인 실패 %s: %r", chat_id, e)
@@ -1020,9 +1026,12 @@ class Worker:
                 log.info("노래 다시 들어가기 못 함 %s: %s", chat_id, res)
                 keep[key] = deadline
                 continue
+            pl.from_rejoin = True     # 재입장으로 띄운 DJ — 바로 또 닫히면(플래핑) finally 가 데드라인을 새로 안 만들어 무한 재입장을 끊음. 안정 재생이면 다음 틱 pl.done 검사로 빠짐
             pl.wake()
+            # 재입장 성공 = 키 제거 (keep 에 안 넣음). 바로 또 닫히면 finally·플래핑 가드가 포기시킴
             log.info("노래 다시 들어가기 %s", chat_id)
-            if self.bot:
+            if self.bot and now - self._rejoin_said.get(chat_id, 0) > 600:   # 재입장 안내는 10분에 한 번만 (플래핑 방에 15초마다 반복 스팸 방지)
+                self._rejoin_said[chat_id] = now
                 with contextlib.suppress(Exception):
                     await self.bot.send_message(chat_id, "🎵 음성채팅이 다시 열려서 남은 곡을 이어서 틀어요.")
         await self.db.set_state(0, musicq.REJOIN_KEY, keep or None)

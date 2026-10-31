@@ -38,7 +38,7 @@ dbm.register_columns("music_sessions", {"stats": "TEXT"})   # 끊김 숫자 (JSO
 
 HEALTH_KEY = "music_health"
 QUEUE_MAX = 30               # 방마다 기다리는 곡
-PER_USER = 5                 # 한 사람이 동시에 걸어 둘 수 있는 곡
+PER_USER = 30                # 한 사람이 동시에 걸어 둘 수 있는 곡 (2026-11-01 오너: 5→30)
 KEEP_DAYS = 90               # 끝난 곡 기록 보관 (방 인기곡·통계)
 ORDER = "COALESCE(sort, id), id"   # 대기열 순서 (섞기 뒤엔 sort)
 MODES_KEY = "music_modes"
