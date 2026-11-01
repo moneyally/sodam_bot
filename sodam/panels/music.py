@@ -640,10 +640,15 @@ async def t_music(ctx: tools.ToolCtx, a: dict) -> str:
         return {"ok": f"{value}번 '{row['title'] if row else ''}' 뺌", "none": f"대기열에 {value}번 없음",
                 "not_yours": "내가 신청한 곡만 뺄 수 있음 (관리자는 아무 곡)"}[why]
     op = {"stop": "end"}.get(action, action)
-    if op not in ("skip", "pause", "resume", "end", "volume", "seek"):
+    if op not in ("skip", "pause", "resume", "end", "volume", "seek", "loop"):
         return "모르는 동작."
-    out = await control(ctx.svc, ctx.chat_id, ctx.caller.id, ctx.role, op,
-                        int(value) if str(value or "").isdecimal() else (100 if op == "volume" else None))
+    if op == "loop":                       # '이 곡 반복' — value=횟수(0=끔), 안 주면 계속(최대 10). 0 은 falsy 라 isinstance 로 살림
+        v = int(value) if isinstance(value, int) else 9
+    elif op == "volume":
+        v = int(value) if str(value or "").isdecimal() else 100
+    else:
+        v = int(value) if str(value or "").isdecimal() else None
+    out = await control(ctx.svc, ctx.chat_id, ctx.caller.id, ctx.role, op, v)
     return plain(out)
 
 
@@ -652,7 +657,8 @@ tools.register_tool(tools.Tool(
     "음성채팅에서 노래 틀기 (소담 뮤직봇). '아이유 밤편지 틀어줘'·'노래 틀어'·'이 링크 틀어' → play(query=제목·가수·링크 그대로). "
     "'다음 곡'·'스킵' → skip · '멈춰'·'일시정지' → pause · '다시 틀어' → resume · '노래 꺼'·'노래 끝'·'전체 꺼줘' → stop · "
     "'나머지 다 취소'·'대기열 비워' → clear · '섞어'·'셔플' → shuffle · '3번 빼' → remove(value=3) · '1분 30초로' → seek(value=90) · "
-    "'전체 반복'·'계속 돌려' → loop_queue(on) · '자동으로 이어서 틀어'·'자동재생 켜/꺼' → autoplay(on) · "
+    "'이 곡 반복'·'이거 반복'·'이거만 계속 틀어'·'한 곡 반복' → loop (value=횟수, 안 주면 계속·value=0 끄기) · "
+    "'전체 반복'·'대기열 전체 돌려'·'모든 곡 반복' → loop_queue(on) · '자동으로 이어서 틀어'·'자동재생 켜/꺼' → autoplay(on) · "
     "'가사 뭐야'·'후렴 가사' → lyrics (전문을 받아 물어본 부분만 인용) · '인기곡'·'많이 들은 노래' → top(value=일수). "
     "'대기열'·'뭐 나와?' → queue / now · '소리 줄여 50' → volume(value). 음악 파일에 답장하며 '이거 틀어' → play(query 비움). "
     "'노래재생'·'다시 틀어'·'노래 켜'·'새로고침'·'멈췄어'·'다시 켜'·'대기 중인 곡 틀어'·'안 나와' = resume — 대기열에 남은 곡을 다시 틀어 줌 "
@@ -665,9 +671,9 @@ tools.register_tool(tools.Tool(
     "그대로 넣음(소담이 어울리는 플레이리스트로 여러 곡 틀어 줌). 특정 제목·가수가 하나라도 있으면 mix 는 비움. "
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
     {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume", "seek",
-                                            "remove", "clear", "shuffle", "loop_queue", "autoplay", "lyrics", "top"]},
+                                            "remove", "clear", "shuffle", "loop", "loop_queue", "autoplay", "lyrics", "top"]},
      "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로). mix=true 면 분위기·상황 말"},
-     "value": {"type": "integer", "description": "volume 0~200 · seek 초 · remove 대기열 번호 · top 일수"},
+     "value": {"type": "integer", "description": "volume 0~200 · seek 초 · remove 대기열 번호 · top 일수 · loop 반복 횟수(0=끔, 안 주면 계속)"},
      "mix": {"type": "boolean", "description": "특정 곡 아닌 분위기·상황·장르 신청이면 true (자장가·잠잘 때·신나는 노래 등) → 어울리는 곡 여러 개"},
      "on": {"type": "boolean", "description": "loop_queue·autoplay 켜기(true)/끄기(false), 비우면 바꾸기"}},
     ["action"], t_music, where="room"))
