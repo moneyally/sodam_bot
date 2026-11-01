@@ -63,6 +63,7 @@
   `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`·받는 주소·정확한 금액(청구서마다 끝자리 다름)·확정거래·유효시간·tx 1회만 검사.
   `check_pending` 은 asyncio.Lock, 연장은 SQL 한 문장(`db.extend_paid`). 설정: 월 30 USDT / 30일 / 체험 3일.
   **끝난 방은 AI 답 없음, 안내만**(방마다 1시간 1번, 오너 결정 2026-09-28 — 예전 '하루 10회 무료' 없앰). 1:1 은 FREE_AI_PER_DAY 그대로.
+  **🎵 노래(뮤직봇)는 구독과 무관하게 모든 방 무료** (오너 결정 2026-11-01 '노래는 걍 나오게, AI 만 막으면 됨') — `music.precheck` 에서 paid_features 체크를 뺌. 구독으로 막는 건 AI·그 외 기능뿐.
   끝난 그 시각에 방 안내 + 초대한 관리자 1:1 (`handlers._notify_ended`, 30초 틱, (방,끝난 시각) claim). 10시 작업은 '곧 끝나요'만.
   늦게 확인된 입금: 입금 시각이 청구서 유효시간 안이면 7일(billing.LATE_MATCH)까지 그 청구서로 연결(`db.match_candidates`, 만료 상태 포함),
   그 7일 동안 같은 금액은 새 청구서에 안 줌. 커서 없는 첫 결제도 후보 청구서 만든 시각부터 조회. 재초대 인사는 체험 중일 때만 '3일 무료'.
@@ -970,7 +971,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
   .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).
   권한: 신청 music_who(누구나) · 넘기기·멈춤 = 관리자·그 곡 신청자(music_ctrl=all 이면 누구나) · 끝 = 관리자(또는 남은 곡이 전부 내 곡) ·
-  이용 기간 방만 · 한 사람 4초 간격. 음악 파일에 답장 → 봇이 data/music/tg_* 로 받아 틀기(음성 담당은 data/music 밖 경로 거부).
+  **노래는 구독 무관 모든 방 무료**(2026-11-01, music.precheck 에 paid 체크 없음) · 한 사람 4초 간격. 음악 파일에 답장 → 봇이 data/music/tg_* 로 받아 틀기(음성 담당은 data/music 밖 경로 거부).
   AI 도구 `music`(CORE·LIGHT_WRITE, 지도 '노래 틀어 → music', 다른 봇을 콕 집으면 bot_command). 재생 카드 버튼 mu:pause/resume/skip/queue/end.
   안내서 guide/music.md. 방 허브 🎵 m:mus.
 

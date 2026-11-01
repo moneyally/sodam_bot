@@ -523,6 +523,12 @@ async def precheck_paths():
     assert "찾는 중" in (await cmd(svc, bot, ".노래 첫곡", OTHER)).replies[0]
     assert "초에 한 번" in (await cmd(svc, bot, ".노래 둘째곡", OTHER)).replies[0], "연타 = 유튜브 검색만 늘어남"
 
+    async def _no_paid(c):              # 구독(이용 기간) 끝나도 노래는 무료 — 막는 건 AI 뿐 (오너 결정 2026-11-01)
+        return False
+    svc.paid_features = _no_paid
+    svc.__dict__.setdefault("_music_last", {}).clear()          # 앞 신청 쿨다운 비우기
+    assert "찾는 중" in (await cmd(svc, bot, ".노래 무료곡", ADMIN, Role.ADMIN)).replies[0], "구독 끝나도 노래 무료"
+
 
 @test
 async def control_permissions_requester_admin_and_end():
