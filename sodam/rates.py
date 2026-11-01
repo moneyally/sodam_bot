@@ -199,6 +199,10 @@ async def fast_reply(svc, bot, msg, text: str) -> bool:
     body = fast_body(text)
     if body is None:
         return False
+    # 호칭·물음 없는 '맨 숫자'(50테더)는 그룹훅 on_message 가 전담한다. handlers 가 훅을 asyncio.create_task 로
+    # 메인 핸들러와 동시에 돌려서, 여기서도 답하면 _last 쿨다운을 둘 다 통과해 두 번 떴다 (2026-11-01 테더정산방).
+    if not (_CALL_RE.search(text) or _ASK_RE.search(text)):
+        return False
     now = time.time()
     key = (msg.chat_id, msg.from_user.id)
     if now - _last.get(key, 0.0) < USER_GAP:
@@ -225,7 +229,7 @@ async def on_message(svc, bot, msg, role) -> None:
     key = (msg.chat_id, msg.from_user.id)
     if now - _last.get(key, 0.0) < USER_GAP:
         return
-    out = await reply_for(msg.text, strict=True)
+    out = await reply_for(_TRAIL_RE.sub("", (msg.text or "").strip()), strict=True)   # 끝 ?!~. 떼고 (맨 숫자+물음표도)
     if out is None:
         return
     _last[key] = now
