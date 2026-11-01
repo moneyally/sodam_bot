@@ -75,8 +75,7 @@ async def precheck(svc, chat_id: int, role: Role) -> str | None:
         return "🎵 이 방은 뮤직봇이 꺼져 있어요 (관리자: 메뉴 → 🎵 뮤직봇)."
     if s.get("music_who", "all") == "admin" and role < Role.ADMIN:
         return "🎵 이 방은 관리자만 노래를 신청할 수 있어요."
-    if not await svc.paid_features(chat_id):
-        return "🎵 이용 기간이 끝난 방이라 뮤직봇은 쉬어요."
+    # 노래는 구독(이용 기간)과 무관하게 모든 방 무료 — 구독으로 막는 건 AI 뿐 (오너 결정 2026-11-01)
     if not await store.assistant(db):
         return voice.RESULT_TEXT["no_assistant"]
     if not await store.worker_alive(db):
