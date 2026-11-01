@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import mtproto
-from . import music, musicq, store
+from . import music, musicq, store, warprotate
 from .bridge import Bridge
 from .live import BACKEND_MODEL, LIVE_MODEL, LiveBridge
 from .video import FPS as VFPS, H as VH, W as VW, to_i420
@@ -98,6 +98,7 @@ STUTTER_LIMITS = {"jitter": 15, "late": 5, "underrun": 50, "send_slow": 30}
 STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤", "underrun": "소리 조각 빔", "send_slow": "보내기 20ms 넘게 걸림"}
 STUTTER_KEY = "music_stutter_alert"
 REJOIN_EVERY = 15                # 🎵 음성채팅이 닫혀 멈춘 방: 다시 열렸는지 확인 간격
+WARP_HB_EVERY = 600              # 🌐 WARP 우회 길 능동 확인(하트비트) + 막히거나 오래된 IP 교체 간격 (10분)
 # 🎵 새벽에 인기곡 미리 받기: 한국시각 4시대, 노래 트는 방이 없을 때만, 하루 한 번, 곡 사이 쉬면서
 PREFETCH_HOUR = 4
 PREFETCH_MAX = 20
@@ -153,6 +154,7 @@ class Worker:
         self._swin: dict[int, deque] = {}           # 끊김 감시: 방마다 [(시각, 숫자, 어느 DJ)]
         self._watch_at = 0.0
         self._rejoin_at = 0.0
+        self._warp_hb_at = 0.0
         self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
@@ -575,6 +577,14 @@ class Worker:
                 await self._music_rejoin()
             except Exception as e:
                 log.warning("노래 다시 들어가기 확인 실패: %s", e)
+        if time.monotonic() - self._warp_hb_at >= WARP_HB_EVERY:   # 🌐 WARP 길 살았나 확인 + 막히거나 오래되면 새 IP
+            self._warp_hb_at = time.monotonic()
+            try:
+                await warprotate.heartbeat(self._warp_check, alert_fn=self._warp_alert)
+                busy = {warprotate._port(w) for w in warprotate.ways()} if self.players else set()
+                await warprotate.tick(busy)                        # heartbeat 가 막힘 표시한 길 + 오래된 길 하나 교체
+            except Exception as e:
+                log.warning("WARP 확인·교체 실패: %s", e)
         self._maybe_night_prefetch()
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
@@ -998,6 +1008,25 @@ class Worker:
         except Exception as e:
             log.info("음성채팅 열림 확인 실패 %s: %r", chat_id, e)
             return False
+
+    async def _warp_check(self, proxy: str) -> bool:
+        """그 WARP 길로 유튜브에 가볍게 나가지는지 (곡 받기 없이 검색 1개) — 능동 하트비트."""
+        def probe() -> bool:
+            import yt_dlp
+            try:
+                with yt_dlp.YoutubeDL({"proxy": proxy, "quiet": True, "no_warnings": True,
+                                       "extract_flat": True, "socket_timeout": 20}) as y:
+                    info = y.extract_info("ytsearch1:music", download=False)
+                return bool(info and info.get("entries"))
+            except Exception:
+                return False
+        return await asyncio.to_thread(probe)
+
+    async def _warp_alert(self) -> None:
+        """WARP 길이 전부 막힘 → 오너 1:1 긴급 (쿠키까지 죽었으면 음악 완전 중단)."""
+        await self._alert_owners(
+            "🌐 <b>WARP 우회 길이 전부 막혔어요</b>\n노래 받기가 막혀 새 IP 교체도 안 되는 중이에요. "
+            "쿠키 백업이 살아 있으면 버티지만, 쿠키도 죽었으면 음악이 멈춰요.\n🎵 → 🍪 쿠키 넣기로 새 쿠키를 넣어 주세요.")
 
     async def _music_rejoin(self, now: int | None = None) -> None:
         """음성채팅이 닫혀 멈춘 방: 15분 안에 다시 열리면 들어가서 남은 곡을 이어서. 지나면 대기열 정리.

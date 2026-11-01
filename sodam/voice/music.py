@@ -29,7 +29,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import audio, musicmatch as mm, musicq
+from . import audio, musicmatch as mm, musicq, warprotate
 
 log = logging.getLogger("sodam.voice.music")
 
@@ -284,6 +284,8 @@ class Source:
                     break
         if _blocked(last):
             self.blocked_at = time.time()
+            for w in ways:                    # WARP 길이 다 '봇이냐?' 로 막힘 → IP 교체 신호 (worker tick 이 읽어 rotate)
+                warprotate.mark_blocked(w)
             raise MusicError("blocked", "음원 서버가 잠깐 막혔어요. 잠시 뒤 다시 신청해 주세요.")   # 운영자 안내는 오너 1:1 로만 (worker)
         log.info("%s 못 가져옴: %s", where, _short(last, 300))
         raise MusicError("download", f"노래를 못 가져왔어요: {_short(_hide_src(last))}")
