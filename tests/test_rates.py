@@ -224,6 +224,32 @@ async def fast_reply_answers_addressed_query():
 
 
 @test
+async def plain_number_only_hook_not_both_paths():
+    # 2026-11-01 테더정산방: handlers 가 on_message(그룹훅)와 fast_reply(메인)를 asyncio.create_task 로 동시 실행 →
+    # '맨 숫자'가 양쪽에 다 걸려 두 번 떴다. 역할 분리: 맨 숫자=훅 전담, 호칭/물음=fast_reply 전담.
+    _reset(FakeClient(upbit=1346)); rates._last.clear()
+    svc = _Svc(True)
+    m = _Msg("50테더")
+    assert await rates.fast_reply(svc, None, m, m.text) is False, "맨 숫자는 fast_reply 가 손 떼야(훅 전담 → 중복 방지)"
+    assert m.replies == []
+    rates._last.clear()
+    await rates.on_message(svc, None, m, 0)
+    assert m.replies and "67,300원" in m.replies[0], ("맨 숫자는 훅이 답", m.replies)
+    # 호칭 질문은 fast_reply 전담
+    _reset(FakeClient(upbit=1346)); rates._last.clear()
+    svc2 = _Svc(True)
+    a = _Msg("소담아 50테더 얼마야")
+    assert await rates.fast_reply(svc2, None, a, a.text) is True and a.replies
+    # 끝에 물음표 붙은 맨 숫자도 훅이 처리해야 (fast_reply 가 더는 안 잡으니)
+    _reset(FakeClient(upbit=1346)); rates._last.clear()
+    svc3 = _Svc(True)
+    q = _Msg("50테더?")
+    assert await rates.fast_reply(svc3, None, q, q.text) is False
+    await rates.on_message(svc3, None, q, 0)
+    assert q.replies and "67,300원" in q.replies[0], ("물음표 맨 숫자도 훅이 처리", q.replies)
+
+
+@test
 async def fast_reply_user_cooldown():
     _reset(FakeClient(upbit=1346))
     svc = _Svc(True)
