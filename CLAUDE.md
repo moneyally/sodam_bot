@@ -969,7 +969,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 음질 실험실: 브랜치 `claude/audio-lab` docs/AUDIO_LAB.md (ntgcalls 가 Opus 모노·통화 모드·32kbps — 포크해서 음악 모드·128k, GitHub Actions 빌드 제안, 실측 전).
 - 명령(commands.py `_music` → panels/music, 순환 import 피함): .노래/play · .스킵/skip · .일시정지/pause · .다시재생/resume · .대기열/queue ·
   .빼기/remove · .음소거/mmute(**/mute 는 멤버 뮤트**) · .이동/seek(초·+초·분:초) · .노래끝/end · .볼륨/volume · .반복/loop · .지금곡/np ·
-  .도우미부르기/userbotjoin. **@ 없는 영어 /play 는 music_bare 켠 방만**(다른 음악봇과 둘 다 트는 것 방지, 명령 메뉴에서 고르면 @소담이 붙음).
+  .도우미부르기/userbotjoin. **@ 없는 영어 /play 도 모든 방에서 받음**(오너 결정 2026-11-01 — 예전 music_bare 설정 없앰, _skip_bare 는 항상 False).
   권한: 신청 music_who(누구나) · 넘기기·멈춤 = 관리자·그 곡 신청자(music_ctrl=all 이면 누구나) · 끝 = 관리자(또는 남은 곡이 전부 내 곡) ·
   **노래는 구독 무관 모든 방 무료**(2026-11-01, music.precheck 에 paid 체크 없음) · 한 사람 4초 간격. 음악 파일에 답장 → 봇이 data/music/tg_* 로 받아 틀기(음성 담당은 data/music 밖 경로 거부).
   AI 도구 `music`(CORE·LIGHT_WRITE, 지도 '노래 틀어 → music', 다른 봇을 콕 집으면 bot_command). 재생 카드 버튼 mu:pause/resume/skip/queue/end.

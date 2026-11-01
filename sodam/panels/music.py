@@ -4,8 +4,7 @@
   .노래 / /play <제목·노래 링크>  (음악 파일에 답장해도 됨)   .스킵 /skip   .일시정지 /pause   .다시재생 /resume
   .대기열 /queue   .빼기 /remove <번호>   .음소거 / .음소거해제 (노래만 — /mute 는 멤버 뮤트)   .이동 /seek <초|+초|-초>
   .노래끝 /end (음성채팅 나가기)   .볼륨 /volume <0~200>   .반복 /loop <0~10>   .지금곡 /np   .도우미부르기 /userbotjoin
-  영어 이름을 '@봇' 없이 쓰는 건(`/play`) 방 설정 music_bare 를 켰을 때만 — 다른 음악봇이 있는 방에서
-  둘 다 틀지 않게. 명령 메뉴에서 고르면 텔레그램이 '/play@sodam_ai_bot' 로 붙여 줌.
+  영어 이름을 '@봇' 없이 쓰는 것(`/play`)도 모든 방에서 받음 (오너 결정 2026-11-01 '전부 모든 방'). 예전엔 music_bare 켠 방만.
 권한: 신청 = music_who(누구나/관리자) · 넘기기·일시정지·되감기·음량 = 관리자 또는 지금 곡 신청자(music_ctrl=all 이면 누구나) ·
   끝내기 = 관리자(또는 남은 곡이 전부 내 곡) · 빼기 = 관리자는 아무 곡, 아니면 내 곡.
 이용 기간 중인 방만. AI 비용 없음. 오너 메인 🎵 — 음원 상태·인증 쿠키(서버 IP 가 막힐 때).
@@ -41,7 +40,6 @@ settings.register_setting("music_who", "all", "노래 신청",
 settings.register_setting("music_ctrl", "requester", "노래 넘기기·멈춤",
                           choices={"requester": "requester", "신청자": "requester", "all": "all", "누구나": "all"},
                           choice_labels={"requester": "관리자·그 곡 신청자", "all": "누구나"})
-settings.register_setting("music_bare", False, "@ 없는 /play 받기")
 
 WAIT_CTL = 8.0                  # 넘기기·일시정지 결과 기다림
 COOLDOWN = 4.0                  # 한 사람 노래 신청 간격 (초)
@@ -350,7 +348,7 @@ def _bare_english(ctx) -> bool:
 
 
 async def _skip_bare(ctx) -> bool:
-    return _bare_english(ctx) and not (await ctx.svc.db.get_settings(ctx.chat_id)).get("music_bare")
+    return False       # '/play'(@봇 없이 영어) 를 모든 방에서 받음 (오너 결정 2026-11-01). 예전엔 music_bare 켠 방만 — 이제 항상
 
 
 async def c_play(ctx) -> None:
@@ -711,7 +709,6 @@ tools.register_tool(tools.Tool(
 menu.register_preset("music_who", [("all", "누구나"), ("admin", "관리자만")], "mus")
 menu.register_preset("music_ctrl", [("requester", "관리자·신청자"), ("all", "누구나")], "mus")
 menu.register_toggle("music_enabled", "mus")
-menu.register_toggle("music_bare", "mus")
 
 
 async def s_room(c: PanelCtx) -> Screen:
@@ -723,9 +720,7 @@ async def s_room(c: PanelCtx) -> Screen:
              f"지금: {('🎶 ' + esc(cur['title'])[:60] + f' · 대기 {n}곡') if cur else '쉬는 중'}", "",
              f"뮤직봇: <b>{'켜짐' if s['music_enabled'] else '꺼짐'}</b>",
              f"노래 신청: <b>{settings.render('music_who', s['music_who'])}</b>",
-             f"넘기기·멈춤: <b>{settings.render('music_ctrl', s['music_ctrl'])}</b>",
-             f"@ 없는 <code>/play</code>: <b>{'받음' if s['music_bare'] else '안 받음'}</b> "
-             "(다른 음악봇이 있는 방은 끔 — 명령 메뉴에서 고르면 @소담이 붙어요)", "",
+             f"넘기기·멈춤: <b>{settings.render('music_ctrl', s['music_ctrl'])}</b>", "",
              "명령: <code>.노래 제목</code> · <code>.스킵</code> · <code>.일시정지</code> · <code>.다시재생</code> · "
              "<code>.대기열</code> · <code>.빼기 번호</code> · <code>.이동 초</code> · <code>.볼륨 50</code> · <code>.노래끝</code> · "
              "<code>.섞기</code> · <code>.자동재생</code> · <code>.전체반복</code> · <code>.가사</code> · <code>.인기곡</code>",
@@ -735,8 +730,6 @@ async def s_room(c: PanelCtx) -> Screen:
     rows = [[B(("✅ 켜짐" if s["music_enabled"] else "❌ 꺼짐") + " — 바꾸기",
                f"m:t:{c.cid}:music_enabled:{0 if s['music_enabled'] else 1}")],
             menu._preset_row(s, c.cid, "music_who"), menu._preset_row(s, c.cid, "music_ctrl"),
-            [B(("✅" if s["music_bare"] else "❌") + " @ 없는 /play 받기",
-               f"m:t:{c.cid}:music_bare:{0 if s['music_bare'] else 1}")],
             [B(("✅" if m["autoplay"] else "❌") + " 📻 자동 재생", f"m:musm:{c.cid}:autoplay"),
              B(("✅" if m["loopq"] else "❌") + " 🔁 전체 반복", f"m:musm:{c.cid}:loopq")],
             [B(("✅" if m["vc_title"] else "❌") + " 🏷 음성채팅 제목 = 지금 곡", f"m:musm:{c.cid}:vc_title")],

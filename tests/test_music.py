@@ -494,16 +494,15 @@ async def play_command_posts_searching_and_sends_job():
 
 
 @test
-async def bare_english_slash_only_when_room_allows_it():
+async def bare_english_slash_always_received():
+    """영어 '@봇 없이 /play' 도 모든 방에서 받음 (오너 결정 2026-11-01 '전부 모든 방'). 예전엔 music_bare 켠 방만."""
     db, svc, bot = await world()
     await ready(db)
     msg = await cmd(svc, bot, "/play 밤편지")
-    assert not msg.replies, "다른 음악봇과 같이 있는 방: @ 없는 /play 는 무시"
-    msg = await cmd(svc, bot, "/play@sodambot 밤편지")
+    assert msg.replies and "찾는 중" in msg.replies[0], "@ 없는 /play 도 모든 방에서 받음"
+    svc.__dict__.setdefault("_music_last", {}).clear()           # 쿨다운 비우기
+    msg = await cmd(svc, bot, "/play@sodambot 가수")
     assert msg.replies and "찾는 중" in msg.replies[0]
-    await db.set_setting(CHAT, "music_bare", True)
-    msg = await cmd(svc, bot, "/skip")
-    assert msg.replies, "켠 방은 받음"
     msg = await cmd(svc, bot, "/mute@sodambot")
     assert commands.parse("/mute", "sodambot")[0].names[0] == "뮤트", "/mute 는 멤버 뮤트 그대로"
 
