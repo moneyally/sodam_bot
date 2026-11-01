@@ -243,6 +243,20 @@ class Source:
         opts.update(extra)
         return opts
 
+    @staticmethod
+    def _try_order(jar_s: list[str], way_seq: list[str]) -> list[tuple[str | None, str | None]]:
+        """쿠키·우회길 조합 시도 순서. 서버 실측 2026-11-01: 유튜브가 WARP 출구 IP 를 '봇'으로 학습하면
+        쿠키만(서버 IP)·WARP만(쿠키 없이)은 둘 다 막히고 **쿠키+WARP 조합만 통과** (WARP 계정을 바꿔도 같은
+        출구 IP 라 IP 교체로는 못 풂). → 쿠키·길 둘 다 있으면 그 조합을 **먼저**. 그다음 예전 순서(우회길만→쿠키만→맨몸)."""
+        tries: list[tuple[str | None, str | None]] = []
+        if way_seq:                                             # ① 우회길만, 쿠키 없이 (막힘이 무작위라 가끔 됨·쿠키 아낌 — 2026-10-08)
+            tries += [(None, way_seq[i % len(way_seq)]) for i in range(len(way_seq) * WAY_ROUNDS)]
+        if jar_s and way_seq:                                   # ② 쿠키+우회길 (2026-11-01 실측: IP 가 '봇'으로 학습되면 이 조합만 통과)
+            tries += [(c, v) for v in way_seq for c in jar_s]
+        tries += [(c, None) for c in jar_s]                     # ③ 쿠키만 (서버 IP)
+        tries.append((None, None))                              # ④ 맨몸
+        return tries
+
     def _run(self, fn: Callable[[dict], Any], *, cookies: bool = True, where: str = "기본 음원", **extra):
         """쿠키가 있으면 쿠키부터(여러 개면 무작위 순서), '봇이냐?'로 막히면 다음 쿠키 → 마지막에 쿠키 없이.
         (쿠키 없이 먼저 두드리면 막힌 IP 로 요청만 늘어남)"""
@@ -256,9 +270,9 @@ class Source:
         # '봇이냐?' 막힘은 요청마다 무작위 (서버 실측 2026-10-12: 같은 길·같은 곡 5번 → 2/5·4/5 성공) → 길을 번갈아 WAY_ROUNDS 바퀴.
         # 다른 오류(없는 영상·지역 제한)면 다시 두드리지 않고 다음 단계로.
         start = self._way if self._way < len(ways) else 0
-        tries: list[tuple[str | None, str | None]] = \
-            [(None, ways[(start + i) % len(ways)]) for i in range(len(ways) * WAY_ROUNDS)] + \
-            [(c, None) for c in random.sample(jar, len(jar))] + [(None, None)]
+        jar_s = random.sample(jar, len(jar)) if jar else []
+        way_seq = [ways[(start + i) % len(ways)] for i in range(len(ways))]
+        tries = self._try_order(jar_s, way_seq)
         last = ""
         dead: set[str] = set()                    # 다시 두드려도 소용없는 길 (연결 안 됨·없는 영상 등) — 그 길만 건너뜀
         for n, (cookie, via) in enumerate(tries):
