@@ -80,6 +80,25 @@ def youtube_links_and_mix_ducking():
 
 
 @test
+def cookie_plus_proxy_tried_together():
+    # 서버 실측 2026-11-01: 유튜브가 WARP 출구 IP 를 '봇'으로 막으면 쿠키만(서버 IP)·WARP만(쿠키 없이)은 다 막히고
+    # **쿠키+WARP 조합만 통과** → _try_order 가 쿠키·길 둘 다 있으면 그 조합을 먼저 시도해야 한다.
+    order = music.Source._try_order(["ck1", "ck2"], ["p1", "p2"])
+    assert ("ck1", "p1") in order and ("ck2", "p2") in order, "쿠키+WARP 조합이 시도 목록에 없음"
+    # 우회길만(쿠키 아낌)을 먼저 → 안 되면 쿠키+우회길(오늘 유일하게 되는 조합) → 쿠키만 → 맨몸
+    assert order[0] == (None, "p1"), "첫 시도는 우회길만(쿠키 없이)"
+    assert order.index(("ck1", "p1")) < order.index(("ck1", None)), "쿠키+WARP 가 쿠키만(서버IP)보다 먼저여야"
+    assert order.index(("ck1", "p1")) < order.index((None, None)), "쿠키+WARP 가 맨몸보다 먼저여야"
+    assert order[-1] == (None, None), "맨 끝은 쿠키·우회길 없는 맨몸"
+    # 쿠키 없으면 예전처럼 (우회길만 → 맨몸, 쿠키는 안 씀)
+    no_ck = music.Source._try_order([], ["p1", "p2"])
+    assert (None, "p1") in no_ck and no_ck[-1] == (None, None)
+    assert all(c is None for c, _ in no_ck), "쿠키 없을 땐 쿠키 안 씀"
+    # 우회길도 쿠키도 없으면 맨몸 한 번
+    assert music.Source._try_order([], []) == [(None, None)]
+
+
+@test
 async def real_ffmpeg_decodes_wav_to_10ms_frames_and_seeks():
     d = tempfile.mkdtemp()
     path = f"{d}/t.wav"

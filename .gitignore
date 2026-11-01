@@ -12,3 +12,5 @@ __pycache__/
 sodam-migrate-*.enc
 *.session
 .env.migrated*
+pytgcalls_src/
+ntgcalls_src/
