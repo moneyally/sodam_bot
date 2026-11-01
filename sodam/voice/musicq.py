@@ -147,6 +147,29 @@ async def remove_nth(db, chat_id: int, n: int, uid: int, admin: bool):
     return await db.atomic(run)
 
 
+def norm_title(s: str) -> str:
+    """제목 비교용: NFKC(전각→반각) + 소문자 + 공백 제거. 유튜브 제목이 잡음 많아 name_key(기호 전부 제거)는 과함."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", s or "").casefold().replace(" ", "")
+
+
+async def remove_matching(db, chat_id: int, keyword: str, uid: int, admin: bool):
+    """대기열(queued)에서 제목에 keyword 든 곡 전부 뺌. 관리자는 전부, 아니면 자기 신청 곡만.
+       지금 곡(playing)은 **건드리지 않는다** — worker(다른 프로세스)가 재생 중이라 여기서 자동 skip 하면
+       그 사이 곡이 끝나 엉뚱한 곡을 넘기는 경쟁이 생김. 지금 곡도 매칭이면 cur_hit 로 알리기만.
+       → (뺀 줄들, 지금 곡도 매칭인지)."""
+    key = norm_title(keyword)
+    def run(c):
+        rows = c.execute(f"SELECT * FROM music_queue WHERE chat_id=? AND state='queued' ORDER BY {ORDER}", (chat_id,)).fetchall()
+        hit = [r for r in rows if key in norm_title(r["title"]) and (admin or r["by_id"] == uid)]
+        for r in hit:
+            c.execute("UPDATE music_queue SET state='removed', end_ts=? WHERE id=? AND state='queued'", (_now(), r["id"]))
+        cur = c.execute("SELECT * FROM music_queue WHERE chat_id=? AND state='playing' ORDER BY id LIMIT 1", (chat_id,)).fetchone()
+        cur_hit = bool(cur and key in norm_title(cur["title"]) and (admin or cur["by_id"] == uid))
+        return hit, cur_hit
+    return await db.atomic(run)
+
+
 async def clear(db, chat_id: int, reason: str = "removed") -> int:
     """대기열·지금 곡 전부 끝 (끝내기). 지운 곡 수."""
     cur = await db.conn.execute("UPDATE music_queue SET state=?, end_ts=? WHERE chat_id=? AND state IN ('queued','playing')",

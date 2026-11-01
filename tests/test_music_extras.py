@@ -349,6 +349,64 @@ async def ai_loop_one_song_routes_to_control():
 
 
 @test
+async def remove_matching_pulls_keyword_leaves_others():
+    """'버즈 전부 빼' — 대기열에서 '버즈' 든 곡 다 빼되 나머지는 남김 (2026-10-31 大일루왕: 하나씩밖에 못 빼 연타)."""
+    db = await make_db()
+    await add(db, 1, title="버즈 - 겁쟁이")
+    await add(db, 2, title="아이유 - 밤편지")
+    await add(db, 3, title="버즈 - 가시")
+    hit, cur_hit = await musicq.remove_matching(db, CHAT, "버즈", ADMIN.id, True)
+    assert {r["title"] for r in hit} == {"버즈 - 겁쟁이", "버즈 - 가시"}, hit
+    assert not cur_hit, "지금 틀리는 곡 없음"
+    assert [r["title"] for r in await musicq.waiting(db, CHAT)] == ["아이유 - 밤편지"]
+    await db.close()
+
+
+@test
+async def remove_matching_never_touches_current_song():
+    """지금 곡이 매칭이어도 queued 만 뺌 — 지금 곡은 worker(다른 프로세스)가 재생 중이라 자동 skip 하면 경쟁. cur_hit 로 알림만."""
+    db = await make_db()
+    await add(db, 1, title="버즈 - 겁쟁이")
+    await add(db, 2, title="버즈 - 가시")
+    await musicq.start_next(db, CHAT)                 # 1곡이 playing 으로
+    cur = await musicq.current(db, CHAT)
+    hit, cur_hit = await musicq.remove_matching(db, CHAT, "버즈", ADMIN.id, True)
+    assert cur_hit, "지금 곡도 버즈 → 알림 플래그"
+    still = await musicq.current(db, CHAT)
+    assert still and still["id"] == cur["id"], "지금 곡은 그대로 재생 중 (안 지움)"
+    assert len(hit) == 1 and not await musicq.waiting(db, CHAT), "대기열 버즈만 빠짐"
+    await db.close()
+
+
+@test
+async def remove_matching_non_admin_only_own():
+    """비관리자는 자기가 신청한 매칭 곡만 (remove_nth 와 같은 권한)."""
+    db = await make_db()
+    await add(db, 1, title="버즈 - 겁쟁이", by=MEMBER.id)
+    await add(db, 2, title="버즈 - 가시", by=OTHER.id)
+    hit, _ = await musicq.remove_matching(db, CHAT, "버즈", MEMBER.id, False)
+    assert len(hit) == 1 and hit[0]["by_id"] == MEMBER.id, "자기 곡만"
+    assert len(await musicq.waiting(db, CHAT)) == 1, "남의 버즈는 남음"
+    await db.close()
+
+
+@test
+async def c_remove_number_vs_keyword():
+    """.빼기 3/3번/2곡 = 번호(remove_nth), .빼기 버즈 = 키워드 일괄. 숫자+조사는 번호 의도."""
+    db, svc, bot = await world()
+    await ready(db)
+    await add(db, 1, title="버즈 - 겁쟁이")
+    await add(db, 2, title="아이유 - 밤편지")
+    await add(db, 3, title="버즈 - 가시")
+    msg = await cmd(svc, bot, ".빼기 버즈", ADMIN, Role.ADMIN)
+    assert "2곡 뺐어요" in msg.replies[0], msg.replies[0]
+    assert [r["title"] for r in await musicq.waiting(db, CHAT)] == ["아이유 - 밤편지"]
+    msg = await cmd(svc, bot, ".빼기 1", ADMIN, Role.ADMIN)      # 번호 — 남은 1곡(아이유)
+    assert "1번" in msg.replies[0] and "아이유" in msg.replies[0], msg.replies[0]
+    await db.close()
+
+
+@test
 def mood_requests_pick_songs_from_playlists_skipping_long_mixes_and_other_artists():
     """실제 사례 2026-10-08 자이 '소담아 잔잔한 플리 하나 틀어줘' → '노래 모음은 못 틀어요'. 서버 실측: 첫 재생목록이 1시간 모음 영상뿐."""
     src = music.Source(tempfile.mkdtemp())

@@ -399,17 +399,34 @@ async def c_now(ctx) -> None:
     await ctx.reply(musicq.card_text("now", dict(cur)) if cur else RESULT["no_music"])
 
 
+async def _remove_matching_text(svc, chat_id: int, uid: int, role: Role, keyword: str) -> str:
+    """가수·제목 일괄 빼기 결과 글 (명령·AI 공용). 지금 곡은 안 건드리고, 매칭이면 .스킵 안내만 (자동 skip 안 함 — 경쟁 방지)."""
+    admin = role >= Role.ADMIN
+    hit, cur_hit = await musicq.remove_matching(svc.db, chat_id, keyword, uid, admin)
+    kw = esc(keyword)
+    if not hit:
+        base = f"대기열에 '{kw}' 든 곡이 없어요." if admin else f"내가 신청한 곡 중 '{kw}' 든 게 없어요."
+        return base + (f" (지금 틀리는 곡이 '{kw}' 예요 — 넘기려면 <code>.스킵</code>)" if cur_hit else "")
+    out = f"🗑 '{kw}' {len(hit)}곡 뺐어요." + ("" if admin else " (내가 신청한 곡만)")
+    return out + (f"\n지금 틀리는 곡도 '{kw}' 예요 — 넘기려면 <code>.스킵</code>." if cur_hit else "")
+
+
 async def c_remove(ctx) -> None:
     if ctx.chat_id > 0 or await _skip_bare(ctx):
         return
-    n = int(ctx.args[0]) if ctx.args and ctx.args[0].isdecimal() else 0
-    if not n:
-        await ctx.reply("빼려는 곡 번호를 써 주세요. 예: <code>.빼기 2</code> (번호는 <code>.대기열</code>)")
+    arg = (ctx.argstr or "").strip()
+    m = re.match(r"(\d{1,3})\s*(?:번째|번|곡)?$", arg)       # '3'·'3번'·'2곡'·'1번째' = 대기열 번호
+    if m:
+        n = int(m.group(1))
+        row, why = await musicq.remove_nth(ctx.svc.db, ctx.chat_id, n, ctx.user.id, ctx.role >= Role.ADMIN)
+        await ctx.reply({"ok": f"🗑 {n}번 <b>{esc(row['title'] if row else '')[:80]}</b> 뺐어요.",
+                         "none": f"대기열에 {n}번 곡이 없어요.",
+                         "not_yours": "내가 신청한 곡만 뺄 수 있어요 (관리자는 아무 곡)."}[why])
         return
-    row, why = await musicq.remove_nth(ctx.svc.db, ctx.chat_id, n, ctx.user.id, ctx.role >= Role.ADMIN)
-    await ctx.reply({"ok": f"🗑 {n}번 <b>{esc(row['title'] if row else '')[:80]}</b> 뺐어요.",
-                     "none": f"대기열에 {n}번 곡이 없어요.",
-                     "not_yours": "내가 신청한 곡만 뺄 수 있어요 (관리자는 아무 곡)."}[why])
+    if len(musicq.norm_title(arg)) < 2:
+        await ctx.reply("빼려는 곡 번호나 가수·제목을 써 주세요. 예: <code>.빼기 2</code> · <code>.빼기 버즈</code> (가수·제목 다 뺌)")
+        return
+    await ctx.reply(await _remove_matching_text(ctx.svc, ctx.chat_id, ctx.user.id, ctx.role, arg))
 
 
 async def c_userbotjoin(ctx) -> None:
@@ -634,8 +651,18 @@ async def t_music(ctx: tools.ToolCtx, a: dict) -> str:
     if action == "top":
         return plain(await top_text(ctx.svc, ctx.chat_id, int(value) if str(value or "").isdecimal() else 30))
     if action == "remove":
+        q = str(a.get("query") or "").strip()
+        if q:                                          # '버즈 전부 빼' → 가수·제목 일괄 (지금 곡은 안 건드림)
+            if len(musicq.norm_title(q)) < 2:
+                return "뺄 가수·제목을 2글자 이상 query 로."
+            admin = ctx.role >= Role.ADMIN
+            hit, cur_hit = await musicq.remove_matching(ctx.svc.db, ctx.chat_id, q, ctx.caller.id, admin)
+            if not hit:
+                return f"대기열에 '{q}' 든 곡 없음" + (f" · 지금 곡이 '{q}' — 유저가 넘기라 했으면 skip 호출" if cur_hit else "")
+            msg = f"'{q}' {len(hit)}곡 뺌" + ("" if admin else " (내가 신청한 곡만)")
+            return msg + (f" · 지금 곡도 '{q}' — 유저가 '스킵/넘겨'라 했으면 skip 도 호출(아니면 그대로 둠)" if cur_hit else "")
         if not str(value or "").isdecimal():
-            return "몇 번째 곡인지 value 로 (대기열 번호)."
+            return "몇 번째 곡인지 value(숫자), 또는 뺄 가수·제목을 query 로."
         row, why = await musicq.remove_nth(ctx.svc.db, ctx.chat_id, int(value), ctx.caller.id, ctx.role >= Role.ADMIN)
         return {"ok": f"{value}번 '{row['title'] if row else ''}' 뺌", "none": f"대기열에 {value}번 없음",
                 "not_yours": "내가 신청한 곡만 뺄 수 있음 (관리자는 아무 곡)"}[why]
@@ -656,7 +683,9 @@ tools.register_tool(tools.Tool(
     "music",
     "음성채팅에서 노래 틀기 (소담 뮤직봇). '아이유 밤편지 틀어줘'·'노래 틀어'·'이 링크 틀어' → play(query=제목·가수·링크 그대로). "
     "'다음 곡'·'스킵' → skip · '멈춰'·'일시정지' → pause · '다시 틀어' → resume · '노래 꺼'·'노래 끝'·'전체 꺼줘' → stop · "
-    "'나머지 다 취소'·'대기열 비워' → clear · '섞어'·'셔플' → shuffle · '3번 빼' → remove(value=3) · '1분 30초로' → seek(value=90) · "
+    "'나머지 다 취소'·'대기열 비워' → clear · '섞어'·'셔플' → shuffle · '3번 빼' → remove(value=3) · "
+    "'버즈 노래 전부 빼/스킵'·'버즈 다 빼줘' → remove(query='버즈') (대기열에서 그 가수·제목 다 뺌 — 지금 곡도 그 가수면 "
+    "결과에 나옴, 유저가 '스킵'이라 했으면 skip 도 호출) · '1분 30초로' → seek(value=90) · "
     "'이 곡 반복'·'이거 반복'·'이거만 계속 틀어'·'한 곡 반복' → loop (value=횟수, 안 주면 계속·value=0 끄기) · "
     "'전체 반복'·'대기열 전체 돌려'·'모든 곡 반복' → loop_queue(on) · '자동으로 이어서 틀어'·'자동재생 켜/꺼' → autoplay(on) · "
     "'가사 뭐야'·'후렴 가사' → lyrics (전문을 받아 물어본 부분만 인용) · '인기곡'·'많이 들은 노래' → top(value=일수). "
@@ -672,7 +701,7 @@ tools.register_tool(tools.Tool(
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
     {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume", "seek",
                                             "remove", "clear", "shuffle", "loop", "loop_queue", "autoplay", "lyrics", "top"]},
-     "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로). mix=true 면 분위기·상황 말"},
+     "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로). mix=true 면 분위기·상황 말 · remove 땐 뺄 가수·제목(일괄)"},
      "value": {"type": "integer", "description": "volume 0~200 · seek 초 · remove 대기열 번호 · top 일수 · loop 반복 횟수(0=끔, 안 주면 계속)"},
      "mix": {"type": "boolean", "description": "특정 곡 아닌 분위기·상황·장르 신청이면 true (자장가·잠잘 때·신나는 노래 등) → 어울리는 곡 여러 개"},
      "on": {"type": "boolean", "description": "loop_queue·autoplay 켜기(true)/끄기(false), 비우면 바꾸기"}},
