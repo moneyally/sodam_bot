@@ -53,6 +53,19 @@
 - 서버: 실제 통화 끊김 측정 (netwatch our_stall 건수·길이)
 - 리스크 커서 **브랜치 분리 + 한 방 먼저 실측 → 괜찮으면 전체**. 음성/음악 전체 경로라 롤백 쉽게.
 
+## ⚠️ 서브에이전트 코드검토 결과 (2026-11-01) — 설계 수정됨
+진단(send_frame 이 2스레드 공용 executor 풀 min(32,nproc)에서 경합)은 **소스로 확정**. FIFO 도 원리상 성립(ntgcalls `threaded_reader.cpp` kRealtime 스레드가 SHELL/FIFO 를 realtime 페이싱하고 executor 를 안 탐). **단 설계에 틀린 가정·빠진 케이스 발견:**
+1. **치명적 — "큰 블록 write·pacer 제거" 틀림.** 파이프 버퍼(리눅스 64KB≈0.68초)+ffmpeg+ntgcalls 배치 때문에 앞서 쓰면 **~0.7~1.5초 지연 버퍼**가 생김 → `worker._send` 가 노래 중 AI 음성을 같은 스트림에 섞는데(music.py:936 더킹) **소담 말이 ~1초 늦게 재생 = 실시간 대화 망가짐.** 스킵·이동 반영도 100ms 아니라 0.7~1.5초. → **파이썬 pacer 를 그대로 둬야**(앞서 쓰지 말 것). 그러면 이득은 "pacer 제거"가 아니라 **executor 왕복 제거뿐.**
+2. **ffprobe 가 FIFO 를 건드림** — `MediaStream.check_stream` 이 SHELL 오디오에 ffprobe 실행 → 초기 PCM 먹거나 writer 없으면 20초 블록. play 전 무음 미리 쓰기 필요.
+3. **EOF = 노래 영구 정지** — writer fd 를 잠깐이라도 닫으면 ffmpeg EOF → reader 파괴 → 노래 멈춤(자동 leave 는 안 함). **절대 안 닫는 영속 O_RDWR writer** 필수, 곡 전환도 fd 안 닫고 이어붙임.
+4. **AI 단독 통화↔음악 소스 스왑** — 지금 AI 단독은 ExternalMedia. 음악 시작/종료 때 `set_stream_sources`(play 재호출로 교체 가능, 확인됨)로 스왑해야 하고 글리치 설계 없음.
+5. 일시정지는 ntgcalls `pause` API 있음(무음 쓰기 대안).
+6. **버전**: py-tgcalls==3.0.0 은 ntgcalls 를 플로팅(>=3.0.2). "3.0.4" 부정확 → **VPS 에서 `pip show ntgcalls` 실제 버전 먼저 확인.**
+
+### 🟢 더 싸고 덜 위험한 1차 대안 = vCPU 2→4
+- 전용 스레드/풀 리사이즈는 불가(C++ 안 lazy 생성 `min(32,nproc)`). **hardware_concurrency=4 로 올리면 executor 풀 자동 4스레드 — 코드 0줄·즉시 롤백.** 끊김이 send_frame 경합이면 FIFO 재설계보다 압도적 저위험·저비용. 덤으로 2코어 경합 전부(시험이 노래 끊음·스티커 throttle·run_all --jobs 2) 완화.
+- **권장 순서: ① VPS ntgcalls 버전 + netwatch our_stall before 수치 고정 → ② 4 vCPU 로 올려 before/after 비교(가설 검증) → ③ 그래도 부족하면 FIFO(pacer 유지·영속 O_RDWR writer·음악 전용·ffprobe 회피).**
+
 ## 참고
-- 조사 근거: ntgcalls `targets/python/support/py_async.hpp`(스레드풀=min(32,nproc)), `io/threaded_reader.cpp`(kRealtime+버퍼, shell/파일 전용), `media/audio_sink.cpp`(10ms 고정). Yukki `room_control.go`(MediaSourceShell+ffmpeg).
+- 조사 근거: ntgcalls `targets/python/support/py_async.hpp`(스레드풀=min(32,nproc)), `io/threaded_reader.cpp`(kRealtime+100ms 배치), `shell_reader.cpp`(asio::read 블록·EOF), `ntgcalls.cpp:61`(onStreamEnd), `methods/stream/play.py:46-56`(set_stream_sources 스왑), `ffmpeg.py`(check_stream=ffprobe). Yukki `room_control.go`(MediaSourceShell+ffmpeg).
 - 음질(128k/stereo)은 별개 트랙 `docs/AUDIO_LAB.md`. 이 전환은 **끊김**만.
