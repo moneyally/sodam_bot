@@ -1492,6 +1492,11 @@ async def job_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("digest job failed")
 
 
+# 자정 직전 — 하루(00:00~지금) 거의 전부를 담되, 정확히 23:59:59 로 두면 서버가 바쁜 밤에 job 이 몇 초
+# 밀려 자정을 넘길 때 "오늘"이 다음 날로 굴러 통계가 0 이 돼 리포트가 통째로 빠진다 → 60초 여유를 둔 23:59:00.
+DAILY_REPORT_AT = dtime(23, 59)
+
+
 async def job_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = _svc(context)
     for chat_id in await svc.db.all_chat_ids():
@@ -1700,7 +1705,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     jq.run_repeating(job_tick, interval=30, first=10, name="tick")
     jq.run_repeating(job_name_sweep, interval=60, first=90, name="name_sweep")
     jq.run_repeating(job_sports, interval=4, first=45, name="sports")   # 리그별로 8초(경기 중)·6시간(일정)만 실제로 받음 (sports/alerts.py)
-    jq.run_daily(job_daily_report, time=dtime(23, 50, tzinfo=tz), name="daily_report")
+    jq.run_daily(job_daily_report, time=DAILY_REPORT_AT.replace(tzinfo=tz), name="daily_report")
     jq.run_daily(job_backup, time=dtime(hh, mm, tzinfo=tz), name="backup")
     jq.run_daily(job_prune, time=dtime(4, 0, tzinfo=tz), name="prune")
     jq.run_repeating(job_disk, interval=3600, first=300, name="disk")
