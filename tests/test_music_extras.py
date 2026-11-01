@@ -322,6 +322,33 @@ async def ai_tool_does_everything_by_words():
 
 
 @test
+async def ai_loop_one_song_routes_to_control():
+    """'이 곡 반복' → loop action (2026-11-01 大일루왕: enum 에 loop 가 없어 AI 가 loop_queue(전체 반복)로 잘못 매핑했음).
+    worker 의 music_loop 는 이미 작동 — AI 배선만 빠졌던 것. value 안 주면 계속(9), value=0 은 끄기(0 이 falsy 로 날아가면 안 됨)."""
+    calls = []
+
+    async def fake_control(svc, chat_id, uid, role, op, value=None, relative=False):
+        calls.append((op, value))
+        return f"loop:{value}"
+
+    orig = M.control
+    M.control = fake_control
+    try:
+        ctx = SimpleNamespace(svc=None, bot=None, chat_id=CHAT, caller=ADMIN, role=Role.ADMIN, tainted=False, quiet=False)
+        await M.t_music(ctx, {"action": "loop", "value": 3})
+        assert calls[-1] == ("loop", 3), calls
+        await M.t_music(ctx, {"action": "loop"})                 # 횟수 안 주면 계속(9)
+        assert calls[-1] == ("loop", 9), calls
+        await M.t_music(ctx, {"action": "loop", "value": 0})     # 끄기 — 0 이 살아남아야 (str(value or '') 패턴이면 날아감)
+        assert calls[-1] == ("loop", 0), calls
+    finally:
+        M.control = orig
+    enum = tools._BY_NAME["music"].params["action"]["enum"]
+    assert "loop" in enum and "loop_queue" in enum, "한 곡 반복·전체 반복 둘 다"
+    assert "이 곡 반복" in tools._BY_NAME["music"].description
+
+
+@test
 def mood_requests_pick_songs_from_playlists_skipping_long_mixes_and_other_artists():
     """실제 사례 2026-10-08 자이 '소담아 잔잔한 플리 하나 틀어줘' → '노래 모음은 못 틀어요'. 서버 실측: 첫 재생목록이 1시간 모음 영상뿐."""
     src = music.Source(tempfile.mkdtemp())
