@@ -328,3 +328,14 @@ class Permissions:
         if user_id in await self.owners():
             return True
         return chat_id < 0 and user_id in await self.telegram_admins(bot, chat_id)
+
+    async def is_creator(self, bot: Bot, chat_id: int, user_id: int) -> bool:
+        """그 방을 만든 소유자(creator)인지 — 일반 관리자·봇관리자는 False. 신선 조회.
+        방 전체 채팅 수 초기화처럼 '관리자 남용 방지'가 필요한 곳에만 쓴다 (한 번에 한 API 호출)."""
+        if chat_id >= 0:
+            return False
+        try:
+            m = await bot.get_chat_member(chat_id, user_id)
+        except TelegramError:
+            return False
+        return getattr(m, "status", "") == ChatMemberStatus.OWNER

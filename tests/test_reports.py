@@ -38,6 +38,17 @@ def label_counts(act) -> dict[str, int]:
 
 # ── 1. 리포트 숫자 = 실제 기록 ─────────────────────────────
 @test
+def daily_report_fires_just_before_midnight():
+    # 🌙 소통방 리포트는 하루(00:00~지금) 전체를 담게 자정 직전에 떠야 한다 (예전 23:50 은 마지막 10분을 놓침).
+    # 단 정확히 23:59:59 로 두면 밤에 job 이 몇 초 밀려 자정을 넘길 때 '오늘'이 다음 날로 굴러 통계 0 →
+    # 리포트가 통째로 빠진다. 60초 여유(초=0)를 둔 23:59:00 이어야 함.
+    from datetime import time as dtime
+    assert handlers.DAILY_REPORT_AT == dtime(23, 59), handlers.DAILY_REPORT_AT
+    assert handlers.DAILY_REPORT_AT.hour == 23 and handlers.DAILY_REPORT_AT.minute >= 55, "자정 직전"
+    assert handlers.DAILY_REPORT_AT.second == 0, "자정 경계 위험 — 초는 0(여유)"
+
+
+@test
 async def report_counts_match_real_records():
     old = fast_timers()
     try:

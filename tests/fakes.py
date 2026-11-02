@@ -277,6 +277,7 @@ class FakePerms:
 
     from sodam.permissions import Permissions as _P
     shield = _P.shield          # 오너 우선권 판단은 진짜 코드 그대로 (protected·owners·settings 는 위 가짜 값)
+    is_creator = _P.is_creator  # 소유자(creator) 판단도 진짜 코드 — FakeBot.get_chat_member status 로 (bot.member_status 지정)
     del _P
 
     async def is_admin(self, bot, chat_id, uid):
