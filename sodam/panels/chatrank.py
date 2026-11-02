@@ -111,6 +111,43 @@ async def c_me(ctx) -> None:
     await send_html(ctx.bot, ctx.chat_id, html, reply_to=ctx.msg.message_id)
 
 
+async def can_reset_room(svc, bot, chat_id: int, user_id: int) -> bool:
+    """방 전체 채팅 수 초기화 권한 — 소담 운영자(owner) 또는 그 방 소유자(creator)만.
+    일반 관리자·봇관리자는 제외 (관리자 남용 방지 — 오너 요청 2026-11-02)."""
+    if user_id in await svc.perms.owners():
+        return True
+    return await svc.perms.is_creator(bot, chat_id, user_id)
+
+
+async def c_rank_reset_all(ctx) -> None:
+    """방 전체 채팅 수를 0부터 다시 (타수 초기화) — 방 소유자·소담 운영자만, [취소] 로 되돌림.
+    글은 안 지움: 대화 기록·AI 기억·검색·.통계·.랭킹 은 그대로, .순위·.나·시상식·미니앱만 바뀜."""
+    if ctx.chat_id > 0:
+        await ctx.reply("방에서 쳐 주세요 (그 방 소유자 또는 소담 운영자만).")
+        return
+    if not await can_reset_room(ctx.svc, ctx.bot, ctx.chat_id, ctx.user.id):
+        await ctx.reply("⛔ 방 전체 채팅 수 초기화는 <b>방 소유자(방 만든 사람)</b> 또는 소담 운영자만 할 수 있어요 "
+                        "(관리자 남용 방지).\n한 사람만 초기화하려면 관리자가 <code>.채팅리셋</code> (답장/@아이디).")
+        return
+    undo = bool(ctx.args) and ctx.args[0].strip() in ("취소", "해제", "undo", "되돌리기", "원래대로")
+    cfg = await cr.get(ctx.svc.db, ctx.chat_id)
+    if undo:
+        cfg.reset_at = 0
+        await cr.save(ctx.svc.db, ctx.chat_id, cfg, ctx.user.id)
+        cr._CACHE.clear()
+        await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, None, "rank_reset_all_undo", "전체 채팅수 초기화 취소")
+        await ctx.reply("↩️ 방 전체 채팅 수 초기화를 취소했어요 (원래 숫자로).")
+        return
+    cfg.reset_at = int(datetime.now(ctx.svc.cfg.tz).timestamp())
+    await cr.save(ctx.svc.db, ctx.chat_id, cfg, ctx.user.id)
+    cr._CACHE.clear()
+    await ctx.svc.db.log_mod(ctx.chat_id, ctx.user.id, None, "rank_reset_all", "전체 채팅수 초기화")
+    await ctx.reply("🔄 지금부터 <b>방 전체 채팅 수</b>를 0부터 다시 세요.\n"
+                    "<code>.순위</code>·<code>.나</code>·시상식·미니앱만 바뀌고 "
+                    "<b>대화 기록·AI 기억·.랭킹·.통계는 그대로</b>예요.\n"
+                    "되돌리기: <code>.전체순위초기화 취소</code>")
+
+
 async def c_chatreset(ctx) -> None:
     """특정 멤버만 채팅 수 0부터 다시 (도배범 순위 초기화). 글·기록은 그대로, .순위·.나·미니앱만."""
     from .. import commands
@@ -150,7 +187,9 @@ def register_commands() -> None:
                 commands.Cmd(("채팅리셋", "순위리셋", "채팅초기화"), c_chatreset, Role.ADMIN, usage="@user|답장|ID",
                              help="그 사람만 채팅 수 0부터 다시 (도배범 순위 초기화)", group="집계"),
                 commands.Cmd(("채팅리셋취소", "순위리셋취소", "채팅초기화취소"), c_chatreset_cancel, Role.ADMIN,
-                             usage="@user|답장|ID", help="그 사람 채팅 수 초기화 취소", group="집계")):
+                             usage="@user|답장|ID", help="그 사람 채팅 수 초기화 취소", group="집계"),
+                commands.Cmd(("전체순위초기화", "전체채팅초기화", "타수초기화", "방순위초기화"), c_rank_reset_all, Role.ADMIN,
+                             usage="[취소]", help="방 전체 채팅 수 0부터 다시 (방 소유자·운영자만, 기억은 그대로)", group="집계")):
         commands.COMMANDS.append(cmd)
         for name in cmd.names:
             commands._INDEX.setdefault(name.lower(), cmd)
@@ -435,8 +474,17 @@ async def r_reset(c: PanelCtx) -> Screen:
     return sc
 
 
+async def _reset_guard(c: PanelCtx) -> Screen | None:
+    """방 전체 초기화는 방 소유자·소담 운영자만 (관리자 남용 방지)."""
+    if not await can_reset_room(c.svc, c.bot, c.cid, c.uid):
+        return Screen(None, toast="방 전체 채팅 수 초기화는 방 소유자(방 만든 사람) 또는 소담 운영자만 돼요.", alert=True)
+    return None
+
+
 async def r_zero_ask(c: PanelCtx) -> Screen:
     """초기화는 되돌릴 수 있지만 순위가 바로 바뀌니 한 번 더 묻기."""
+    if g := await _reset_guard(c):
+        return g
     text = ("🔄 <b>채팅 수를 0부터 다시 셀까요?</b>\n"
             "지금부터 쓴 글만 <code>.순위</code> · <code>.나</code> · 시상식에 셈. 대화 기록·AI 기억·<code>.랭킹</code> 은 그대로예요.\n"
             "잘못 눌렀으면 [↩️ 초기화 취소] 로 원래대로 돌아가요.")
@@ -444,6 +492,8 @@ async def r_zero_ask(c: PanelCtx) -> Screen:
 
 
 async def r_zero(c: PanelCtx) -> Screen:
+    if g := await _reset_guard(c):
+        return g
     now = int(datetime.now(c.svc.cfg.tz).timestamp())
     sc = await _change(c, "🔄 지금부터 0부터 다시 세요", reset_at=now)
     cr._CACHE.clear()
@@ -451,6 +501,8 @@ async def r_zero(c: PanelCtx) -> Screen:
 
 
 async def r_zero_undo(c: PanelCtx) -> Screen:
+    if g := await _reset_guard(c):
+        return g
     sc = await _change(c, "↩️ 초기화를 취소했어요 (원래 숫자)", reset_at=0)
     cr._CACHE.clear()
     return sc
@@ -652,9 +704,12 @@ async def t_chat_rank(ctx, a: dict) -> str:
             setattr(cfg, k, a[k])
             done.append(k)
     if a.get("reset") in ("now", "undo"):
-        cfg.reset_at = int(datetime.now(ctx.svc.cfg.tz).timestamp()) if a["reset"] == "now" else 0
-        cr._CACHE.clear()
-        done.append("채팅 수 0부터 다시" if cfg.reset_at else "초기화 취소")
+        if not await can_reset_room(ctx.svc, ctx.bot, cid, uid):   # 전체 초기화는 방 소유자·운영자만 (관리자 남용 방지)
+            bad.append("reset: 방 전체 채팅 수 초기화는 방 소유자(방 만든 사람) 또는 소담 운영자만 돼요")
+        else:
+            cfg.reset_at = int(datetime.now(ctx.svc.cfg.tz).timestamp()) if a["reset"] == "now" else 0
+            cr._CACHE.clear()
+            done.append("채팅 수 0부터 다시" if cfg.reset_at else "초기화 취소")
     if a.get("award") in AWARD_WORDS:
         cfg.award = AWARD_WORDS[a["award"]]
         if cfg.award >= 0 and not await ctx.svc.paid_features(cid):

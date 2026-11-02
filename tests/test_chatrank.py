@@ -406,6 +406,7 @@ async def weekly_mode_counts_from_monday_and_awards_last_week_on_monday_midnight
 async def reset_counts_only_from_now_and_can_be_undone():
     """고객 2026-10-12 백악관 '채팅 수만 초기화돼요?' — 글은 안 지우고 그 뒤 글만 셈."""
     e = await setup([(A, 4), (B_, 2)])
+    e.bot.member_status = {(ROOM, ADMIN.id): "creator"}   # 전체 초기화는 방 소유자(creator)·운영자만 (관리자 남용 방지)
     n_msgs = (await e.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=?", (ROOM,)))["n"]
     sc = await P.r_zero_ask(ctx(e))
     assert "0부터 다시" in sc.text and (await cr.get(e.db, ROOM)).reset_at == 0, "묻기만 (바로 안 바뀜)"
@@ -431,6 +432,65 @@ async def reset_counts_only_from_now_and_can_be_undone():
     dm = tools.ToolCtx(e.svc, e.bot, ADMIN.id, ADMIN, Role.MEMBER, {})
     out = await P.t_chat_rank(dm, {"action": "set", "reset": "now"})
     assert "0부터 다시" in out and (await cr.get(e.db, ROOM)).reset_at > 0, "말로도 ('채팅 수 초기화해줘')"
+
+
+def _reset_cmd(e, user, *args):
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    msg = FakeMsg(ROOM, user, ".전체순위초기화 " + " ".join(args))
+    return CmdCtx(e.svc, e.bot, msg, ROOM, user, Role.ADMIN, list(args), " ".join(args)), msg
+
+
+@test
+async def rank_reset_all_only_owner_or_creator_not_admin():
+    """방 전체 채팅 수 초기화 = 방 소유자(creator) 또는 소담 운영자만. 일반 관리자는 남용 방지로 거절 (오너 2026-11-02)."""
+    # ① 일반 관리자(소유자 아님) → 거절, 초기화 안 됨
+    e = await setup([(A, 4), (B_, 2)])
+    c, msg = _reset_cmd(e, ADMIN)                 # ADMIN 은 관리자지만 creator 아님(member_status 없음)
+    await P.c_rank_reset_all(c)
+    assert "소유자" in msg.replies[-1] and (await cr.get(e.db, ROOM)).reset_at == 0, "일반 관리자는 거절"
+    # ② 방 소유자(creator) → 통과
+    e.bot.member_status = {(ROOM, ADMIN.id): "creator"}
+    n_msgs = (await e.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=?", (ROOM,)))["n"]
+    c, msg = _reset_cmd(e, ADMIN)
+    await P.c_rank_reset_all(c)
+    cfg = await cr.get(e.db, ROOM)
+    assert cfg.reset_at > 0 and "0부터 다시" in msg.replies[-1], "방 소유자는 됨"
+    # 글·AI 기억은 그대로 (메시지 안 지움)
+    assert (await e.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=?", (ROOM,)))["n"] == n_msgs, "글 그대로"
+    _, _, rows = await cr.standings(e.svc, ROOM, cfg, None, e.bot)
+    assert rows == [], "초기화 뒤 순위는 0"
+    # ③ 되돌리기 (취소)
+    c, msg = _reset_cmd(e, ADMIN, "취소")
+    await P.c_rank_reset_all(c)
+    assert (await cr.get(e.db, ROOM)).reset_at == 0 and "취소" in msg.replies[-1], "취소하면 원래대로"
+    # ④ 소담 운영자(owner) → creator 아니어도 통과
+    e2 = await setup([(A, 3)])
+    e2.svc.perms.owner_ids = {C.id}              # C 는 소담 운영자
+    c, msg = _reset_cmd(e2, C)
+    await P.c_rank_reset_all(c)
+    assert (await cr.get(e2.db, ROOM)).reset_at > 0, "소담 운영자는 됨"
+
+
+@test
+async def rank_reset_button_and_ai_also_owner_or_creator_only():
+    """같은 전체 초기화를 버튼·AI 도구로 해도 방 소유자·운영자만 (관리자 남용 완전 차단)."""
+    from sodam import tools
+    from sodam.permissions import Role
+    e = await setup([(A, 4)])
+    # 버튼: 일반 관리자 → 토스트로 거절, 초기화 안 됨
+    sc = await P.r_zero(ctx(e))
+    assert sc.text is None and "소유자" in (sc.toast or "") and (await cr.get(e.db, ROOM)).reset_at == 0, "버튼도 관리자 거절"
+    sc = await P.r_zero_ask(ctx(e))
+    assert "소유자" in (sc.toast or ""), "묻기 화면도 막힘"
+    # AI 도구: 일반 관리자 → 못 넣음
+    dm = tools.ToolCtx(e.svc, e.bot, ADMIN.id, ADMIN, Role.MEMBER, {})
+    out = await P.t_chat_rank(dm, {"action": "set", "reset": "now"})
+    assert "소유자" in out and (await cr.get(e.db, ROOM)).reset_at == 0, "AI 도구도 관리자 거절"
+    # 소유자면 버튼 통과
+    e.bot.member_status = {(ROOM, ADMIN.id): "creator"}
+    await P.r_zero(ctx(e))
+    assert (await cr.get(e.db, ROOM)).reset_at > 0, "소유자는 버튼으로 됨"
 
 
 @test
