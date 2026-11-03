@@ -228,6 +228,10 @@ async def room_world():
                   CHAT, uid, now - 40 * DAY, now - 4 * 3600)
     for uid, ago in ((10, 3 * 3600), (12, 3 * 3600), (13, 3 * 3600), (14, 3 * DAY)):
         await ins(db, "INSERT INTO member_left(chat_id, user_id, ts) VALUES(?,?,?)", CHAT, uid, now - ago)
+    # 실제 입장 이벤트(join_info): 10·11 은 지금 남은 사람, 15 는 들어왔다 나가서 members 에 없음 → 입장 3·남음 2
+    for uid in (10, 11, 15):
+        await ins(db, "INSERT INTO mod_log(chat_id, actor_id, target_id, action, detail, ts) VALUES(?,?,?,?,?,?)",
+                  CHAT, ADMIN, uid, "join_info", "추가: 방장", now - 5 * 3600)
     await ins(db, "INSERT INTO mod_log(chat_id, actor_id, target_id, action, detail, ts) VALUES(?,?,?,?,?,?)",
               CHAT, ADMIN, 13, "kick", "관리자 판단", now - 3 * 3600)
     await ins(db, "INSERT INTO mod_log(chat_id, actor_id, target_id, action, detail, ts) VALUES(?,?,?,?,?,?)",
@@ -246,7 +250,7 @@ async def room_world():
 async def room_changes_counts_leaves_and_buckets():
     db, svc, bot, now = await room_world()
     rc = await insight.room_changes(svc, bot, CHAT, "24h")
-    assert (rc.joins, rc.leaves) == (2, 3), (rc.joins, rc.leaves)
+    assert (rc.joins, rc.present_new, rc.leaves) == (3, 2, 3), (rc.joins, rc.present_new, rc.leaves)
     assert rc.kicked_leavers == 1 and rc.quick_leavers == 1
     assert abs(rc.base_leaves - 1 / 7) < 1e-9
     hot = max(rc.buckets, key=lambda b: b.human)
@@ -255,12 +259,32 @@ async def room_changes_counts_leaves_and_buckets():
     assert hot.events.get("예약 공지") == 1 and not any("ask" in k for b in rc.buckets for k in b.events)
     assert rc.human == 40 + 1 + 26 + 1 and rc.admin == 1, (rc.human, rc.admin)   # 영희 41 · 철수 26 · 관리자 1
     t = insight.changes_text(rc, svc.cfg.tz)
-    assert t.startswith("최근 24시간 방 변화: 입장 2 · 나감 3 (순 -1)"), t[:80]
+    assert t.startswith("최근 24시간 방 변화: 입장 3명 (지금 남음 2 · 그중 나감 1) · 나감(기록) 3"), t[:90]
     assert "봇·관리자가 내보낸 기록 1" in t and "들어왔다 나감 1" in t and "급증" in t and "추정" in t
     assert t.index("가장 바쁜 시간: " + hot.label + " 40") > 0
     week = await insight.room_changes(svc, bot, CHAT, "7d")
     assert week.leaves == 4 and all("(" in b.label for b in week.buckets)       # 7일 = 날짜(요일) 버킷
     assert (await insight.room_changes(svc, bot, CHAT, "이상한값")).period == "today"
+
+
+@test
+async def joins_command_counts_real_entries():
+    from fakes import FakeMsg
+    from sodam import commands
+    db, svc, bot, now = await room_world()
+    user = fake_user(ADMIN, "방장")
+    text = ".입장 하루"           # 하루=24h (자정 기준은 시각에 따라 깜빡여서 테스트는 24h 로 고정)
+    parsed = commands.parse(text, bot.username)
+    msg = FakeMsg(CHAT, user, text)
+    await commands.dispatch(commands.CmdCtx(svc, bot, msg, CHAT, user, Role.ADMIN, parsed[1], parsed[2]), parsed[0])
+    assert msg.replies, "답 없음"
+    out = msg.replies[-1]
+    assert "입장 <b>3명</b>" in out and "지금 남음 2 · 나감 1" in out, out
+    # 1:1(양수 chat_id)에선 그룹방에서 쓰라고 안내
+    msg2 = FakeMsg(ADMIN, user, ".입장")
+    p2 = commands.parse(".입장", bot.username)
+    await commands.dispatch(commands.CmdCtx(svc, bot, msg2, ADMIN, user, Role.ADMIN, p2[1], p2[2]), p2[0])
+    assert msg2.replies and "그룹방에서" in msg2.replies[-1], msg2.replies
 
 
 @test

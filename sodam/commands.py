@@ -143,6 +143,7 @@ EXAMPLES_ADMIN: list[tuple[str, list[str]]] = [
     ("🏆 순위 관리", ["도배하는 철수 채팅 수 초기화해줘", "쟤 순위 0으로 (답장)",
                     "2글자 이상 집계되게 부스트 켜줘", "집계 부스트 꺼줘",
                     ".전체순위초기화 (방 전체 타수 0부터 · 방 소유자·운영자만, 기억은 그대로)"]),
+    ("📥 입장 수", ["오늘 몇 명 들어왔어?", ".입장"]),
     ("🚨 수배", ["이 사람 사기꾼이야 수배 올려 (답장)"]),
     ("💬 자동답글", ["'공지' 치면 이 글 자동으로 보내줘 (답장)"]),
     ("📚 자료 저장", ["광고는 관리자에게 먼저 말하기, 방 규칙으로 기억해"]),
@@ -466,6 +467,28 @@ async def c_about(ctx: CmdCtx) -> None:
 
 
 # ── 관리자 명령 ───────────────────────────────────────────
+async def c_joins(ctx: CmdCtx) -> None:
+    """📥 오늘(자정부터) 이 방에 들어온 사람 수 — AI 안 거치고 기록으로 바로 셈.
+
+    입장 = 실제 입장 이벤트(들어왔다 나간 사람도 셈), 그중 지금 남은 수·나간 수도 같이.
+    기간 인자: (없음)=오늘 · 하루/24시간 · 주간/7일.
+    """
+    if ctx.chat_id >= 0:
+        await ctx.reply("그룹방에서 써줘 — 그 방 입장 수를 보여줄게.")
+        return
+    from . import insight
+    period = "today"
+    arg = (ctx.argstr or "").strip()
+    if arg:
+        period = insight.PERIOD_ALIAS.get(arg, arg if arg in insight.PERIODS else "today")
+    rc = await insight.room_changes(ctx.svc, ctx.bot, ctx.chat_id, period)
+    gone = max(0, rc.joins - rc.present_new)
+    base = (f" · 그 전 7일 하루 평균 {rc.base_joins:.0f}명" if period != "7d"
+            else f" · 그 전 7일 합 {rc.base_joins:.0f}명")
+    await ctx.reply(f"📥 {insight.PERIODS[period]} 입장 <b>{rc.joins}명</b> "
+                    f"(지금 남음 {rc.present_new} · 나감 {gone}){base}")
+
+
 async def c_members(ctx: CmdCtx) -> None:
     """👥 멤버 목록을 관리자 1:1 로 (방에 명단을 뿌리지 않게)."""
     from .panels.members import s_members
@@ -1661,6 +1684,8 @@ COMMANDS: list[Cmd] = [
     Cmd(("아이디조회", "check_username", "usernames"), c_check_username, usage="[@user|ID|답장]",
         help="@아이디 변경만", group="이름 기록", dm_ok=True),
     Cmd(("내기록", "myhistory"), c_myhistory, help="내 이름·아이디 기록", group="이름 기록", dm_ok=True),
+    Cmd(("입장", "오늘입장", "입장수", "joins"), c_joins, Role.ADMIN, usage="[하루|주간]",
+        help="오늘(자정부터) 들어온 사람 수 — 지금 남음·나감까지", group="관리자"),
     Cmd(("멤버", "멤버목록", "members"), c_members, Role.ADMIN, help="방 멤버 목록 (1:1 로)", group="관리자"),
     Cmd(("프로필", "profile"), c_profile, Role.ADMIN, usage="@user|답장|ID",
         help="한 사람 프로필: 소개글·접속 상태·계정 생성 추정 + 이 방 기록 (1:1 로, 오너는 1:1 에서 뒤에 방 이름)",
