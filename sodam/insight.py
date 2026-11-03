@@ -386,7 +386,8 @@ class RoomChanges:
     period: str
     since: int
     until: int
-    joins: int = 0
+    joins: int = 0                   # 실제 입장(mod_log join_info, 들어왔다 나간 사람도 셈)
+    present_new: int = 0             # 그중 지금도 방에 남아있는 사람 (members.joined_at)
     leaves: int = 0
     kicked_leavers: int = 0          # 나간 사람 중 기간 안 kick/ban 기록 있음
     quick_leavers: int = 0           # 기간 안에 들어왔다 나감
@@ -439,17 +440,22 @@ async def room_changes(svc: Services, bot, chat_id: int, period: str = "today") 
     rc.human, rc.bot, rc.admin = (sum(x.human for x in buckets.values()), sum(x.bot for x in buckets.values()),
                                   sum(x.admin for x in buckets.values()))
 
-    joined = await db._all("SELECT m.user_id, m.joined_at FROM members m JOIN users u ON u.user_id=m.user_id "
-                           "WHERE m.chat_id=? AND m.joined_at>=? AND u.is_bot=0", (chat_id, since))
-    for r in joined:
-        b(r["joined_at"]).joins += 1
-    joined_ids = {r["user_id"] for r in joined}
+    # 실제 입장 = mod_log join_info 이벤트 (들어왔다 나간 사람도 포함). 사람당 처음 입장 시각으로 묶음.
+    # members.joined_at 은 '지금 방에 남은 사람'만이라 들어왔다 나간 사람이 빠져 적게 나옴 → 남은 수(present_new)로만 씀.
+    jrows = await db._all("SELECT target_id, MIN(ts) AS ts FROM mod_log "
+                          "WHERE chat_id=? AND action='join_info' AND target_id IS NOT NULL AND ts>=? "
+                          "GROUP BY target_id", (chat_id, since))
+    for r in jrows:
+        b(r["ts"]).joins += 1
+    present = await db._all("SELECT m.user_id FROM members m JOIN users u ON u.user_id=m.user_id "
+                            "WHERE m.chat_id=? AND m.joined_at>=? AND u.is_bot=0", (chat_id, since))
+    joined_ids = {r["user_id"] for r in present}
     left = await db._all("SELECT user_id, ts FROM member_left WHERE chat_id=? AND ts>=?", (chat_id, since - 7 * DAY))
     base = [r for r in left if r["ts"] < since]
     left = [r for r in left if r["ts"] >= since]
     for r in left:
         b(r["ts"]).leaves += 1
-    rc.joins, rc.leaves = len(joined), len(left)
+    rc.joins, rc.present_new, rc.leaves = len(jrows), len(joined_ids), len(left)
 
     logs = await db._all("SELECT ts, action, detail, actor_id, target_id FROM mod_log WHERE chat_id=? AND ts>=? "
                          "AND action NOT LIKE 'ask!_%' ESCAPE '!' AND action NOT LIKE 'press!_%' ESCAPE '!' "
@@ -469,9 +475,9 @@ async def room_changes(svc: Services, bot, chat_id: int, period: str = "today") 
     rc.quick_leavers = len(leaver_ids & joined_ids)
 
     # 비교 기준: 그 전 7일 (나감은 member_left 가 사람당 마지막 1번만 남아서 대략값)
-    base_joins = (await db._one("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.user_id=m.user_id "
-                                "WHERE m.chat_id=? AND m.joined_at>=? AND m.joined_at<? AND u.is_bot=0",
-                                (chat_id, since - 7 * DAY, since)))["n"]
+    base_joins = (await db._one("SELECT COUNT(DISTINCT target_id) AS n FROM mod_log "
+                                "WHERE chat_id=? AND action='join_info' AND target_id IS NOT NULL "
+                                "AND ts>=? AND ts<?", (chat_id, since - 7 * DAY, since)))["n"]
     div = 1 if daily else 7
     rc.base_leaves, rc.base_joins = len(base) / div, base_joins / div
 
@@ -497,7 +503,9 @@ def changes_text(rc: RoomChanges, tz) -> str:
     unit = "일" if daily else "시"
     base = (f"그 전 7일 합 나감 {rc.base_leaves:.0f}·입장 {rc.base_joins:.0f}" if daily
             else f"그 전 7일 하루 평균 나감 {rc.base_leaves:.1f}·입장 {rc.base_joins:.1f}")
-    L = [f"{PERIODS[rc.period]} 방 변화: 입장 {rc.joins} · 나감 {rc.leaves} (순 {rc.joins - rc.leaves:+d}) · {base}",
+    gone = max(0, rc.joins - rc.present_new)
+    L = [f"{PERIODS[rc.period]} 방 변화: 입장 {rc.joins}명 (지금 남음 {rc.present_new} · 그중 나감 {gone}) · "
+         f"나감(기록) {rc.leaves} · {base}",
          f"나간 {rc.leaves}명 중 봇·관리자가 내보낸 기록 {rc.kicked_leavers} · 기간 안 들어왔다 나감 {rc.quick_leavers}",
          f"메시지 사람 {rc.human} (관리자 {rc.admin}) · 봇 {rc.bot}  [{fmt_time(rc.since, tz, '%m/%d %H:%M')}~"
          f"{fmt_time(rc.until, tz, '%m/%d %H:%M')}]"]
