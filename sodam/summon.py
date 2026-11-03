@@ -17,7 +17,7 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 from .db import register_schema
-from .util import display_name, esc, mention, send_retry
+from .util import display_name, esc, mention, send_retry, to_int
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS summon_lists (
@@ -60,6 +60,34 @@ async def picked(db, chat_id: int, admin_id: int) -> list[int]:
     return out
 
 
+async def room_picked(db, chat_id: int, prefer: int | None = None) -> list[int]:
+    """방 안 **모든 관리자**의 '진행 중 선택'을 합친 공용 명단 — A 가 골라 두면 B 도 `.집합` 으로 부를 수 있게.
+    (진행중 선택은 관리자마다 따로라, 본인 선택이 비면 이걸로 폴백.) 순서 유지·중복 없음.
+    prefer 가 주어지면 그 관리자 선택을 맨 앞에."""
+    rows = await db._all(
+        r"SELECT key, value FROM chat_state WHERE chat_id=? AND key LIKE 'summon\_pick:%' ESCAPE '\'", (chat_id,))
+    out, seen = [], set()
+
+    def take(val):
+        try:
+            ids = json.loads(val)
+        except Exception:
+            return
+        if not isinstance(ids, list):
+            return
+        for x in ids:
+            uid = int(x) if isinstance(x, int) or (isinstance(x, str) and str(x).lstrip("-").isdigit()) else None
+            if uid is not None and uid not in seen:
+                seen.add(uid)
+                out.append(uid)
+
+    if prefer is not None:
+        take(next((r["value"] for r in rows if r["key"] == _key(prefer)), "[]"))
+    for r in rows:
+        take(r["value"])
+    return out[:MAX_PICK]
+
+
 async def _set(db, chat_id: int, admin_id: int, ids: list[int]) -> None:
     await db.set_state(chat_id, _key(admin_id), ids[:MAX_PICK])
 
@@ -94,6 +122,26 @@ async def add_ids(db, chat_id: int, admin_id: int, user_ids: list[int]) -> int:
 
 async def clear(db, chat_id: int, admin_id: int) -> None:
     await db.set_state(chat_id, _key(admin_id), None)
+
+
+async def resolve_targets(db, chat_id: int, toks) -> tuple[list[int], list[str]]:
+    """토큰들(@아이디·이름·숫자 고유번호) → (찾은 user_id, 못 찾은 토큰).
+    방에 기록이 없는 사람도 **순수 숫자 고유번호는 그대로** 받는다(밴·공동차단과 같은 방침 — 외부인·말 안 한 멤버도 부를 수 있게).
+    이름만으론(숫자가 아니면) 못 찾으면 miss."""
+    found, miss, seen = [], [], set()
+    for t in toks:
+        key = str(t).strip().lstrip("@")
+        if not key:
+            continue
+        rows = await db.find_members(chat_id, key)
+        uid = rows[0]["user_id"] if len(rows) == 1 else (
+            to_int(key) if key.isdigit() and (to_int(key) or 0) > 0 else None)
+        if uid is None:
+            miss.append(str(t))
+        elif uid not in seen:
+            seen.add(uid)
+            found.append(uid)
+    return found, miss
 
 
 async def member_rows(db, chat_id: int, user_ids: list[int]) -> dict[int, dict]:
