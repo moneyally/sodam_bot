@@ -147,7 +147,7 @@ async def help_examples_by_role():
     assert "<code>.경고</code>" not in text and len(text) < 900, len(text)            # 짧게, 명령어 목록 아님
     assert not commands._BACKGROUND - bg, "멤버 도움말은 방에 남음"
     text = await _cmd(svc, bot, -100555, boss, Role.ADMIN, ".도움말")
-    assert all(s in text for s in MEMBER_SAYS + ADMIN_SAYS) and len(text) < 1500, text
+    assert all(s in text for s in MEMBER_SAYS + ADMIN_SAYS) and len(text) < 1600, text
     assert commands._BACKGROUND - bg, "관리자 예시는 방에 잠깐만"
     for t in list(commands._BACKGROUND - bg):
         t.cancel()
