@@ -41,6 +41,51 @@ def _off(v):
     return abs(dx) > 900 or abs(dy) > 380 or abs(sx) < 0.2 or abs(sy) < 0.2
 
 
+def _blob_on(bg):
+    """가운데 어두운 캐릭터 + 배경 bg(H,W,3)."""
+    a = np.array(bg)
+    H, W = a.shape[:2]
+    a[H // 20:H * 9 // 10, W * 3 // 10:W * 7 // 10] = (30, 25, 28)
+    return Image.fromarray(a, "RGB")
+
+
+def _checker(H=400, W=400, s=16):
+    c = np.zeros((H, W, 3), np.uint8)
+    for y in range(H):
+        for x in range(W):
+            c[y, x] = (255, 255, 255) if ((x // s + y // s) % 2 == 0) else (205, 205, 205)
+    return c
+
+
+@test
+def checker_background_keyed_clean_not_left_as_tiles():
+    """투명 격자무늬(체커보드)가 박힌 그림 → 흰·회색 둘 다 지워 타일이 안 남는다.
+    (2026-11-03 태산방 자이: 흰 배경으로 오인해 흰 칸만 지워 회색 타일이 남던 버그)"""
+    H = W = 400
+    # 균일 배경·진짜 투명은 체커로 오인하지 않는다
+    assert keying.detect_mode(_blob_on(np.full((H, W, 3), 255, np.uint8))) == "white"
+    assert keying.detect_mode(_blob_on(np.full((H, W, 3), 205, np.uint8))) != "checker"
+    tr = np.dstack([np.zeros((H, W, 3), np.uint8), np.zeros((H, W), np.uint8)])
+    tr[20:360, 120:280] = (30, 25, 28, 255)
+    assert keying.detect_mode(Image.fromarray(tr, "RGBA")) == "none"
+    # 체커보드 → checker 로 감지하고 배경을 완전히 지운다
+    im = _blob_on(_checker(H, W))
+    assert keying.detect_mode(im) == "checker"
+    out, used = keying.key_image(_save(_png(im)), "auto")
+    assert used == "checker"
+    al = np.asarray(out.getchannel("A"))
+    bg = np.ones((H, W), bool)
+    bg[H // 20:H * 9 // 10, W * 3 // 10:W * 7 // 10] = False
+    assert ((al > 128) & bg).mean() < 0.02, "배경에 타일 잔재가 남음"      # 거의 0
+    assert (al[80:300, 140:260] > 128).mean() > 0.95, "캐릭터가 지워짐"     # 안쪽 보존
+
+
+def _png(im: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 @test
 def every_motion_loops_and_counts():
     assert len(M.PRESETS) >= 25, len(M.PRESETS)

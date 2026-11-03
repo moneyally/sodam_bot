@@ -50,6 +50,13 @@ async def s_smn(c: PanelCtx) -> Screen:
     if sel:
         kb.append([B("🗑 선택 비우기", f"m:smc:{c.cid}")])
         kb.append([B(f"📣 집합 보내기 ({len(sel)}명)", f"m:smg:{c.cid}")])
+    else:
+        # 본인 선택이 비어도 다른 관리자가 골라 둔 방 공용 명단이 있으면 바로 부를 수 있게
+        room = await summon.room_picked(c.svc.db, c.cid)
+        if room:
+            lines.append(f"\n📣 다른 관리자가 골라 둔 <b>{len(room)}명</b>이 있어요 — 바로 부르거나 "
+                         "<code>.집합</code> 으로도 돼요.")
+            kb.append([B(f"📣 집합 보내기 ({len(room)}명)", f"m:smg:{c.cid}")])
     return Screen("\n".join(lines), _kb([*kb, _back(c.cid)]))
 
 
@@ -157,7 +164,7 @@ async def r_dellist(c: PanelCtx) -> Screen:
 
 # ── 미리보기 · 집합 실행 ──────────────────────────────────
 async def r_confirm(c: PanelCtx) -> Screen:
-    sel = await summon.picked(c.svc.db, c.cid, c.uid)
+    sel = await summon.picked(c.svc.db, c.cid, c.uid) or await summon.room_picked(c.svc.db, c.cid)
     if not sel:
         s = await s_smn(c)
         s.toast = "고른 사람이 없어요."
@@ -173,7 +180,7 @@ async def r_confirm(c: PanelCtx) -> Screen:
 
 
 async def r_fire(c: PanelCtx) -> Screen:
-    sel = await summon.picked(c.svc.db, c.cid, c.uid)
+    sel = await summon.picked(c.svc.db, c.cid, c.uid) or await summon.room_picked(c.svc.db, c.cid)
     if not sel:
         s = await s_smn(c)
         s.toast = "고른 사람이 없어요."
@@ -196,16 +203,10 @@ async def in_search(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 
 
 async def in_addids(c: PanelCtx, msg: Message) -> tuple[bool, str]:
-    toks = [t.strip().lstrip("@") for t in (msg.text or "").replace(",", " ").split() if t.strip()]
+    toks = [t.strip() for t in (msg.text or "").replace(",", " ").split() if t.strip()]
     if not toks:
         return False, "@아이디나 숫자 ID 를 보내 주세요."
-    found, miss = [], []
-    for t in toks[:30]:
-        rows = await c.svc.db.find_members(c.cid, t)
-        if len(rows) == 1:
-            found.append(rows[0]["user_id"])
-        else:
-            miss.append(t)
+    found, miss = await summon.resolve_targets(c.svc.db, c.cid, toks[:30])
     added = await summon.add_ids(c.svc.db, c.cid, c.uid, found) if found else 0
     note = f"➕ {added}명 더했어요." if added else "추가된 사람이 없어요."
     if miss:
@@ -243,19 +244,13 @@ async def c_summon(ctx: commands.CmdCtx) -> None:
         if hit:
             targets = await summon.list_ids(db, chat_id, hit["id"])
     if not targets and ctx.args:
-        miss = []
-        for t in ctx.args[:30]:
-            rows = await db.find_members(chat_id, t.lstrip("@"))
-            if len(rows) == 1:
-                targets.append(rows[0]["user_id"])
-            elif not rows:
-                miss.append(t)
+        targets, miss = await summon.resolve_targets(db, chat_id, ctx.args[:30])
         if miss and not targets:
             await ctx.reply("못 찾았어요: " + esc(", ".join(miss[:5]) )
                             + "\n답장하거나 @아이디·숫자 ID 로, 또는 1:1 ⚙️ → 📣 집합 에서 골라 보내세요.")
             return
-    if not targets:  # 답장·인자 없음 → 1:1 에서 만든 내 선택
-        targets = await summon.picked(db, chat_id, ctx.user.id)
+    if not targets:  # 답장·인자 없음 → 내 선택, 없으면 방 공용(다른 관리자가 골라 둔 것)
+        targets = await summon.picked(db, chat_id, ctx.user.id) or await summon.room_picked(db, chat_id)
     if not targets:
         await ctx.reply("부를 사람을 정해 주세요.\n"
                         "• 답장하며 <code>.집합</code>\n"
@@ -297,13 +292,10 @@ async def t_summon(ctx: tools.ToolCtx, a: dict) -> str:
         if hit:
             targets = await summon.list_ids(db, ctx.chat_id, hit["id"])
     miss = []
-    if not targets:
-        for nm in names[:30]:
-            rows = await db.find_members(ctx.chat_id, str(nm).lstrip("@"))
-            if len(rows) == 1:
-                targets.append(rows[0]["user_id"])
-            else:
-                miss.append(str(nm))
+    if not targets and names:
+        targets, miss = await summon.resolve_targets(db, ctx.chat_id, [str(n) for n in names[:30]])
+    if not targets and not names:   # 이름 없이 '집합' → 내 선택, 없으면 방 공용(다른 관리자가 골라 둔 것)
+        targets = await summon.picked(db, ctx.chat_id, ctx.caller.id) or await summon.room_picked(db, ctx.chat_id)
     if not targets:
         return (f"집합할 사람을 못 찾음 ({esc(', '.join(miss[:5]))}). 정확한 이름·@아이디로 다시 알려 달라고 하거나 "
                 "1:1 ⚙️ → 📣 집합 에서 고르라고 안내.")

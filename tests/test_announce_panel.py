@@ -85,6 +85,25 @@ async def mod_log_count(db, action="schedule"):
     return len(await db._all("SELECT * FROM mod_log WHERE action=?", (action,)))
 
 
+@test
+async def interval_announcements_dont_burst_one_per_tick():
+    """반복(시작시각 없는 interval) 예약공지 여러 개가 같은 시각에 걸려도 한 틱에 방당 1개만 —
+    나머지는 오버듀로 남아 다음 틱에(위상 벌어짐). (2026-11-03 뉴월드: 18개가 150분마다 우르르)"""
+    db, svc, bot, state = await setup()
+    svc.paid_features = lambda cid: _async(True)
+    for i in range(4):
+        await add(db, CHAT, f"반복{i}", kind="interval", at_time=None, interval_min=180)
+    await db._write("UPDATE schedules SET last_sent=0 WHERE chat_id=?", (CHAT,))        # 전부 due 로
+    await svc.announcer.run_due(bot)
+    assert len(sent_to(bot, CHAT)) == 1, "한 틱엔 방당 1개여야"
+    assert len([r for r in await db.schedules(CHAT) if r["last_sent"] == 0]) == 3        # 3개 미룸(아직 안 보냄)
+    await svc.announcer.run_due(bot)                                                    # 같은 시각 재실행
+    assert len(sent_to(bot, CHAT)) == 1, "간격(120초) 안이라 추가 발송 없음"
+    await db.set_setting(CHAT, "announce_gap_sec", 0)                                   # 간격 꺼도 한 틱 1개는 유지
+    await svc.announcer.run_due(bot)
+    assert len(sent_to(bot, CHAT)) == 2
+
+
 # ── 목록 · 항목 ───────────────────────────────────────────
 @test
 async def hub_has_announce_button_and_list_is_scoped():

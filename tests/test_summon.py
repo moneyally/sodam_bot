@@ -177,6 +177,37 @@ async def command_fires_by_at_id_and_list():
 
 
 @test
+async def resolve_targets_takes_raw_numeric_id():
+    """@아이디·이름은 멤버에서 찾고, **순수 숫자 고유번호는 방 기록에 없어도 그대로** (밴처럼)."""
+    db, svc, bot = await setup()
+    found, miss = await summon.resolve_targets(db, CHAT, ["@cheol", "8640369497", "없는이름zzz"])
+    assert A in found and 8640369497 in found, found
+    assert miss == ["없는이름zzz"], miss
+
+
+@test
+async def command_adds_raw_numeric_id_for_outsider():
+    """.집합 <숫자 ID> — 방에서 말 안 한/외부 사람도 고유번호로 부른다."""
+    db, svc, bot = await setup()
+    bot.calls.clear()
+    await run_cmd(svc, bot, ADMIN, Role.ADMIN, ".집합 8640369497")
+    out = bot.named("send_message")
+    assert out and "tg://user?id=8640369497" in out[0][2], out
+
+
+@test
+async def command_uses_other_admins_pick_when_mine_empty():
+    """관리자 A 가 골라 두면 관리자 B 의 .집합(빈 선택)도 그 공용 명단으로 부른다."""
+    db, svc, bot = await setup()
+    await summon.toggle(db, CHAT, ADMIN, A)          # 관리자 A 선택
+    await summon.toggle(db, CHAT, ADMIN, B)
+    bot.calls.clear()
+    await run_cmd(svc, bot, 905, Role.ADMIN, ".집합")   # 다른 관리자(905)가 빈 손으로 .집합
+    out = bot.named("send_message")
+    assert out and f"tg://user?id={A}" in out[0][2] and f"tg://user?id={B}" in out[0][2], out
+
+
+@test
 async def command_no_target_guides():
     db, svc, bot = await setup()
     msg, _ = await run_cmd(svc, bot, ADMIN, Role.ADMIN, ".집합")
