@@ -25,7 +25,13 @@ from telegram.error import BadRequest, TelegramError
 
 from . import mediastore, persist
 from .db import register_schema
-from .settings import parse_hhmm
+from .settings import parse_hhmm, register_setting
+
+# 📢 몰림 방지: 같은 방에서 '반복(interval)' 예약공지 여러 개가 같은 시각에 걸려도 한꺼번에
+# 쏟아지지 않게 방마다 최소 간격(초). 0=제한 없음. 한 틱엔 방당 1개만 올리고, 미룬 건 오버듀로
+# 남아 다음 틱에 → 위상이 자동으로 벌어진다(de-phase). (2026-11-03 뉴월드: 18개가 150분마다 우르르)
+register_setting("announce_gap_sec", 120, "예약공지 한 방 최소 간격(초)", range_=(0, 1800),
+                 render_fn=lambda v: "제한 없음" if not v else (f"{int(v) // 60}분" if int(v) % 60 == 0 else f"{int(v)}초"))
 from .util import esc, html_plain, rich_html
 
 if TYPE_CHECKING:
@@ -662,7 +668,15 @@ class Announcer:
 
     async def run_due(self, bot: Bot) -> None:
         now_ts = int(time.time())
-        for row in await self.svc.db.schedules():
+        rows = await self.svc.db.schedules()
+        room_last: dict[int, int] = {}          # 방마다 가장 최근 발송 시각 (몰림 방지 기준)
+        for r in rows:
+            ls = r["last_sent"] or 0
+            if ls > room_last.get(r["chat_id"], 0):
+                room_last[r["chat_id"]] = ls
+        gaps: dict[int, int] = {}               # 방별 최소 간격(설정) 캐시
+        sent_now: set[int] = set()              # 이번 틱에 반복 공지를 이미 올린 방
+        for row in rows:
             if row["kind"] == "once" and now_ts - (row["at_ts"] or 0) >= ONCE_GRACE:    # 너무 늦게 켜짐: 안 하고 끔
                 await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
                 from . import opsdesk   # 📥 운영 인박스용 기록 (sodam/opsdesk.py)
@@ -671,7 +685,20 @@ class Announcer:
                     and now_ts > row["end_ts"]:                                          # 종료일 지남 → 깔끔하게 끔
                 await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
             elif is_due(row, now_ts, self.svc.cfg.tz) and await self.svc.paid_features(row["chat_id"]):
+                cid = row["chat_id"]
+                # 📢 몰림 방지: 방에 올리는 '반복(시작시각 없는 interval)' 공지만 한 틱에 방당 1개 + 최소 간격.
+                # (시각 지정 공지·once·1:1 전달은 제때 가야 하므로 제외)
+                spread = (row["kind"] == "interval" and not row["at_time"]
+                          and row["action"] == "post" and _col(row, "deliver", "room") == "room")
+                if spread:
+                    if cid not in gaps:
+                        gaps[cid] = int((await self.svc.db.get_settings(cid)).get("announce_gap_sec", 120))
+                    if cid in sent_now or (gaps[cid] and now_ts - room_last.get(cid, 0) < gaps[cid]):
+                        continue                                                         # 이번 틱엔 미룸 → 다음 틱에 (위상 벌어짐)
                 await self.publish(bot, row)
+                if spread:
+                    sent_now.add(cid)
+                    room_last[cid] = now_ts
 
     # ── 목록 ──────────────────────────────────────────────
     async def list_text(self, chat_id: int) -> str:
