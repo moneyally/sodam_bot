@@ -17,10 +17,10 @@ import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from .. import emojilab, hooks, menu
+from .. import emojilab, hooks, menu, util
 from ..db import register_schema
 
-SPACER = "⠀" * 30      # 안 보이는 점자 공백(U+2800) 한 줄 → 메시지를 꽉 찬 폭으로 (짜부라짐=계단 방지)
+SPACER = util.BANNER_SPACER   # 안 보이는 점자 공백(U+2800) 한 줄 → 메시지를 꽉 찬 폭으로 (짜부라짐=계단 방지)
 MIN_TILES = 4               # 커스텀 이모지 이만큼 이상이면 '모션 배너'로 본다 (평소 이모지 한두 개는 제외)
 SAFE_COLS = 9               # 한 줄에 이보다 많으면 폰에서 줄바꿈돼 깨질 수 있다 → 경고
 PICK_MAX = 12               # 방 고르기 버튼 최대
@@ -48,7 +48,7 @@ def fixed_html(msg) -> str | None:
     html = msg.text_html if msg.text is not None else getattr(msg, "caption_html", None)
     if not html:
         return None
-    return html.rstrip("\n") + "\n" + SPACER
+    return util.banner_spacer(html, min_tiles=MIN_TILES)
 
 
 def is_forwarded(msg) -> bool:

@@ -32,7 +32,7 @@ from .settings import parse_hhmm, register_setting
 # 남아 다음 틱에 → 위상이 자동으로 벌어진다(de-phase). (2026-11-03 뉴월드: 18개가 150분마다 우르르)
 register_setting("announce_gap_sec", 120, "예약공지 한 방 최소 간격(초)", range_=(0, 1800),
                  render_fn=lambda v: "제한 없음" if not v else (f"{int(v) // 60}분" if int(v) % 60 == 0 else f"{int(v)}초"))
-from .util import esc, html_plain, rich_html
+from .util import banner_spacer, esc, html_plain, rich_html
 
 if TYPE_CHECKING:
     from .services import Services
@@ -405,6 +405,7 @@ def render(title: str, text: str, *, has_media: bool, rules: str, tz, fmt: str =
     if fmt == "html":
         body = text.replace("{규칙}", esc(rules_txt)).replace("{날짜}", today)
         out = (f"📢 <b>{title}</b>\n\n{body}" if title else f"📢 {body}").strip()
+        out = banner_spacer(out)   # 🎞 모션 배너(커스텀 이모지 격자)면 전체폭 스페이서 → 반복 공지도 안 깨짐
         if len(html_plain(out)) <= limit:
             return out
         title, text = html_plain(title), html_plain(text)

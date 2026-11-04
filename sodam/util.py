@@ -84,6 +84,23 @@ def html_truncate(s: str, limit: int) -> str:
     return "".join(out)
 
 
+# 🎞 모션 배너(텔레모션): 큰 광고를 커스텀 이모지 조각으로 쪼개 격자로 이어 친 글. 전체폭 스페이서가 없으면
+# 격자가 좁게 짜부라져 줄이 어긋나 계단으로 깨진다 (오픈소스 telegram-premium-emojis MIT·공식 custom-emoji 문서).
+# 안 보이는 점자 공백(U+2800) 한 줄을 끝에 붙여 꽉 찬 폭으로 → 정렬 유지. 모션배너 재전송·예약공지 둘 다 이걸 쓴다.
+BANNER_SPACER = "⠀" * 30
+_CUSTOM_EMOJI_TAG = re.compile(r"<tg-emoji\b")
+
+
+def banner_spacer(html: str, min_tiles: int = 4) -> str:
+    """커스텀 이모지 조각이 min_tiles 개 이상인 '배너' HTML 이면 전체폭 스페이서 한 줄을 끝에 붙인다.
+    조각이 적은 보통 글(이모지 한두 개)은 그대로. 이미 붙어 있으면 그대로."""
+    if not html or len(_CUSTOM_EMOJI_TAG.findall(html)) < min_tiles:
+        return html
+    if html.rstrip().endswith(BANNER_SPACER):
+        return html
+    return html.rstrip("\n") + "\n" + BANNER_SPACER
+
+
 # 이름 꾸밈용 투명 글자 (실제 2026-10-05 베베방: 'ㅤㅤ춘식이'·'ㅤㅤㅤㅤ정실장' = 한글 채움 U+3164 — 멤버 4,553명 중 167명이 투명 글자·이모지)
 _NAME_FILLERS = frozenset("ㅤᅟᅠﾠ⠀​‌‍⁠﻿")
 
