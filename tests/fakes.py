@@ -338,7 +338,17 @@ class FakeJobQueue:
         self.once.append((cb, when, data))
 
 
-# 테스트 임시 DB·파일은 한 폴더에 모아 끝나면 지운다 (안 지우면 돌릴 때마다 쌓여 서버 디스크가 참 — 실제로 30GB 쌓여 봇 쓰기 실패)
+# 테스트 임시 DB·파일은 한 폴더에 모아 끝나면 지운다 (안 지우면 돌릴 때마다 쌓여 서버 디스크가 참 — 실제로 30GB 쌓여 봇 쓰기 실패).
+# ① 시작 때 1시간 넘은 옛 sodam-test-* 를 쓸어냄 (죽은 run·강제종료로 atexit 가 안 돈 잔여 회수 — 2026-11-04 세션 중 25GB 누적으로 ENOSPC).
+import glob as _glob  # noqa: E402
+import time as _time  # noqa: E402
+_BASE_TMP = tempfile.gettempdir()
+for _old in _glob.glob(os.path.join(_BASE_TMP, "sodam-test-*")):
+    try:
+        if _time.time() - os.path.getmtime(_old) > 3600:
+            shutil.rmtree(_old, ignore_errors=True)
+    except OSError:
+        pass
 tempfile.tempdir = tempfile.mkdtemp(prefix="sodam-test-")
 atexit.register(shutil.rmtree, tempfile.tempdir, True)
 
@@ -353,8 +363,16 @@ async def make_db() -> DB:
 
 
 async def close_open_dbs() -> None:
+    # ② 테스트 하나가 끝날 때마다 그 임시폴더(DB·WAL·미디어·emoji_lab 등)를 바로 지운다 —
+    # 끝까지 안 지우면 한 번 돌 때 수백 개 DB(2GB+)가 동시에 쌓여 디스크 꽉 차면 중간 테스트가 ENOSPC 로 '무작위' 실패.
+    dirs = set()
     while OPEN_DBS:
-        await OPEN_DBS.pop().close()
+        db = OPEN_DBS.pop()
+        dirs.add(os.path.dirname(db.path))
+        await db.close()
+    for d in dirs:
+        if d and d != tempfile.tempdir:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 async def make_svc(db: DB, *, admins=(), cas_banned=(), **cfg_kw) -> Services:
