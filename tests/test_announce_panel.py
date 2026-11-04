@@ -722,5 +722,20 @@ async def album_items_backfilled_by_mediastore():
     await db.close()
 
 
+@test
+def motion_banner_announce_gets_full_width_spacer():
+    """커스텀 이모지 배너(텔레모션)를 예약공지로 반복해도 안 깨지게 — render 가 전체폭 스페이서를 붙인다.
+    보통 글(이모지 몇 개)엔 안 붙음. (2026-11-04 오너: 예약공지로도 모션 배너)"""
+    from datetime import timezone
+    from sodam import util
+    banner = "".join(f'<tg-emoji emoji-id="{i}">🟨</tg-emoji>' for i in range(8))
+    out = announce.render("사신팀", banner, has_media=False, rules="", tz=timezone.utc, fmt="html")
+    assert util.BANNER_SPACER in out, "배너 예약공지에 스페이서 없음 → 방에서 계단으로 깨짐"
+    assert out.count("tg-emoji") == 16, "조각(커스텀 이모지)이 보존돼야"
+    # 보통 글은 그대로 (쓸데없는 빈 줄 X)
+    plain = announce.render("공지", "안녕하세요 오늘도 좋은 하루 🙂", has_media=False, rules="", tz=timezone.utc, fmt="")
+    assert util.BANNER_SPACER not in plain
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
