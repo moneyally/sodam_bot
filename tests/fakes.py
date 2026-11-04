@@ -355,7 +355,22 @@ atexit.register(shutil.rmtree, tempfile.tempdir, True)
 OPEN_DBS: list[DB] = []
 
 
+def _reset_global_caches() -> None:
+    """테스트마다 '새 세상' — production 은 DB 하나라 괜찮지만 테스트는 DB 를 새로 만드는데,
+    카지노 난이도(질 확률)는 모듈 전역 캐시(_lose, monotonic 30초)·(_room_pct, 방별)라 앞 테스트
+    (test_casino_tilt 가 80%로 올림)가 새 DB 인 다음 테스트로 새어들어 게임이 '지게' 조작됨
+    → fix_games_audit 가 느려지고 틀림 (2026-11-04 추적: tilt→fix_games_audit 멈춤·KeyError)."""
+    try:
+        from sodam.casino import core as _c
+        _c._lose.update(pct=0, at=-1e9)
+        for _d in (_c._room_pct, _c._overload_note, _c._last_bet, _c._STAKED, _c._room_noticed):
+            _d.clear()
+    except Exception:
+        pass
+
+
 async def make_db() -> DB:
+    _reset_global_caches()
     db = DB(os.path.join(tempfile.mkdtemp(), "t.db"))
     await db.open()
     OPEN_DBS.append(db)  # 테스트가 중간에 실패해도 runner 가 닫는다 (안 닫으면 프로세스가 안 끝남)

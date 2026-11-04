@@ -21,7 +21,7 @@ CMD = [sys.executable, str(HERE / "run_all.py")]     # 묶음 하나 = 이 파�
 # 기존 순서 유지, 나머지는 이름순
 ORDER = ["test_offline", "test_features", "test_admin_kb", "test_billing", "test_menu"]
 # 대략 걸리는 초 (2026-10-06 측정, 그림·영상 렌더). 없는 모듈 = 5초로 셈
-HEAVY = {"test_sticker_parts": 130, "test_avatar": 95, "test_sticker_upgrade": 83, "test_animation": 48,
+HEAVY = {"test_casino_tilt": 290, "test_sticker_parts": 130, "test_avatar": 95, "test_sticker_upgrade": 83, "test_animation": 48,
          "test_voice": 48, "test_sticker": 29, "test_botskills": 28, "test_anim": 18, "test_vision": 15,
          "test_card_approvals": 14, "test_game_visual2": 13, "test_workshop": 12, "test_fix_ops": 12,
          "test_stickerpack": 33, "test_sticker_layout": 11, "test_make_emoji": 10}
