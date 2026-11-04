@@ -162,6 +162,32 @@ async def help_examples_by_role():
 
 
 @test
+async def commands_splits_long_list():
+    """명령 많아져서 4096자 넘으면 '.명령어' 가 Message is too long 으로 터지던 것 →
+    여러 메시지로 쪼개 보냄 (자이 /commands → 처리 중 텔레그램 오류, 2026-11-04)."""
+    # 1) _split_msg: 한 묶음이 혼자 한도를 넘으면 줄 단위로, 내용은 안 잃음
+    big = "\n".join(f"line{i}" for i in range(2000))
+    chunks = commands._split_msg([big])
+    assert len(chunks) >= 2 and all(len(c) <= 3800 for c in chunks), [len(c) for c in chunks]
+    assert "\n".join(chunks).count("line") == 2000, "쪼개다 줄이 사라짐"
+    # 2) c_commands: 억지로 긴 목록 → 여러 번 reply·각 4096 이하 (되돌리면 한 번에 보내 >4096 → 실패)
+    db = await make_db()
+    svc = await make_svc(db, admins={1})
+    await db.ensure_chat(-100555, "방")
+    bot, member = FakeBot(), fake_user(5, "멤버")
+    orig = commands.feature_lines
+    commands.feature_lines = lambda *a, **k: ["x" * 200 for _ in range(60)]   # ~12000자
+    try:
+        cmd, args, argstr = commands.parse(".명령어", "sodambot")
+        msg = FakeMsg(-100555, member, ".명령어")
+        await commands.dispatch(CmdCtx(svc, bot, msg, -100555, member, Role.MEMBER, args, argstr), cmd)
+    finally:
+        commands.feature_lines = orig
+    assert len(msg.replies) >= 2, "긴 목록인데 안 쪼갬"
+    assert all(len(r) <= 4096 for r in msg.replies), [len(r) for r in msg.replies]
+
+
+@test
 async def help_menu_screen_by_role():
     db = await make_db()
     svc = await make_svc(db, admins={1})

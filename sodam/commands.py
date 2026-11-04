@@ -175,6 +175,32 @@ def help_text(call: str, *, admin: bool, in_dm: bool = False) -> str:
                      + ["", "📋 명령어 전체 <code>.명령어</code> · 🎰 포인트 게임 <code>!도움</code>"])
 
 
+def _split_msg(parts: list[str], limit: int = 3800) -> list[str]:
+    """긴 글(명령어 전체 등)을 텔레그램 한도(4096) 밑으로 쪼갠다. 묶음 경계 우선,
+    한 묶음이 그래도 크면 줄 단위로 더 쪼갠다. HTML 태그는 한 줄 안에 닫혀 있어 줄에서 자르면 안전."""
+    chunks: list[str] = []
+    cur = ""
+    for part in parts:
+        pieces = [part]
+        if len(part) > limit:                       # 한 묶음이 혼자 한도를 넘으면 줄 단위로
+            pieces, buf = [], ""
+            for line in part.split("\n"):
+                if buf and len(buf) + 1 + len(line) > limit:
+                    pieces.append(buf)
+                    buf = ""
+                buf = (buf + "\n" + line) if buf else line
+            if buf:
+                pieces.append(buf)
+        for p in pieces:
+            if cur and len(cur) + 1 + len(p) > limit:
+                chunks.append(cur)
+                cur = ""
+            cur = (cur + "\n" + p) if cur else p
+    if cur:
+        chunks.append(cur)
+    return chunks or [""]
+
+
 async def is_any_admin(svc: Services, bot: Bot, uid: int) -> bool:
     """1:1 에서 관리자 예시를 보여줄지: 오너이거나 소담이 있는 방 하나라도 관리자."""
     if uid in await svc.perms.owners():
@@ -209,19 +235,24 @@ async def c_commands(ctx: CmdCtx) -> None:
              *feature_lines(ctx.svc.cfg.call_names[0], in_dm=in_dm)]
     for group, lines in groups.items():
         parts.append(f"\n<b>[{group}]</b>\n" + "\n".join(lines))
-    full = "\n".join(parts)
+    chunks = _split_msg(parts)   # 명령 많아져서 4096자 넘으면 텔레그램이 거절 → 쪼개서 보냄
     if in_dm or ctx.role < Role.ADMIN:
-        await ctx.reply(full)
+        for ch in chunks:
+            await ctx.reply(ch)
         return
-    # 방 관리자: 관리자 명령까지 60줄이 넘어서 방엔 짧게(잠깐 뒤 삭제), 전체 목록은 1:1 로
+    # 방 관리자: 관리자 명령까지 길어서 방엔 짧게(잠깐 뒤 삭제), 전체 목록은 1:1 로
     try:
-        await ctx.bot.send_message(ctx.user.id, full, parse_mode="HTML")
+        for ch in chunks:
+            await ctx.bot.send_message(ctx.user.id, ch, parse_mode="HTML")
         text = ("📬 관리자 명령어 전체를 1:1 로 보냈어요.\n"
                 "버튼 설정 <code>.설정</code> · 이용 기간 <code>.구독</code> · AI 켜고 끄기 <code>.AI대화</code>")
-    except TelegramError:  # 봇과 1:1 을 시작 안 했으면 방에 잠깐 보여줌
-        text = full + "\n\n(봇과 1:1 대화를 시작해두면 다음부턴 1:1 로 보내드려요)"
-    sent = await ctx.reply(text)
-    _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
+        sent = await ctx.reply(text)
+        _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
+    except TelegramError:  # 봇과 1:1 을 시작 안 했으면 방에 잠깐 보여줌 (쪼개서)
+        for i, ch in enumerate(chunks):
+            tail = "\n\n(봇과 1:1 대화를 시작해두면 다음부턴 1:1 로 보내드려요)" if i == len(chunks) - 1 else ""
+            sent = await ctx.reply(ch + tail)
+            _delete_later(ctx.bot, ctx.chat_id, sent.message_id, HELP_ROOM_SECONDS, ctx.svc.db)
 
 
 async def c_rules(ctx: CmdCtx) -> None:
