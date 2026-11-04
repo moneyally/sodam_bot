@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 from fakes import FakeBot, FakeQuery, fake_user, make_db, make_svc, runner
 
-from sodam import menu
 from sodam.panels import motionbanner as M
 
 test, run_all = runner()
@@ -42,16 +41,15 @@ def banner_msg(user, *, forwarded=True, rows=(3, 4)):
     return msg
 
 
-async def setup(monkeypatch_groups=((CHAT, "꼬꼬방"), (CHAT2, "둘째방"))):
+async def setup():
     db = await make_db()
     svc = await make_svc(db, admins={ADMIN})
     svc.perms.owner_ids = {OWNER}
-    bot = FakeBot()
-
-    async def fake_groups(s, b, uid):
-        return list(monkeypatch_groups)
-    menu.admin_groups = fake_groups          # 방 고르기 목록 고정 (perms 복잡도 회피)
-    return db, svc, bot
+    # 방을 DB 에 만들어 두면 진짜 menu.admin_groups 가 이 방들을 돌려준다 (FakePerms.candidate_chats=all_chat_ids,
+    # is_admin=admins 안). 전역 함수 몽키패치(복구 안 하면 다른 테스트 오염)를 쓰지 않는다.
+    await db.ensure_chat(CHAT, "꼬꼬방")
+    await db.ensure_chat(CHAT2, "둘째방")
+    return db, svc, FakeBot()
 
 
 # ── 핵심: 전체폭 스페이서 ────────────────────────────────
