@@ -1350,9 +1350,12 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 # 흔하고 무해한 BadRequest (이미 지워졌거나·수정 안 바뀜·오래된 콜백) → 조용히
+# '글 보낼 권한 없음'(봇이 그 방에서 벙어리 = 관리자 아님·봇이 제한됨)은 코드 버그가 아니라 환경 조건이라 오너 알림에서 뺀다
+# (2026-11-05: 봇 글 권한 없는 방에서 .뮤트 → 안내 발송 실패가 '버그 깊숙히'로 오너에게 튐. 방 권한 빠진 건 job_rights 가 하루 1번 알림).
 _HARMLESS_BADREQ = ("not modified", "message to edit not found", "message to delete not found",
                     "message to reply not found", "message can't be edited", "query is too old",
-                    "message_id_invalid", "chat not found")
+                    "message_id_invalid", "chat not found",
+                    "not enough rights to send", "have no rights to send", "chat_write_forbidden")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

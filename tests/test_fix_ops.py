@@ -462,6 +462,13 @@ async def error_notifier_throttles_and_skips_network():
     await n(None, ctx(BadRequest("Message is not modified")))   # 무해 → 제외
     await n(None, ctx(BadRequest("Document_invalid")))          # 내용 오류 → 알림
     assert len(reports) == 3 and "Document_invalid" in reports[2], reports
+    # 봇이 그 방에서 글 못 씀(권한 없음)은 환경 조건 → 오너 알림 X (2026-11-05 .뮤트 안내 발송 실패가 '버그'로 튐).
+    # 시계를 넘겨 쓰로틀(종류별 10분)을 피해야 무해 판정만 검사됨 (안 그러면 BadRequest 가 이미 알림돼 막혀 뮤테이션을 못 잡음).
+    now[0] += main_mod.ERROR_NOTIFY_GAP + 1
+    await n(None, ctx(BadRequest("Not enough rights to send text messages to the chat")))
+    now[0] += main_mod.ERROR_NOTIFY_GAP + 1
+    await n(None, ctx(BadRequest("Have no rights to send a message")))
+    assert len(reports) == 3, reports    # 둘 다 무해 → 안 늘어야 (쓰로틀 아님 — 시계 넘김)
     now[0] += main_mod.ERROR_NOTIFY_GAP + 1
     await n(None, ctx(ValueError("<c>")))
     assert len(reports) == 4 and "&lt;c&gt;" in reports[3]
