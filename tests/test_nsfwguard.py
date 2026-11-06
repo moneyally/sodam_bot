@@ -13,7 +13,7 @@ from fakes import FakeQuery, fake_user, runner
 from sodam import menu, nsfwguard, vision
 
 test, run_all = runner()
-ADMIN, MEMBER, OTHER = 5, 20, 21
+ADMIN, MEMBER, OTHER, OWNER = 5, 20, 21, 9
 
 
 async def room(*, mode="delete", can_moderate=True, paid=True):
@@ -163,15 +163,31 @@ async def repeat_sticker_deleted_without_second_api_call():
 
 
 @test
-async def admin_and_free_members_excluded():
+async def only_owner_is_excluded():
     r = await room(mode="delete")
-    patch_scores(r, {ADMIN: 0.99, OTHER: 0.99})
-    ma = await send_media(r, ADMIN, file_uid="a1", name="방장")
-    assert not ma.deleted, "관리자는 검사 안 함"
+    r.svc.perms.owner_ids = {OWNER}
+    await r.join(fake_user(OWNER, "오너"))
+    patch_scores(r, {OWNER: 0.99})
+    m = await send_media(r, OWNER, file_uid="own1", name="오너")
+    assert not m.deleted, "오너(운영자)만 검사 제외"
+
+
+@test
+async def admin_media_is_now_checked():
+    r = await room(mode="delete")
+    patch_scores(r, {ADMIN: 0.99})
+    m = await send_media(r, ADMIN, file_uid="adm1", name="방장")
+    assert m.deleted, "관리자가 올려도 지움 (오너만 제외)"
+
+
+@test
+async def free_member_is_now_checked():
+    r = await room(mode="delete")
     from sodam import free
     await free.add(r.db, r.CHAT, OTHER, ADMIN)
-    mf = await send_media(r, OTHER, file_uid="f1", name="딴사람")
-    assert not mf.deleted, "자유 멤버는 검사 안 함"
+    patch_scores(r, {OTHER: 0.99})
+    m = await send_media(r, OTHER, file_uid="fr1", name="딴사람")
+    assert m.deleted, "자유 멤버가 올려도 지움 (오너만 제외)"
 
 
 @test

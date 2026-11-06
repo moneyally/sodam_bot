@@ -6,7 +6,8 @@
 
 학습 방어: 한번 걸린 조각(file_unique_id)은 nsfw_bad 에 남겨 다음엔 API 없이 **즉시 삭제**(같은 스티커 도배 테러).
 오탐 복구: 관리자가 '괜찮음' 누르면 그 방에선 그 조각 다시 안 지움(nsfw_ok).
-제외: 관리자·오너·자유 멤버·봇·익명 관리자. **구독과 무관하게 동작**(안전 기능 + moderation 무료).
+제외: **봇 오너만**(2026-11-06 오너 '오너 빼고는 못하게 — 나·소유자가 올릴 이유 없으니 좁혀') + 봇·익명/채널 글
+(사람 특정·제재 불가라 기술적 제외). **관리자·자유 멤버도 검사함.** **구독과 무관하게 동작**(안전 기능 + moderation 무료).
 알림: '사용자 차단' 권한 관리자 1:1 (incidents, 같은 사람 한 통) + 버튼. 자동 밴은 안 함(지우기만).
 """
 from __future__ import annotations
@@ -18,7 +19,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from . import db as dbmod
-from . import free, hooks, incidents, vision
+from . import hooks, incidents, vision
 from .permissions import Role
 from .settings import register_setting
 from .util import esc, mention, post_temp, user_name
@@ -63,7 +64,8 @@ def media_obj(msg):
 
 async def on_message(svc, bot, msg, role) -> None:
     chat_id, user = msg.chat_id, msg.from_user
-    if role >= Role.ADMIN or chat_id >= 0 or not user or getattr(user, "is_bot", False) or getattr(msg, "sender_chat", None):
+    # 오너만 제외 (관리자·자유 멤버도 검사). 봇·익명/채널 글은 사람 특정·제재가 안 돼 기술적 제외.
+    if role >= Role.OWNER or chat_id >= 0 or not user or getattr(user, "is_bot", False) or getattr(msg, "sender_chat", None):
         return
     obj = media_obj(msg)
     if obj is None:
@@ -72,7 +74,7 @@ async def on_message(svc, bot, msg, role) -> None:
     if mode == "off":
         return
     uid = getattr(obj, "file_unique_id", None)
-    if not uid or await free.is_free(svc.db, chat_id, user.id):
+    if not uid:
         return
     if await svc.db._one("SELECT 1 FROM nsfw_ok WHERE chat_id=? AND file_uid=?", (chat_id, uid)):
         return
