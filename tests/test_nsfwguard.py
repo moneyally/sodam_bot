@@ -17,11 +17,22 @@ ADMIN, MEMBER, OTHER, OWNER = 5, 20, 21, 9
 _ORIG_SKIN = nsfwguard._skin_ratio
 
 
+async def _no_nude(data):
+    return None
+
+
+def fake_nude(r, value):
+    async def _f(data):
+        return value
+    nsfwguard.nsfwlocal.nude_score = _f
+
+
 async def room(*, mode="delete", can_moderate=True, paid=True):
     nsfwguard._CACHE.clear()
     nsfwguard._LOCKS.clear()
     nsfwguard._RECENT.clear()
     nsfwguard._skin_ratio = _ORIG_SKIN   # 앞 테스트가 바꾼 살색 함수 원복
+    nsfwguard.nsfwlocal.nude_score = _no_nude   # 기본은 로컬탐지 꺼서 테스트 결정적 (특정 테스트가 덮어씀)
     r = Room()
     await r.open(admins=(ADMIN,), settings={"nsfw_mode": mode} if mode else {})
     r.bot.admins = [fake_user(ADMIN, "방장")]
@@ -327,6 +338,36 @@ async def low_suspicion_high_skin_not_caught():
     nsfwguard._skin_ratio = lambda data: 0.9
     m = await send_media(r, MEMBER, file_uid="face1")
     assert not m.deleted, "AI 가 의심 안 하면 살색만으론 안 지움(오탐 방지)"
+
+
+@test
+async def nudenet_catches_fragment_omni_missed():
+    r = await room(mode="delete")
+    patch_scores(r, {MEMBER: 0.2})            # omni 는 통째로 0.2 (조각이라 놓침)
+    nsfwguard._skin_ratio = lambda data: 0.4   # 살색 어느정도(≥0.35) → NudeNet 돌림, 살색휴리스틱(0.60)엔 미달
+    fake_nude(r, 0.9)                          # NudeNet 은 노출 부위 0.9 로 잡음
+    m = await send_media(r, MEMBER, file_uid="nn1")
+    assert m.deleted, "omni 가 놓친 조각도 NudeNet 부위탐지로 잡음"
+
+
+@test
+async def nudenet_low_score_not_caught():
+    r = await room(mode="delete")
+    patch_scores(r, {MEMBER: 0.2})
+    nsfwguard._skin_ratio = lambda data: 0.4
+    fake_nude(r, 0.3)                          # NudeNet 도 확신 낮음(<0.45)
+    m = await send_media(r, MEMBER, file_uid="nn2")
+    assert not m.deleted, "NudeNet 확신 낮으면 안 지움"
+
+
+@test
+async def nudenet_high_confidence_auto_bans():
+    r = await room(mode="ban")
+    patch_scores(r, {MEMBER: 0.2})            # omni 낮지만
+    nsfwguard._skin_ratio = lambda data: 0.5
+    fake_nude(r, 0.92)                         # NudeNet 매우 확신 → 자동 밴 허용
+    m = await send_media(r, MEMBER, file_uid="nn3")
+    assert m.deleted and any(c[0] == "ban" and c[2] == MEMBER for c in r.bot.calls), "NudeNet 고확신이면 자동 밴"
 
 
 @test
