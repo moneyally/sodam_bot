@@ -298,6 +298,23 @@ class LLM:
         await self._record(r.usage, None, purpose, model)
         return [d.embedding for d in r.data]
 
+    async def moderate_image(self, data: bytes, mime: str) -> dict | None:
+        """🔞 OpenAI omni-moderation 으로 이미지 유해도 판정 (무료·사용량 안 침, 이미지는 sexual·violence 점수 지원).
+        {'sexual': 0~1, 'violence': 0~1, 'flagged': bool} 또는 못 하면 None. 요금 0 → 예산 기록 안 함."""
+        model = os.getenv("NSFW_MODEL", "omni-moderation-latest").strip() or "omni-moderation-latest"
+        url = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+        try:
+            r = await self.client.moderations.create(
+                model=model, input=[{"type": "image_url", "image_url": {"url": url}}])
+        except OpenAIError as e:
+            log.warning("moderation 실패: %s", e)
+            return None
+        res = r.results[0]
+        sc = res.category_scores
+        get = (lambda k: getattr(sc, k.replace("/", "_"), None)) if not isinstance(sc, dict) else sc.get
+        return {"sexual": float(get("sexual") or 0.0), "violence": float(get("violence") or 0.0),
+                "flagged": bool(res.flagged)}
+
     async def usd_today(self, chat_id: int = 0) -> int:
         """오늘 쓴 요금 (마이크로달러). chat_id=0 은 전체."""
         return await self.db.counter(self._today(), chat_id, costs.USD if chat_id == 0 else costs.ROOM_USD)
