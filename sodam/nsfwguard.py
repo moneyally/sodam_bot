@@ -28,7 +28,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from . import db as dbmod
-from . import hooks, incidents, vision
+from . import hooks, incidents, nsfwlocal, vision
 from .permissions import Role
 from .settings import register_setting
 from .util import esc, mention, user_name
@@ -39,6 +39,9 @@ THRESHOLD = 0.70          # 평소 sexual 기준 (포르노는 보통 0.9+, 0.7 
 BURST_THRESHOLD = 0.45    # 도배(모자이크) 중엔 기준 낮춤 — 조각은 점수가 낮아서
 SKIN_SEXUAL = 0.30        # 조각(신체 일부) 잡기: AI 가 이만큼이라도 의심하고 +
 SKIN_RATIO = 0.60         # 화면의 이 비율 이상이 살색이면(=신체 조각) 기준 낮춰 잡음 (단, 자동 밴은 안 함)
+LOCAL_SKIN_GATE = 0.35    # 살색이 이만큼↑ 이고 omni 가 안 걸렸으면 NudeNet(부위탐지) 한번 돌림 (호출 수 제한)
+LOCAL_MIN = 0.45          # NudeNet 노출부위 점수 이상이면 음란물로 봄 (조각도 잡힘)
+LOCAL_SANCTION = 0.85     # NudeNet 이 이만큼 확신하면 자동 뮤트/밴도 허용
 BURST_N, BURST_SEC = 4, 20   # 한 사람이 BURST_SEC 초 안에 미디어 BURST_N 개↑ = 도배로 봄
 SANCTION_MIN_SCORE = 0.85    # 자동 뮤트/밴은 이 점수 이상일 때만 (오탐으로 밴하는 것 방지)
 SET_HITS_TO_BLOCK = 2     # 같은 스티커팩에서 조각 이만큼 걸리면 팩 통째 차단(공개팩 오폭 방지)
@@ -192,31 +195,35 @@ async def on_message(svc, bot, msg, role) -> None:
     res = await _score(svc, bot, msg, uid)
     if res is None:
         return
-    score, dh, skin = res
+    score, dh, skin, local = res
     eff = BURST_THRESHOLD if burst else THRESHOLD
-    # 조각(신체 일부) 잡기: AI 가 애매하게 의심(≥SKIN_SEXUAL)하는데 화면이 거의 살색이면 기준을 낮춰서 잡음.
-    fragment = skin is not None and skin >= SKIN_RATIO and score >= SKIN_SEXUAL
+    # 조각(신체 일부) 잡기 — 두 길:
+    #  ① 살색 휴리스틱: AI 가 애매하게 의심(≥SKIN_SEXUAL)하는데 화면이 거의 살색.
+    #  ② NudeNet 부위탐지: 노출 부위를 LOCAL_MIN 이상 확신 (omni 가 통째론 놓친 크롭·타일).
+    fragment = (skin is not None and skin >= SKIN_RATIO and score >= SKIN_SEXUAL) or \
+               (local is not None and local >= LOCAL_MIN)
     if score < eff and not fragment:
         return
-    await act(svc, bot, msg, user, uid, score, mode, set_name=set_name, dh=dh)
+    strong = score >= SANCTION_MIN_SCORE or (local is not None and local >= LOCAL_SANCTION)
+    await act(svc, bot, msg, user, uid, score, mode, set_name=set_name, dh=dh, strong=strong)
 
 
 async def _score(svc, bot, msg, uid: str):
-    """(sexual 0~1, dHash|None, 살색비율|None) 또는 None. 같은 조각 동시 폭주는 lock 으로 한 번만 API."""
+    """(sexual 0~1, dHash|None, 살색비율|None, NudeNet점수|None) 또는 None. 동시 폭주는 lock 으로 한 번만."""
     hit = _CACHE.get(uid)
     if hit and time.time() - hit[1] < CACHE_TTL:
-        return (hit[0], None, None)
+        return (hit[0], None, None, None)
     lock = _LOCKS.setdefault(uid, asyncio.Lock())
     try:
         async with lock:
             hit = _CACHE.get(uid)                       # 기다리는 동안 먼저 끝났으면
             if hit and time.time() - hit[1] < CACHE_TTL:
-                return (hit[0], None, None)
+                return (hit[0], None, None, None)
             known = await svc.db._one("SELECT score FROM nsfw_bad WHERE file_uid=?", (uid,))
             if known:
                 s = float(known["score"])
                 _CACHE[uid] = (s, time.time())
-                return (s, None, None)
+                return (s, None, None, None)
             try:
                 md = vision._media_of(msg)
                 att = await vision._fetch(bot, msg, md) if md else None
@@ -228,17 +235,20 @@ async def _score(svc, bot, msg, uid: str):
             dh = _dhash(att.data)
             if await _phash_hit(svc, dh):               # 재인코딩된 같은 음란물 (API 없이)
                 _CACHE[uid] = (1.0, time.time())
-                return (1.0, dh, None)
+                return (1.0, dh, None, None)
             v = await svc.llm.moderate_image(att.data, att.mime or "image/jpeg")
             if v is None:
                 return None
             s = v["sexual"]
-            # 조각 신호: AI 가 애매하게(≥SKIN_SEXUAL) 의심하지만 기준 미달일 때만 살색 비율 계산 (CPU 아낌)
-            skin = _skin_ratio(att.data) if SKIN_SEXUAL <= s < THRESHOLD else None
+            skin = local = None
+            if s < THRESHOLD:        # omni 가 통째론 안 걸린 것만 조각 검사 (CPU 아낌)
+                skin = _skin_ratio(att.data)
+                if skin is not None and skin >= LOCAL_SKIN_GATE:   # 살색 어느 정도 → NudeNet 부위탐지 한번
+                    local = await nsfwlocal.nude_score(att.data)
             _CACHE[uid] = (s, time.time())
             if len(_CACHE) > 8000:
                 _CACHE.clear()
-            return (s, dh, skin)
+            return (s, dh, skin, local)
     finally:
         if uid in _LOCKS and not _LOCKS[uid].locked():
             _LOCKS.pop(uid, None)
@@ -254,7 +264,7 @@ async def _register_set_hit(svc, set_name: str, uid: str) -> bool:
     return False
 
 
-async def act(svc, bot, msg, user, uid: str, score: float, mode: str, *, set_name=None, dh=None) -> None:
+async def act(svc, bot, msg, user, uid: str, score: float, mode: str, *, set_name=None, dh=None, strong=None) -> None:
     chat_id = msg.chat_id
     # 아는 것으로 기록 (다음엔 즉시) — 멱등
     await svc.db._write("INSERT OR REPLACE INTO nsfw_bad(file_uid, chat_id, score, ts) VALUES(?,?,?,?)",
@@ -272,7 +282,9 @@ async def act(svc, bot, msg, user, uid: str, score: float, mode: str, *, set_nam
         except TelegramError as e:
             log.info("nsfw delete failed %s: %s", chat_id, e)
     sanction = None
-    if deleted and mode in ("mute", "ban") and score >= SANCTION_MIN_SCORE:
+    if strong is None:
+        strong = score >= SANCTION_MIN_SCORE
+    if deleted and mode in ("mute", "ban") and strong:
         reason = f"음란물 자동 감지 (약 {int(score * 100)}%)"
         try:
             if mode == "mute":
