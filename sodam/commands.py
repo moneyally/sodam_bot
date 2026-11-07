@@ -1341,15 +1341,25 @@ async def c_botadmin(ctx: CmdCtx) -> None:
 
 
 async def c_fedban(ctx: CmdCtx) -> None:
-    """.공동차단 @user|답장 사유 → 공동 명단에 올리고 이 방에서 밴. .공동차단 해제 ID → 이 방 표시 빼기(오너는 완전 삭제)."""
+    """.공동차단 @user|답장 사유 → 공동 명단 등재.
+    오너·방장(소유자)이 올리면 무조건 자동 밴. 그 외 관리자·자유 멤버가 올리면 방에 승인 카드 [🚫 밴][🙈 무시]
+    (권한 있는 관리자가 밴을 눌러야 등재·밴). .공동차단 해제 ID → 이 방 표시 빼기(오너는 완전 삭제)."""
     svc = ctx.svc
+    is_owner = ctx.user.id in await svc.perms.owners()
+    is_admin = ctx.role >= Role.ADMIN
+    is_free = (not is_admin) and await free.is_free(svc.db, ctx.chat_id, ctx.user.id)
+    if not (is_owner or is_admin or is_free):
+        await ctx.reply("공동 차단(박제)은 관리자나 자유 멤버만 쓸 수 있어요.")
+        return
     if ctx.args and ctx.args[0] in ("해제", "삭제", "remove"):
+        if not (is_owner or is_admin):
+            await ctx.reply("공동 차단 해제는 관리자만 할 수 있어요.")
+            return
         uid = to_int(ctx.args[1]) if len(ctx.args) > 1 else None
         if not uid or uid <= 0:
             await ctx.reply("사용법: <code>.공동차단 해제 숫자ID</code>")
             return
-        owner = ctx.user.id in await svc.perms.owners()
-        await ctx.reply(await fedban.remove(svc, ctx.chat_id, uid, ctx.user.id, owner=owner))
+        await ctx.reply(await fedban.remove(svc, ctx.chat_id, uid, ctx.user.id, owner=is_owner))
         return
     if not ctx.args and not ctx.msg.reply_to_message:
         await ctx.reply(fedban.USAGE)
@@ -1371,8 +1381,11 @@ async def c_fedban(ctx: CmdCtx) -> None:
         await ctx.reply("사유를 꼭 적어주세요. 예: <code>.공동차단 @아이디 코인 사기 DM</code>")
         return
     ev, mk, mid = fedban.capture_evidence(ctx.msg.reply_to_message)   # 답장이면 그 박제 원글을 증거로
+    # 오너·방장(소유자) = 무조건 자동 밴. 그 외(관리자·자유 멤버) = 방에 선택 카드([🚫밴][🙈무시], 밴은 권한 관리자가).
+    boss = is_owner or await svc.perms.is_creator(ctx.bot, ctx.chat_id, ctx.user.id)
     await ctx.reply(await fedban.add(svc, ctx.bot, ctx.chat_id, uid, name, reason, ctx.user.id,
-                                     evidence=ev, media_kind=mk, media_id=mid, by_name=name))
+                                     evidence=ev, media_kind=mk, media_id=mid, by_name=name,
+                                     auto_ban=boss, reply_to=ctx.msg.message_id))
 
 
 async def c_lookup(ctx: CmdCtx) -> None:
@@ -1829,9 +1842,9 @@ COMMANDS: list[Cmd] = [
     Cmd(("리포트", "report"), c_report, Role.ADMIN, help="오늘 집계 리포트", group="관리자"),
     Cmd(("전체태그", "tagall"), c_tagall, Role.ADMIN, usage="[할 말]",
         help="방 전체 멤버를 5명씩 태그 (확인 카드 · 6시간에 한 번)", group="관리자"),
-    Cmd(("공동차단", "fedban", "박제", "수배"), c_fedban, Role.ADMIN, usage="@user 사유 | 해제 ID",
-        help="사기·스팸 계정을 여러 방 공동 차단(수배) 명단에 올리고 이 방에서 내보내기 (박제 원글에 답장하면 원글도 저장)",
-        group="관리자", right="restrict"),
+    Cmd(("공동차단", "fedban", "박제", "수배"), c_fedban, Role.MEMBER, usage="@user 사유 | 해제 ID",
+        help="사기·스팸 계정을 여러 방 공동 차단(수배) 명단에 올리기 (오너·방장은 자동 밴, 그 외 관리자·자유 멤버는 승인 카드로). "
+             "박제 원글에 답장하면 원글도 저장", group="관리자"),
     Cmd(("조회", "수배조회", "lookup"), c_lookup, Role.MEMBER, usage="@아이디|ID|#수배번호|답장",
         help="공동 차단(수배) 명단에 있는지·박제 원글 보기 (누구나)", group="일반", dm_ok=True),
     Cmd(("봇관리자", "botadmin"), c_botadmin, Role.OWNER, usage="[추가|삭제] @user", help="봇 관리자 지정", group="오너"),

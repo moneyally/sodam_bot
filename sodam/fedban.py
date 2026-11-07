@@ -68,8 +68,9 @@ register_columns("fedban_reports", {"evidence": "TEXT", "media_kind": "TEXT", "m
 
 USAGE = ("🛡️ <b>공동 차단 명단</b>\n"
          "사기·스팸 계정을 올리면 소담을 쓰는 다른 방에 들어올 때 관리자에게 알려드려요 (방 설정에 따라 자동 밴).\n"
-         "• 올리기: <code>.공동차단 @아이디 사유</code> 또는 메시지에 답장하며 <code>.공동차단 사유</code>\n"
-         "  → 이 방에서도 바로 내보내요. 사유는 꼭 적어주세요.\n"
+         "• 올리기: <code>.공동차단 @아이디 사유</code> 또는 메시지에 답장하며 <code>.공동차단 사유</code> (별칭 .박제·.수배)\n"
+         "  → <b>오너·방장</b>이 올리면 바로 내보내요. <b>관리자·자유 멤버</b>가 올리면 방에 [🚫 밴][🙈 무시] 카드가 떠서 "
+         "'사용자 차단' 권한 관리자가 정해요. 사유는 꼭 적어주세요.\n"
          f"• 빼기: <code>.공동차단 해제 숫자ID</code> (이 방이 올린 표시만 빠져요)\n"
          f"• 한 방에서 하루 {DAILY_LIMIT}명까지, 이용 기간 중인 방만 올릴 수 있어요.")
 NOT_PAID = "공동 차단 명단에 올리기는 이용 기간(구독·체험) 중인 방에서만 할 수 있어요."
@@ -160,9 +161,11 @@ def capture_evidence(reply_msg):
 
 
 async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, actor_id: int,
-              evidence=None, media_kind=None, media_id=None, by_name=None) -> str:
-    """명단에 올리고 이 방에서 밴. 권한·대상 확인(관리자·봇·운영자 제외)은 부르는 쪽(commands.c_fedban)에서.
-    evidence/media_* = 박제 원글(답장한 글). 돌려주는 값 = 방에 보낼 안내문."""
+              evidence=None, media_kind=None, media_id=None, by_name=None, *, auto_ban: bool = True,
+              reply_to: int | None = None) -> str:
+    """명단에 올린다(박제). auto_ban=True(오너·방장)면 이 방에서 바로 밴.
+    auto_ban=False(그 외 관리자·자유 멤버)면 밴 대신 방에 수배 카드 [🚫 밴][🙈 무시]를 올려 권한 관리자가 정하게 함.
+    권한·대상 확인(관리자·봇·운영자 제외)은 부르는 쪽(commands.c_fedban)에서. evidence/media_* = 박제 원글(답장한 글)."""
     db = svc.db
     if not await svc.paid_features(chat_id):
         return NOT_PAID
@@ -193,6 +196,10 @@ async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, acto
         mediastore.remember_soon(bot, db, media_kind, media_id)
     await db.log_mod(chat_id, actor_id, user_id, "fedban", reason)
     info = await lookup(db, user_id)
+    if not auto_ban:   # 오너·방장이 아닌 사람 → 자동 밴 대신 방에 선택 카드, 밴은 권한 관리자가 정함
+        await post_wanted_card(svc, bot, chat_id, user_id, name, info, reply_to=reply_to, force=True)
+        return (f"🚨 {mention(user_id, name)}님을 <b>수배(공동 차단) 명단</b>에 올렸어요. 사유: {esc(reason)}\n"
+                "내보낼지는 '사용자 차단' 권한 관리자가 위 카드의 [🚫 밴]으로 정해주세요.")
     try:
         await svc.mod.ban(bot, chat_id, user_id, actor_id, f"공동 차단: {reason}")
         banned = "이 방에서 내보냈어요"
