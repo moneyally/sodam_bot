@@ -200,7 +200,8 @@ def join_ctx(svc, bot):
 
 
 async def listed(svc, bot, reason="코인 사기 DM"):
-    r = await cmd(svc, bot, A, STRONG, f".공동차단 @user{TARGET} {reason}")
+    # 오너가 올리면 자동 밴(=기존 등록 흐름). 다른 테스트는 등재+밴이 끝난 상태를 전제로 함.
+    r = await cmd(svc, bot, A, OWNER, f".공동차단 @user{TARGET} {reason}")
     assert "공동 차단 명단" in r[0] and bans(bot, A), r
     return r
 
@@ -284,8 +285,6 @@ async def fedban_rules_limit_reason_protected():
     assert not await fedban.lookup(db, WEAK), r
     r = await cmd(svc, bot, A, STRONG, f".공동차단 {OWNER} 사기")             # 오너 (방에 없는 숫자 ID)
     assert "올릴 수 없어요" in r[0] and not await fedban.lookup(db, OWNER), r
-    r = await cmd(svc, bot, A, WEAK, f".공동차단 @user{TARGET} 사기")          # 차단 권한 없는 관리자
-    assert NO_RIGHT in r[0] and not await fedban.lookup(db, TARGET)
     for i in range(fedban.DAILY_LIMIT):
         await cmd(svc, bot, A, STRONG, f".공동차단 {5000 + i} 스팸 {i}")
     r = await cmd(svc, bot, A, STRONG, f".공동차단 {6000} 스팸")

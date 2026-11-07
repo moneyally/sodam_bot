@@ -8,9 +8,9 @@ import sys
 from types import SimpleNamespace
 
 from fakes import FakeMsg, FakeQuery, fake_user, runner
-from test_fedban_perms import A, B, MEMBER, STRONG, TARGET, WEAK, _drain, cmd, join_ctx, setup
+from test_fedban_perms import A, B, CREATOR, MEMBER, OWNER, STRONG, TARGET, WEAK, _drain, cmd, join_ctx, setup
 
-from sodam import fedban, handlers
+from sodam import fedban, free, handlers
 from sodam.permissions import Role
 
 test, run_all = runner()
@@ -23,7 +23,8 @@ def scam_post(uid=TARGET, caption="입금 TXwallet9999 주소로 보내면 2배 
 
 
 async def register_with_evidence(svc, bot, caption="입금 TXwallet9999 주소로 보내면 2배 사기 DM"):
-    r = await cmd(svc, bot, A, STRONG, ".공동차단 코인 사기", reply_to=scam_post(caption=caption))
+    # 오너가 올리면 자동 밴(=기존 등록 흐름) — 이 파일의 다른 테스트는 등록이 끝난 상태를 전제로 함
+    r = await cmd(svc, bot, A, OWNER, ".공동차단 코인 사기", reply_to=scam_post(caption=caption))
     assert "공동 차단 명단" in r[0], r
     return r
 
@@ -37,7 +38,7 @@ async def register_captures_original_post_and_number():
     assert "TXwallet9999" in info["evidence"], info            # 원글 전문 저장 (필터 없이)
     assert info["media_kind"] == "photo" and info["media_id"] == "SCAMPIC", info
     # 별칭 .박제 / .수배 도 같은 등록
-    r = await cmd(svc, bot, A, STRONG, ".박제 9001 다른 사기")
+    r = await cmd(svc, bot, A, OWNER, ".박제 9001 다른 사기")
     assert "공동 차단 명단" in r[0] and (await fedban.lookup(db, 9001))["no"] == 2, r
     _drain()
 
@@ -159,6 +160,79 @@ async def ban_mode_bans_and_posts_card():
     assert [c for c in bot.named("ban") if c[1] == B], bot.named("ban")
     cards = [c for c in bot.named("send_message") if c[1] == B and "수배" in c[2]]
     assert cards and "내보냈어요" in cards[-1][2], cards
+    _drain()
+
+
+# ── 올린 사람 역할로 자동밴 vs 선택 카드 (2026-11-07 오너) ──
+def room_cards(bot, chat=A):
+    return [c for c in bot.named("send_message") if c[1] == chat and "수배" in c[2]]
+
+
+@test
+async def owner_or_creator_autobans():
+    db, svc, bot = await setup()
+    # 오너
+    r = await cmd(svc, bot, A, OWNER, f".공동차단 {TARGET} 코인 사기")
+    assert "내보냈어요" in r[0] and [c for c in bot.named("ban") if c[1] == A], r
+    assert await fedban.lookup(db, TARGET), "명단 등재"
+    # 방장(creator) — get_chat_member 로 creator 판정되게
+    bot.member_status = {(A, CREATOR): "creator"}
+    bot.calls.clear()
+    r = await cmd(svc, bot, A, CREATOR, ".공동차단 8001 사기")
+    assert "내보냈어요" in r[0] and [c for c in bot.named("ban") if c[1] == A], r
+    _drain()
+
+
+@test
+async def admin_gets_choice_card_no_autoban():
+    db, svc, bot = await setup()
+    bot.calls.clear()
+    r = await cmd(svc, bot, A, STRONG, f".공동차단 {TARGET} 코인 사기")   # 권한 있는 일반 관리자
+    assert not [c for c in bot.named("ban") if c[1] == A], "관리자는 자동 밴 안 함"
+    assert await fedban.lookup(db, TARGET), "그래도 수배 명단엔 올라감(박제)"
+    cards = room_cards(bot)
+    assert cards, bot.named("send_message")
+    datas = [b.callback_data for row in cards[0][3]["reply_markup"].inline_keyboard for b in row]
+    assert any(d == f"wnt:ban:{TARGET}" for d in datas) and any(d == f"wnt:ig:{TARGET}" for d in datas), datas
+    # 카드의 [🚫 밴] 을 권한 관리자가 누르면 그때 밴
+    q = FakeQuery(A, fake_user(STRONG), f"wnt:ban:{TARGET}")
+    await fedban.on_wanted(svc, bot, q, ["ban", str(TARGET)])
+    assert [c for c in bot.named("ban") if c[1] == A], "카드 밴 버튼으로 내보냄"
+    _drain()
+
+
+@test
+async def free_member_can_report_with_card():
+    db, svc, bot = await setup()
+    await free.add(db, A, MEMBER, STRONG)        # 자유 멤버로 지정
+    bot.calls.clear()
+    r = await cmd(svc, bot, A, MEMBER, f".공동차단 {TARGET} 사기꾼")
+    assert await fedban.lookup(db, TARGET), "자유 멤버도 박제(명단 등재) 가능"
+    assert not [c for c in bot.named("ban") if c[1] == A], "자유 멤버는 자동 밴 안 함"
+    assert room_cards(bot), "선택 카드가 뜸"
+    _drain()
+
+
+@test
+async def no_ban_admin_can_report_but_not_ban():
+    db, svc, bot = await setup()
+    bot.calls.clear()
+    await cmd(svc, bot, A, WEAK, f".공동차단 {TARGET} 사기")   # 차단 권한 없는 관리자
+    assert await fedban.lookup(db, TARGET), "신고(박제)는 됨"
+    assert not [c for c in bot.named("ban") if c[1] == A], "자동 밴은 안 함"
+    assert room_cards(bot), "선택 카드가 뜸"
+    q = FakeQuery(A, fake_user(WEAK), f"wnt:ban:{TARGET}")     # 권한 없는 사람이 밴 누르면 막힘
+    await fedban.on_wanted(svc, bot, q, ["ban", str(TARGET)])
+    assert "권한" in q.answers[-1][0] and not [c for c in bot.named("ban") if c[1] == A], q.answers
+    _drain()
+
+
+@test
+async def plain_member_cannot_fedban():
+    db, svc, bot = await setup()
+    r = await cmd(svc, bot, A, MEMBER, f".공동차단 {TARGET} 사기")
+    assert "관리자나 자유 멤버만" in r[0], r
+    assert not await fedban.lookup(db, TARGET), "일반 멤버는 박제 못 함 — 명단에 안 올라감"
     _drain()
 
 
