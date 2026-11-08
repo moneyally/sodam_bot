@@ -1120,11 +1120,12 @@ class Worker:
             load = "%.1f" % os.getloadavg()[0]
         except OSError:
             load = "?"
+        cores = os.cpu_count() or 0        # 실제 코어 수 (서버 사양 바뀌면 그대로 반영 — 예전엔 '코어 2개' 로 박혀 있었음)
         nums = " · ".join(f"{STUTTER_NAMES[k]} {grew[k]}번" for k in STUTTER_LIMITS if grew[k])
         title = musicq._esc(str((pl.row or {}).get("title") or "")[:60]) if getattr(pl, "row", None) else ""
-        log.warning("노래 끊김 감지 %s: %s (최대 %sms, 부하 %s)", chat_id, nums, worst, load)
+        log.warning("노래 끊김 감지 %s: %s (최대 %sms, 부하 %s, 코어 %s)", chat_id, nums, worst, load, cores)
         await self._alert_owners(f"🎵 <b>뮤직봇 소리 끊김 감지</b> (방 <code>{chat_id}</code>)\n"
-                                 f"최근 {max(1, span // 60)}분: {nums}\n가장 크게 밀림 {worst}ms · 서버 부하 {load} (코어 2개)"
+                                 f"최근 {max(1, span // 60)}분: {nums}\n가장 크게 밀림 {worst}ms · 서버 부하 {load} (코어 {cores}개)"
                                  + (f"\n지금 곡: {title}" if title else "")
                                  + "\n같은 방은 1시간에 한 번만 알려요.")
 
