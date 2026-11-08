@@ -218,19 +218,43 @@ def _btn_style(theme: str, label: str, first: bool) -> str | None:
     return btnstyle._by_words(label) or btnstyle.PRIMARY   # 신호등(기본): 글자 뜻, 없으면 파랑
 
 
+# 봇 주인이 프리미엄이 아니라 아이콘(프리미엄 이모지)이 거절되면 이 프로세스 동안 아이콘을 뺀다 (greet 와 같은 방식)
+_icons_off = False
+
+
+def _emoji_id(e) -> str | None:
+    return None if _icons_off else btnstyle.valid_emoji_id(e)
+
+
 def markup(rows: list[list[dict]], theme: str = "signal") -> InlineKeyboardMarkup | None:
+    """버튼 색은 버튼별 색(b['c']) 우선, 없으면 전체 테마. 버튼 앞 프리미엄 이모지(b['e'])는 api_kwargs 로."""
     out, seen = [], 0
     for r in rows or []:
         if not r:
             continue
         line = []
         for b in r[:MAX_COLS]:
-            st = _btn_style(theme, b["t"], seen == 0)
-            line.append(InlineKeyboardButton(b["t"], url=b["u"], style=st))
+            st = btnstyle.valid_style(b.get("c")) or _btn_style(theme, b["t"], seen == 0)
+            icon = _emoji_id(b.get("e"))
+            line.append(InlineKeyboardButton(b["t"], url=b["u"], style=st,
+                                             api_kwargs={"icon_custom_emoji_id": icon} if icon else None))
             seen += 1
         if line:
             out.append(line)
     return InlineKeyboardMarkup(out) if out else None
+
+
+async def _icon_retry(call):
+    """프리미엄 이모지 아이콘이 거절되면(봇 주인 비프리미엄) 아이콘을 끄고 한 번 더 — markup 이 다시 그려짐."""
+    global _icons_off
+    try:
+        return await call()
+    except BadRequest as e:
+        s = str(e).lower()
+        if not _icons_off and any(w in s for w in ("emoji", "icon", "premium")):
+            _icons_off = True
+            return await call()
+        raise
 
 
 def limit_of(d) -> int:
@@ -278,24 +302,29 @@ async def remove(db, did: int) -> None:
 # ── 보내기 · 고치기 ───────────────────────────────────────
 async def send(bot, chat_id: int, d, *, silent: bool | None = None):
     """초안을 chat_id 로 (채널 게시·1:1 미리보기 공용 → 미리보기가 실제와 같음)."""
-    kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d), theme_of(d)),
-              disable_notification=bool(d["silent"] if silent is None else silent))
     body = d["body"] or None
-    if d["media_type"] in MEDIA and d["media_id"]:
-        # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
-        return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
-    return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
+    disable = bool(d["silent"] if silent is None else silent)
+
+    async def go():
+        kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d), theme_of(d)), disable_notification=disable)
+        if d["media_type"] in MEDIA and d["media_id"]:
+            # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
+            return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
+        return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
+    return await _icon_retry(go)
 
 
 async def edit(bot, chat_id: int, msg_id: int, d) -> None:
-    kb = markup(buttons(d), theme_of(d))
-    try:
-        if d["media_type"]:
-            await bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=d["body"] or None,
-                                           parse_mode="HTML", reply_markup=kb)
-        else:
-            await bot.edit_message_text(d["body"], chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=kb,
-                                        link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]))
-    except BadRequest as e:
-        if "not modified" not in str(e).lower():
-            raise
+    async def go():
+        kb = markup(buttons(d), theme_of(d))
+        try:
+            if d["media_type"]:
+                await bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=d["body"] or None,
+                                               parse_mode="HTML", reply_markup=kb)
+            else:
+                await bot.edit_message_text(d["body"], chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=kb,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]))
+        except BadRequest as e:
+            if "not modified" not in str(e).lower():
+                raise
+    await _icon_retry(go)
