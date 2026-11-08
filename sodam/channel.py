@@ -344,6 +344,7 @@ async def post(svc: Services, bot, ch, d, by: int):
     sent = await composer.send(bot, ch["chat_id"], d)
     snap = {k: d[k] for k in ("body", "media_type", "media_id", "buttons", "preview")}
     await record(svc, ch["chat_id"], sent.message_id, composer.plain(d["body"]), snap, by)
+    composer.arm_auto_delete(bot, svc.db, ch["chat_id"], sent.message_id, d)   # ⏰ 자동삭제 (설정됐을 때만)
     await notify_room(svc, bot, ch, sent.message_id, composer.plain(d["body"]))
     return sent
 

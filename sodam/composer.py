@@ -51,7 +51,27 @@ CREATE TABLE IF NOT EXISTS composer_drafts (
 );
 """)
 register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER",
-                                      "theme": "TEXT NOT NULL DEFAULT 'signal'"})
+                                      "theme": "TEXT NOT NULL DEFAULT 'signal'",
+                                      "auto_del": "INTEGER NOT NULL DEFAULT 0"})  # 올린 뒤 N초 지나면 자동삭제(0=안 함)
+
+# ⏰ 자동삭제 프리셋 — 텔레그램은 봇이 48시간 지난 글을 못 지워서 그 안으로만 (persist.TEMP_MAX_AGE)
+AUTO_DEL = (0, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600)
+AUTO_DEL_MAX = 47 * 3600
+
+
+def auto_del_of(d) -> int:
+    try:
+        v = int(d["auto_del"] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return 0
+    return v if 0 <= v <= AUTO_DEL_MAX else 0
+
+
+def auto_del_label(secs: int) -> str:
+    if not secs:
+        return "안 함"
+    h = secs // 3600
+    return f"{h}시간 뒤" if h else f"{secs // 60}분 뒤"
 
 # 반응 버튼 집계: 올린 글의 [👍] 버튼을 누른 사람 (한 사람 한 표, 다시 누르면 취소)
 register_schema("""
@@ -438,6 +458,15 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
             return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
         return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
     return await _icon_retry(go)
+
+
+def arm_auto_delete(bot, db, chat_id: int, msg_id: int | None, d) -> int:
+    """올린 글에 자동삭제를 예약 (초안에 설정됐을 때만). 예약한 초를 돌려줌(0=안 함).
+    persist.delete_later 가 DB(temp_msgs)에도 적어 재시작돼도 sweep 이 지운다."""
+    secs = auto_del_of(d)
+    if secs and msg_id:
+        persist.delete_later(bot, chat_id, msg_id, secs, db=db)
+    return secs
 
 
 async def edit(bot, chat_id: int, msg_id: int, d) -> None:

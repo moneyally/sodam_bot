@@ -400,5 +400,52 @@ async def pin_refused_still_posts_and_copy_to_channel():
     assert o["state"] == "posted" and o["target"] == ROOM                    # 원본은 그대로
 
 
+@test
+async def auto_delete_arms_on_post():
+    """⏰ 자동삭제: 고른 시간이 저장되고, 올린 뒤 그 글이 temp_msgs 에 예약된다 (재시작돼도 sweep 이 지움)."""
+    from channel_world import ROOM
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="⚡ 반짝 이벤트")
+    # 기본은 안 함
+    assert composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ad")
+    assert "자동삭제" in q.edits[-1]
+    q = await w.press(BOSS, f"m:cp:{did}:ada:bad")                           # 엉뚱한 값은 거절
+    assert "다시" in (q.answers[0][0] or "") and composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ada:7200")                          # 프리셋 아닌 숫자(2시간)도 거절
+    assert "다시" in (q.answers[0][0] or "") and composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ada:3600")                          # 1시간 뒤
+    assert composer.auto_del_of(await composer.get(w.db, did)) == 3600 and "1시간 뒤" in q.edits[-1]
+    q = await w.press(BOSS, f"m:cp:{did}")                                   # 편집 화면에 상태 줄
+    assert "1시간 뒤 자동삭제" in q.edits[-1]
+    # 올리기 → temp_msgs 에 예약 (delete_later 가 뒤에서 remember_delete)
+    q = await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    assert d["state"] == "posted" and d["msg_id"] and "자동으로 지워져요" in q.edits[-1]
+    rows = await w.db._all("SELECT chat_id, message_id, due, sent FROM temp_msgs WHERE message_id=?", (d["msg_id"],))
+    assert len(rows) == 1 and rows[0]["chat_id"] == ROOM and 3500 < rows[0]["due"] - rows[0]["sent"] < 3700
+
+
+@test
+async def no_auto_delete_by_default():
+    """자동삭제를 안 고르면 올려도 temp_msgs 에 안 들어간다 (상시 메뉴·공지가 사라지지 않게)."""
+    from channel_world import ROOM
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="상시 안내")
+    await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    # 예약도 없고, (secs=0 으로 잘못 예약해 바로 지워버리는 일도 없어야) 글이 지워지지도 않음
+    assert not await w.db._all("SELECT 1 FROM temp_msgs WHERE message_id=?", (d["msg_id"],))
+    assert ("delete", ROOM, d["msg_id"]) not in w.bot.calls
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

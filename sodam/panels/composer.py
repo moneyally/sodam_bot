@@ -111,6 +111,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
     if not edit:
         lines.append("🔕 조용히 보내기 (알림 없이)" if d["silent"] else "🔔 알림과 함께 보내기")
         lines.append("📌 올리면서 고정해요" if d["pin"] else "📌 고정 안 함")
+        ad = composer.auto_del_of(d)
+        lines.append(f"⏰ 올린 뒤 {composer.auto_del_label(ad)} 자동삭제" if ad else "⏰ 자동삭제 안 함")
     if note:
         lines += ["", note]
     go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
@@ -122,7 +124,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
             ([] if d["media_type"] else [B("🔗 미리보기 끄기" if d["preview"] else "🔗 미리보기 켜기",
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
-            [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1))],
+            [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1)),
+                             B(f"⏰ 자동삭제: {composer.auto_del_label(composer.auto_del_of(d))}", cp(did, "ad"))],
             [B(f"🎨 전체 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
             [B("👀 미리보기 (1:1)", cp(did, "pr"))],
             [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
@@ -224,6 +227,15 @@ def s_react_pick(d, note: str = "") -> Screen:
     return Screen("\n".join(lines), _kb(menu._chunks(picks, 5) + [[B("⬅️ 편집으로", cp(d["id"]))]]))
 
 
+def s_autodel(d, note: str = "") -> Screen:
+    """⏰ 자동삭제 고르기 — 올린 글을 정한 시간 뒤 소담이 스스로 지움 (반짝 공지·이벤트용)."""
+    cur = composer.auto_del_of(d)
+    lines = ["⏰ <b>자동삭제</b> — 올린 글을 정한 시간 뒤 소담이 스스로 지워요 (반짝 공지·이벤트용).",
+             "텔레그램 규칙상 올린 지 48시간 안쪽만 돼요. 예약·재시작돼도 지워져요."] + ([note] if note else [])
+    kb = [B(("✓ " if s == cur else "") + composer.auto_del_label(s), cp(d["id"], "ada", s)) for s in composer.AUTO_DEL]
+    return Screen("\n".join(lines), _kb(menu._chunks(kb, 3) + [[B("⬅️ 편집으로", cp(d["id"]))]]))
+
+
 async def _post(c: PanelCtx, d) -> Screen:
     """📤 지금 올리기 (확인 뒤). 권한·봇 권한을 지금 상태로 확인 → 초안을 posting 으로 차지(한 번만) → 보냄."""
     ch = await channel.get(c.svc.db, d["target"])
@@ -247,7 +259,8 @@ async def _post(c: PanelCtx, d) -> Screen:
     await composer.claim(c.svc.db, d["id"], "posting", "posted")
     await c.svc.db.log_mod(ch["chat_id"], c.uid, None, "channel_post", f"#{sent.message_id}")
     pinned = await _pin(c.bot, ch["chat_id"], sent.message_id, d)
-    return Screen(f"✅ 📢 <b>{esc(ch['title'])}</b> 에 올렸어요!{pinned}",
+    adn = f"\n⏰ {composer.auto_del_label(composer.auto_del_of(d))} 자동으로 지워져요." if composer.auto_del_of(d) else ""
+    return Screen(f"✅ 📢 <b>{esc(ch['title'])}</b> 에 올렸어요!{pinned}{adn}",
                   _kb([[InlineKeyboardButton("👀 채널에서 보기", url=channel.post_link(ch, sent.message_id))],
                        [B("📤 다른 방·채널에도", cp(d["id"], "cpy"))],
                        [B("✍️ 새 글", f"m:chn:{ch['chat_id']}"), B("⬅️ 채널", f"m:ch:{ch['chat_id']}")]]),
@@ -271,10 +284,12 @@ async def _post_room(c: PanelCtx, d) -> Screen:
     await db.atomic(lambda x: x.execute("UPDATE composer_drafts SET state='posted', msg_id=?, updated=? WHERE id=?",
                                         (sent.message_id, int(time.time()), d["id"])))
     await db.log_mod(cid, c.uid, None, "menu_post", f"#{sent.message_id}")
+    composer.arm_auto_delete(c.bot, db, cid, sent.message_id, d)   # ⏰ 자동삭제 (설정됐을 때만)
     pinned = await _pin(c.bot, cid, sent.message_id, d)
     _, title = await _dest(c.svc, cid)
     link = room_link(cid, sent.message_id)
-    return Screen(f"✅ {title} 에 올렸어요!{pinned}\n고칠 땐 ⚙️ 방 설정 → 🎛 버튼 메뉴 → 올린 메뉴에서 — 방 글이 바로 바뀌어요.",
+    adn = f"\n⏰ {composer.auto_del_label(composer.auto_del_of(d))} 자동으로 지워져요." if composer.auto_del_of(d) else ""
+    return Screen(f"✅ {title} 에 올렸어요!{pinned}{adn}\n고칠 땐 ⚙️ 방 설정 → 🎛 버튼 메뉴 → 올린 메뉴에서 — 방 글이 바로 바뀌어요.",
                   _kb([[InlineKeyboardButton("👀 방에서 보기", url=link)] if link else [],
                        [B("📤 다른 방·채널에도", cp(d["id"], "cpy"))],
                        [_new(None, cid), _back(None, cid)]]), toast="올렸어요!")
@@ -432,6 +447,14 @@ async def r_cp(c: PanelCtx) -> Screen:
         return s_react_pick(await composer.get(db, did), f"{emoji} 추가했어요.")
     elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
         await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
+    elif act == "ad":   # ⏰ 자동삭제 고르기
+        return s_autodel(d)
+    elif act == "ada":
+        secs = to_int(a[0] if a else "")
+        if secs is None or secs not in composer.AUTO_DEL:
+            return Screen(None, toast="다시 골라주세요.")
+        await composer.update(db, did, auto_del=secs)
+        return s_autodel(await composer.get(db, did), f"⏰ {composer.auto_del_label(secs)} 자동삭제로 맞췄어요.")
     elif act == "th":   # 버튼색 틀 돌려가며 (신호등→파랑→무채색→강조)
         order = list(composer.THEMES)
         nxt = order[(order.index(composer.theme_of(d)) + 1) % len(order)]
@@ -452,7 +475,9 @@ async def r_cp(c: PanelCtx) -> Screen:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
         _, title = await _dest(c.svc, d["target"])
         return Screen(f"📤 {title} 에 지금 올릴까요?"
-                      + ("\n🔕 알림 없이 올려요." if d["silent"] else "") + ("\n📌 올리면서 고정해요." if d["pin"] else ""),
+                      + ("\n🔕 알림 없이 올려요." if d["silent"] else "") + ("\n📌 올리면서 고정해요." if d["pin"] else "")
+                      + (f"\n⏰ 올린 뒤 {composer.auto_del_label(composer.auto_del_of(d))} 자동삭제돼요."
+                         if composer.auto_del_of(d) else ""),
                       _kb([[B("✅ 올리기", cp(did, "go1")), B("⬅️ 돌아가기", cp(did))]]))
     elif act == "go1":
         return await _post(c, d)
@@ -479,7 +504,7 @@ async def r_cp(c: PanelCtx) -> Screen:
 
 # ── 📤 같은 글 다른 방·채널에도 ─────────────────────────
 COPY_MAX = 8   # 채널·방 각각 몇 개까지 보여 줄지
-COPY_FIELDS = ("body", "media_type", "media_id", "buttons", "preview", "silent", "pin")
+COPY_FIELDS = ("body", "media_type", "media_id", "buttons", "preview", "silent", "pin", "auto_del")
 
 
 async def _places(c: PanelCtx, skip: int) -> list[tuple[int, str]]:
