@@ -76,6 +76,24 @@ async def token_file_is_private_and_needed_and_wrong_token_is_rate_limited():
 
 
 @test
+async def rooms_route_shows_inviter_and_last_paid():
+    db = await world()
+    await db.start_subscription(CHAT, 1800000000, added_by=5)          # 철수(5)가 초대
+    await db._write("INSERT INTO payments(tx_id, chat_id, amount_units, seen_at) VALUES('tx1', ?, 30, 1790000000)", (CHAT,))
+    s = Server(db.path)
+    try:
+        tok = diag.token_path(db.path).read_text().strip()
+        st, body = await call(s, "/v1/rooms", tok)
+        room = next(r for r in body["rooms"] if r["title"] == "벳블리 소통방")
+        assert room["added_by"] == 5 and room["added_by_name"] == "철수", room       # 초대한 사람
+        assert room["last_paid"] == 1790000000, room                                 # 실결제 시각
+        other = next(r for r in body["rooms"] if r["title"] == "다른방")
+        assert other["added_by"] is None and other["last_paid"] is None, other        # 구독·결제 없는 방
+    finally:
+        s.close()
+
+
+@test
 async def read_only_routes_resolve_room_by_name_and_redact_secrets():
     db = await world()
     s = Server(db.path)

@@ -43,6 +43,7 @@ settings.register_setting("music_ctrl", "requester", "노래 넘기기·멈춤",
 
 WAIT_CTL = 8.0                  # 넘기기·일시정지 결과 기다림
 COOLDOWN = 4.0                  # 한 사람 노래 신청 간격 (초)
+COOL_NOTE = 60.0                # 간격 넘겨 거부될 때 '4초에 한 번' 안내 글은 사람당 이 간격으로만 (나머진 🙈 반응만)
 TG_MAX = 20 * 1024 * 1024       # 봇이 받을 수 있는 파일 (Bot API getFile)
 AUDIO_EXT = {".mp3", ".m4a", ".ogg", ".oga", ".opus", ".wav", ".flac", ".aac", ".webm"}
 ENGLISH = {"play", "skip", "next", "pause", "resume", "queue", "remove", "seek", "end", "volume", "vol",
@@ -199,12 +200,23 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, m
         return why
     query = (query or "").strip()[:300]
     last = svc.__dict__.setdefault("_music_last", {})
+    noted = svc.__dict__.setdefault("_music_cool_note", {})
     now = time.monotonic()
     if now - last.get((chat_id, user.id), -1e9) < COOLDOWN:      # 연타 = 음원 검색만 늘어남 (서버 IP 막힘 위험)
-        return f"⏳ 노래 신청은 {COOLDOWN:g}초에 한 번씩 해 주세요."
+        # 거부는 조용히 — 방에 '4초에 한 번' 을 매번 도배하면 그게 더 지저분(2026-11-08 오너) → 🙈 반응만.
+        if msg is not None:
+            try:
+                await bot.set_message_reaction(chat_id, msg.message_id, "🙈")
+            except TelegramError:
+                pass
+        if now - noted.get((chat_id, user.id), -1e9) >= COOL_NOTE:   # 안내 글은 사람당 가끔만(1분)
+            noted[(chat_id, user.id)] = now
+            return f"⏳ 노래 신청은 {COOLDOWN:g}초에 한 번씩 해 주세요."
+        return None
     last[(chat_id, user.id)] = now
     if len(last) > 5000:
         last.clear()
+        noted.clear()
     tg = await _tg_audio(svc, bot, msg)
     if isinstance(tg, str):
         return tg
