@@ -15,7 +15,8 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, InputMediaVideo,
+                      LinkPreviewOptions)
 from telegram.error import BadRequest
 
 from . import btnstyle, mediastore, persist
@@ -28,6 +29,9 @@ MAX_ROWS, MAX_COLS, LABEL_MAX, URL_MAX = 8, 3, 40, 512
 MEDIA = {"photo": "사진", "video": "영상", "animation": "움짤(GIF)"}
 DRAFT_KEEP = 7 * 86400      # 손 놓은 초안은 7일 뒤 정리
 MAX_DRAFTS = 10             # 한 사람이 들고 있는 초안 (예약된 글 제외)
+MAX_MEDIA = 10             # 🖼 앨범(미디어 그룹) 한 번에 2~10장
+ALBUM_KINDS = ("photo", "video")   # 앨범에 넣을 수 있는 건 사진·영상뿐 (움짤·파일은 한 개만)
+# ⚠️ 텔레그램은 앨범(미디어 그룹)에 인라인 버튼을 못 담는다 → 앨범 글엔 버튼이 안 나간다.
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS composer_drafts (
@@ -55,7 +59,8 @@ register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_i
                                       "auto_del": "INTEGER NOT NULL DEFAULT 0",   # 올린 뒤 N초 지나면 자동삭제(0=안 함)
                                       "live": "INTEGER NOT NULL DEFAULT 0",       # 👁 실시간 미리보기 켬
                                       "live_msg": "INTEGER",                      # 1:1 에 띄운 미리보기 글 id
-                                      "live_sig": "TEXT"})                        # 그 미리보기가 보여 주는 미디어 지문
+                                      "live_sig": "TEXT",                         # 그 미리보기가 보여 주는 미디어 지문
+                                      "media_list": "TEXT"})                      # 🖼 앨범(2장↑) [{"t","id"},…] JSON (1장·없음은 media_type/id 로만)
 
 # ⏰ 자동삭제 프리셋 — 텔레그램은 봇이 48시간 지난 글을 못 지워서 그 안으로만 (persist.TEMP_MAX_AGE)
 AUTO_DEL = (0, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600)
@@ -227,6 +232,8 @@ def check_url(url: str) -> str | None:
 
 
 def buttons(d) -> list[list[dict]]:
+    if is_album(d):          # 앨범 글엔 버튼을 못 담음 (텔레그램 제한) → 버튼 무시 (초안엔 남겨 둠)
+        return []
     try:
         rows = json.loads(d["buttons"] or "[]")
     except (TypeError, ValueError):
@@ -234,6 +241,44 @@ def buttons(d) -> list[list[dict]]:
     # URL 버튼(u) 또는 반응 버튼(r = 누르면 집계) 둘 다 허용
     return [[b for b in r if isinstance(b, dict) and b.get("t") and (b.get("u") or b.get("r"))]
             for r in rows if r][:MAX_ROWS]
+
+
+def _col(d, key):
+    try:
+        return d[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def media_items(d) -> list[dict]:
+    """초안의 미디어 목록: 앨범이면 media_list(2장↑), 아니면 [첫 장] 또는 []."""
+    raw = _col(d, "media_list")
+    if raw:
+        try:
+            got = [it for it in json.loads(raw)
+                   if isinstance(it, dict) and it.get("id") and it.get("t") in ALBUM_KINDS]
+            if len(got) >= 2:
+                return got[:MAX_MEDIA]
+        except (ValueError, TypeError):
+            pass
+    mt, mid = _col(d, "media_type"), _col(d, "media_id")
+    return [{"t": mt, "id": mid}] if mid else []
+
+
+def media_json(items: list) -> str | None:
+    """앨범(2장 이상)일 때만 JSON 으로 (1장·없음은 media_type/media_id 로만 — 단일 경로 그대로)."""
+    return json.dumps(items, ensure_ascii=False) if items and len(items) >= 2 else None
+
+
+def is_album(d) -> bool:
+    raw = _col(d, "media_list")
+    if not raw:
+        return False
+    try:
+        return len([it for it in json.loads(raw)
+                    if isinstance(it, dict) and it.get("id") and it.get("t") in ALBUM_KINDS]) >= 2
+    except (ValueError, TypeError):
+        return False
 
 
 # 버튼 색 틀(테마) — 방장이 하나만 고르면 코드가 각 버튼 색을 정함 (Bot API 9.4 style)
@@ -449,10 +494,12 @@ async def remove(db, did: int) -> None:
 
 
 # ── 보내기 · 고치기 ───────────────────────────────────────
-async def send(bot, chat_id: int, d, *, silent: bool | None = None):
-    """초안을 chat_id 로 (채널 게시·1:1 미리보기 공용 → 미리보기가 실제와 같음)."""
+async def send_group(bot, chat_id: int, d, *, silent: bool | None = None) -> list:
+    """초안을 보냄 — 앨범(2장↑)이면 미디어 그룹(버튼 없음·설명은 첫 장), 아니면 한 글. 보낸 글들(순서대로)."""
     body = d["body"] or None
     disable = bool(d["silent"] if silent is None else silent)
+    if is_album(d):
+        return await _send_album(bot, persist.db_of(bot), chat_id, media_items(d), caption=body, silent=disable)
 
     async def go():
         kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d), theme_of(d)), disable_notification=disable)
@@ -460,7 +507,45 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
             # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
             return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
         return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
-    return await _icon_retry(go)
+    return [await _icon_retry(go)]
+
+
+async def send(bot, chat_id: int, d, *, silent: bool | None = None):
+    """초안을 chat_id 로 한 글 보냄 (앨범이면 첫 장). 여러 글 전부가 필요하면 send_group
+    (채널 게시·1:1 미리보기 공용 → 미리보기가 실제와 같음)."""
+    return (await send_group(bot, chat_id, d, silent=silent))[0]
+
+
+async def _send_album(bot, db, chat_id: int, items: list, *, caption: str | None = None, silent: bool = False) -> list:
+    """사진·영상 여러 장을 앨범(미디어 그룹)으로. 설명은 첫 장에만(텔레그램 규칙), 버튼은 못 담음.
+    file_id 가 이 봇에서 안 먹으면 보관 원본으로 다시 올린다 (하나라도 원본 없으면 MediaLost)."""
+    async def build(resolver):
+        out = []
+        for i, it in enumerate(items):
+            cls = InputMediaVideo if it["t"] == "video" else InputMediaPhoto
+            cap = caption if i == 0 else None          # 앨범은 첫 장 설명이 전체에 보임
+            out.append(cls(await resolver(it["id"]), caption=cap, parse_mode="HTML" if cap else None))
+        return out
+
+    try:
+        media = await build(lambda fid: mediastore.aliased(db, bot, fid))
+        return list(await bot.send_media_group(chat_id, media, disable_notification=silent))
+    except BadRequest as e:
+        if not mediastore.is_bad_file(e):
+            raise
+
+    async def from_store(fid):
+        data = await mediastore.load(db, fid)
+        if data is None:
+            raise mediastore.MediaLost("album media id refused and no kept original")
+        return InputFile(data, filename="photo.jpg")
+    media = await build(from_store)
+    sent = list(await bot.send_media_group(chat_id, media, disable_notification=silent))
+    for it, m in zip(items, sent):   # 새 봇의 file_id 를 기억 (다음부터 바로)
+        new = mediastore.new_file_id(m, it["t"])
+        if new:
+            await mediastore.record_alias(db, bot, it["id"], new)
+    return sent
 
 
 def preview_sig(d) -> str:
@@ -469,12 +554,14 @@ def preview_sig(d) -> str:
     return f"{d['media_type'] or ''}|{d['media_id'] or ''}"
 
 
-def arm_auto_delete(bot, db, chat_id: int, msg_id: int | None, d) -> int:
-    """올린 글에 자동삭제를 예약 (초안에 설정됐을 때만). 예약한 초를 돌려줌(0=안 함).
-    persist.delete_later 가 DB(temp_msgs)에도 적어 재시작돼도 sweep 이 지운다."""
+def arm_auto_delete(bot, db, chat_id: int, msg_ids, d) -> int:
+    """올린 글(들)에 자동삭제를 예약 (초안에 설정됐을 때만). msg_ids 는 단일 id 또는 앨범의 id 목록.
+    예약한 초를 돌려줌(0=안 함). persist.delete_later 가 DB(temp_msgs)에도 적어 재시작돼도 sweep 이 지운다."""
     secs = auto_del_of(d)
-    if secs and msg_id:
-        persist.delete_later(bot, chat_id, msg_id, secs, db=db)
+    if secs:
+        for mid in (msg_ids if isinstance(msg_ids, (list, tuple)) else [msg_ids]):
+            if mid:
+                persist.delete_later(bot, chat_id, mid, secs, db=db)
     return secs
 
 

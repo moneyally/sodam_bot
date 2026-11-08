@@ -483,5 +483,59 @@ async def live_preview_updates_in_place():
     assert d["live"] == 0 and not d["live_msg"] and ("delete", BOSS, newpid) in w.bot.calls
 
 
+@test
+async def album_builds_and_posts_as_media_group():
+    """🖼 사진을 여러 장 담으면 앨범 → 버튼은 무시(텔레그램 제한), 올리면 send_media_group 한 번·설명 첫 장."""
+    from types import SimpleNamespace
+    w = await World().open()
+    did = await w.draft()
+    await composer.update(w.db, did, body="<b>갤러리</b>",
+                          buttons=json.dumps([[{"t": "문의", "u": "https://t.me/boss"}]]))
+    await w.press(BOSS, f"m:cp:{did}:m")
+    await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])            # 한 장 → 단일
+    d = await composer.get(w.db, did)
+    assert not composer.is_album(d) and len(composer.media_items(d)) == 1 and composer.buttons(d)
+    await w.press(BOSS, f"m:cp:{did}:m")
+    m2 = await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P2")])       # 한 장 더 → 앨범
+    d = await composer.get(w.db, did)
+    assert composer.is_album(d) and [it["id"] for it in composer.media_items(d)] == ["P1", "P2"]
+    assert composer.buttons(d) == [] and "앨범" in m2.replies[-1]              # 앨범이면 버튼 안 나감
+    await w.press(BOSS, f"m:cp:{did}:m")
+    dup = await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])      # 같은 사진 → 거절
+    assert "이미 넣은" in dup.replies[-1] and len(composer.media_items(await composer.get(w.db, did))) == 2
+    await w.press(BOSS, f"m:cp:{did}:go1")                                    # 올리기
+    groups = [c for c in w.bot.calls if c[0] == "send_media_group" and c[1] == CH]
+    assert len(groups) == 1
+    media = groups[0][2]
+    assert len(media) == 2 and media[0].caption and "갤러리" in media[0].caption and media[1].caption is None
+    assert groups[0][3].get("reply_markup") is None                          # 앨범엔 버튼 못 담음
+    assert (await composer.get(w.db, did))["state"] == "posted"
+
+
+@test
+async def album_room_post_not_editable_and_autodeletes_all():
+    """🎛 리모컨 앨범: 올리면 제자리 수정 불가(msg_id NULL)·⏰ 자동삭제는 세 글 전부 예약."""
+    from channel_world import ROOM
+    from types import SimpleNamespace
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="갤러리")
+    for fid in ("P1", "P2", "P3"):
+        await w.press(BOSS, f"m:cp:{did}:m")
+        await w.say(BOSS, None, photo=[SimpleNamespace(file_id=fid)])
+    await w.press(BOSS, f"m:cp:{did}:ada:3600")                              # ⏰ 1시간 자동삭제
+    d = await composer.get(w.db, did)
+    assert composer.is_album(d) and len(composer.media_items(d)) == 3
+    await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    groups = [c for c in w.bot.calls if c[0] == "send_media_group" and c[1] == ROOM]
+    assert d["state"] == "posted" and d["msg_id"] is None and len(groups) == 1 and len(groups[0][2]) == 3
+    rows = await w.db._all("SELECT message_id FROM temp_msgs WHERE chat_id=?", (ROOM,))
+    assert len(rows) == 3                                                    # 올린 세 글 전부 자동삭제 예약
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

@@ -341,10 +341,11 @@ async def decide(svc: Services, bot, chat_id: int, uid: int, approve: bool) -> s
 # ── 예약 글 ───────────────────────────────────────────────
 async def post(svc: Services, bot, ch, d, by: int):
     """초안 1개를 채널에 올리고 기록 (+ 새 글 알림). TelegramError 는 부른 쪽에서."""
-    sent = await composer.send(bot, ch["chat_id"], d)
-    snap = {k: d[k] for k in ("body", "media_type", "media_id", "buttons", "preview")}
+    msgs = await composer.send_group(bot, ch["chat_id"], d)      # 앨범(2장↑)이면 여러 글, 아니면 한 글
+    sent = msgs[0]
+    snap = {k: d[k] for k in ("body", "media_type", "media_id", "buttons", "preview", "media_list")}
     await record(svc, ch["chat_id"], sent.message_id, composer.plain(d["body"]), snap, by)
-    composer.arm_auto_delete(bot, svc.db, ch["chat_id"], sent.message_id, d)   # ⏰ 자동삭제 (설정됐을 때만)
+    composer.arm_auto_delete(bot, svc.db, ch["chat_id"], [m.message_id for m in msgs], d)   # ⏰ 자동삭제 (앨범은 전부)
     await notify_room(svc, bot, ch, sent.message_id, composer.plain(d["body"]))
     return sent
 

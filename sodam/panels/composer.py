@@ -101,12 +101,15 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
                       _kb([[B("📤 다른 방·채널에도", cp(did, "cpy"))], [_new(ch, d["target"])], [back]]))
     edit, rows_ = bool(d["edit_of"]), composer.buttons(d)
     n = sum(map(len, rows_))
+    album, nmedia = composer.is_album(d), len(composer.media_items(d))
     head = "✏️ <b>올린 글 고치기</b>" if edit else ("🤖 <b>AI 초안</b>" if d["source"] == "ai" else "✍️ <b>새 글</b>")
     text = composer.plain(d["body"])
+    media_desc = f"사진·영상 {nmedia}장 (앨범)" if album else composer.MEDIA.get(d["media_type"], "없음")
+    stat = f"📝 {composer.utf16_len(text)}/{composer.limit_of(d)}자 · 🖼 {media_desc}"
+    stat += " · ⚠️ 앨범엔 버튼 못 달아요" if album else f" · 🔘 버튼 {n}개" + (f" ({len(rows_)}줄)" if n else "")
     lines = [f"{head} → {title}", "",
              f"<blockquote>{esc(text[:300])}{'…' if len(text) > 300 else ''}</blockquote>" if text.strip() else "본문: 아직 없어요",
-             f"📝 {composer.utf16_len(text)}/{composer.limit_of(d)}자 · 🖼 {composer.MEDIA.get(d['media_type'], '없음')} · "
-             f"🔘 버튼 {n}개" + (f" ({len(rows_)}줄)" if n else "")]
+             stat]
     if not d["media_type"]:
         lines.append(f"🔗 링크 미리보기 {'켬' if d['preview'] else '끔'}")
     if not edit:
@@ -114,24 +117,26 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
         lines.append("📌 올리면서 고정해요" if d["pin"] else "📌 고정 안 함")
         ad = composer.auto_del_of(d)
         lines.append(f"⏰ 올린 뒤 {composer.auto_del_label(ad)} 자동삭제" if ad else "⏰ 자동삭제 안 함")
-    if d["live"]:
+    if d["live"] and not album:
         lines.append("👁 실시간 미리보기 켜짐 — 편집하면 1:1 미리보기가 바로 바뀌어요")
     if note:
         lines += ["", note]
+    add_more = d["media_type"] in composer.ALBUM_KINDS      # 사진·영상이면 '더 넣기'(앨범)로 안내
+    media_btn = [] if edit else [B("🖼 사진 더 넣기 (앨범)" if add_more else "🖼 사진·영상·움짤", cp(did, "m"))]
     go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
-    rows = [[B("🧩 템플릿으로 시작", cp(did, "tpl"))] if not edit and not text.strip() and not n else [],
-            [B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상·움짤", cp(did, "m"))]),
+    rows = [[B("🧩 템플릿으로 시작", cp(did, "tpl"))] if not edit and not album and not text.strip() and not n else [],
+            [B("✏️ 본문", cp(did, "b"))] + media_btn,
             [B("🗑 사진·영상 빼기", cp(did, "mx"))] if d["media_type"] and not edit else [],
-            [B("➕ 버튼", cp(did, "ba")), B("➕ 반응 버튼", cp(did, "rb"))]
-            + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else []),
+            ([] if album else [B("➕ 버튼", cp(did, "ba")), B("➕ 반응 버튼", cp(did, "rb"))]
+             + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else [])),
             ([] if d["media_type"] else [B("🔗 미리보기 끄기" if d["preview"] else "🔗 미리보기 켜기",
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
             [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1)),
                              B(f"⏰ 자동삭제: {composer.auto_del_label(composer.auto_del_of(d))}", cp(did, "ad"))],
             [B(f"🎨 전체 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
-            [B("👀 미리보기 (1:1)", cp(did, "pr")),
-             B("👁 실시간 끄기" if d["live"] else "👁 실시간 미리보기", cp(did, "lv"))],
+            [B("👀 미리보기 (1:1)", cp(did, "pr"))]
+            + ([] if album else [B("👁 실시간 끄기" if d["live"] else "👁 실시간 미리보기", cp(did, "lv"))]),
             [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
             [B("📤 다른 방·채널에도", cp(did, "cpy"))] if not edit and (d["body"] or d["media_type"]) else [],
             [B("🗑 버리기", cp(did, "del")), back]]
@@ -244,8 +249,8 @@ async def refresh_live(c: PanelCtx, d) -> None:
     """👁 실시간 미리보기가 켜져 있으면 1:1 의 미리보기 글을 지금 초안대로 갱신한다.
     미디어 종류·파일이 그대로면 글자·설명·버튼만 그 자리에서 고치고(editMessage),
     바뀌었으면(사진↔글·다른 파일) 지우고 다시 보낸다. 안 되면 조용히 넘어감(편집은 계속)."""
-    if not d or not d["live"] or (not d["body"] and not d["media_type"]):
-        return
+    if not d or not d["live"] or (not d["body"] and not d["media_type"]) or composer.is_album(d):
+        return                                                   # 앨범은 제자리 수정 불가 → 실시간 미리보기 건너뜀 (👀 한번보기 사용)
     db, uid = c.svc.db, c.uid
     sig, pid = composer.preview_sig(d), d["live_msg"]
     if pid and d["live_sig"] == sig:
@@ -307,14 +312,16 @@ async def _post_room(c: PanelCtx, d) -> Screen:
     if not await composer.claim(db, d["id"], "draft", "posting"):
         return Screen(None, toast="이미 올렸거나 올리는 중이에요.")
     try:
-        sent = await composer.send(c.bot, cid, d)
+        msgs = await composer.send_group(c.bot, cid, d)   # 앨범(2장↑)이면 여러 글
     except TelegramError as e:
         await composer.claim(db, d["id"], "posting", "draft")
         return await s_compose(c, await composer.get(db, d["id"]), f"❌ 올리지 못했어요: {esc(e.message[:200])}")
+    sent = msgs[0]
+    keep_msg = None if composer.is_album(d) else sent.message_id   # 앨범은 제자리 수정 불가 → 🎛 고치기 목록엔 안 올림
     await db.atomic(lambda x: x.execute("UPDATE composer_drafts SET state='posted', msg_id=?, updated=? WHERE id=?",
-                                        (sent.message_id, int(time.time()), d["id"])))
+                                        (keep_msg, int(time.time()), d["id"])))
     await db.log_mod(cid, c.uid, None, "menu_post", f"#{sent.message_id}")
-    composer.arm_auto_delete(c.bot, db, cid, sent.message_id, d)   # ⏰ 자동삭제 (설정됐을 때만)
+    composer.arm_auto_delete(c.bot, db, cid, [m.message_id for m in msgs], d)   # ⏰ 자동삭제 (앨범은 전부)
     pinned = await _pin(c.bot, cid, sent.message_id, d)
     _, title = await _dest(c.svc, cid)
     link = room_link(cid, sent.message_id)
@@ -388,7 +395,7 @@ async def r_cp(c: PanelCtx) -> Screen:
     if act == "m":
         return _ask(c, d, "cpm", "🖼 올릴 <b>사진·영상·움짤(GIF)</b> 하나를 보내주세요. (설명은 ✏️ 본문에서)")
     if act == "mx":
-        await composer.update(db, did, media_type=None, media_id=None)
+        await composer.update(db, did, media_type=None, media_id=None, media_list=None)   # 앨범도 전부 뺌
     elif act == "ba":
         rows = composer.buttons(d)
         if len(rows) >= composer.MAX_ROWS and all(len(r) >= composer.MAX_COLS for r in rows):
@@ -500,7 +507,7 @@ async def r_cp(c: PanelCtx) -> Screen:
         if not d["body"] and not d["media_type"]:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
         try:
-            await composer.send(c.bot, c.uid, d, silent=True)
+            await composer.send_group(c.bot, c.uid, d, silent=True)   # 앨범이면 앨범 그대로 미리보기
         except TelegramError as e:
             return Screen(None, toast=f"미리보기 실패: {e.message[:150]}", alert=True)
         screen = await s_compose(c, d, "👆 위가 채널에 올라갈 모양 그대로예요.")
@@ -560,7 +567,7 @@ async def r_cp(c: PanelCtx) -> Screen:
 
 # ── 📤 같은 글 다른 방·채널에도 ─────────────────────────
 COPY_MAX = 8   # 채널·방 각각 몇 개까지 보여 줄지
-COPY_FIELDS = ("body", "media_type", "media_id", "buttons", "preview", "silent", "pin", "auto_del")
+COPY_FIELDS = ("body", "media_type", "media_id", "media_list", "buttons", "preview", "silent", "pin", "auto_del")
 
 
 async def _places(c: PanelCtx, skip: int) -> list[tuple[int, str]]:
@@ -619,7 +626,7 @@ async def in_body(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         return False, f"❌ {e}"
     if not body and not media_type:
         return False, "본문 글자를 보내주세요."
-    fields = {"body": body} | ({"media_type": media_type, "media_id": media_id} if media_type else {})
+    fields = {"body": body} | ({"media_type": media_type, "media_id": media_id, "media_list": None} if media_type else {})
     await composer.update(c.svc.db, d["id"], **fields)
     mediastore.remember_soon(c.bot, c.svc.db, media_type, media_id)
     return True, "✅ 본문을 넣었어요." + (f" (지원하지 않는 태그 {esc(', '.join(dropped))} 는 글자만 남겼어요)" if dropped else "")
@@ -634,8 +641,30 @@ async def in_media(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         return False, "사진이나 영상 하나를 보내주세요."
     if composer.utf16_len(composer.plain(d["body"])) > composer.CAPTION_LIMIT:
         return False, "본문이 1024자를 넘어서 사진·영상 설명으로 못 써요. 본문을 줄인 뒤 다시 해주세요."
-    await composer.update(c.svc.db, d["id"], media_type=media_type, media_id=media_id)
-    mediastore.remember_soon(c.bot, c.svc.db, media_type, media_id)
+    db, items = c.svc.db, composer.media_items(d)
+    # 사진·영상을 이미 담았고 둘 다 앨범 종류면 → 앨범으로 쌓기 (움짤·파일은 한 개만)
+    if items and media_type in composer.ALBUM_KINDS and all(it["t"] in composer.ALBUM_KINDS for it in items):
+        if any(it["id"] == media_id for it in items):
+            return False, "이미 넣은 사진·영상이에요. 다른 걸 보내주세요."
+        if len(items) >= composer.MAX_MEDIA:
+            return False, f"앨범은 {composer.MAX_MEDIA}장까지예요. 다 넣었으면 ⬅️ 메뉴로 눌러주세요."
+        items.append({"t": media_type, "id": media_id})
+        fields = {"media_type": items[0]["t"], "media_id": items[0]["id"], "media_list": composer.media_json(items)}
+        if d["live"] and d["live_msg"]:   # 앨범엔 실시간 미리보기를 못 하니 끄고 그 글도 치움
+            try:
+                await c.bot.delete_message(c.uid, d["live_msg"])
+            except TelegramError:
+                pass
+            fields |= {"live": 0, "live_msg": None, "live_sig": None}
+        elif d["live"]:
+            fields["live"] = 0
+        await composer.update(db, d["id"], **fields)
+        mediastore.remember_soon(c.bot, db, media_type, media_id)
+        return True, f"✅ 사진·영상 {len(items)}장 담았어요 (앨범). 더 넣으려면 🖼 다시, 다 됐으면 ⬅️ 메뉴로.\n" \
+                     "⚠️ 앨범 글엔 버튼을 못 달아요 (텔레그램 제한)."
+    # 첫 장(또는 움짤·파일로 교체) — 단일
+    await composer.update(db, d["id"], media_type=media_type, media_id=media_id, media_list=None)
+    mediastore.remember_soon(c.bot, db, media_type, media_id)
     return True, f"✅ {composer.MEDIA[media_type]}을 붙였어요."
 
 
