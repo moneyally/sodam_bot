@@ -4,7 +4,7 @@ omni-moderation 은 '야함'을 통째로 점수 매겨서 **조각낸 신체사
 NudeNet 은 부위별(FEMALE_GENITALIA_EXPOSED 등)로 잡아서 조각에 강함. 320n 모델은 패키지에 들어 있어
 실행 중 내려받지 않음(ProtectSystem=strict 안전), 추론은 CPU 로 한 장 ~10~40ms.
 
-조심히(2코어 VPS·노래/음성과 CPU 경쟁):
+조심히(VPS·노래/음성과 CPU 경쟁):
   · 라이브러리 없으면 조용히 꺼짐(봇은 그대로 동작) — requirements 에 nudenet 넣지만 import 는 지연.
   · 한 번에 하나(_SEM), 스레드풀(to_thread), 5초 타임아웃.
   · nsfwguard 가 **살색 비율이 어느 정도 높은, omni 가 안 걸린 이미지에만** 부르게 해서 호출 수를 줄임.

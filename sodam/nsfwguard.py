@@ -2,7 +2,7 @@
 
 스티커·사진·GIF·영상이 올라오면 OpenAI omni-moderation(무료·이미지 'sexual' 점수, 하루 수천 건)으로 재서
 기준 넘으면 지운다. 방별 nsfw_mode off(기본)/notify(알림만)/delete(지우고 알림)/mute(+1일 뮤트)/ban(+밴).
-2코어 VPS 라 로컬 NSFW 모델(ONNX/torch)은 CPU 부담 커서 안 씀 — moderation API 가 무료·빠름.
+VPS(노래·음성과 CPU 경쟁) 라 로컬 NSFW 모델(ONNX/torch)은 CPU 부담 커서 안 씀 — moderation API 가 무료·빠름.
 
 회피를 뚫는 장치 (2026-11-06, 오너 '한계는 뚫으라고 있는 것' — 조사: dHash 재인코딩 내성·omni 토큰한도·모자이크 공격):
   ① 지문(file_unique_id) 즉시삭제 — 같은 조각 재도배는 API 없이.

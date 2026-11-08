@@ -5,6 +5,7 @@ m:cp:<초안>:b|m|mx              본문 입력(서식 메시지·HTML·사진+�
 m:cp:<초안>:ba → 글자 → 주소 → br:<줄|n>   URL 버튼 추가 (8줄 × 3개, https·tg 만)
 m:cp:<초안>:bl · bs:<줄>:<칸> · bo:<rev>:<줄>:<칸>:u|d|l|r|x   버튼 정리 (rev 가 다르면 옛 화면 → 다시 그림)
 m:cp:<초안>:bc:<rev>:<줄>:<칸>   버튼별 색 돌리기 (⚪→🔵→🟢→🔴). 글자 앞 🔵🟢🔴·프리미엄 이모지로도 입력(btnstyle.parse_label)
+m:cp:<초안>:rb · rba:<idx>        👍 반응 버튼 추가 (누르면 집계 [👍 12], 콜백 cr:<이모지> = composer.on_react, 채널·방 아무나)
 m:cp:<초안>:pv:0|1 · sl:0|1     링크 미리보기 · 조용히 (목표값)
 m:cp:<초안>:pr                  1:1 로 실제 모양 미리보기 (채널에 보내는 함수 그대로)
 m:cp:<초안>:go → go1 · sc · sv  지금 올리기(확인 뒤, 초안 state 를 한 문장으로 차지 → 한 번만) · 예약 · 고친 글 저장
@@ -20,7 +21,7 @@ import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
-from .. import announce, btnstyle, channel, composer, mediastore, menu, tools
+from .. import announce, btnstyle, channel, composer, hooks, mediastore, menu, tools
 from ..llm import BudgetExceeded
 from ..menu import PUBLIC, TG_ADMIN, B, PanelCtx, Route, Screen
 from ..security import nonce, strip_unsafe, wrap
@@ -114,7 +115,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
     go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
     rows = [[B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상·움짤", cp(did, "m"))]),
             [B("🗑 사진·영상 빼기", cp(did, "mx"))] if d["media_type"] and not edit else [],
-            [B("➕ 버튼", cp(did, "ba"))] + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else []),
+            [B("➕ 버튼", cp(did, "ba")), B("➕ 반응 버튼", cp(did, "rb"))]
+            + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else []),
             ([] if d["media_type"] else [B("🔗 미리보기 끄기" if d["preview"] else "🔗 미리보기 켜기",
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
@@ -182,7 +184,8 @@ def s_button(d, r: int, col: int) -> Screen | None:
     icon = " · 🖼 아이콘" if btnstyle.valid_emoji_id(b.get("e")) else ""
     nxt = _COLOR_CYCLE[(_COLOR_CYCLE.index(cur or "") + 1) % len(_COLOR_CYCLE)]
     ops = [("u", "⬆️ 윗줄로"), ("d", "⬇️ 아랫줄로"), ("l", "◀️ 앞으로"), ("r", "▶️ 뒤로")]
-    return Screen(f"🔘 <b>{esc(b['t'])}</b> ({r + 1}줄 {col + 1}번째) {dot}{icon}\n→ <code>{esc(b['u'])}</code>",
+    target = f"→ <code>{esc(b['u'])}</code>" if b.get("u") else "👍 반응 버튼 (누르면 집계)"
+    return Screen(f"🔘 <b>{esc(b['t'])}</b> ({r + 1}줄 {col + 1}번째) {dot}{icon}\n{target}",
                   _kb([[B(f"🎨 색 {dot} → {_COLOR_DOT.get(nxt, '⚪')}", cp(did, "bc", r, col))],
                        [B(label, cp(did, "bo", rev, r, col, op)) for op, label in ops[:2]],
                        [B(label, cp(did, "bo", rev, r, col, op)) for op, label in ops[2:]],
@@ -199,6 +202,16 @@ def s_pick_row(d) -> Screen:
         kb.append(B("➕ 새 줄", cp(d["id"], "br", "n")))
     return Screen(f"🔘 <b>{esc(p['t'])}</b> → <code>{esc(p['u'])}</code>\n어느 줄에 넣을까요?",
                   _kb(menu._chunks(kb, 3) + [[B("❌ 취소", cp(d["id"]))]]))
+
+
+def s_react_pick(d, note: str = "") -> Screen:
+    """👍 반응 버튼 고르기 — 누르면 몇 명 눌렀는지 집계되는 버튼 ([👍 12])."""
+    rows = composer.buttons(d)
+    have = {b.get("r") for row in rows for b in row if b.get("r")}
+    lines = ["👍 <b>반응 버튼</b> — 올린 글에서 <b>누가 몇 명</b> 눌렀는지 집계돼요 (예: <code>👍 12</code>).",
+             "채널·방 아무나 누를 수 있고, 다시 누르면 취소돼요. 넣을 이모지를 고르세요."] + ([note] if note else [])
+    picks = [B(e + (" ✓" if e in have else ""), cp(d["id"], "rba", i)) for i, e in enumerate(composer.REACT_PRESETS)]
+    return Screen("\n".join(lines), _kb(menu._chunks(picks, 5) + [[B("⬅️ 편집으로", cp(d["id"]))]]))
 
 
 async def _post(c: PanelCtx, d) -> Screen:
@@ -372,6 +385,27 @@ async def r_cp(c: PanelCtx) -> Screen:
         await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
         nd = await composer.get(db, did)
         return s_button(nd, r, col) or s_buttons(nd)
+    elif act == "rb":   # 👍 반응 버튼 고르기
+        rows = composer.buttons(d)
+        if len(rows) >= composer.MAX_ROWS and all(len(r) >= composer.MAX_COLS for r in rows):
+            return Screen(None, toast=f"버튼은 {composer.MAX_ROWS}줄 × {composer.MAX_COLS}개까지예요.", alert=True)
+        return s_react_pick(d)
+    elif act == "rba":  # 반응 버튼 추가 (프리셋 이모지 하나)
+        idx = to_int(a[0] if a else "")
+        if idx is None or not 0 <= idx < len(composer.REACT_PRESETS):
+            return Screen(None, toast="다시 골라주세요.")
+        emoji = composer.REACT_PRESETS[idx]
+        rows = composer.buttons(d)
+        if any(b.get("r") == emoji for r in rows for b in r):
+            return s_react_pick(d, f"{emoji} 반응은 이미 있어요.")
+        if rows and len(rows[-1]) < composer.MAX_COLS:
+            rows[-1].append({"t": emoji, "r": emoji})
+        elif len(rows) < composer.MAX_ROWS:
+            rows.append([{"t": emoji, "r": emoji}])
+        else:
+            return Screen(None, toast=f"버튼은 {composer.MAX_ROWS}줄 × {composer.MAX_COLS}개까지예요.", alert=True)
+        await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
+        return s_react_pick(await composer.get(db, did), f"{emoji} 추가했어요.")
     elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
         await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
     elif act == "th":   # 버튼색 틀 돌려가며 (신호등→파랑→무채색→강조)
@@ -644,6 +678,7 @@ for _kind, _fn in (("cpb", in_body), ("cpm", in_media), ("cpl", in_label), ("cpu
     menu.register_input(_kind, "", _kind, _fn, s_input_next, media=_kind in ("cpb", "cpm"), need=TG_ADMIN)
     menu.register_route(_kind, Route(r_resume, PUBLIC, scoped=False))
 menu.register_route("cp", Route(r_cp, PUBLIC, scoped=False))
+hooks.add_callback_handler("cr", composer.on_react)   # 반응 버튼([👍]) — 채널·방 아무나 누르면 집계
 
 
 # ── AI 초안 도구 ──────────────────────────────────────────

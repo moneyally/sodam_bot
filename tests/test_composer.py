@@ -182,6 +182,62 @@ async def button_color_and_premium_icon():
 
 
 @test
+async def reaction_buttons_count_votes():
+    """반응 버튼([👍]) 누르면 집계 — 사람마다 한 표, 다시 누르면 취소, 키마다 독립, URL 버튼은 그대로."""
+    from types import SimpleNamespace
+
+    from sodam import hooks
+    w = await World().open()
+    CHAT, MSG = -1009, 77
+
+    class RQ:   # 채널/방 글에 달린 버튼 누름을 흉내 (on_react 가 q.message 의 현재 키보드를 읽음)
+        def __init__(self, uid, kb):
+            self.from_user, self.answers, self.new_kb = fake_user(uid), [], None
+            self.message = SimpleNamespace(chat_id=CHAT, message_id=MSG, reply_markup=kb)
+
+        async def answer(self, text="", **k):
+            self.answers.append(text)
+
+        async def edit_message_reply_markup(self, markup):
+            self.new_kb = markup
+
+    assert hooks.CALLBACK_HANDLERS.get("cr") is composer.on_react     # 콜백 등록됨
+    kb = composer.markup([[{"t": "👍", "r": "👍"}, {"t": "🔥", "r": "🔥"}],
+                          [{"t": "문의", "u": "https://t.me/x"}]], "mono")
+    assert kb.inline_keyboard[0][0].callback_data == "cr:👍"
+    q = RQ(1001, kb)                                                  # 1001 이 👍
+    await composer.on_react(w.svc, w.bot, q, ["👍"])
+    assert q.new_kb.inline_keyboard[0][0].text == "👍 1" and q.new_kb.inline_keyboard[0][1].text == "🔥"
+    assert q.new_kb.inline_keyboard[1][0].url == "https://t.me/x"     # URL 버튼은 안 건드림
+    q2 = RQ(1002, q.new_kb)                                           # 1002 도 👍 → 2
+    await composer.on_react(w.svc, w.bot, q2, ["👍"])
+    assert q2.new_kb.inline_keyboard[0][0].text == "👍 2"
+    q3 = RQ(1001, q2.new_kb)                                          # 1001 다시 👍 → 취소 → 1
+    await composer.on_react(w.svc, w.bot, q3, ["👍"])
+    assert q3.new_kb.inline_keyboard[0][0].text == "👍 1" and "취소" in q3.answers[-1]
+    q4 = RQ(1001, q3.new_kb)                                          # 1001 🔥 → 키마다 독립
+    await composer.on_react(w.svc, w.bot, q4, ["🔥"])
+    assert q4.new_kb.inline_keyboard[0][1].text == "🔥 1" and q4.new_kb.inline_keyboard[0][0].text == "👍 1"
+    assert await composer.vote_counts(w.db, CHAT, MSG) == {"👍": 1, "🔥": 1}
+
+
+@test
+async def reaction_button_add_and_dedupe():
+    """👍 반응 버튼 추가(rb→rba) · 같은 이모지 중복 거절 · 상세엔 '반응 버튼'."""
+    w = await World().open()
+    did = await w.draft()
+    await w.press(BOSS, f"m:cp:{did}:rb")
+    await w.press(BOSS, f"m:cp:{did}:rba:0")                 # 👍
+    assert composer.buttons(await composer.get(w.db, did)) == [[{"t": "👍", "r": "👍"}]]
+    q = await w.press(BOSS, f"m:cp:{did}:rba:0")             # 중복
+    assert "이미 있어요" in q.edits[-1]
+    await w.press(BOSS, f"m:cp:{did}:rba:2")                 # 🔥 (같은 줄, 자리 있음)
+    assert composer.buttons(await composer.get(w.db, did)) == [[{"t": "👍", "r": "👍"}, {"t": "🔥", "r": "🔥"}]]
+    q = await w.press(BOSS, f"m:cp:{did}:bs:0:0")            # 반응 버튼 상세
+    assert "반응 버튼" in q.edits[-1]
+
+
+@test
 async def preview_is_exact_and_post_once():
     w = await World().open()
     did = await w.draft()
