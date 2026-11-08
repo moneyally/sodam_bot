@@ -148,6 +148,40 @@ async def button_builder_limits_and_validation():
 
 
 @test
+async def button_color_and_premium_icon():
+    """버튼별 색(글 앞 🔵🟢🔴 또는 🎨 돌리기) + 버튼 앞 프리미엄 이모지 아이콘. markup 이 버튼마다 적용."""
+    w = await World().open()
+    did = await w.draft()
+    # 1) 글자 앞 색 이모지 → 버튼 색, 글자엔 안 남김
+    await w.press(BOSS, f"m:cp:{did}:ba")
+    m = await w.say(BOSS, "🟢 지금 신청")
+    assert "색" in m.replies[-1]
+    await w.say(BOSS, "https://t.me/boss")
+    await w.press(BOSS, f"m:cp:{did}:br:n")
+    assert composer.buttons(await composer.get(w.db, did)) == [[{"t": "지금 신청", "u": "https://t.me/boss", "c": "success"}]]
+    # 2) 맨 앞 프리미엄(커스텀) 이모지 → 아이콘(icon_custom_emoji_id), 글자엔 안 남김
+    await w.press(BOSS, f"m:cp:{did}:ba")
+    await w.say(BOSS, "✨ 문의", entities=[E("custom_emoji", 0, 1, custom_emoji_id="555")])
+    await w.say(BOSS, "https://t.me/ask")
+    await w.press(BOSS, f"m:cp:{did}:br:0")
+    b = composer.buttons(await composer.get(w.db, did))[0][1]
+    assert b["t"] == "문의" and b["e"] == "555" and "c" not in b
+    # 3) markup: 버튼별 색 우선, 아이콘은 api_kwargs, 색 없으면 전체 테마(mono=없음)
+    kb = composer.markup(composer.buttons(await composer.get(w.db, did)), "mono")
+    first, second = kb.inline_keyboard[0]
+    assert first.style == "success" and second.style is None
+    assert second.api_kwargs["icon_custom_emoji_id"] == "555" and not first.api_kwargs
+    # 4) 🎨 버튼별 색 돌리기 (⚪→🔵→🟢→🔴→⚪)
+    await w.press(BOSS, f"m:cp:{did}:bc:0:1")
+    assert composer.buttons(await composer.get(w.db, did))[0][1]["c"] == "primary"
+    q = await w.press(BOSS, f"m:cp:{did}:bc:0:1")                 # 🔵 → 🟢, 화면 다시 그림(색 점 표시)
+    assert q.edits and "🟢" in q.edits[-1] and composer.buttons(await composer.get(w.db, did))[0][1]["c"] == "success"
+    await w.press(BOSS, f"m:cp:{did}:bc:0:1")                     # 🟢 → 🔴
+    await w.press(BOSS, f"m:cp:{did}:bc:0:1")                     # 🔴 → ⚪ (색 없음)
+    assert "c" not in composer.buttons(await composer.get(w.db, did))[0][1]
+
+
+@test
 async def preview_is_exact_and_post_once():
     w = await World().open()
     did = await w.draft()

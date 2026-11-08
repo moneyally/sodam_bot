@@ -38,6 +38,52 @@ PRIMARY_WORDS = ("조회", "보기", "다음", "새로고침", "자세히", "상
 DANGER_PREFIX = ("fbx", "anmx", "um", "cas", "rngx", "rkp")  # 밴/무시/제재 계열(일부 성공 겹침은 글자 우선)
 
 
+# 줄 맨 앞 색 이모지 → style (버튼 글자 입력 보조, greet.BTN_COLORS 와 같은 뜻)
+COLOR_EMOJI = {"🔵": PRIMARY, "🟦": PRIMARY, "🟢": SUCCESS, "🟩": SUCCESS, "🔴": DANGER, "🟥": DANGER}
+
+
+def valid_style(v) -> str | None:
+    return v if v in (PRIMARY, SUCCESS, DANGER) else None
+
+
+def valid_emoji_id(icon) -> str | None:
+    """custom_emoji_id 는 숫자 문자열. 그 모양만 통과 (저장값·입력 공통)."""
+    return icon if isinstance(icon, str) and icon.isdigit() and 1 <= len(icon) <= 25 else None
+
+
+def lead_color(text: str) -> tuple[str | None, str]:
+    """글자 맨 앞 색 이모지(🔵🟢🔴)를 떼어 (style|None, 나머지 글자)."""
+    t = (text or "").strip()
+    for mark, st in COLOR_EMOJI.items():
+        if t.startswith(mark):
+            return st, t[len(mark):].strip()
+    return None, t
+
+
+def parse_label(text: str, entities=None) -> tuple[str | None, str | None, str]:
+    """버튼 글자 입력에서 맨 앞 프리미엄(커스텀) 이모지·색 이모지를 떼어낸다 → (style, icon_id, 글자).
+    프리미엄 이모지는 아이콘(icon_custom_emoji_id)으로, 색 이모지는 버튼 색으로, 둘 다 글자엔 안 남긴다."""
+    cps = list(text or "")
+    cp2u, u16 = [], 0                         # 코드포인트 i → UTF-16 오프셋 (텔레그램 entity 가 UTF-16 기준)
+    for ch in cps:
+        cp2u.append(u16)
+        u16 += 1 if ord(ch) <= 0xFFFF else 2
+    cp2u.append(u16)
+    u2cp = {u: i for i, u in enumerate(cp2u)}
+    lead = len(cps) - len(text.lstrip()) if text else 0    # 앞 공백 코드포인트 수
+    icon = None
+    for e in entities or []:
+        if getattr(e, "type", None) != "custom_emoji" or not getattr(e, "custom_emoji_id", None):
+            continue
+        a, b = u2cp.get(getattr(e, "offset", -1)), u2cp.get(getattr(e, "offset", -1) + getattr(e, "length", 0))
+        if a == lead and b is not None and b > a and valid_emoji_id(e.custom_emoji_id):
+            icon = e.custom_emoji_id
+            cps = cps[:a] + cps[b:]           # 맨 앞 이모지 글자 제거
+            break
+    style, rest = lead_color("".join(cps))
+    return style, icon, " ".join(rest.split())
+
+
 def _by_words(text: str) -> str | None:
     t = (text or "").lower()
     for w in DANGER_WORDS:

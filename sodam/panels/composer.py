@@ -4,6 +4,7 @@ m:cp:<초안>                     편집 화면 (초안 주인 + 지금 그 채�
 m:cp:<초안>:b|m|mx              본문 입력(서식 메시지·HTML·사진+설명) / 사진·영상 입력 / 빼기
 m:cp:<초안>:ba → 글자 → 주소 → br:<줄|n>   URL 버튼 추가 (8줄 × 3개, https·tg 만)
 m:cp:<초안>:bl · bs:<줄>:<칸> · bo:<rev>:<줄>:<칸>:u|d|l|r|x   버튼 정리 (rev 가 다르면 옛 화면 → 다시 그림)
+m:cp:<초안>:bc:<rev>:<줄>:<칸>   버튼별 색 돌리기 (⚪→🔵→🟢→🔴). 글자 앞 🔵🟢🔴·프리미엄 이모지로도 입력(btnstyle.parse_label)
 m:cp:<초안>:pv:0|1 · sl:0|1     링크 미리보기 · 조용히 (목표값)
 m:cp:<초안>:pr                  1:1 로 실제 모양 미리보기 (채널에 보내는 함수 그대로)
 m:cp:<초안>:go → go1 · sc · sv  지금 올리기(확인 뒤, 초안 state 를 한 문장으로 차지 → 한 번만) · 예약 · 고친 글 저장
@@ -19,7 +20,7 @@ import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 
-from .. import announce, channel, composer, mediastore, menu, tools
+from .. import announce, btnstyle, channel, composer, mediastore, menu, tools
 from ..llm import BudgetExceeded
 from ..menu import PUBLIC, TG_ADMIN, B, PanelCtx, Route, Screen
 from ..security import nonce, strip_unsafe, wrap
@@ -27,6 +28,9 @@ from ..services import PendingInput
 from ..util import esc, to_int
 
 LABEL = {"b": "본문", "m": "사진·영상"}
+# 버튼 색 → 보여줄 점 (버튼별 색 표시용)
+_COLOR_DOT = {"primary": "🔵", "success": "🟢", "danger": "🔴"}
+_COLOR_CYCLE = ["", "primary", "success", "danger"]   # 🎨 버튼 색 돌리기 (⚪→🔵→🟢→🔴)
 
 
 def cp(did: int, *args) -> str:
@@ -115,7 +119,7 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
                                            cp(did, "pv", 0 if d["preview"] else 1))])
             + ([] if edit else [B("🔔 알림 켜기" if d["silent"] else "🔕 조용히", cp(did, "sl", 0 if d["silent"] else 1))]),
             [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1))],
-            [B(f"🎨 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
+            [B(f"🎨 전체 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
             [B("👀 미리보기 (1:1)", cp(did, "pr"))],
             [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
             [B("📤 다른 방·채널에도", cp(did, "cpy"))] if not edit and (d["body"] or d["media_type"]) else [],
@@ -173,9 +177,14 @@ def s_button(d, r: int, col: int) -> Screen | None:
     if not (0 <= r < len(rows) and 0 <= col < len(rows[r])):
         return None
     b, rev, did = rows[r][col], d["rev"], d["id"]
+    cur = btnstyle.valid_style(b.get("c"))
+    dot = _COLOR_DOT.get(cur, "⚪")
+    icon = " · 🖼 아이콘" if btnstyle.valid_emoji_id(b.get("e")) else ""
+    nxt = _COLOR_CYCLE[(_COLOR_CYCLE.index(cur or "") + 1) % len(_COLOR_CYCLE)]
     ops = [("u", "⬆️ 윗줄로"), ("d", "⬇️ 아랫줄로"), ("l", "◀️ 앞으로"), ("r", "▶️ 뒤로")]
-    return Screen(f"🔘 <b>{esc(b['t'])}</b> ({r + 1}줄 {col + 1}번째)\n→ <code>{esc(b['u'])}</code>",
-                  _kb([[B(label, cp(did, "bo", rev, r, col, op)) for op, label in ops[:2]],
+    return Screen(f"🔘 <b>{esc(b['t'])}</b> ({r + 1}줄 {col + 1}번째) {dot}{icon}\n→ <code>{esc(b['u'])}</code>",
+                  _kb([[B(f"🎨 색 {dot} → {_COLOR_DOT.get(nxt, '⚪')}", cp(did, "bc", r, col))],
+                       [B(label, cp(did, "bo", rev, r, col, op)) for op, label in ops[:2]],
                        [B(label, cp(did, "bo", rev, r, col, op)) for op, label in ops[2:]],
                        [B("🗑 삭제", cp(did, "bo", rev, r, col, "x")), B("⬅️ 버튼 정리", cp(did, "bl"))]]))
 
@@ -316,7 +325,9 @@ async def r_cp(c: PanelCtx) -> Screen:
         rows = composer.buttons(d)
         if len(rows) >= composer.MAX_ROWS and all(len(r) >= composer.MAX_COLS for r in rows):
             return Screen(None, toast=f"버튼은 {composer.MAX_ROWS}줄 × {composer.MAX_COLS}개까지예요.", alert=True)
-        return _ask(c, d, "cpl", f"🔘 버튼에 보일 <b>글자</b>를 보내주세요 ({composer.LABEL_MAX}자까지). 예: <code>📞 문의하기</code>")
+        return _ask(c, d, "cpl", f"🔘 버튼에 보일 <b>글자</b>를 보내주세요 ({composer.LABEL_MAX}자까지). 예: <code>📞 문의하기</code>\n"
+                                 "• 색: 글 맨 앞에 🔵(파랑)·🟢(초록)·🔴(빨강)  예: <code>🟢 지금 신청</code>\n"
+                                 "• 아이콘: 글 맨 앞에 프리미엄(움직이는) 이모지를 붙이면 버튼 앞 아이콘이 돼요")
     elif act == "br":
         rows, p = composer.buttons(d), json.loads(d["pending"] or "{}")
         i = len(rows) if a[:1] == ["n"] else to_int(a[0] if a else "")
@@ -324,7 +335,12 @@ async def r_cp(c: PanelCtx) -> Screen:
                 or i < len(rows) and len(rows[i]) >= composer.MAX_COLS:
             return Screen(None, toast="넣을 수 없는 줄이에요. 다시 골라주세요.")
         rows += [[]] if i == len(rows) else []
-        rows[i].append({"t": p["t"], "u": p["u"]})
+        btn = {"t": p["t"], "u": p["u"]}
+        if p.get("c"):
+            btn["c"] = p["c"]
+        if p.get("e"):
+            btn["e"] = p["e"]
+        rows[i].append(btn)
         if not await composer.update(db, did, d["rev"], buttons=json.dumps(rows, ensure_ascii=False), pending=None):
             return Screen(None, toast="이미 넣었어요.")
     elif act == "bl":
@@ -342,6 +358,20 @@ async def r_cp(c: PanelCtx) -> Screen:
         if not await composer.update(db, did, rev, buttons=json.dumps(rows, ensure_ascii=False)):
             return s_buttons(await composer.get(db, did), "화면이 바뀌어서 다시 보여드려요.")
         return s_buttons(await composer.get(db, did), "🗑 지웠어요." if op == "x" else "옮겼어요.")
+    elif act == "bc":   # 버튼별 색 돌리기 (⚪→🔵→🟢→🔴) — rev 없음(같은 색 두 번 적용돼도 무해, 콜백 자기순환 폭발 방지)
+        r, col = to_int(a[0] if a else ""), to_int(a[1] if len(a) > 1 else "")
+        rows = composer.buttons(d)
+        if r is None or col is None or not (0 <= r < len(rows) and 0 <= col < len(rows[r])):
+            return s_buttons(d, "화면이 바뀌어서 다시 보여드려요.")
+        cur = btnstyle.valid_style(rows[r][col].get("c")) or ""
+        nxt = _COLOR_CYCLE[(_COLOR_CYCLE.index(cur) + 1) % len(_COLOR_CYCLE)]
+        if nxt:
+            rows[r][col]["c"] = nxt
+        else:
+            rows[r][col].pop("c", None)
+        await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
+        nd = await composer.get(db, did)
+        return s_button(nd, r, col) or s_buttons(nd)
     elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
         await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
     elif act == "th":   # 버튼색 틀 돌려가며 (신호등→파랑→무채색→강조)
@@ -471,13 +501,21 @@ async def in_media(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 
 
 async def in_label(c: PanelCtx, msg: Message) -> tuple[bool, str]:
-    d, label = await _draft_of(c), " ".join((msg.text or "").split())
+    d = await _draft_of(c)
+    # 맨 앞 색 이모지(🔵🟢🔴)·프리미엄 이모지는 버튼 색·아이콘으로 떼어냄 (greet 버튼과 같은 방식)
+    style, icon, label = btnstyle.parse_label(msg.text or "", msg.entities)
     if not d:
         return True, "이 글은 이미 올렸거나 없어졌어요."
     if not 1 <= len(label) <= composer.LABEL_MAX:
-        return False, f"버튼 글자는 1~{composer.LABEL_MAX}자로 보내주세요."
-    await composer.update(c.svc.db, d["id"], pending=json.dumps({"t": label}, ensure_ascii=False))
-    return True, f"🔘 <b>{esc(label)}</b>"
+        return False, f"버튼 글자는 1~{composer.LABEL_MAX}자로 보내주세요. (색은 글 앞에 🔵🟢🔴, 아이콘은 프리미엄 이모지)"
+    pend = {"t": label}
+    if style:
+        pend["c"] = style
+    if icon:
+        pend["e"] = icon
+    await composer.update(c.svc.db, d["id"], pending=json.dumps(pend, ensure_ascii=False))
+    extra = (f" · {_COLOR_DOT.get(style, '')}색" if style else "") + (" · 🖼 아이콘" if icon else "")
+    return True, f"🔘 <b>{esc(label)}</b>{extra}"
 
 
 async def in_url(c: PanelCtx, msg: Message) -> tuple[bool, str]:
