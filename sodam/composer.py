@@ -336,6 +336,53 @@ async def on_react(svc, bot, q, parts) -> None:
     await q.answer("👍 반영했어요" if on else "취소했어요")
 
 
+# ── 🧩 레이아웃 템플릿 ─────────────────────────────────────
+# 빈 초안을 뼈대로 채움 (제목·목록·인용 블록 + 반응 줄). 〈…〉 는 그대로 고쳐 쓰는 자리.
+# 링크 버튼은 죽은 링크가 생기니 넣지 않음 — 관리자가 ➕ 버튼으로 직접. 반응 버튼만 예시로.
+TEMPLATES = {
+    "notice": {
+        "name": "📢 공지",
+        "body": "<b>📢 공지</b>\n\n〈공지 내용을 여기에 적어주세요〉\n\n"
+                "<blockquote>문의는 아래 버튼으로 받아요</blockquote>",
+        "buttons": [],
+    },
+    "event": {
+        "name": "🎉 이벤트",
+        "body": "<b>🎉 이벤트 안내</b>\n\n〈이벤트 제목〉\n\n"
+                "📅 기간: 〈언제부터 언제까지〉\n🎁 혜택: 〈무엇을 받는지〉\n\n많은 참여 바랍니다!",
+        "buttons": [[{"t": "🎉", "r": "🎉"}, {"t": "👍", "r": "👍"}, {"t": "🔥", "r": "🔥"}]],
+    },
+    "price": {
+        "name": "💰 가격표",
+        "body": "<b>💰 이용 안내</b>\n\n• 〈상품/서비스 1〉 — 〈가격〉\n• 〈상품/서비스 2〉 — 〈가격〉\n"
+                "• 〈상품/서비스 3〉 — 〈가격〉\n\n<blockquote>자세한 문의는 아래로</blockquote>",
+        "buttons": [],
+    },
+    "promo": {
+        "name": "🔥 홍보",
+        "body": "<b>🔥 〈제목〉</b>\n\n〈핵심 한 줄〉\n\n✅ 〈특징 1〉\n✅ 〈특징 2〉\n✅ 〈특징 3〉\n\n지금 확인하세요 👇",
+        "buttons": [[{"t": "❤️", "r": "❤️"}, {"t": "🔥", "r": "🔥"}]],
+    },
+    "schedule": {
+        "name": "📅 일정",
+        "body": "<b>📅 일정 안내</b>\n\n🗓 〈날짜〉\n🕐 〈시간〉\n📍 〈장소/링크〉\n\n〈추가 안내 사항〉",
+        "buttons": [[{"t": "👍", "r": "👍"}]],
+    },
+}
+
+
+def template_body(key: str) -> tuple[str, str] | None:
+    """템플릿 key → (clean_html 통과한 본문, 버튼 JSON). 없으면 None."""
+    t = TEMPLATES.get(key)
+    if not t:
+        return None
+    try:
+        body, _ = clean_html(t["body"])
+    except HtmlError:
+        body = plain(t["body"])
+    return body, json.dumps(t["buttons"], ensure_ascii=False)
+
+
 def limit_of(d) -> int:
     return CAPTION_LIMIT if d["media_type"] else TEXT_LIMIT
 

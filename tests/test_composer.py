@@ -238,6 +238,27 @@ async def reaction_button_add_and_dedupe():
 
 
 @test
+async def layout_template_fills_empty_draft():
+    """🧩 템플릿 — 빈 초안만 뼈대(본문+반응버튼)로 채움, 내용 있으면 안 덮음."""
+    w = await World().open()
+    did = await w.draft()
+    q = await w.press(BOSS, f"m:cp:{did}")                      # 빈 초안 → 🧩 버튼 보임
+    assert any(b.text == "🧩 템플릿으로 시작" for r in q.kb.inline_keyboard for b in r)
+    await w.press(BOSS, f"m:cp:{did}:tpl")
+    await w.press(BOSS, f"m:cp:{did}:tpla:event")
+    d = await composer.get(w.db, did)
+    assert "이벤트" in composer.plain(d["body"]) and "🎁" in d["body"]
+    assert composer.buttons(d) == [[{"t": "🎉", "r": "🎉"}, {"t": "👍", "r": "👍"}, {"t": "🔥", "r": "🔥"}]]
+    q = await w.press(BOSS, f"m:cp:{did}")                      # 내용 생김 → 🧩 버튼 사라짐
+    assert not any(b.text == "🧩 템플릿으로 시작" for r in q.kb.inline_keyboard for b in r)
+    q = await w.press(BOSS, f"m:cp:{did}:tpla:notice")         # 재적용 거부(안 덮음)
+    assert "적용하지 않았어요" in q.edits[-1]
+    assert "이벤트" in composer.plain((await composer.get(w.db, did))["body"])
+    q = await w.press(BOSS, f"m:cp:{did}:tpl")                 # tpl 도 거부(toast)
+    assert q.answers and "이미 있어요" in q.answers[0][0]
+
+
+@test
 async def preview_is_exact_and_post_once():
     w = await World().open()
     did = await w.draft()
