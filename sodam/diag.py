@@ -310,9 +310,12 @@ def ai_config(env: Path) -> dict | None:
 def r_rooms(d: Diag, q: dict) -> dict:
     like = f"%{q.get('q', '')}%"
     with d.db() as c:
-        cur = c.execute("SELECT c.chat_id, c.title, s.trial_until, s.paid_until, "
+        cur = c.execute("SELECT c.chat_id, c.title, s.trial_until, s.paid_until, s.added_by, "
+                        "u.first_name AS added_by_name, u.username AS added_by_at, "
+                        "(SELECT MAX(COALESCE(block_ts, seen_at)) FROM payments p WHERE p.chat_id=c.chat_id) last_paid, "
                         "(SELECT MAX(ts) FROM messages m WHERE m.chat_id=c.chat_id) last_msg "
-                        "FROM chats c LEFT JOIN subscriptions s USING(chat_id) WHERE c.title LIKE ? "
+                        "FROM chats c LEFT JOIN subscriptions s USING(chat_id) "
+                        "LEFT JOIN users u ON u.user_id=s.added_by WHERE c.title LIKE ? "
                         "ORDER BY last_msg DESC LIMIT ?", (like, MAX_ROWS))
         return {"rooms": _rows(cur)}
 
