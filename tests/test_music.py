@@ -549,6 +549,20 @@ async def precheck_paths():
 
 
 @test
+async def cooldown_reject_is_quiet_not_spammy():
+    """연타 거부가 방에 '4초에 한 번' 을 매번 도배하던 것 → 🙈 반응만, 안내 글은 사람당 가끔(2026-11-08 오너)."""
+    db, svc, bot = await world()
+    await ready(db)
+    await db.set_setting(CHAT, "music_who", "all")
+    assert "찾는 중" in (await cmd(svc, bot, ".노래 첫곡", OTHER)).replies[0]
+    m2 = await cmd(svc, bot, ".노래 둘째곡", OTHER)                 # 바로 연타 → 안내 1번은 나감
+    assert m2.replies and "초에 한 번" in m2.replies[0]
+    m3 = await cmd(svc, bot, ".노래 셋째곡", OTHER)                 # 또 연타 → 조용 (글 X)
+    assert not m3.replies, "세 번째부턴 방에 글 안 도배"
+    assert any(c[0] == "reaction" and c[3] == "🙈" for c in bot.calls), "거부는 🙈 반응으로 표시"
+
+
+@test
 async def control_permissions_requester_admin_and_end():
     db, svc, bot = await world()
     sid = await musicq.session_start(db, CHAT, 5)
