@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS composer_drafts (
 """)
 register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER",
                                       "theme": "TEXT NOT NULL DEFAULT 'signal'",
-                                      "auto_del": "INTEGER NOT NULL DEFAULT 0"})  # 올린 뒤 N초 지나면 자동삭제(0=안 함)
+                                      "auto_del": "INTEGER NOT NULL DEFAULT 0",   # 올린 뒤 N초 지나면 자동삭제(0=안 함)
+                                      "live": "INTEGER NOT NULL DEFAULT 0",       # 👁 실시간 미리보기 켬
+                                      "live_msg": "INTEGER",                      # 1:1 에 띄운 미리보기 글 id
+                                      "live_sig": "TEXT"})                        # 그 미리보기가 보여 주는 미디어 지문
 
 # ⏰ 자동삭제 프리셋 — 텔레그램은 봇이 48시간 지난 글을 못 지워서 그 안으로만 (persist.TEMP_MAX_AGE)
 AUTO_DEL = (0, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600)
@@ -458,6 +461,12 @@ async def send(bot, chat_id: int, d, *, silent: bool | None = None):
             return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
         return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
     return await _icon_retry(go)
+
+
+def preview_sig(d) -> str:
+    """미리보기 글을 그 자리에서 고칠 수 있는지 가르는 지문. 미디어 종류·파일이 그대로면
+    글자·설명·버튼만 editMessage 로 고치고, 바뀌면(사진↔글, 다른 파일) 지우고 다시 보낸다."""
+    return f"{d['media_type'] or ''}|{d['media_id'] or ''}"
 
 
 def arm_auto_delete(bot, db, chat_id: int, msg_id: int | None, d) -> int:

@@ -447,5 +447,41 @@ async def no_auto_delete_by_default():
     assert ("delete", ROOM, d["msg_id"]) not in w.bot.calls
 
 
+@test
+async def live_preview_updates_in_place():
+    """👁 실시간 미리보기: 켜면 1:1 에 미리보기 글 하나 → 본문 고치면 그 자리에서,
+    사진↔글이 바뀌면 지우고 다시, 끄면 치운다."""
+    from types import SimpleNamespace
+    w = await World().open()
+    did = await w.draft()
+    await composer.update(w.db, did, body="<b>공지1</b>",
+                          buttons=json.dumps([[{"t": "문의", "u": "https://t.me/boss"}]]))
+    base = len(w.sent_to(BOSS))                                                # 연결 안내 등 기존 발송은 빼고 셈
+    q = await w.press(BOSS, f"m:cp:{did}:lv")                                  # 켜기 → 첫 미리보기 발송
+    d = await composer.get(w.db, did)
+    prev = [c for c in w.sent_to(BOSS) if c[2] == "<b>공지1</b>"]
+    assert d["live"] == 1 and d["live_msg"] and len(w.sent_to(BOSS)) == base + 1 and len(prev) == 1
+    assert "실시간 미리보기 켜짐" in q.edits[-1]
+    pid = d["live_msg"]
+    # 본문 고치기 → 그 자리에서 (editMessageText), 새 미리보기 안 보냄
+    await w.press(BOSS, f"m:cp:{did}:b")
+    await w.say(BOSS, "<b>공지2</b>")
+    d = await composer.get(w.db, did)
+    edits = [c for c in w.bot.calls if c[0] == "edit_text" and c[1] == BOSS and c[2] == "<b>공지2</b>"]
+    assert d["live_msg"] == pid and edits and len(w.sent_to(BOSS)) == base + 1    # 발송 수 그대로
+    # 사진 추가 → 글↔사진 이라 옛 글 지우고 다시 보냄 (새 msg_id·지문)
+    await w.press(BOSS, f"m:cp:{did}:m")
+    await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])
+    d = await composer.get(w.db, did)
+    photos = [c for c in w.bot.calls if c[0] == "send_photo" and c[1] == BOSS]
+    assert ("delete", BOSS, pid) in w.bot.calls and len(photos) == 1 and photos[0][2] == "P1"
+    assert d["live_msg"] != pid and d["live_sig"] == "photo|P1"
+    newpid = d["live_msg"]
+    # 끄기 → 미리보기 글 치우고 live=0
+    q = await w.press(BOSS, f"m:cp:{did}:lv")
+    d = await composer.get(w.db, did)
+    assert d["live"] == 0 and not d["live_msg"] and ("delete", BOSS, newpid) in w.bot.calls
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

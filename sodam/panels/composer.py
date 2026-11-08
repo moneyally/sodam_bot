@@ -8,7 +8,8 @@ m:cp:<초안>:bc:<rev>:<줄>:<칸>   버튼별 색 돌리기 (⚪→🔵→🟢�
 m:cp:<초안>:rb · rba:<idx>        👍 반응 버튼 추가 (누르면 집계 [👍 12], 콜백 cr:<이모지> = composer.on_react, 채널·방 아무나)
 m:cp:<초안>:tpl · tpla:<키>        🧩 레이아웃 템플릿(공지·이벤트·가격표·홍보·일정) — 빈 초안만 뼈대로 채움
 m:cp:<초안>:pv:0|1 · sl:0|1     링크 미리보기 · 조용히 (목표값)
-m:cp:<초안>:pr                  1:1 로 실제 모양 미리보기 (채널에 보내는 함수 그대로)
+m:cp:<초안>:pr                  1:1 로 실제 모양 미리보기 (채널에 보내는 함수 그대로, 한 번만)
+m:cp:<초안>:lv                  👁 실시간 미리보기 켜기/끄기 — 켜면 편집할 때마다 1:1 미리보기 글이 그 자리에서 바뀜 (refresh_live)
 m:cp:<초안>:go → go1 · sc · sv  지금 올리기(확인 뒤, 초안 state 를 한 문장으로 차지 → 한 번만) · 예약 · 고친 글 저장
 m:cp:<초안>:del → del1          버리기
 m:cpb|cpm|cpl|cpu|cpw:<채널>    글자 입력 뒤 '⬅️ 메뉴로' (그 채널의 내 최근 초안)
@@ -113,6 +114,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
         lines.append("📌 올리면서 고정해요" if d["pin"] else "📌 고정 안 함")
         ad = composer.auto_del_of(d)
         lines.append(f"⏰ 올린 뒤 {composer.auto_del_label(ad)} 자동삭제" if ad else "⏰ 자동삭제 안 함")
+    if d["live"]:
+        lines.append("👁 실시간 미리보기 켜짐 — 편집하면 1:1 미리보기가 바로 바뀌어요")
     if note:
         lines += ["", note]
     go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
@@ -127,7 +130,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
             [] if edit else [B("📌 고정 끄기" if d["pin"] else "📌 올리고 고정", cp(did, "pn", 0 if d["pin"] else 1)),
                              B(f"⏰ 자동삭제: {composer.auto_del_label(composer.auto_del_of(d))}", cp(did, "ad"))],
             [B(f"🎨 전체 버튼색: {composer.THEMES[composer.theme_of(d)]}", cp(did, "th"))] if n else [],
-            [B("👀 미리보기 (1:1)", cp(did, "pr"))],
+            [B("👀 미리보기 (1:1)", cp(did, "pr")),
+             B("👁 실시간 끄기" if d["live"] else "👁 실시간 미리보기", cp(did, "lv"))],
             [B("💾 고친 내용 저장", cp(did, "sv"))] if edit else go,
             [B("📤 다른 방·채널에도", cp(did, "cpy"))] if not edit and (d["body"] or d["media_type"]) else [],
             [B("🗑 버리기", cp(did, "del")), back]]
@@ -234,6 +238,32 @@ def s_autodel(d, note: str = "") -> Screen:
              "텔레그램 규칙상 올린 지 48시간 안쪽만 돼요. 예약·재시작돼도 지워져요."] + ([note] if note else [])
     kb = [B(("✓ " if s == cur else "") + composer.auto_del_label(s), cp(d["id"], "ada", s)) for s in composer.AUTO_DEL]
     return Screen("\n".join(lines), _kb(menu._chunks(kb, 3) + [[B("⬅️ 편집으로", cp(d["id"]))]]))
+
+
+async def refresh_live(c: PanelCtx, d) -> None:
+    """👁 실시간 미리보기가 켜져 있으면 1:1 의 미리보기 글을 지금 초안대로 갱신한다.
+    미디어 종류·파일이 그대로면 글자·설명·버튼만 그 자리에서 고치고(editMessage),
+    바뀌었으면(사진↔글·다른 파일) 지우고 다시 보낸다. 안 되면 조용히 넘어감(편집은 계속)."""
+    if not d or not d["live"] or (not d["body"] and not d["media_type"]):
+        return
+    db, uid = c.svc.db, c.uid
+    sig, pid = composer.preview_sig(d), d["live_msg"]
+    if pid and d["live_sig"] == sig:
+        try:
+            await composer.edit(c.bot, uid, pid, d)          # 글자·설명·버튼만 그 자리에서
+            return
+        except TelegramError:
+            pass                                             # 지워졌거나 못 고치면 다시 보냄
+    if pid:
+        try:
+            await c.bot.delete_message(uid, pid)
+        except TelegramError:
+            pass
+    try:
+        m = await composer.send(c.bot, uid, d, silent=True)
+    except TelegramError:
+        return
+    await composer.update(db, d["id"], live_msg=m.message_id, live_sig=sig)
 
 
 async def _post(c: PanelCtx, d) -> Screen:
@@ -395,7 +425,9 @@ async def r_cp(c: PanelCtx) -> Screen:
             return Screen(None, toast="그쪽으로는 옮길 수 없어요.")
         if not await composer.update(db, did, rev, buttons=json.dumps(rows, ensure_ascii=False)):
             return s_buttons(await composer.get(db, did), "화면이 바뀌어서 다시 보여드려요.")
-        return s_buttons(await composer.get(db, did), "🗑 지웠어요." if op == "x" else "옮겼어요.")
+        nd = await composer.get(db, did)
+        await refresh_live(c, nd)
+        return s_buttons(nd, "🗑 지웠어요." if op == "x" else "옮겼어요.")
     elif act == "bc":   # 버튼별 색 돌리기 (⚪→🔵→🟢→🔴) — rev 없음(같은 색 두 번 적용돼도 무해, 콜백 자기순환 폭발 방지)
         r, col = to_int(a[0] if a else ""), to_int(a[1] if len(a) > 1 else "")
         rows = composer.buttons(d)
@@ -409,6 +441,7 @@ async def r_cp(c: PanelCtx) -> Screen:
             rows[r][col].pop("c", None)
         await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
         nd = await composer.get(db, did)
+        await refresh_live(c, nd)
         return s_button(nd, r, col) or s_buttons(nd)
     elif act == "tpl":   # 🧩 템플릿으로 시작 (빈 초안만)
         if d["body"] or composer.buttons(d):
@@ -423,7 +456,9 @@ async def r_cp(c: PanelCtx) -> Screen:
         body, btns = tpl
         await composer.update(db, did, body=body, buttons=btns)
         name = composer.TEMPLATES[a[0]]["name"]
-        return await s_compose(c, await composer.get(db, did), f"🧩 {name} 템플릿을 넣었어요. 〈…〉 부분을 고쳐 쓰세요.")
+        nd = await composer.get(db, did)
+        await refresh_live(c, nd)
+        return await s_compose(c, nd, f"🧩 {name} 템플릿을 넣었어요. 〈…〉 부분을 고쳐 쓰세요.")
     elif act == "rb":   # 👍 반응 버튼 고르기
         rows = composer.buttons(d)
         if len(rows) >= composer.MAX_ROWS and all(len(r) >= composer.MAX_COLS for r in rows):
@@ -444,7 +479,9 @@ async def r_cp(c: PanelCtx) -> Screen:
         else:
             return Screen(None, toast=f"버튼은 {composer.MAX_ROWS}줄 × {composer.MAX_COLS}개까지예요.", alert=True)
         await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
-        return s_react_pick(await composer.get(db, did), f"{emoji} 추가했어요.")
+        nd = await composer.get(db, did)
+        await refresh_live(c, nd)
+        return s_react_pick(nd, f"{emoji} 추가했어요.")
     elif act in ("pv", "sl", "pn") and a[:1] in (["0"], ["1"]):
         await composer.update(db, did, **{{"pv": "preview", "sl": "silent", "pn": "pin"}[act]: int(a[0])})
     elif act == "ad":   # ⏰ 자동삭제 고르기
@@ -470,6 +507,18 @@ async def r_cp(c: PanelCtx) -> Screen:
         await menu.send_panel(c.svc, c.bot, c.uid, lambda: c.bot.send_message(
             c.uid, screen.text, parse_mode="HTML", reply_markup=screen.kb))
         return Screen(None, toast="1:1 로 미리보기를 보냈어요.")
+    elif act == "lv":   # 👁 실시간 미리보기 켜기/끄기
+        if d["live"]:
+            if d["live_msg"]:
+                try:
+                    await c.bot.delete_message(c.uid, d["live_msg"])
+                except TelegramError:
+                    pass
+            await composer.update(db, did, live=0, live_msg=None, live_sig=None)
+        else:
+            if not d["body"] and not d["media_type"]:
+                return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
+            await composer.update(db, did, live=1)   # 아래 fallthrough 의 refresh_live 가 첫 미리보기를 보냄
     elif act == "go":
         if not d["body"] and not d["media_type"]:
             return Screen(None, toast="본문이나 사진·영상을 먼저 넣어주세요.", alert=True)
@@ -496,10 +545,17 @@ async def r_cp(c: PanelCtx) -> Screen:
     elif act == "del":
         return Screen("🗑 이 글을 버릴까요? (되돌릴 수 없어요)", _kb([[B("🗑 버리기", cp(did, "del1")), B("⬅️ 돌아가기", cp(did))]]))
     elif act == "del1":
+        if d["live_msg"]:          # 👁 띄워 둔 실시간 미리보기 글도 치움
+            try:
+                await c.bot.delete_message(c.uid, d["live_msg"])
+            except TelegramError:
+                pass
         await composer.remove(db, did)
         ch, _ = await _dest(c.svc, d["target"])
         return Screen("🗑 버렸어요.", _kb([[_new(ch, d["target"]), _back(ch, d["target"])]]))
-    return await s_compose(c, await composer.get(db, did) or d)
+    nd = await composer.get(db, did) or d
+    await refresh_live(c, nd)       # 👁 실시간 미리보기: 본문·미디어·버튼·색·토글이 바뀌었으면 바로 반영
+    return await s_compose(c, nd)
 
 
 # ── 📤 같은 글 다른 방·채널에도 ─────────────────────────
@@ -645,6 +701,7 @@ async def s_input_next(c: PanelCtx) -> Screen:
     if d["state"] == "scheduled":
         return Screen("🗓️ 예약 글 목록에서 확인·취소할 수 있어요.",
                       _kb([[B("🗓️ 예약 글", f"m:chs:{d['target']}"), B("⬅️ 채널", f"m:ch:{d['target']}")]]))
+    await refresh_live(c, d)       # 👁 본문·사진을 넣으면 실시간 미리보기도 바로 바뀜
     return await s_compose(c, d)
 
 
