@@ -400,5 +400,142 @@ async def pin_refused_still_posts_and_copy_to_channel():
     assert o["state"] == "posted" and o["target"] == ROOM                    # 원본은 그대로
 
 
+@test
+async def auto_delete_arms_on_post():
+    """⏰ 자동삭제: 고른 시간이 저장되고, 올린 뒤 그 글이 temp_msgs 에 예약된다 (재시작돼도 sweep 이 지움)."""
+    from channel_world import ROOM
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="⚡ 반짝 이벤트")
+    # 기본은 안 함
+    assert composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ad")
+    assert "자동삭제" in q.edits[-1]
+    q = await w.press(BOSS, f"m:cp:{did}:ada:bad")                           # 엉뚱한 값은 거절
+    assert "다시" in (q.answers[0][0] or "") and composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ada:7200")                          # 프리셋 아닌 숫자(2시간)도 거절
+    assert "다시" in (q.answers[0][0] or "") and composer.auto_del_of(await composer.get(w.db, did)) == 0
+    q = await w.press(BOSS, f"m:cp:{did}:ada:3600")                          # 1시간 뒤
+    assert composer.auto_del_of(await composer.get(w.db, did)) == 3600 and "1시간 뒤" in q.edits[-1]
+    q = await w.press(BOSS, f"m:cp:{did}")                                   # 편집 화면에 상태 줄
+    assert "1시간 뒤 자동삭제" in q.edits[-1]
+    # 올리기 → temp_msgs 에 예약 (delete_later 가 뒤에서 remember_delete)
+    q = await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    assert d["state"] == "posted" and d["msg_id"] and "자동으로 지워져요" in q.edits[-1]
+    rows = await w.db._all("SELECT chat_id, message_id, due, sent FROM temp_msgs WHERE message_id=?", (d["msg_id"],))
+    assert len(rows) == 1 and rows[0]["chat_id"] == ROOM and 3500 < rows[0]["due"] - rows[0]["sent"] < 3700
+
+
+@test
+async def no_auto_delete_by_default():
+    """자동삭제를 안 고르면 올려도 temp_msgs 에 안 들어간다 (상시 메뉴·공지가 사라지지 않게)."""
+    from channel_world import ROOM
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="상시 안내")
+    await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    # 예약도 없고, (secs=0 으로 잘못 예약해 바로 지워버리는 일도 없어야) 글이 지워지지도 않음
+    assert not await w.db._all("SELECT 1 FROM temp_msgs WHERE message_id=?", (d["msg_id"],))
+    assert ("delete", ROOM, d["msg_id"]) not in w.bot.calls
+
+
+@test
+async def live_preview_updates_in_place():
+    """👁 실시간 미리보기: 켜면 1:1 에 미리보기 글 하나 → 본문 고치면 그 자리에서,
+    사진↔글이 바뀌면 지우고 다시, 끄면 치운다."""
+    from types import SimpleNamespace
+    w = await World().open()
+    did = await w.draft()
+    await composer.update(w.db, did, body="<b>공지1</b>",
+                          buttons=json.dumps([[{"t": "문의", "u": "https://t.me/boss"}]]))
+    base = len(w.sent_to(BOSS))                                                # 연결 안내 등 기존 발송은 빼고 셈
+    q = await w.press(BOSS, f"m:cp:{did}:lv")                                  # 켜기 → 첫 미리보기 발송
+    d = await composer.get(w.db, did)
+    prev = [c for c in w.sent_to(BOSS) if c[2] == "<b>공지1</b>"]
+    assert d["live"] == 1 and d["live_msg"] and len(w.sent_to(BOSS)) == base + 1 and len(prev) == 1
+    assert "실시간 미리보기 켜짐" in q.edits[-1]
+    pid = d["live_msg"]
+    # 본문 고치기 → 그 자리에서 (editMessageText), 새 미리보기 안 보냄
+    await w.press(BOSS, f"m:cp:{did}:b")
+    await w.say(BOSS, "<b>공지2</b>")
+    d = await composer.get(w.db, did)
+    edits = [c for c in w.bot.calls if c[0] == "edit_text" and c[1] == BOSS and c[2] == "<b>공지2</b>"]
+    assert d["live_msg"] == pid and edits and len(w.sent_to(BOSS)) == base + 1    # 발송 수 그대로
+    # 사진 추가 → 글↔사진 이라 옛 글 지우고 다시 보냄 (새 msg_id·지문)
+    await w.press(BOSS, f"m:cp:{did}:m")
+    await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])
+    d = await composer.get(w.db, did)
+    photos = [c for c in w.bot.calls if c[0] == "send_photo" and c[1] == BOSS]
+    assert ("delete", BOSS, pid) in w.bot.calls and len(photos) == 1 and photos[0][2] == "P1"
+    assert d["live_msg"] != pid and d["live_sig"] == "photo|P1"
+    newpid = d["live_msg"]
+    # 끄기 → 미리보기 글 치우고 live=0
+    q = await w.press(BOSS, f"m:cp:{did}:lv")
+    d = await composer.get(w.db, did)
+    assert d["live"] == 0 and not d["live_msg"] and ("delete", BOSS, newpid) in w.bot.calls
+
+
+@test
+async def album_builds_and_posts_as_media_group():
+    """🖼 사진을 여러 장 담으면 앨범 → 버튼은 무시(텔레그램 제한), 올리면 send_media_group 한 번·설명 첫 장."""
+    from types import SimpleNamespace
+    w = await World().open()
+    did = await w.draft()
+    await composer.update(w.db, did, body="<b>갤러리</b>",
+                          buttons=json.dumps([[{"t": "문의", "u": "https://t.me/boss"}]]))
+    await w.press(BOSS, f"m:cp:{did}:m")
+    await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])            # 한 장 → 단일
+    d = await composer.get(w.db, did)
+    assert not composer.is_album(d) and len(composer.media_items(d)) == 1 and composer.buttons(d)
+    await w.press(BOSS, f"m:cp:{did}:m")
+    m2 = await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P2")])       # 한 장 더 → 앨범
+    d = await composer.get(w.db, did)
+    assert composer.is_album(d) and [it["id"] for it in composer.media_items(d)] == ["P1", "P2"]
+    assert composer.buttons(d) == [] and "앨범" in m2.replies[-1]              # 앨범이면 버튼 안 나감
+    await w.press(BOSS, f"m:cp:{did}:m")
+    dup = await w.say(BOSS, None, photo=[SimpleNamespace(file_id="P1")])      # 같은 사진 → 거절
+    assert "이미 넣은" in dup.replies[-1] and len(composer.media_items(await composer.get(w.db, did))) == 2
+    await w.press(BOSS, f"m:cp:{did}:go1")                                    # 올리기
+    groups = [c for c in w.bot.calls if c[0] == "send_media_group" and c[1] == CH]
+    assert len(groups) == 1
+    media = groups[0][2]
+    assert len(media) == 2 and media[0].caption and "갤러리" in media[0].caption and media[1].caption is None
+    assert groups[0][3].get("reply_markup") is None                          # 앨범엔 버튼 못 담음
+    assert (await composer.get(w.db, did))["state"] == "posted"
+
+
+@test
+async def album_room_post_not_editable_and_autodeletes_all():
+    """🎛 리모컨 앨범: 올리면 제자리 수정 불가(msg_id NULL)·⏰ 자동삭제는 세 글 전부 예약."""
+    from channel_world import ROOM
+    from types import SimpleNamespace
+    w = await World().open()
+    q = await w.press(BOSS, f"m:rmc:{ROOM}:n")
+    did = int(next(b.callback_data for r in q.kb.inline_keyboard for b in r if b.text == "✏️ 본문").split(":")[2])
+    await composer.update(w.db, did, body="갤러리")
+    for fid in ("P1", "P2", "P3"):
+        await w.press(BOSS, f"m:cp:{did}:m")
+        await w.say(BOSS, None, photo=[SimpleNamespace(file_id=fid)])
+    await w.press(BOSS, f"m:cp:{did}:ada:3600")                              # ⏰ 1시간 자동삭제
+    d = await composer.get(w.db, did)
+    assert composer.is_album(d) and len(composer.media_items(d)) == 3
+    await w.press(BOSS, f"m:cp:{did}:go1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    d = await composer.get(w.db, did)
+    groups = [c for c in w.bot.calls if c[0] == "send_media_group" and c[1] == ROOM]
+    assert d["state"] == "posted" and d["msg_id"] is None and len(groups) == 1 and len(groups[0][2]) == 3
+    rows = await w.db._all("SELECT message_id FROM temp_msgs WHERE chat_id=?", (ROOM,))
+    assert len(rows) == 3                                                    # 올린 세 글 전부 자동삭제 예약
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
