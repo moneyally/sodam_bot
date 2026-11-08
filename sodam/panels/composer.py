@@ -6,6 +6,7 @@ m:cp:<초안>:ba → 글자 → 주소 → br:<줄|n>   URL 버튼 추가 (8줄 
 m:cp:<초안>:bl · bs:<줄>:<칸> · bo:<rev>:<줄>:<칸>:u|d|l|r|x   버튼 정리 (rev 가 다르면 옛 화면 → 다시 그림)
 m:cp:<초안>:bc:<rev>:<줄>:<칸>   버튼별 색 돌리기 (⚪→🔵→🟢→🔴). 글자 앞 🔵🟢🔴·프리미엄 이모지로도 입력(btnstyle.parse_label)
 m:cp:<초안>:rb · rba:<idx>        👍 반응 버튼 추가 (누르면 집계 [👍 12], 콜백 cr:<이모지> = composer.on_react, 채널·방 아무나)
+m:cp:<초안>:tpl · tpla:<키>        🧩 레이아웃 템플릿(공지·이벤트·가격표·홍보·일정) — 빈 초안만 뼈대로 채움
 m:cp:<초안>:pv:0|1 · sl:0|1     링크 미리보기 · 조용히 (목표값)
 m:cp:<초안>:pr                  1:1 로 실제 모양 미리보기 (채널에 보내는 함수 그대로)
 m:cp:<초안>:go → go1 · sc · sv  지금 올리기(확인 뒤, 초안 state 를 한 문장으로 차지 → 한 번만) · 예약 · 고친 글 저장
@@ -113,7 +114,8 @@ async def s_compose(c: PanelCtx, d, note: str = "") -> Screen:
     if note:
         lines += ["", note]
     go = [B("📤 지금 올리기", cp(did, "go"))] + ([B("🗓️ 예약", cp(did, "sc"))] if ch else [])
-    rows = [[B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상·움짤", cp(did, "m"))]),
+    rows = [[B("🧩 템플릿으로 시작", cp(did, "tpl"))] if not edit and not text.strip() and not n else [],
+            [B("✏️ 본문", cp(did, "b"))] + ([] if edit else [B("🖼 사진·영상·움짤", cp(did, "m"))]),
             [B("🗑 사진·영상 빼기", cp(did, "mx"))] if d["media_type"] and not edit else [],
             [B("➕ 버튼", cp(did, "ba")), B("➕ 반응 버튼", cp(did, "rb"))]
             + ([B(f"🔘 버튼 정리 ({n})", cp(did, "bl"))] if n else []),
@@ -202,6 +204,14 @@ def s_pick_row(d) -> Screen:
         kb.append(B("➕ 새 줄", cp(d["id"], "br", "n")))
     return Screen(f"🔘 <b>{esc(p['t'])}</b> → <code>{esc(p['u'])}</code>\n어느 줄에 넣을까요?",
                   _kb(menu._chunks(kb, 3) + [[B("❌ 취소", cp(d["id"]))]]))
+
+
+def s_templates(d) -> Screen:
+    """🧩 레이아웃 템플릿 고르기 — 빈 초안을 뼈대로 채움."""
+    lines = ["🧩 <b>템플릿으로 시작</b> — 자주 쓰는 글 모양을 뼈대로 넣어드려요.",
+             "적용한 뒤 〈…〉 부분을 고쳐 쓰고, 링크 버튼은 ➕ 버튼으로 직접 넣으면 돼요."]
+    kb = [[B(t["name"], cp(d["id"], "tpla", k))] for k, t in composer.TEMPLATES.items()]
+    return Screen("\n".join(lines), _kb(kb + [[B("⬅️ 편집으로", cp(d["id"]))]]))
 
 
 def s_react_pick(d, note: str = "") -> Screen:
@@ -385,6 +395,20 @@ async def r_cp(c: PanelCtx) -> Screen:
         await composer.update(db, did, buttons=json.dumps(rows, ensure_ascii=False))
         nd = await composer.get(db, did)
         return s_button(nd, r, col) or s_buttons(nd)
+    elif act == "tpl":   # 🧩 템플릿으로 시작 (빈 초안만)
+        if d["body"] or composer.buttons(d):
+            return Screen(None, toast="글·버튼이 이미 있어요. 새 글에서 템플릿을 써주세요.", alert=True)
+        return s_templates(d)
+    elif act == "tpla":
+        tpl = composer.template_body(a[0] if a else "")
+        if not tpl:
+            return Screen(None, toast="없는 템플릿이에요.")
+        if d["body"] or composer.buttons(d):     # 그 사이 내용이 생겼으면 덮지 않음
+            return await s_compose(c, d, "이미 내용이 있어 템플릿을 적용하지 않았어요.")
+        body, btns = tpl
+        await composer.update(db, did, body=body, buttons=btns)
+        name = composer.TEMPLATES[a[0]]["name"]
+        return await s_compose(c, await composer.get(db, did), f"🧩 {name} 템플릿을 넣었어요. 〈…〉 부분을 고쳐 쓰세요.")
     elif act == "rb":   # 👍 반응 버튼 고르기
         rows = composer.buttons(d)
         if len(rows) >= composer.MAX_ROWS and all(len(r) >= composer.MAX_COLS for r in rows):
