@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import time
 from urllib.parse import urlsplit
@@ -19,6 +20,8 @@ from telegram.error import BadRequest
 
 from . import btnstyle, mediastore, persist
 from .db import register_columns, register_schema
+
+log = logging.getLogger(__name__)
 
 TEXT_LIMIT, CAPTION_LIMIT = 4096, 1024
 MAX_ROWS, MAX_COLS, LABEL_MAX, URL_MAX = 8, 3, 40, 512
@@ -49,6 +52,18 @@ CREATE TABLE IF NOT EXISTS composer_drafts (
 """)
 register_columns("composer_drafts", {"pin": "INTEGER NOT NULL DEFAULT 0", "msg_id": "INTEGER",
                                       "theme": "TEXT NOT NULL DEFAULT 'signal'"})
+
+# 반응 버튼 집계: 올린 글의 [👍] 버튼을 누른 사람 (한 사람 한 표, 다시 누르면 취소)
+register_schema("""
+CREATE TABLE IF NOT EXISTS composer_votes (
+    chat_id INTEGER NOT NULL,
+    msg_id  INTEGER NOT NULL,
+    rkey    TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    ts      INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, msg_id, rkey, user_id)
+);
+""")
 
 
 class HtmlError(ValueError):
@@ -193,7 +208,9 @@ def buttons(d) -> list[list[dict]]:
         rows = json.loads(d["buttons"] or "[]")
     except (TypeError, ValueError):
         return []
-    return [[b for b in r if isinstance(b, dict) and b.get("t") and b.get("u")] for r in rows if r][:MAX_ROWS]
+    # URL 버튼(u) 또는 반응 버튼(r = 누르면 집계) 둘 다 허용
+    return [[b for b in r if isinstance(b, dict) and b.get("t") and (b.get("u") or b.get("r"))]
+            for r in rows if r][:MAX_ROWS]
 
 
 # 버튼 색 틀(테마) — 방장이 하나만 고르면 코드가 각 버튼 색을 정함 (Bot API 9.4 style)
@@ -235,9 +252,12 @@ def markup(rows: list[list[dict]], theme: str = "signal") -> InlineKeyboardMarku
         line = []
         for b in r[:MAX_COLS]:
             st = btnstyle.valid_style(b.get("c")) or _btn_style(theme, b["t"], seen == 0)
-            icon = _emoji_id(b.get("e"))
-            line.append(InlineKeyboardButton(b["t"], url=b["u"], style=st,
-                                             api_kwargs={"icon_custom_emoji_id": icon} if icon else None))
+            if b.get("r"):          # 반응 버튼: 누르면 집계 (콜백 cr:<키>). 수는 누를 때 on_react 가 붙임
+                line.append(InlineKeyboardButton(b["t"], callback_data=f"cr:{b['r']}", style=st))
+            else:
+                icon = _emoji_id(b.get("e"))
+                line.append(InlineKeyboardButton(b["t"], url=b["u"], style=st,
+                                                 api_kwargs={"icon_custom_emoji_id": icon} if icon else None))
             seen += 1
         if line:
             out.append(line)
@@ -255,6 +275,65 @@ async def _icon_retry(call):
             _icons_off = True
             return await call()
         raise
+
+
+# ── 반응 버튼 집계 ([👍 12]) ──────────────────────────────
+_COUNT_TAIL = re.compile(r"\s+\d+$")           # 버튼 글자 끝의 ' 숫자'(집계 수) — 다시 그릴 때 떼어냄
+REACT_PRESETS = ("👍", "❤️", "🔥", "😂", "😮", "👏", "🎉", "💯", "🙏", "✅")
+
+
+async def _vote_toggle(db, chat_id: int, msg_id: int, rkey: str, uid: int) -> bool:
+    """이 사람의 반응을 켜고/끔 (다시 누르면 취소). 켜졌으면 True — 한 db.atomic 으로."""
+    def run(c):
+        if c.execute("DELETE FROM composer_votes WHERE chat_id=? AND msg_id=? AND rkey=? AND user_id=?",
+                     (chat_id, msg_id, rkey, uid)).rowcount:
+            return False
+        c.execute("INSERT INTO composer_votes(chat_id, msg_id, rkey, user_id, ts) VALUES(?,?,?,?,?)",
+                  (chat_id, msg_id, rkey, uid, int(time.time())))
+        return True
+    return await db.atomic(run)
+
+
+async def vote_counts(db, chat_id: int, msg_id: int) -> dict[str, int]:
+    rows = await db._all("SELECT rkey, COUNT(*) n FROM composer_votes WHERE chat_id=? AND msg_id=? GROUP BY rkey",
+                         (chat_id, msg_id))
+    return {r["rkey"]: r["n"] for r in rows}
+
+
+def _with_count(text: str, n: int) -> str:
+    """버튼 글자에 집계 수를 붙임 (기존 끝 숫자는 떼고). 0 이면 글자만."""
+    base = _COUNT_TAIL.sub("", text or "").rstrip()
+    return f"{base} {n}" if n else base
+
+
+async def on_react(svc, bot, q, parts) -> None:
+    """반응 버튼(cr:<키>) 누름 → 그 사람 표 토글 → 지금 키보드의 반응 버튼 수만 다시 그림.
+    레이아웃은 q.message 의 현재 키보드를 그대로 쓰므로 따로 저장할 필요 없음 (URL 버튼·색·아이콘 유지)."""
+    rkey = parts[0] if parts else ""
+    msg = getattr(q, "message", None)
+    kb = getattr(msg, "reply_markup", None)
+    if not rkey or not msg or not kb:
+        return await q.answer()
+    chat_id, msg_id, uid = msg.chat_id, msg.message_id, q.from_user.id
+    on = await _vote_toggle(svc.db, chat_id, msg_id, rkey, uid)
+    counts = await vote_counts(svc.db, chat_id, msg_id)
+    rows = []
+    for row in kb.inline_keyboard:
+        nr = []
+        for b in row:
+            cd = b.callback_data or ""
+            if cd.startswith("cr:"):          # 반응 버튼만 수 갱신, 나머지(URL)는 그대로
+                nr.append(InlineKeyboardButton(_with_count(b.text, counts.get(cd[3:], 0)),
+                                               callback_data=cd, style=getattr(b, "style", None)))
+            else:
+                nr.append(b)
+        rows.append(nr)
+    try:
+        await q.edit_message_reply_markup(InlineKeyboardMarkup(rows))
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            log.debug("reaction edit skip: %s", e)
+    await q.answer("👍 반영했어요" if on else "취소했어요")
 
 
 def limit_of(d) -> int:
