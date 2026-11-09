@@ -116,6 +116,17 @@ SEARCH_PLAYLISTS = "https://www.youtube.com/results?search_query={}&sp=EgIQAw%25
 FILLER = {"노래", "음악", "곡", "노래들", "한곡", "하나", "아무", "아무거나", "아무노래", "아무곡", "다른", "다른노래",
           "song", "songs", "music"}
 
+COUNT_RE = re.compile(r"(\d+)\s*(?:곡|개)")              # '팝송 5곡'·'발라드 10개' → 그만큼만 (검색어에선 뺌 — 제목 아님)
+
+
+def req_count(text: str) -> int | None:
+    """분위기·장르 신청에서 '몇 곡' 뽑기 ('5곡'·'10개'). 1~50 만 (그 밖은 제목 속 숫자로 봄 → None)."""
+    m = COUNT_RE.search(text or "")
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if 1 <= n <= 50 else None
+
 
 def wants_mix(req) -> bool:
     """가수·제목 대신 분위기·모음을 신청 ('잔잔한 플리'·'최유리 노래모음'·'신나는 노래') → 여러 곡."""
@@ -457,6 +468,10 @@ class Source:
         모음 영상(8분 넘음)·커버·라이브·리믹스 빼고, 가수 이름을 썼으면 그 가수 곡만, 같은 곡은 한 번 (서버 실측 2026-10-08:
         첫 목록이 1시간짜리 모음 영상뿐인 경우가 있어 다음 목록으로 넘어감)."""
         import urllib.parse
+        n = req_count(text)                               # '팝송 5곡' → 5곡만 (명시 limit 가 더 작으면 그걸 우선, 최대 PLAYLIST_MAX)
+        if n:
+            limit = min(n, limit)
+        text = COUNT_RE.sub(" ", text or "")              # 검색어에선 'N곡'·'N개' 뺌 (곡 제목이 아니라 개수)
         req = mm.parse(text)
         words = [w for w in req.must if w not in FILLER and w not in ("소담", "소담아", "소담이")]   # '소담아 잔잔한 플리 하나' → '잔잔한'
         base = " ".join(words) or "인기"

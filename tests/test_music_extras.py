@@ -475,6 +475,46 @@ def mood_skips_compilation_titles_and_fills_from_mix_and_scans_far():
     assert len(got) == len(set(got)), "같은 곡 두 번 X"
 
 
+@test
+def mood_count_limits_songs():
+    """2026-11-09 오너 '팝송 5곡 넣어달라면 5곡만, 최대 15 유지' — 분위기·장르 신청 개수 지정."""
+    assert music.req_count("팝송 5곡") == 5
+    assert music.req_count("발라드 10개") == 10
+    assert music.req_count("잔잔한 플리") is None, "개수 말 없으면 None"
+    assert music.req_count("플레이리스트 100곡") is None, "50 초과 = 제목 속 숫자로 봄 (개수 아님)"
+    src = music.Source(tempfile.mkdtemp())
+    songs = [{"id": f"popAAAAA{i:03d}", "title": f"가수{i} - 곡{i}", "duration": 200} for i in range(30)]
+    src._entries = lambda url: [{"id": "PLpop"}] if "results?search_query=" in url else songs
+    assert len(src.mix_for("팝송 5곡")) == 5, "'5곡' 이면 5곡만"
+    assert len(src.mix_for("발라드 10개")) == 10
+    assert len(src.mix_for("팝송", 3)) == 3, "명시 limit(AI count) 우선"
+    assert len(src.mix_for("팝송 50곡")) == music.PLAYLIST_MAX, "상한 15 유지 (그 이상 요청해도)"
+    assert len(src.mix_for("팝송")) == music.PLAYLIST_MAX, "개수 안 주면 최대 15곡 그대로"
+    import urllib.parse                               # 검색어엔 'N곡' 이 안 들어감 (제목 아님)
+    seen = []
+    src._entries = lambda url: (seen.append(url), [{"id": "PLpop"}] if "results?search_query=" in url else songs)[1]
+    src.mix_for("팝송 5곡")
+    assert "5곡" not in urllib.parse.unquote(seen[0]), ("검색어에 개수 남으면 안 됨", seen[0])
+
+
+class CountMixSource(FakeSource):
+    def mix_for(self, text, limit=music.PLAYLIST_MAX):
+        n = music.req_count(text) or limit            # 진짜 Source.mix_for 와 같은 규칙 (개수 지정 반영)
+        n = min(n, limit)
+        return [{"title": f"곡{i}", "url": "u", "vid": f"cnt{i:08d}", "duration": 200} for i in range(n)]
+
+
+@test
+async def mood_count_reaches_worker():
+    """AI 가 count 를 주면 payload → _music_mix → mix_for(limit) 까지 전해져 그만큼만 대기열에."""
+    db, w, _, _ = await make_worker()
+    w.music_source = CountMixSource(tempfile.mkdtemp())
+    await run_job(db, w, "music_play", {"query": "팝송", "mix": True, "count": 5,
+                                        "by": 5, "by_name": "오너", "status_msg": 9}, CHAT)
+    assert len(await db._all("SELECT id FROM music_queue WHERE by_id=5")) == 5, "count=5 → 5곡"
+    await stop_all(w)
+
+
 class MixSource(FakeSource):
     def resolve(self, query):
         if "플리" in query:
