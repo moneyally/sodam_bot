@@ -28,7 +28,24 @@ from ..util import display_name, name_key
 _LOOKUP_ASK = re.compile(r"누구|누군|조회|아이디|고유\s*번호|ID|id\b|찾아|정보|프로필|프사|사칭|닮은|기록|이름|lookup|allhistory|@\w", re.I)
 
 MAX_ROOMS = 15
+STATUS_MAX = 8        # 방별 '지금 상태'(getChatMember)는 상위 몇 개만 — 방 많으면 조회가 느려짐
 RECENT_MAX = 60
+
+# 텔레그램 ChatMember.status → 사람이 읽을 한 글자 (2026-11 오너 '각 방 현재 상태(제한/나감/밴)도')
+_ROOM_STATUS = {"creator": "👑방장", "administrator": "🛡관리자", "member": "✅있음",
+                "restricted": "🔇제한", "left": "🚪나감", "kicked": "🚫밴"}
+
+
+async def _room_status(ctx: ToolCtx, cid: int, uid: int) -> str:
+    """그 방에서 이 사람이 지금 어떤 상태인지 — 조회할 때 텔레그램에 한 번 더 물어봄. 실패(봇이 나간 방 등)면 빈칸."""
+    try:
+        cm = await ctx.bot.get_chat_member(cid, uid)
+    except TelegramError:
+        return ""
+    st = getattr(cm, "status", "")
+    if st == "restricted" and getattr(cm, "is_member", True):
+        return "🔇제한"                      # 제한됐지만 아직 방에 있음
+    return _ROOM_STATUS.get(st, "")
 KEY_SETTINGS = ("style", "ai_comeback", "ai_spicy", "ai_follow_up", "ai_chime_in", "ai_memory", "voice_who", "voice_reply",
                 "captcha_enabled", "anomaly_mode", "spamshield_mode", "farewell_mode")
 
@@ -85,7 +102,9 @@ async def _seen_rooms(ctx: ToolCtx, uid: int) -> str:
     db = ctx.svc.db
     rows = await db._all("SELECT m.chat_id, c.title, m.last_seen FROM members m LEFT JOIN chats c USING(chat_id) "
                          "WHERE m.user_id=? AND m.chat_id<0 ORDER BY m.last_seen DESC LIMIT 50", (uid,))
-    if ctx.role >= Role.OWNER or ctx.caller.id in await trusted(db):
+    tr = await trusted(db)
+    is_admin = ctx.role >= Role.ADMIN or ctx.caller.id in tr
+    if ctx.role >= Role.OWNER or ctx.caller.id in tr:
         allowed = None
     else:
         from .. import menu
@@ -98,8 +117,16 @@ async def _seen_rooms(ctx: ToolCtx, uid: int) -> str:
     if not shown:
         return "본 방: (볼 수 있는 방에선 기록 없음)"
     tz = ctx.svc.cfg.tz
-    return "본 방: " + ", ".join(f"{r['title'] or r['chat_id']}(마지막 {datetime.fromtimestamp(r['last_seen'] or 0, tz):%m-%d})"
-                                 for r in shown[:MAX_ROOMS])
+    # 오너·관리자 조회일 때만 방마다 '지금 상태'를 텔레그램에 한 번 더 물어봄 (상위 STATUS_MAX 개, 멤버 조회엔 과함·느려짐)
+    parts = []
+    for i, r in enumerate(shown[:MAX_ROOMS]):
+        tail = f"마지막 {datetime.fromtimestamp(r['last_seen'] or 0, tz):%m-%d}"
+        if is_admin and i < STATUS_MAX:
+            now = await _room_status(ctx, r["chat_id"], uid)
+            if now:
+                tail = f"지금 {now} · {tail}"
+        parts.append(f"{r['title'] or r['chat_id']}({tail})")
+    return "본 방: " + ", ".join(parts)
 
 
 def _edit(a: str, b: str) -> int:
