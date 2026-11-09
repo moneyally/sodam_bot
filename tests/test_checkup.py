@@ -83,6 +83,23 @@ async def seen_rooms_depend_on_who_asks():
 
 
 @test
+async def seen_rooms_show_current_status_for_admins_only():
+    """2026-11 오너 '각 방 현재 상태(제한/나감/밴)도 조회 때 텔레그램에 한 번 더 물어봐'."""
+    db, svc, bot = await world()
+    bot.member_status = {(B, LOVE): "kicked"}                      # SECOND 방에선 밴됨
+    owner = await C.t_lookup_user(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(LOVE)})
+    assert "SECOND" in owner and "지금 🚫밴" in owner, owner
+    assert ("get_chat_member", B, LOVE) in bot.calls, "방마다 getChatMember 한 번 더"
+    bot.member_status = {}                                         # 지정 안 하면 기본 member
+    owner2 = await C.t_lookup_user(ctx(svc, bot, OWNER, Role.OWNER, OWNER), {"who": str(LOVE)})
+    assert "지금 ✅있음" in owner2, owner2
+    # 멤버 조회(B 는 안 보이니 A 에 넣고): 상태 글자 안 붙음
+    await add_member(db, A, fake_user(LOVE, "love", "lovesic3"))
+    mem = await C.t_lookup_user(ctx(svc, bot, MEMBER, Role.MEMBER, A), {"who": str(LOVE)})
+    assert "본 방" in mem and "지금 ✅있음" not in mem and ("get_chat_member", A, LOVE) not in bot.calls, mem
+
+
+@test
 async def unknown_id_asks_telegram_once_and_says_so():
     db, svc, bot = await world()
 
