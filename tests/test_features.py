@@ -375,6 +375,8 @@ async def announce_wizard_create_with_photo():
     await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
     assert draft.step == "limits"                            # 기간·시간대 제한 (선택)
     await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    assert draft.step == "buttons"                           # 🔗 URL 버튼 (선택)
+    await svc.announcer.on_callback(bot, q, [draft.token, "nobtn"])
     preview = bot.named("send_photo")[-1]
     assert preview[2] == "BIG" and "주간 규칙 안내" in preview[3] and preview[4]["reply_markup"]
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
@@ -406,6 +408,7 @@ async def announce_wizard_edit_keep_and_cancel():
     await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
     await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])   # 반복 공지 → 쌓기 물음 (지우고 새로 유지)
     await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])  # 기간·시간대 제한 없음
+    await svc.announcer.on_callback(bot, q, [draft.token, "nobtn"])    # 🔗 URL 버튼 없이
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     r = await db.get_schedule(CHAT, sid)
     assert (r["title"], r["text"], r["interval_min"], r["pin"]) == ("원래 제목", "원래 내용", 120, 0)
