@@ -243,6 +243,8 @@ async def _run_wizard(svc, bot, dm, answers=("공지 제목", "공지 내용", "
         await svc.announcer.on_callback(bot, q, [draft.token, keep])
     if draft.step == "limits":                                             # 기간·시간대 제한 (선택) → 제한 없음
         await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    if draft.step == "buttons":                                            # 🔗 URL 버튼 (선택) → 버튼 없이
+        await svc.announcer.on_callback(bot, q, [draft.token, "nobtn"])
     if save:
         await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     return draft, q
@@ -402,6 +404,8 @@ async def group_wizard_still_runs_in_group():
     await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
     assert draft.step == "limits"                                          # 기간·시간대 제한 (선택)
     await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    assert draft.step == "buttons"                                         # 🔗 URL 버튼 (선택)
+    await svc.announcer.on_callback(bot, q, [draft.token, "nobtn"])
     assert sent_to(bot, CHAT)[-1][0] == "send_message" and "그룹 공지" in sent_to(bot, CHAT)[-1][2]  # 미리보기도 방에
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     assert [r["title"] for r in await db.schedules(CHAT)] == ["그룹 공지"]
@@ -735,6 +739,77 @@ def motion_banner_announce_gets_full_width_spacer():
     # 보통 글은 그대로 (쓸데없는 빈 줄 X)
     plain = announce.render("공지", "안녕하세요 오늘도 좋은 하루 🙂", has_media=False, rules="", tz=timezone.utc, fmt="")
     assert util.BANNER_SPACER not in plain
+
+
+# ── 🔗 URL 버튼 (색·여러 개, greet 버튼 재사용) 2026-11-09 ──────
+@test
+async def wizard_captures_colored_url_buttons_and_publish_attaches():
+    """마법사 7/7 다음 🔗 버튼 단계에서 '글자 - 주소' 여러 줄(색 🟢🔵) → 저장·발송에 그대로 붙는다."""
+    import json
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    for a in ("공지", "내용", "없음", "매일 21:30"):
+        await dm(a)
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    q = FakeQuery(ADMIN, fake_user(ADMIN))
+    await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    assert draft.step == "buttons"                                             # 제한 다음 버튼 단계
+    await dm("🟢 테더코인 받기 - https://t.me/june0247\n🔵 광고 문의 - https://t.me/leondesign888")
+    assert draft.step == "confirm"
+    assert draft.buttons == [["테더코인 받기", "https://t.me/june0247", None, "success"],
+                             ["광고 문의", "https://t.me/leondesign888", None, "primary"]]
+    await svc.announcer.on_callback(bot, q, [draft.token, "save"])
+    row = (await db.schedules(CHAT))[0]
+    saved = json.loads(row["buttons"])
+    assert len(saved) == 2 and saved[0][3] == "success", saved                 # 색까지 저장 (뮤테이션: buttons 안 저장하면 실패)
+    await svc.announcer.publish(bot, row)
+    kb = sent_to(bot, CHAT)[-1][3]["reply_markup"]
+    bs = buttons(kb)
+    assert [b.url for b in bs] == ["https://t.me/june0247", "https://t.me/leondesign888"]  # 발송에 버튼 붙음
+    assert bs[0].style == "success" and bs[1].style == "primary"               # 색 반영 (뮤테이션: style 빼면 실패)
+    await db.close()
+
+
+@test
+async def buttons_none_skips_and_publish_has_no_markup():
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    for a in ("공지", "내용", "없음", "매일 21:30"):
+        await dm(a)
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    q = FakeQuery(ADMIN, fake_user(ADMIN))
+    await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    await dm("없음")                                                           # 버튼 없이
+    assert draft.step == "confirm" and draft.buttons == []
+    await svc.announcer.on_callback(bot, q, [draft.token, "save"])
+    row = (await db.schedules(CHAT))[0]
+    assert row["buttons"] is None
+    await svc.announcer.publish(bot, row)
+    assert sent_to(bot, CHAT)[-1][3]["reply_markup"] is None                   # 버튼 없으면 markup 없음
+    await db.close()
+
+
+@test
+async def publish_album_puts_buttons_in_followup_message():
+    """앨범(여러 장)엔 인라인 버튼을 못 달아 → 앨범 뒤에 버튼만 한 메시지로 따로 (텔레그램 제한)."""
+    import json
+    db, svc, bot, _ = await setup()
+    btns = json.dumps([["바로가기", "https://t.me/x", None, "success"]])
+    sid = await add(db, CHAT, "앨범버튼", text="세 장", media_type="photo", media_id="A1",
+                    media_list=json.dumps([{"t": "photo", "id": "A1"}, {"t": "photo", "id": "A2"}]),
+                    buttons=btns)
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)
+    assert [c for c in bot.calls if c[0] == "send_media_group"]                # 앨범은 그대로
+    follow = [c for c in bot.calls if c[0] == "send_message" and c[1] == CHAT and c[3].get("reply_markup")]
+    assert follow and buttons(follow[-1][3]["reply_markup"])[0].url == "https://t.me/x"  # 버튼은 뒤 메시지에
+    await db.close()
 
 
 if __name__ == "__main__":

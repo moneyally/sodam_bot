@@ -446,6 +446,7 @@ class Draft:
     end_ts: int | None = None
     active_from: int | None = None  # 하루 중 올릴 시간대 [from,to) 한국 시 (None=종일)
     active_to: int | None = None
+    buttons: list = field(default_factory=list)   # URL 버튼 [[글자,url,이모지id,색], …] (greet_buttons 와 같은 꼴)
     token: str = field(default_factory=lambda: secrets.token_hex(3))
     expires: float = field(default_factory=lambda: time.time() + WIZARD_TTL)
     cleanup: list[int] = field(default_factory=list)
@@ -478,6 +479,28 @@ class Draft:
 
 
 CLOSE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 닫기", callback_data="an:x")]])
+
+
+BTN_FOLLOW_TEXT = "🔗 바로가기"   # 앨범(여러 장) 뒤에 버튼만 따로 올릴 때의 짧은 문구 (앨범엔 인라인 버튼을 못 닮)
+
+
+def row_buttons(row) -> list:
+    """저장된 예약공지의 URL 버튼 목록 (buttons 칸 JSON → [[글자,url,이모지id,색], …])."""
+    raw = _col(row, "buttons", None)
+    try:
+        got = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return []
+    return got if isinstance(got, list) else []
+
+
+def button_markup(buttons: list, *, icons: bool = True, extra: list | None = None):
+    """예약공지 URL 버튼 → InlineKeyboardMarkup (greet 버튼 재사용: 색·여러 개·프리미엄 이모지).
+    extra = 뒤에 붙일 줄(미리보기 저장/취소 등). 버튼·extra 둘 다 없으면 None."""
+    from . import greet   # 늦게 import (순환 방지)
+    rows = greet.button_rows({"greet_buttons": buttons}, icons=icons) if buttons else []
+    rows = rows + (extra or [])
+    return InlineKeyboardMarkup(rows) if rows else None
 
 
 register_schema("""
@@ -603,6 +626,26 @@ class Announcer:
                 await mediastore.record_alias(db, bot, it["id"], new)
         return sent
 
+    async def send_buttons(self, bot: Bot, chat_id: int, *, title: str, text: str, media_type: str | None,
+                           media_id: str | None, buttons: list, extra: list | None = None,
+                           rules_chat: int | None = None, fmt: str = "") -> Message:
+        """URL 버튼을 달아 공지를 보낸다. 봇 주인이 프리미엄이 아니라 프리미엄 이모지를 텔레그램이 거절하면
+        이모지를 빼고 한 번 다시 보낸다 (greet 와 같은 폴백 — 공지가 안 올라가는 것보단 낫다)."""
+        from . import greet   # 늦게 import (순환 방지)
+        icons = not greet._icons_off[0]
+        while True:
+            markup = button_markup(buttons, icons=icons, extra=extra)
+            try:
+                return await self.send(bot, chat_id, title=title, text=text, media_type=media_type,
+                                       media_id=media_id, reply_markup=markup, rules_chat=rules_chat, fmt=fmt)
+            except BadRequest as e:
+                if buttons and icons and greet._ICON_REFUSED.search(str(e)):
+                    log.info("announce button emoji refused (%s) — 이모지 빼고 다시", e)
+                    greet._icons_off[0] = True
+                    icons = False
+                    continue
+                raise
+
     async def publish(self, bot: Bot, row) -> None:
         """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire."""
         now_ts = int(time.time())
@@ -620,28 +663,38 @@ class Announcer:
                 except TelegramError:
                     pass
         items = media_items(row)
+        btns = row_buttons(row)                      # URL 버튼 (색·여러 개·프리미엄 이모지)
         msg_id, msg_ids = None, None
         try:
-            if len(items) >= 2:   # 여러 장 → 앨범
+            if len(items) >= 2:   # 여러 장 → 앨범 (텔레그램 앨범은 버튼을 못 달아 → 버튼은 뒤 메시지에)
                 try:
                     sent = await self.send_album(bot, row["chat_id"], items, title=row["title"],
                                                  text=row["text"], fmt=row["fmt"] or "")
                 except mediastore.MediaLost:
-                    # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 글만이라도
-                    sent = [await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                            media_type=None, media_id=None, fmt=row["fmt"] or "")]
+                    # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 글만이라도 (버튼은 글에 붙임)
+                    sent = [await self.send_buttons(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                                    media_type=None, media_id=None, buttons=btns, fmt=row["fmt"] or "")]
                     await self._media_lost(bot, row)
+                    btns = []   # 글에 이미 붙였으니 뒤 메시지는 생략
                 ids = [m.message_id for m in sent]
+                if btns:   # 앨범 뒤에 버튼만 한 줄 (앨범엔 인라인 버튼을 못 달아서)
+                    try:
+                        b = await self.send_buttons(bot, row["chat_id"], title="", text=BTN_FOLLOW_TEXT,
+                                                    media_type=None, media_id=None, buttons=btns)
+                        ids.append(b.message_id)
+                    except TelegramError as e:
+                        log.warning("announce album buttons failed: %s", e)
                 msg_id = ids[0] if ids else None
                 msg_ids = json.dumps(ids) if len(ids) >= 2 else None
             else:
                 try:
-                    sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                           media_type=row["media_type"], media_id=row["media_id"], fmt=row["fmt"] or "")
+                    sent = await self.send_buttons(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                                   media_type=row["media_type"], media_id=row["media_id"],
+                                                   buttons=btns, fmt=row["fmt"] or "")
                 except mediastore.MediaLost:
                     # 봇이 바뀌어 미디어가 안 먹고 원본도 없음 → 공지는 글만이라도 올리고 만든 관리자에게 하루 한 번 알림
-                    sent = await self.send(bot, row["chat_id"], title=row["title"], text=row["text"],
-                                           media_type=None, media_id=None, fmt=row["fmt"] or "")
+                    sent = await self.send_buttons(bot, row["chat_id"], title=row["title"], text=row["text"],
+                                                   media_type=None, media_id=None, buttons=btns, fmt=row["fmt"] or "")
                     await self._media_lost(bot, row)
                 msg_id = sent.message_id
             await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
@@ -785,6 +838,7 @@ class Announcer:
             for k in ("start_ts", "end_ts", "active_from", "active_to"):
                 setattr(draft, k, _col(edit_row, k, None))
             draft.fmt = edit_row["fmt"] or ""
+            draft.buttons = row_buttons(edit_row)
         if trigger_msg_id is not None:
             draft.cleanup.append(trigger_msg_id)
         if draft.in_dm:  # 1:1 에선 입력 흐름을 하나만 (메뉴 글자 입력과 서로 취소)
@@ -826,7 +880,7 @@ class Announcer:
 
     async def _handle_message(self, bot: Bot, msg: Message) -> bool:
         draft = self._get(msg.chat_id, msg.from_user.id)
-        if not draft or draft.step not in ("title", "body", "media", "when"):
+        if not draft or draft.step not in ("title", "body", "media", "when", "limits", "buttons"):
             return False
         text = (msg.text or msg.caption or "").strip()
         if text and text[0] in "./" and text not in CANCEL:
@@ -919,6 +973,25 @@ class Announcer:
                 except ValueError as e:
                     await self._say(bot, draft, f"❌ {e}")
                     return True
+            await self._ask_buttons(bot, draft)
+            return True
+
+        if draft.step == "buttons":
+            if text in ("없음", "-", "건너뛰기", "패스") or (editing and text in KEEP):
+                if not (editing and text in KEEP):
+                    draft.buttons = []
+            else:
+                from . import greet   # 늦게 import (순환 방지)
+                btns, err = greet.parse_buttons(msg.text or msg.caption or "",
+                                                msg.entities or msg.caption_entities)
+                if err:
+                    await self._say(bot, draft, f"❌ {err}\n다시 보내주세요 (없으면 <code>없음</code>).")
+                    return True
+                if not btns:
+                    await self._say(bot, draft, "URL 버튼을 못 읽었어요. <code>글자 - https://주소</code> 꼴로, "
+                                                "색은 줄 맨 앞 🔵🟢🔴. 없으면 <code>없음</code>.")
+                    return True
+                draft.buttons = btns
             await self._ask_confirm(bot, draft)
             return True
 
@@ -958,29 +1031,53 @@ class Announcer:
                                     "• 하루 시간대: <code>9시~18시</code> (그 시간대에만)\n"
                                     "• 없으면 아래 버튼 또는 <code>없음</code>", kb)
 
+    async def _ask_buttons(self, bot: Bot, draft: Draft) -> None:
+        """(선택) URL 버튼 — 글자와 주소를 '글자 - 주소' 한 줄에 하나. 색은 줄 맨 앞 🔵🟢🔴, 여러 개 가능.
+        인사말 버튼과 같은 입력이라 프리미엄 이모지 아이콘도 됨 (봇 주인이 프리미엄일 때)."""
+        draft.step = "buttons"
+        rows = [[InlineKeyboardButton("⏭ 버튼 없이", callback_data=f"an:{draft.token}:nobtn")]]
+        now = ""
+        if draft.buttons:
+            rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 버튼 {len(draft.buttons)}개 그대로",
+                                                   callback_data=f"an:{draft.token}:keepbtn"))
+            now = f"\n(지금 담긴 버튼: {len(draft.buttons)}개 · 그대로 두려면 <code>그대로</code>)"
+        await self._say(bot, draft, "<b>🔗 URL 버튼</b> (선택) — 글 밑에 누르는 버튼을 달까요?\n"
+                                    "• <code>글자 - https://주소</code> 한 줄에 하나 (여러 개 OK)\n"
+                                    "• 색: 줄 맨 앞에 🔵(파랑)·🟢(초록)·🔴(빨강)\n"
+                                    "• 예: <code>🟢 테더코인 받기 - https://t.me/june0247</code>\n"
+                                    "• 없으면 아래 버튼 또는 <code>없음</code>" + now,
+                        InlineKeyboardMarkup(rows))
+
     async def _ask_confirm(self, bot: Bot, draft: Draft) -> None:
+        from . import greet   # 늦게 import (순환 방지)
         draft.step = "confirm"
         keep = "" if draft.del_prev else " · 📚 이전 글 쌓기"
         lim = describe_limits(draft.start_ts, draft.end_ts, draft.active_from, draft.active_to, self.svc.cfg.tz)
+        btn_note = f" · 🔗 버튼 {len(draft.buttons)}개" if draft.buttons else ""
         await self._say(bot, draft, "👀 <b>미리보기</b> — "
                                     f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
                                     f"{' · 📌 고정' if draft.pin else ''}{keep}"
-                                    f"{' · ' + lim if lim else ''}")
-        kb = InlineKeyboardMarkup([[
+                                    f"{' · ' + lim if lim else ''}{btn_note}")
+        save_cancel = [[
             InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
             InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
-        ]])
+        ]]
         try:
-            if len(draft.media) >= 2:   # 앨범은 버튼을 못 달아 → 앨범 미리보기 + 저장/취소 버튼은 바로 다음 메시지
+            if len(draft.media) >= 2:   # 앨범은 인라인 버튼을 못 달아 → 앨범 미리보기 + (버튼·저장/취소)는 바로 다음 메시지
                 album = await self.send_album(bot, draft.ui_chat_id, draft.media, title=draft.title,
                                               text=draft.text, rules_chat=draft.chat_id, fmt=draft.fmt)
                 for m in album:
                     draft.cleanup.append(m.message_id)
-                await self._say(bot, draft, f"👆 위가 미리보기예요 (사진 {len(draft.media)}장). 저장할까요?", kb)
+                kb = button_markup(draft.buttons, icons=not greet._icons_off[0], extra=save_cancel)
+                note = " (버튼은 올릴 땐 글 아래로 따로 올라가요)" if draft.buttons else ""
+                sent = await self._say(bot, draft, f"👆 위가 미리보기예요 (사진 {len(draft.media)}장).{note} 저장할까요?", kb)
+                if sent is not None:
+                    draft.cleanup.append(sent.message_id)
             else:
-                preview = await self.send(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
-                                          media_type=draft.media_type, media_id=draft.media_id, reply_markup=kb,
-                                          rules_chat=draft.chat_id, fmt=draft.fmt)
+                preview = await self.send_buttons(bot, draft.ui_chat_id, title=draft.title, text=draft.text,
+                                                  media_type=draft.media_type, media_id=draft.media_id,
+                                                  buttons=draft.buttons, extra=save_cancel,
+                                                  rules_chat=draft.chat_id, fmt=draft.fmt)
                 draft.cleanup.append(preview.message_id)
         except (TelegramError, mediastore.MediaLost) as e:
             again = "메뉴에서 다시 눌러주세요" if draft.in_dm else "다시 <code>.예약공지 만들기</code> 해주세요"
@@ -1082,6 +1179,12 @@ class Announcer:
         if action == "nolimit" and draft.step == "limits":
             draft.start_ts = draft.end_ts = draft.active_from = draft.active_to = None
             await query.answer()
+            await self._ask_buttons(bot, draft)
+            return
+        if action in ("nobtn", "keepbtn") and draft.step == "buttons":
+            if action == "nobtn":
+                draft.buttons = []
+            await query.answer()
             await self._ask_confirm(bot, draft)
             return
         if action == "cancel":
@@ -1111,7 +1214,8 @@ class Announcer:
                       media_id=draft.media_id, media_list=media_json(draft.media),
                       pin=int(draft.pin), del_prev=int(draft.del_prev),
                       start_ts=draft.start_ts, end_ts=draft.end_ts,
-                      active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt)
+                      active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt,
+                      buttons=json.dumps(draft.buttons, ensure_ascii=False) if draft.buttons else None)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
                 await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")
