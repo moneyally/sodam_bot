@@ -41,6 +41,23 @@ def requests_are_cleaned_and_generic_or_compilation_asks_back():
 
 
 @test
+def lyric_site_copy_paste_is_decluttered():
+    # 실측 2026-11-08 #15064: 가사 사이트 제목을 통째 복붙 → '가사 | Lyric | smay' 꼬리 탓에 한 곡만 못 틂.
+    q = "그루비룸 (GroovyRoom) - 행성 (This Night) (Feat. Blue D, Jhnovr) 가사 | Lyric | smay 틀어줘"
+    st = mm.search_text(q)
+    assert "|" not in st and "smay" not in st.lower(), f"파이프 꼬리가 검색어에 남음: {st}"
+    must = mm.parse(q).must
+    assert not any(w in must for w in ("가사", "lyric", "smay")), f"가사사이트 군더더기가 must 에 남음: {must}"
+    assert "행성" in must and "groovyroom" in must, f"곡·가수 낱말이 사라짐: {must}"
+    # 검색이 돌려주는 제목이 이제 '신청 낱말 전부 담김'으로 매칭된다 (전엔 가사·smay 탓에 전멸)
+    official = "그루비룸 (GroovyRoom) - 행성 (This Night) (Feat. Blue.D, Jhnovr)"
+    assert mm.Title(official).covers(mm.parse(q)), "복붙 정리 뒤엔 공식 곡이 매칭돼야 함"
+    # 정상 신청은 그대로 (회귀 방지)
+    assert mm.parse("아이유 밤편지 틀어줘").must == ["아이유", "밤편지"]
+    assert mm.search_text("god 길 가사 틀어줘").split() == ["god", "길"], "재생 신청의 '가사'는 군더더기"
+
+
+@test
 def title_hits_are_word_safe_and_forgive_small_spelling_slips():
     t = mm.Title("디셈버(DECEMBER) - 별이될께 [가사/lyrics]")
     assert t.hit("별이될게") and t.hit("디셈버") and t.hit("december")

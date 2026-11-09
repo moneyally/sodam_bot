@@ -74,10 +74,25 @@ class Req:
         return norm(self.text)
 
 
+# 가사 사이트 복붙 꼬리 ('... 행성 (This Night) (Feat. …) 가사 | Lyric | smay' — 실측 2026-11-08 그루비룸-행성 못 틂):
+# 파이프로 이어 붙인 '| Lyric | 업로더' 꼬리 + 남은 '가사·lyric·official·MV' 낱말은 곡 이름이 아니라 검색·must 에서 뺀다.
+# (split() 이 대체 음원 비교 때 이미 같은 낱말을 떼는데, 검색어·must 엔 안 떼서 '신청 낱말 전부 담긴 원곡' 매칭이 전멸했음.)
+_SITE_TAIL = re.compile(r"\s+[|｜]\s+.*$")       # ' | Lyric | smay' 같은 파이프 꼬리 통째
+_QUALITY_RE = re.compile(r"(?i)\b(?:lyrics?|official(?:\s+(?:music\s+)?(?:video|audio))?|m/?v|music\s+video)\b|\b가사\b|\b뮤직비디오\b")
+
+
+def declutter(text: str) -> str:
+    """가사 사이트에서 통째 복붙한 제목의 군더더기('가사 | Lyric | 업로더'·'MV'·'official')를 뺀다."""
+    t = _SITE_TAIL.sub(" ", text or "")
+    t = _QUALITY_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def search_text(text: str) -> str:
-    """검색어 = 신청 글에서 '틀어줘'·'좀' 같은 말만 뺀 것 (나머지 글자·순서·'-' 는 그대로 — 검색 엔진이 더 잘 앎)."""
-    out = " ".join(t for t in (text or "").split() if norm(t).strip(".,!?~") not in STOP)
-    return re.sub(r"\s+", " ", out).strip() or (text or "").strip()
+    """검색어 = 신청 글에서 '틀어줘'·'좀'·가사사이트 군더더기를 뺀 것 (나머지 글자·순서·'-' 는 그대로 — 검색 엔진이 더 잘 앎)."""
+    cleaned = declutter(text)
+    out = " ".join(t for t in cleaned.split() if norm(t).strip(".,!?~") not in STOP)
+    return re.sub(r"\s+", " ", out).strip() or cleaned or (text or "").strip()
 
 
 def reorder_query(text: str) -> list[str]:
