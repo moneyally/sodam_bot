@@ -130,7 +130,8 @@ async def _helper_ready(svc, bot, chat_id: int, uid: int) -> str | None:
 
 async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | None = None, title: str = "",
                   duration: int = 0, status_msg: int | None = None, pick: dict | None = None,
-                  by_id: int | None = None, by_name: str | None = None, mix: bool = False) -> None:
+                  by_id: int | None = None, by_name: str | None = None, mix: bool = False,
+                  count: int | None = None) -> None:
     """뒤에서: 도우미 준비 → 음성 담당에 신청 → 결과(대기열 추가·재생 시작·고르기 버튼)는 음성 담당이 '찾는 중' 글을 고쳐서.
     pick = 고르기 버튼으로 고른 곡 (신청한 사람 by_id·by_name 그대로)."""
     db = svc.db
@@ -153,6 +154,8 @@ async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | 
                "by_name": name}
     if mix:
         payload["mix"] = True
+    if count:
+        payload["count"] = int(count)
     if pick:
         payload["pick"] = {k: pick.get(k) for k in ("vid", "title", "duration", "kind")}
     jid = await store.add_job(db, chat_id, "music_play", payload, uid, dedupe=False)
@@ -193,7 +196,8 @@ async def _tg_audio(svc, bot, msg) -> tuple[str, str, int] | str | None:
     return str(out), title[:120], int(getattr(f, "duration", 0) or 0)
 
 
-async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, mix: bool = False) -> str | None:
+async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, mix: bool = False,
+               count: int | None = None) -> str | None:
     """신청 접수. 방에 보일 거절 이유를 돌려주거나, 접수했으면 None ('찾는 중' 글은 여기서 올림)."""
     why = await precheck(svc, chat_id, role)
     if why:
@@ -232,7 +236,7 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, m
     if tg:
         persist.spawn(request(svc, bot, chat_id, user, path=tg[0], title=tg[1], duration=tg[2], status_msg=status))
     else:
-        persist.spawn(request(svc, bot, chat_id, user, query=query, status_msg=status, mix=mix))
+        persist.spawn(request(svc, bot, chat_id, user, query=query, status_msg=status, mix=mix, count=count))
     return None
 
 
@@ -631,8 +635,10 @@ async def t_music(ctx: tools.ToolCtx, a: dict) -> str:
     if ctx.chat_id > 0:
         return "1:1 에선 노래를 못 틂 — 그룹방에서 '.노래 제목' 또는 '소담아 ○○ 틀어줘'."
     if action == "play":
+        cnt = a.get("count")
+        cnt = int(cnt) if str(cnt or "").isdecimal() else None   # 분위기·장르 신청에서 '몇 곡' (최대 15 은 뒤에서 자름)
         why = await play(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, ctx.role, str(a.get("query") or ""),
-                         getattr(ctx, "request_msg", None), mix=bool(a.get("mix")))
+                         getattr(ctx, "request_msg", None), mix=bool(a.get("mix")), count=cnt)
         if why:
             await ctx.bot.send_message(ctx.chat_id, why, parse_mode="HTML")
             ctx.quiet = True
@@ -707,12 +713,14 @@ tools.register_tool(tools.Tool(
     "**특정 곡·가수가 아니라 분위기·상황·장르·기분 신청이면 play(mix=true)** — '자장가'·'잠잘 때 듣는 노래'·'신나는 노래 "
     "아무거나'·'운동할 때 듣는 노래'·'드라이브 음악'·'섹스할 때 듣는 노래'·'잔잔한 거'·'카페 음악' 처럼. query 엔 그 분위기 말을 "
     "그대로 넣음(소담이 어울리는 플레이리스트로 여러 곡 틀어 줌). 특정 제목·가수가 하나라도 있으면 mix 는 비움. "
+    "'팝송 5곡'·'발라드 10개'처럼 개수를 말하면 count 에 그 숫자(최대 15, 안 주면 15곡). "
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
     {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume", "seek",
                                             "remove", "clear", "shuffle", "loop", "loop_queue", "autoplay", "lyrics", "top"]},
      "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로). mix=true 면 분위기·상황 말 · remove 땐 뺄 가수·제목(일괄)"},
      "value": {"type": "integer", "description": "volume 0~200 · seek 초 · remove 대기열 번호 · top 일수 · loop 반복 횟수(0=끔, 안 주면 계속)"},
      "mix": {"type": "boolean", "description": "특정 곡 아닌 분위기·상황·장르 신청이면 true (자장가·잠잘 때·신나는 노래 등) → 어울리는 곡 여러 개"},
+     "count": {"type": "integer", "description": "mix=true 에서 몇 곡 넣을지 ('팝송 5곡'이면 5, 최대 15, 안 주면 15곡)"},
      "on": {"type": "boolean", "description": "loop_queue·autoplay 켜기(true)/끄기(false), 비우면 바꾸기"}},
     ["action"], t_music, where="room"))
 

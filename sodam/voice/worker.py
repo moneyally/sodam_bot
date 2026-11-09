@@ -802,8 +802,10 @@ class Worker:
     async def _music_mix(self, chat_id: int, p: dict, by, name: str, status) -> tuple[bool, str]:
         """분위기·상황 신청 ('자장가'·'잠잘 때 듣는 노래'·'신나는 노래') → 어울리는 플레이리스트에서 여러 곡.
         소담이 mix=true 로 판단했거나 resolve 가 '분위기'(MusicError mix)로 본 경우 둘 다 여기로."""
+        count = p.get("count")
+        limit = max(1, min(int(count), music.PLAYLIST_MAX)) if count else music.PLAYLIST_MAX   # 소담이 '팝송 5곡' 처럼 개수 주면 그만큼(최대 15)
         try:
-            items = await asyncio.to_thread(self.music_source.mix_for, str(p.get("query") or "")[:300])
+            items = await asyncio.to_thread(self.music_source.mix_for, str(p.get("query") or "")[:300], limit)
         except music.MusicError as e2:
             await self._music_edit(chat_id, status, f"⚠️ {e2}" if not str(e2).startswith("🎧") else str(e2))
             return False, f"music:{e2.code}"
