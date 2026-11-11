@@ -13,3 +13,4 @@ imageio-ffmpeg>=0.5  # 움프 영상 (sodam/avatar.py) — ffmpeg 정적 바이�
 numpy>=1.26    # 스티커 공방 (sodam/stickerforge) — 배경 빼기·효과
 scipy>=1.11    # 스티커 공방 배경 빼기 (ndimage label·fill)
 nudenet>=3.4.2  # 🔞 로컬 신체부위 탐지 (sodam/nsfwlocal.py, 조각난 음란 스티커 — 320n 모델 번들·CPU ~10~40ms). onnxruntime·opencv-python-headless 를 끌어옴. 선택: .env NSFW_LOCAL=0 로 끔
+rembg[cpu]>=2.0.56  # 🧍 실사 사진에서 사람만 오려내기 (sodam/stickerforge/segment.py, isnet-general-use ONNX·별도 프로세스). onnxruntime 은 nudenet 이 이미 끌어옴. 모델 170MB 는 data/models 에 첫 사용 때 1회 다운. 선택: .env STICKER_SEG=0 로 끔

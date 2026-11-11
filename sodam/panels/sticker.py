@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 from datetime import datetime
 
@@ -33,6 +34,8 @@ REDRAW_KEEP = ("Keep the same character, pose, expression, art style, line work 
                "Place it on a plain flat solid white background with nothing else.")
 COPY_CHECK = True   # 답장한 그림에 새 글자를 얹을 때 원본 글자 읽기 (작은 모델 몇 원 — 테스트 기본은 끔, tests/fakes.py)
 HARD_WARN = ("가장자리에서 잘림", "배경 빼기 구멍", "하얗게 날아감", "거의 까맣", "너무 요란")   # 이건 고쳐서 다시 (까맣게·하얗게 날아감·잘림)
+# "사람만 오려내기" 명시 요청 → AI 세그(keying ai). 복잡한 실사 배경은 색 키잉으로 못 뺌 (2026-11 송도현 카페 사진)
+_PERSON_CUT = re.compile(r"(인물만|사람만|얼굴만|누끼|오려|배경\s*(지우|지워|제거|빼|없애|날려|투명))")
 OCR_SYSTEM = ("You read text in a sticker image. Return JSON {\"texts\": [every piece of visible text exactly as written]}. "
               "Empty list if there is none. Do not guess hidden text.")
 
@@ -252,6 +255,11 @@ async def t_make_sticker(ctx: tools.ToolCtx, a: dict) -> str:
     spec, err = await resolve_spec(ctx, a.get("spec") or {}, "sticker")
     if err:
         return f"spec 오류: {err}. 고쳐서 다시 부를 것."
+    # "인물만/배경 지워/얼굴만/누끼/오려" 명시 요청 → AI 세그로 사람만 오려냄 (색 키잉은 복잡한 실사 배경을 못 뺌).
+    # 소담이 spec 에 뭘 넣었든 코드가 덮음 (명확한 요청은 코드가 — 프레임워크 철학). 세그 꺼졌으면 keying 이 색 키잉으로 폴백.
+    from ..stickerforge import segment
+    if segment.available() and _PERSON_CUT.search(str(a.get("request") or "")) and isinstance(spec.get("keying"), dict):
+        spec["keying"]["mode"] = "ai"
     if not a.get("accept_warnings"):
         same = await same_as_last(ctx, spec, str(a.get("request") or ""), "sticker")
         if same:

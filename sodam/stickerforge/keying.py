@@ -20,6 +20,8 @@ effects on black (auto cannot tell that from a plain black background).
 """
 from __future__ import annotations
 
+import io
+
 import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
@@ -150,9 +152,24 @@ def fill_enclosed_holes(im: Image.Image, max_px: int = 4000) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
-def key_image(path: str, mode: str = "auto", tol: int = 20, fill_holes: bool = True) -> tuple:
-    """Returns (RGBA image, mode actually used)."""
+def key_image(path, mode: str = "auto", tol: int = 20, fill_holes: bool = True) -> tuple:
+    """Returns (RGBA image, mode actually used). `path` 는 파일 경로 또는 BytesIO.
+    mode='ai' = 실사 사진에서 사람만 오려내기 (segment.py, 원본 픽셀 보존·배경만 투명).
+    세그가 꺼졌거나 실패하면 색 키잉(auto)으로 폴백한다."""
     im = Image.open(path)
+    if mode == "ai":
+        from . import segment
+        try:
+            if hasattr(path, "read"):                  # BytesIO
+                path.seek(0)
+                data = path.read()
+            else:
+                with open(path, "rb") as f:
+                    data = f.read()
+            cut = Image.open(io.BytesIO(segment.segment_sync(data))).convert("RGBA")
+            return cut, "ai"
+        except Exception:                              # 세그 꺼짐·타임아웃·오류 → 색 키잉
+            mode = "auto"
     if mode == "auto":
         mode = detect_mode(im)
     if mode == "none":
