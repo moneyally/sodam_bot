@@ -407,7 +407,9 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if adder and svc.billing and svc.billing.enabled and await _is_admin_safe(svc, bot, chat.id, adder.id, fresh=True):
         await subscription.send_panel_dm(svc, bot, chat.id, adder.id)  # 1:1 을 시작 안 했으면 조용히 실패
     await svc.mod.report(bot, f"[봇 초대] {esc(chat.title or '')} ({chat.id}) by "
-                              f"{esc(user_name(adder)) if adder else '?'}({adder.id if adder else '?'})")
+                              f"{esc(user_name(adder)) if adder else '?'}"
+                              f"{(' @' + esc(adder.username)) if adder and adder.username else ''}"
+                              f"({adder.id if adder else '?'})")
 
 
 _NEEDED_RIGHTS = (("can_delete_messages", "메시지 삭제"), ("can_restrict_members", "사용자 차단"))
