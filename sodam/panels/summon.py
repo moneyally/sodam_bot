@@ -284,9 +284,18 @@ async def t_summon(ctx: tools.ToolCtx, a: dict) -> str:
     raw = a.get("names", "")
     names = raw if isinstance(raw, list) else [t for t in str(raw).replace(",", " ").split() if t]
     db = ctx.svc.db
-    # 저장 명단 이름이면 그 명단
     targets: list[int] = []
-    if len(names) == 1:
+    # 📊 채팅 집계로 뽑기: '이번주 100개 이상 친 사람 태그'·'오늘 상위 10명 불러' (2026-11 泰山 루디)
+    by = a.get("by_chat") if isinstance(a.get("by_chat"), dict) else None
+    if by:
+        targets, label = await summon.by_chat_rank(ctx.svc, ctx.chat_id, by.get("period"),
+                                                   min_count=by.get("min_count"), top=by.get("top"))
+        if not targets:
+            cond = (f"{by.get('min_count')}개 이상" if by.get("min_count")
+                    else f"상위 {by.get('top')}명" if by.get("top") else "")
+            return f"{esc(label)} 채팅 {esc(cond)} 친 사람이 없음. 조건을 바꿔 달라고 짧게 안내."
+    # 저장 명단 이름이면 그 명단
+    if not targets and len(names) == 1:
         rows = await summon.lists(db, ctx.chat_id)
         hit = next((r for r in rows if r["name"].lower() == str(names[0]).lower()), None)
         if hit:
@@ -335,8 +344,13 @@ menu.register_input("smnsave", "💾 저장할 <b>명단 이름</b>을 보내 �
 tools.register_tool(tools.Tool(
     "summon_members",
     "[관리자] 고른 사람들을 한 번에 @태그해서 방에 '집합(소집)' 글을 올린다. "
-    "관리자가 '철수 영희 집합시켜'·'단골 명단 불러'처럼 부를 때. names = 이름·@아이디 목록 또는 저장 명단 이름 하나. "
+    "관리자가 '철수 영희 집합시켜'·'단골 명단 불러'처럼 부를 때 names 로. "
+    "**채팅 집계로 부를 땐 by_chat** — '이번주 채팅 100개 이상 친 사람 태그'·'오늘 상위 10명 불러'·'저번주 활발한 사람 소집'. "
     "제재가 아니라 멘션이라 확인 카드 없음. 그룹방에서만.",
     {"names": {"type": "array", "items": {"type": "string"},
-               "description": "부를 사람들의 이름·@아이디 목록, 또는 저장한 집합 명단 이름 하나"}},
-    ["names"], t_summon, Role.ADMIN, where="room"))
+               "description": "부를 사람들의 이름·@아이디 목록, 또는 저장한 집합 명단 이름 하나"},
+     "by_chat": {"type": "object", "description": "채팅 집계로 뽑기. "
+                 "period: 오늘/어제/이번주/저번주/최근7일/이번달 (주는 순위판과 같은 월요일 0시 기준). "
+                 "min_count: N개 이상(예 100), top: 상위 N명. "
+                 "예: '이번주 100개 이상 친 사람' → {period:'이번주', min_count:100}, '오늘 상위 10명' → {period:'오늘', top:10}"}},
+    [], t_summon, Role.ADMIN, where="room"))
