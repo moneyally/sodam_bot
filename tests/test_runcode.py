@@ -86,6 +86,10 @@ async def make_tools_allowed_after_tainted_lookup():
     c.tainted = True
     res = await tools.execute("make_sticker", json.dumps({"spec": {"recipe": "없는레시피"}}), c)
     assert "보안" not in res and "spec 오류" in res, res
+    # @멘션은 알림뿐이라 tainted 뒤에도 허용 (2026-11 브로커방: lookup_user 로 고번→사람 찾고 mention 하다 막혀
+    # 태그 0 인데 '이미 처리됐다'고 거짓 답하던 것). 못 찾으면 다른 안내가 나오지만 '보안' 차단은 아니어야.
+    res = await tools.execute("mention_members", json.dumps({"names": ["없는사람123"]}), c)
+    assert "보안" not in res, res
     res = await tools.execute("change_setting", json.dumps({"key": "ai_enabled", "value": "off"}), c)
     assert "보안" in res, res
 
