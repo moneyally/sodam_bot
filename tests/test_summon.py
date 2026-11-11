@@ -40,6 +40,39 @@ def ctx(svc, bot, uid, cid, args):
     return PanelCtx(svc, bot, uid, cid, list(args))
 
 
+# ── 📊 채팅 집계로 소집 (泰山 루디) ──────────────────────────
+@test
+async def summon_by_chat_rank_over_count_and_top():
+    db, svc, bot = await setup()
+    for i in range(10):
+        await db.log_message(CHAT, A, 1000 + i, "안녕하세요 반갑습니다")
+    for i in range(5):
+        await db.log_message(CHAT, B, 2000 + i, "오늘도 좋은 하루")
+    for i in range(2):
+        await db.log_message(CHAT, C, 3000 + i, "넵 알겠습니다")
+    ids, label = await summon.by_chat_rank(svc, CHAT, "이번주", top=2)
+    assert ids == [A, B] and "이번 주" in label, (ids, label)          # 상위 2명
+    ids, _ = await summon.by_chat_rank(svc, CHAT, "이번주", min_count=5)
+    assert set(ids) == {A, B}, ids                                     # 5개 이상 (뮤테이션: min_count 무시 → C 끼어 실패)
+    ids, _ = await summon.by_chat_rank(svc, CHAT, "이번주", min_count=100)
+    assert ids == [], ids                                              # 100개 이상 = 없음
+
+
+@test
+async def summon_tool_by_chat_tags_them():
+    from sodam.tools import ToolCtx
+    db, svc, bot = await setup()
+    for i in range(6):
+        await db.log_message(CHAT, A, 1000 + i, "안녕하세요 반갑습니다")
+    for i in range(6):
+        await db.log_message(CHAT, B, 2000 + i, "오늘도 좋은 하루")
+    c = ToolCtx(svc, bot, CHAT, fake_user(ADMIN, "문주"), Role.ADMIN, {})
+    out = await P.t_summon(c, {"by_chat": {"period": "이번주", "min_count": 5}})
+    assert "2명" in out, out                                           # A·B 태그
+    out = await P.t_summon(c, {"by_chat": {"period": "이번주", "min_count": 999}})
+    assert "없음" in out, out                                          # 조건 미달 → 거절 안내
+
+
 # ── 코어 ─────────────────────────────────────────────────
 @test
 async def toggle_and_pick_and_clear():

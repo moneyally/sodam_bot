@@ -136,8 +136,8 @@ def sanitize(raw: dict) -> tuple[dict | None, str | None]:
         return None, "mode 는 cutout(배경 빼기) / photo(사진 그대로)"
     key = (raw.get("keying") or {}) if isinstance(raw.get("keying"), dict) else {"mode": raw.get("keying") or "auto"}
     kmode = key.get("mode", "auto")
-    if kmode not in ("auto", "white", "black", "color", "glow", "none", "checker"):
-        return None, "keying 은 auto·white·black·color·glow·none·checker"
+    if kmode not in ("auto", "white", "black", "color", "glow", "none", "checker", "ai"):
+        return None, "keying 은 auto·white·black·color·glow·none·checker·ai"
     spec = {"mode": mode, "keying": {"mode": kmode, "tol": int(min(max(key.get("tol", 20), 5), 60))},
             "margin": float(min(max(raw.get("margin", 0.08), 0.04), 0.18)),
             "radius": int(min(max(raw.get("radius", 56), 8), 256)),   # 스티커는 투명 픽셀이 있어야 함(alpha_range) → 모서리 최소 8

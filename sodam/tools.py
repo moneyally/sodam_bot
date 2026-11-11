@@ -1664,6 +1664,10 @@ CARD_GATED = frozenset({"warn_member", "mute_member", "unmute_member", "ban_memb
 # room_read 여도 되는 만들기 = 결과가 요청자 앞에 그림 한 장 올라가는 것뿐 (설정·제재·전송·기억 없음) — run_code 로 그린 그림을
 # 스티커·움프 원본으로 쓰는 길(그룹방 run_code 는 항상 room.db 사본을 실어 room_read 가 켜짐)이 막히지 않게.
 MAKE_AFTER_READ = frozenset({"make_sticker", "make_profile_video"})
+# @멘션뿐인 도구 = 결과가 그 사람 태그(알림)뿐, 제재·설정·전송·검색·기억 없음 → 읽기 뒤에도 허용.
+# 번호로 찾아 태그하는 정상 흐름(lookup_user 로 고번→사람 → mention_members)이 '조회 뒤 쓰기 금지'에
+# 막혀 태그가 안 됐는데 AI 는 '이미 처리됐다'고 거짓 답하던 것 (2026-11 브로커방 '8729025023 고번 태그').
+MENTION_AFTER_READ = frozenset({"mention_members"})
 ROOM_READ_REFUSED = ("이 답변은 멤버가 쓴 글을 읽었거나 요청 확인을 못 해서, 확인 카드 없이 바로 바뀌는 일은 못 함 (보안 — 숨은 지시 방지). "
                      "필요하면 요청한 사람이 따로 한 번 더 말해 달라고 짧게 안내할 것.")
 
@@ -1692,10 +1696,12 @@ async def execute(name: str, raw_args: str, ctx: ToolCtx) -> str:
     if not tool or tool not in available(ctx.role, ctx.settings, ctx.chat_id > 0):
         return "이 도구는 지금 사용할 수 없음 (권한 없음)."
     if ((ctx.tainted or (ctx.bot_tainted and name != "bot_command")) and name not in READ_ONLY
-            and name not in MAKE_AFTER_READ):   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
+            and name not in MAKE_AFTER_READ and name not in MENTION_AFTER_READ):   # 읽은 기록 속 숨은 지시가 제재·전송·검색·기억으로 이어지지 않게
         # 만들기(스티커·움프)는 요청자 앞에 그림 한 장뿐이라 허용 — '내 아이디 넣어 움프' 에서 lookup_user 뒤 막히던 것 (2026-10-15 벳블리)
+        # @멘션은 알림뿐이라 허용 — lookup_user(고번→사람) 뒤 mention_members 가 막히던 것 (2026-11 브로커방)
         return "방 기록을 읽은 답변에서는 이 도구를 못 씀 (보안). 필요하면 요청한 사람이 따로 한 번 더 말해 달라고 짧게 안내할 것."
-    if ctx.room_read and name not in READ_ONLY and name not in CARD_GATED and name not in MAKE_AFTER_READ:
+    if ctx.room_read and name not in READ_ONLY and name not in CARD_GATED and name not in MAKE_AFTER_READ \
+            and name not in MENTION_AFTER_READ:
         return ROOM_READ_REFUSED
     try:
         args = json.loads(raw_args or "{}")

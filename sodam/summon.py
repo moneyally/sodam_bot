@@ -124,6 +124,45 @@ async def clear(db, chat_id: int, admin_id: int) -> None:
     await db.set_state(chat_id, _key(admin_id), None)
 
 
+def _period_bounds(period: str | None, tz):
+    """기간 → (시작ts, 끝ts|None, 표시이름). 주(週)는 순위판과 똑같이 월요일 0시 기준 (util.period_range 의
+    '이번주=최근7일' 과 다르고, '저번주'도 지원). 2026-11 泰山 루디 '이번주/저번주 채팅 N개 이상 태그'."""
+    from datetime import datetime, timedelta
+    now = datetime.now(tz)
+    t0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    mon = t0 - timedelta(days=now.weekday())
+    p = (period or "이번주").strip().lower()
+    if p in ("오늘", "today"):
+        return t0.timestamp(), None, "오늘"
+    if p in ("어제", "yesterday"):
+        return (t0 - timedelta(days=1)).timestamp(), t0.timestamp(), "어제"
+    if p in ("저번주", "지난주", "lastweek"):
+        return (mon - timedelta(days=7)).timestamp(), mon.timestamp(), "지난 주"
+    if p in ("최근7일", "주간", "week", "7일"):
+        return (now - timedelta(days=7)).timestamp(), None, "최근 7일"
+    if p in ("이번달", "월간", "month", "30일"):
+        return t0.replace(day=1).timestamp(), None, "이번 달"
+    return mon.timestamp(), None, "이번 주"            # 기본 = 이번 주(월요일 0시부터)
+
+
+async def by_chat_rank(svc, chat_id: int, period: str | None,
+                       min_count: int | None = None, top: int | None = None) -> tuple[list[int], str]:
+    """채팅 집계 기준으로 부를 사람 뽑기 → (user_id 목록, 기간 이름). 순위판과 같은 집계 설정
+    (최소 글자수·중복 제외·새벽 제외·멤버 초기화)을 그대로 반영한다. min_count=N개 이상 / top=상위 N명."""
+    from . import stats
+    since, until, label = _period_bounds(period, svc.cfg.tz)
+    rule = await stats.min_chars(svc.db, chat_id)
+    limit = min(int(top), MAX_PICK) if top else MAX_PICK
+    rows = await svc.db.top_chatters(chat_id, int(since), limit=limit,
+                                     until=int(until) if until else None, min_chars=rule, user_cuts=True)
+    out: list[int] = []
+    for r in rows:                                     # 내림차순 → min_count 미달이 나오면 이후도 미달
+        if min_count and (r["n"] or 0) < int(min_count):
+            break
+        out.append(r["user_id"])
+    return out[:MAX_PICK], label
+
+
 async def resolve_targets(db, chat_id: int, toks) -> tuple[list[int], list[str]]:
     """토큰들(@아이디·이름·숫자 고유번호) → (찾은 user_id, 못 찾은 토큰).
     방에 기록이 없는 사람도 **순수 숫자 고유번호는 그대로** 받는다(밴·공동차단과 같은 방침 — 외부인·말 안 한 멤버도 부를 수 있게).
