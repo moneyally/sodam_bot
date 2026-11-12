@@ -1136,6 +1136,7 @@ class Announcer:
                    f"(최대 {greet.MAX_BUTTONS}개). 다 됐으면 <code>✅ 이대로</code>, 비우려면 <code>없음</code>.")
         await self._say(bot, draft, "<b>🔗 URL 버튼</b> (선택) — 글 밑에 누르는 버튼을 달까요?\n"
                                     "• <code>글자 - https://주소</code> — 한 줄에 하나씩, 한 번에 여러 줄도 OK\n"
+                                    "• <b>한 줄에 2개</b> 넣으려면 <code>|</code> 로: <code>렛츠벳 - 주소 | 벳더블유 - 주소</code>\n"
                                     "• <b>한 개씩 따로 보내도 쌓여요</b> (하나 보내고 또 보내면 추가)\n"
                                     "• 색: 줄 맨 앞에 🔵(파랑)·🟢(초록)·🔴(빨강)\n"
                                     "• 예: <code>🟢 테더코인 받기 - https://t.me/june0247</code>\n"

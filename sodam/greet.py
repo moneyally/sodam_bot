@@ -69,7 +69,7 @@ def _valid_style(v: Any) -> str | None:
 def _render_buttons(value: Any) -> str:
     """`.설정 전체` 표시용 (값이 [글자, 주소] 목록이라 기본 표시로는 안 됨)."""
     good = clean_buttons(value)
-    return ", ".join(f"{t} ({u})" for t, u, _, _ in good) if good else "(없음)"
+    return ", ".join(f"{t} ({u})" for t, u, *_ in good) if good else "(없음)"
 
 
 register_setting("greet_media_type", "", "인사 미디어 종류")
@@ -131,17 +131,19 @@ def _valid_emoji_id(icon: Any) -> str | None:
     return icon if isinstance(icon, str) and icon.isdigit() and 1 <= len(icon) <= 25 else None
 
 
-def clean_buttons(value: Any) -> list[tuple[str, str, str | None, str | None]]:
-    """저장된 값에서 쓸 수 있는 버튼만 (최대 6개). (글자, 주소, 프리미엄이모지id|None, 색|None). 틀린 항목은 조용히 뺀다.
-    옛 값([글자, 주소]·[글자, 주소, 이모지])도 그대로 읽는다 (없는 칸은 None)."""
+def clean_buttons(value: Any) -> list[tuple[str, str, str | None, str | None, bool]]:
+    """저장된 값에서 쓸 수 있는 버튼만 (최대 MAX_BUTTONS 개). (글자, 주소, 프리미엄이모지id|None, 색|None, 같은줄?).
+    같은줄=True 면 앞 버튼과 한 줄에 (사진처럼 자유 배치, 2026-11-12 오너). 틀린 항목은 조용히 뺀다.
+    옛 값([글자, 주소]·[글자, 주소, 이모지]·[…, 색])도 그대로 읽는다 (없는 칸은 None/False)."""
     out = []
     for item in value if isinstance(value, list) else []:
         if isinstance(item, (list, tuple)) and len(item) >= 2:
             text, url = clean_button_text(item[0]), normalize_url(item[1])
             icon = _valid_emoji_id(item[2]) if len(item) >= 3 else None
             style = _valid_style(item[3]) if len(item) >= 4 else None
+            same = bool(item[4]) if len(item) >= 5 else False
             if text and url:
-                out.append((text, url, icon, style))
+                out.append((text, url, icon, style, same))
     return out[:MAX_BUTTONS]
 
 
@@ -176,32 +178,40 @@ def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
     줄 맨 앞(공백 뒤 첫 글자)의 프리미엄(커스텀) 이모지는 버튼 앞 아이콘(icon_custom_emoji_id)으로 뽑는다. 하나라도 틀리면 전부 거절."""
     raw = raw or ""
     icons = _line_icons(raw, entities)
-    rows: list[tuple[str, str | None]] = []          # (이모지 뗀 줄 글자, 이모지id|None)
+    rows: list[tuple[str, str | None, str | None, bool]] = []   # (이모지·색 뗀 글자, 이모지id|None, 색|None, 같은줄?)
     cp = 0
     for ln in raw.split("\n"):
-        start, cp = cp, cp + len(ln) + 1             # +1 = '\n' (코드포인트 위치 따라가기)
+        ln_start, cp = cp, cp + len(ln) + 1          # +1 = '\n' (코드포인트 위치 따라가기)
         if not ln.strip():
             continue
-        ls = len(ln) - len(ln.lstrip())              # 앞 공백 코드포인트 수
-        icon = None
-        hit = icons.get(start + ls)                  # 공백 뒤 첫 글자가 커스텀 이모지면 아이콘으로
-        if hit:
-            emo_len, icon = hit
-            ln = ln[:ls] + ln[ls + emo_len:]         # 맨 앞 이모지 글자 제거 → 버튼 글자엔 안 남김
-        text_part, style = ln.strip(), None
-        for mark, st in BTN_COLORS.items():          # 줄 맨 앞 색 이모지(🔵🟢🔴) → 버튼 색, 글자엔 안 남김
-            if text_part.startswith(mark):
-                style, text_part = st, text_part[len(mark):].strip()
-                break
-        rows.append((text_part, icon, style))
+        seg_cp = ln_start                            # 한 줄을 '|' 로 나눠 같은 줄에 버튼 여러 개 (사진처럼, 2026-11-12 오너)
+        first = True
+        for seg in ln.split("|"):
+            seg_start = seg_cp
+            seg_cp += len(seg) + 1                   # +1 = '|' (코드포인트 위치 따라가기)
+            if not seg.strip():
+                continue
+            ls = len(seg) - len(seg.lstrip())        # 조각 앞 공백 코드포인트 수
+            icon = None
+            hit = icons.get(seg_start + ls)          # 조각 맨 앞 글자가 커스텀 이모지면 아이콘으로
+            if hit:
+                emo_len, icon = hit
+                seg = seg[:ls] + seg[ls + emo_len:]  # 맨 앞 이모지 글자 제거 → 버튼 글자엔 안 남김
+            text_part, style = seg.strip(), None
+            for mark, st in BTN_COLORS.items():      # 조각 맨 앞 색 이모지(🔵🟢🔴) → 버튼 색, 글자엔 안 남김
+                if text_part.startswith(mark):
+                    style, text_part = st, text_part[len(mark):].strip()
+                    break
+            rows.append((text_part, icon, style, not first))   # '|' 뒤 조각 = 앞 버튼과 같은 줄
+            first = False
     if not rows:
-        return [], "한 줄에 하나씩 <code>버튼 글자 - https://주소</code> 로 보내주세요."
+        return [], "한 줄에 하나씩 <code>버튼 글자 - https://주소</code> (같은 줄에 2개는 <code>|</code> 로 나눠요)."
     if len(rows) > MAX_BUTTONS:
-        return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 줄: {len(rows)}개)"
+        return [], f"URL 버튼은 최대 {MAX_BUTTONS}개예요. (보낸 버튼: {len(rows)}개)"
     out = []
-    for i, (line, icon, style) in enumerate(rows, 1):
+    for i, (line, icon, style, same) in enumerate(rows, 1):
         m = _LINE.match(line)
-        where = f"{i}번째 줄 <code>{esc(line[:40])}</code>"
+        where = f"{i}번째 버튼 <code>{esc(line[:40])}</code>"
         if not m:
             return [], f"{where}: 형식이 틀렸어요. <code>버튼 글자 - https://주소</code>"
         text, url = clean_button_text(m.group(1)), normalize_url(m.group(2))
@@ -209,12 +219,10 @@ def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
             return [], f"{where}: 버튼 글자는 1~{MAX_BUTTON_TEXT}자로 써주세요."
         if not url:
             return [], f"{where}: 주소는 <code>https://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요."
-        if style:
-            out.append([text, url, icon, style])       # 색 있으면 4칸 (icon 없으면 None)
-        elif icon:
-            out.append([text, url, icon])
+        if same or style or icon:
+            out.append([text, url, icon, style, same])   # 색·이모지·같은줄 있으면 5칸 (앞 칸은 None/False)
         else:
-            out.append([text, url])
+            out.append([text, url])                      # 단순 버튼은 2칸 (하위호환)
     return out, None
 
 
@@ -233,16 +241,19 @@ def copy_of(s: dict) -> tuple[int, int] | None:
     return None
 
 
-def button_rows(s: dict, icons: bool = True, per_row: int = 2) -> list[list[InlineKeyboardButton]]:
+def button_rows(s: dict, icons: bool = True) -> list[list[InlineKeyboardButton]]:
     """버튼 앞 프리미엄 이모지(icon_custom_emoji_id)는 PTB 21 이 모르는 칸 → api_kwargs 로 그대로 실림 (brand.py 와 같은 방식).
     봇 주인이 프리미엄이 아니면 텔레그램이 거절 → send_greeting 이 icons=False 로 다시 보냄.
-    per_row = 한 줄에 몇 개씩 (기본 2 = 사진처럼 2열, 2026-11-12 오너 '일렬 말고 이열로 깔끔하게')."""
-    btns = []
-    for t, u, icon, style in clean_buttons(s.get("greet_buttons")):
+    같은줄(clean_buttons 5번째)=True 면 앞 버튼과 한 줄에 → 사진처럼 자유 배치(1열·2열 섞기, 2026-11-12 오너)."""
+    out: list[list[InlineKeyboardButton]] = []
+    for t, u, icon, style, same in clean_buttons(s.get("greet_buttons")):
         extra = {"icon_custom_emoji_id": icon} if icons and icon else None
-        btns.append(InlineKeyboardButton(t, url=u, style=style or None, api_kwargs=extra))
-    n = max(1, per_row)
-    return [btns[i:i + n] for i in range(0, len(btns), n)]
+        btn = InlineKeyboardButton(t, url=u, style=style or None, api_kwargs=extra)
+        if same and out:
+            out[-1].append(btn)   # 앞 버튼과 같은 줄
+        else:
+            out.append([btn])
+    return out
 
 
 def with_names(template: str, tag: bool = True) -> str:
@@ -371,7 +382,7 @@ async def send_greeting(bot: Bot, chat_id: int, s: dict, text_html: str,
     미디어는 mediastore 로 — 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림."""
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     extra = extra_rows or []
-    has_icon = any(icon for _, _, icon, _ in clean_buttons(s.get("greet_buttons")))
+    has_icon = any(icon for _, _, icon, _, _ in clean_buttons(s.get("greet_buttons")))
 
     def kb(use_icons: bool):
         rows = button_rows(s, icons=use_icons) + extra

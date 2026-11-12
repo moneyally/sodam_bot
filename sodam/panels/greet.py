@@ -128,8 +128,8 @@ async def s_buttons(c: PanelCtx) -> Screen:
     if btns:
         lines = [f"🔗 <b>URL 버튼</b> ({len(btns)}/{MAX_BUTTONS})", ""]
         _color = {"primary": "🔵 ", "success": "🟢 ", "danger": "🔴 "}
-        lines += [f"{i}. {_color.get(style, '')}{'✨ ' if icon else ''}{esc(t)} → <code>{esc(u)}</code>"
-                  for i, (t, u, icon, style) in enumerate(btns, 1)]
+        lines += [f"{i}. {'↳ ' if same else ''}{_color.get(style, '')}{'✨ ' if icon else ''}{esc(t)} → <code>{esc(u)}</code>"
+                  for i, (t, u, icon, style, same) in enumerate(btns, 1)]
         lines.append("\n아래가 인사에 붙는 실제 모양이에요 (눌러서 주소 확인 가능).")
         rows = button_rows(s) + [[B("✏️ 수정", f"m:in:{c.cid}:wb"), B("🗑 삭제", f"m:wd:{c.cid}:b")]]
     else:
@@ -318,6 +318,8 @@ menu.register_input("wb", (
     "<code>공지 채널 - https://t.me/sodam_notice</code>\n"
     "<code>홈페이지 - https://example.com</code>\n"
     "주소는 <code>https://</code> 또는 <code>tg://</code> 만 돼요. 버튼 글자는 30자까지.\n"
+    "↔️ 한 줄에 <b>2개 이상</b> 나란히 놓으려면 <code>|</code> 로 나눠요 "
+    "(예: <code>렛츠벳 - 주소 | 벳더블유 - 주소</code>). 어떤 줄은 1개, 어떤 줄은 2개 — 자유 배치.\n"
     "🎨 줄 <b>맨 앞에 색 이모지</b>를 붙이면 버튼 색이 바뀌어요: 🔵 파랑 · 🟢 초록 · 🔴 빨강 "
     "(예: <code>🔵 문의 - https://t.me/아이디</code>)\n"
     "✨ 버튼 글자 <b>맨 앞에 프리미엄(움직이는) 이모지</b>를 붙여 보내면 그 버튼 앞 아이콘으로 달려요 "
