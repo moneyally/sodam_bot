@@ -758,9 +758,11 @@ async def wizard_captures_colored_url_buttons_and_publish_attaches():
     await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
     assert draft.step == "buttons"                                             # 제한 다음 버튼 단계
     await dm("🟢 테더코인 받기 - https://t.me/june0247\n🔵 광고 문의 - https://t.me/leondesign888")
-    assert draft.step == "confirm"
+    assert draft.step == "buttons"                                             # 넣어도 '더 추가' 화면에 머묾 (confirm 아님)
     assert draft.buttons == [["테더코인 받기", "https://t.me/june0247", None, "success"],
                              ["광고 문의", "https://t.me/leondesign888", None, "primary"]]
+    await svc.announcer.on_callback(bot, q, [draft.token, "keepbtn"])          # ✅ 이대로 → 완료
+    assert draft.step == "confirm"
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
     row = (await db.schedules(CHAT))[0]
     saved = json.loads(row["buttons"])
@@ -770,6 +772,36 @@ async def wizard_captures_colored_url_buttons_and_publish_attaches():
     bs = buttons(kb)
     assert [b.url for b in bs] == ["https://t.me/june0247", "https://t.me/leondesign888"]  # 발송에 버튼 붙음
     assert bs[0].style == "success" and bs[1].style == "primary"               # 색 반영 (뮤테이션: style 빼면 실패)
+    await db.close()
+
+
+@test
+async def wizard_buttons_accumulate_across_messages():
+    """버튼을 한 개씩 여러 메시지로 따로 보내도 쌓인다 (덮어쓰기 X — 2026-11 오너 '버튼 여러 개 넣고 싶은데 한 개만 먹힘').
+    넣을 때마다 confirm 으로 안 넘어가고 '더 추가' 화면에 머물다 ✅ 이대로(keepbtn) 로 완료."""
+    import json
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    for a in ("공지", "내용", "없음", "매일 21:30"):
+        await dm(a)
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    q = FakeQuery(ADMIN, fake_user(ADMIN))
+    await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    assert draft.step == "buttons"
+    await dm("버튼1 - https://t.me/a")                                          # 첫 개
+    assert draft.step == "buttons" and len(draft.buttons) == 1                  # 머묾 (confirm 아님)
+    await dm("버튼2 - https://t.me/b")                                          # 둘째 — 쌓임 (덮어쓰기면 1개)
+    assert len(draft.buttons) == 2, draft.buttons
+    await dm("🔴 버튼3 - https://t.me/c")                                       # 셋째 (색)
+    assert len(draft.buttons) == 3 and draft.buttons[2][3] == "danger", draft.buttons
+    await svc.announcer.on_callback(bot, q, [draft.token, "keepbtn"])           # ✅ 이대로 → 완료
+    assert draft.step == "confirm"
+    await svc.announcer.on_callback(bot, q, [draft.token, "save"])
+    row = (await db.schedules(CHAT))[0]
+    assert len(json.loads(row["buttons"])) == 3, row["buttons"]                 # 3개 다 저장 (뮤테이션: += 를 = 로 되돌리면 1개)
     await db.close()
 
 
