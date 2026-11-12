@@ -20,7 +20,7 @@ import time
 import unicodedata
 from datetime import datetime
 
-from telegram import ReplyParameters
+from telegram import InlineKeyboardMarkup, ReplyParameters
 from telegram.error import BadRequest, TelegramError
 
 from . import mediastore
@@ -96,8 +96,35 @@ def split_words(text: str) -> list[str]:
     return list(dict.fromkeys(w.strip() for w in re.split(r"[,\n]", text or "") if w.strip()))[:5]
 
 
+def _url_markup(markup) -> str | None:
+    """원본 글의 인라인 버튼에서 **URL 버튼만** 추려 JSON 으로 (색 style·프리미엄 이모지 icon 유지).
+    콜백·웹앱 버튼은 다른 방에서 안 먹으니 버린다. URL 버튼이 하나도 없으면 None."""
+    if not markup or not getattr(markup, "inline_keyboard", None):
+        return None
+    rows = []
+    for row in markup.inline_keyboard:
+        kept = [b for b in row if getattr(b, "url", None)]
+        if kept:
+            rows.append(kept)
+    if not rows:
+        return None
+    try:
+        return InlineKeyboardMarkup(rows).to_json()
+    except Exception:
+        return None
+
+
+def _markup(markup_json, bot):
+    if not markup_json:
+        return None
+    try:
+        return InlineKeyboardMarkup.de_json(json.loads(markup_json), bot)
+    except Exception:
+        return None
+
+
 def snapshot(msg) -> dict:
-    """원본이 지워져도 같은 글을 올리기 위한 사본 (움직이는 이모지·서식은 텔레그램 HTML 로)."""
+    """원본이 지워져도 같은 글을 올리기 위한 사본 (움직이는 이모지·서식은 텔레그램 HTML 로, URL 버튼은 markup 으로)."""
     kind, fid = extract_media(msg)
     if not kind:
         for k in ("sticker", "voice", "audio", "video_note"):
@@ -110,7 +137,7 @@ def snapshot(msg) -> dict:
         body = rich_html(msg) or esc(plain)
     except (AttributeError, TypeError):
         body = esc(plain)
-    return {"html": body, "kind": kind, "file_id": fid}
+    return {"html": body, "kind": kind, "file_id": fid, "markup": _url_markup(getattr(msg, "reply_markup", None))}
 
 
 def describe(snap: dict) -> str:
@@ -198,49 +225,53 @@ def _no_emoji(html_text: str) -> str:
     return _EMOJI_TAG.sub(r"\1", html_text)
 
 
-async def _send_text(bot, chat_id: int, html_text: str, rp):
+async def _send_text(bot, chat_id: int, html_text: str, rp, markup=None):
     try:
-        return await bot.send_message(chat_id, html_text, parse_mode="HTML", reply_parameters=rp)
+        return await bot.send_message(chat_id, html_text, parse_mode="HTML", reply_parameters=rp, reply_markup=markup)
     except BadRequest:
         plain = _no_emoji(html_text)
         if plain == html_text:
             raise
-        return await bot.send_message(chat_id, plain, parse_mode="HTML", reply_parameters=rp)
+        return await bot.send_message(chat_id, plain, parse_mode="HTML", reply_parameters=rp, reply_markup=markup)
 
 
-async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = None):
+async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = None, markup=None):
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     kind, fid, body = snap.get("kind"), snap.get("file_id"), snap.get("html") or ""
+    if markup is None:
+        markup = _markup(snap.get("markup"), bot)
     if not kind or not fid:
-        return await _send_text(bot, chat_id, body, rp)
+        return await _send_text(bot, chat_id, body, rp, markup)
     fits = body and kind not in ("sticker", "video_note") and len(html_plain(body)) <= CAPTION_LIMIT
     cap = {"caption": body, "parse_mode": "HTML"} if fits else {}
-    if kind in mediastore.KINDS:
+    if kind in mediastore.KINDS:                   # 버튼은 미디어 메시지에 붙임 (caption 유무 무관)
         try:
-            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, **cap)
+            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, reply_markup=markup, **cap)
         except BadRequest:
             if not cap or _no_emoji(body) == body:
                 raise
-            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp,
+            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, reply_markup=markup,
                                          caption=_no_emoji(body), parse_mode="HTML")
     else:
         fn = getattr(bot, "send_" + kind)          # send_sticker · send_voice · send_audio · send_video_note
-        sent = await fn(chat_id, fid, reply_parameters=rp, **cap)
-    if body and not fits:
+        sent = await fn(chat_id, fid, reply_parameters=rp, reply_markup=markup, **cap)
+    if body and not fits:                          # 캡션에 안 들어간 긴 글은 따로 (버튼은 위 미디어에 이미 붙음)
         sent = await _send_text(bot, chat_id, body, None)
     return sent
 
 
 async def send(bot, db, chat_id: int, row, reply_to: int | None = None):
-    """원본 복사 → 안 되면 사본."""
+    """원본 복사 → 안 되면 사본. 저장해 둔 URL 버튼(색·이모지)은 둘 다에 붙여 유지."""
+    snap = json.loads(row["snap"] or "{}")
+    markup = _markup(snap.get("markup"), bot)
     if row["src_chat"] and row["src_msg"]:
-        try:
+        try:   # copy_message 는 원본 인라인 버튼을 안 옮기므로 저장해 둔 markup 을 다시 붙인다
             rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
-            return await bot.copy_message(chat_id, row["src_chat"], row["src_msg"], reply_parameters=rp)
+            return await bot.copy_message(chat_id, row["src_chat"], row["src_msg"], reply_parameters=rp,
+                                          reply_markup=markup)
         except TelegramError as e:
             log.info("자동 답글 원본 복사 안 됨 %s #%s: %s — 사본으로", chat_id, row["id"], e)
-    snap = json.loads(row["snap"] or "{}")
-    return await send_snap(bot, db, chat_id, snap, reply_to)
+    return await send_snap(bot, db, chat_id, snap, reply_to, markup)
 
 
 async def maybe_reply(svc, bot, msg, text: str) -> bool:

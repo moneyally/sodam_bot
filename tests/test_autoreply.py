@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from fakes import FakeBot, FakeJobQueue, FakeMsg, fake_user, make_db, make_svc, runner
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from sodam import autoreply as AR
@@ -67,6 +68,42 @@ def photo_msg(mid=50):
     m = FakeMsg(CHAT, fake_user(ADMIN, "관리"), "", caption="📢 오늘 공지", message_id=mid,
                 photo=(SimpleNamespace(file_id="PHOTO1"),))
     return m
+
+
+def promo_msg(mid=60):
+    """URL 버튼(색·콜백 섞임) 달린 제휴 글 — URL 버튼만 유지되어야 한다."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("앙벳", url="https://t.me/a", style="success"),
+         InlineKeyboardButton("띵벳", url="https://t.me/b")],
+        [InlineKeyboardButton("코드 받기", callback_data="x")],   # 콜백은 버려야 (다른 방에서 안 먹힘)
+    ])
+    m = FakeMsg(CHAT, fake_user(ADMIN, "관리"), "📢 제휴업체", message_id=mid)
+    m.reply_markup = kb
+    return m
+
+
+@test
+async def url_buttons_are_kept_on_copy_and_fallback():
+    import json
+    db, svc, bot, ctx = await setup()
+    await say(ctx, ADMIN, ".reply 제휴", reply_to=promo_msg())
+    snap = json.loads((await AR.rows(db, CHAT))[0]["snap"])
+    assert snap.get("markup") and "https://t.me/a" in snap["markup"]
+    assert "callback_data" not in snap["markup"]                      # 콜백 버튼은 안 저장
+
+    # 원본 복사 경로: copy_message 에 버튼이 붙어 나간다 (뮤테이션: reply_markup 빼면 실패)
+    await say(ctx, MEMBER, "제휴")
+    mk = copies(bot)[0][4]["reply_markup"]
+    assert [b.url for r in mk.inline_keyboard for b in r] == ["https://t.me/a", "https://t.me/b"]
+    assert mk.inline_keyboard[0][0].style == "success"               # 색 유지
+
+    # 사본 경로(원본 복사 실패)에서도 버튼 유지
+    await db._write("UPDATE auto_replies SET last_used=0")
+    bot.copy_fails = True
+    await say(ctx, OTHER, "제휴")
+    kw = bot.named("send_message")[-1][3]
+    assert kw.get("reply_markup") is not None
+    assert [b.url for r in kw["reply_markup"].inline_keyboard for b in r] == ["https://t.me/a", "https://t.me/b"]
 
 
 @test
