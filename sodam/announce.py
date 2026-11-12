@@ -977,22 +977,33 @@ class Announcer:
             return True
 
         if draft.step == "buttons":
-            if text in ("없음", "-", "건너뛰기", "패스") or (editing and text in KEEP):
+            if text in ("없음", "-", "건너뛰기", "패스", "비우기") or (editing and text in KEEP):
                 if not (editing and text in KEEP):
                     draft.buttons = []
-            else:
-                from . import greet   # 늦게 import (순환 방지)
-                btns, err = greet.parse_buttons(msg.text or msg.caption or "",
-                                                msg.entities or msg.caption_entities)
-                if err:
-                    await self._say(bot, draft, f"❌ {err}\n다시 보내주세요 (없으면 <code>없음</code>).")
-                    return True
-                if not btns:
-                    await self._say(bot, draft, "URL 버튼을 못 읽었어요. <code>글자 - https://주소</code> 꼴로, "
-                                                "색은 줄 맨 앞 🔵🟢🔴. 없으면 <code>없음</code>.")
-                    return True
-                draft.buttons = btns
-            await self._ask_confirm(bot, draft)
+                await self._ask_confirm(bot, draft)          # 없음/그대로 = 완료
+                return True
+            from . import greet   # 늦게 import (순환 방지)
+            btns, err = greet.parse_buttons(msg.text or msg.caption or "",
+                                            msg.entities or msg.caption_entities)
+            if err:
+                await self._say(bot, draft, f"❌ {err}\n다시 보내주세요 (없으면 <code>없음</code>).")
+                return True
+            if not btns:
+                await self._say(bot, draft, "URL 버튼을 못 읽었어요. <code>글자 - https://주소</code> 꼴로, "
+                                            "색은 줄 맨 앞 🔵🟢🔴. 없으면 <code>없음</code>.")
+                return True
+            # 이어붙이기 — 한 줄씩 여러 번(또는 여러 줄 한 번에) 보내도 쌓인다 (덮어쓰기 X, 2026-11 오너 '버튼 여러 개 안 먹힘')
+            room = greet.MAX_BUTTONS - len(draft.buttons)
+            if room <= 0:
+                await self._say(bot, draft, f"🔗 버튼은 최대 {greet.MAX_BUTTONS}개까지예요 (지금 {len(draft.buttons)}개 다 찼어요). "
+                                            "아래 <code>✅ 이대로</code> 로 넘어가거나 <code>없음</code> 으로 비워요.")
+                return True
+            if len(btns) > room:
+                await self._say(bot, draft, f"🔗 버튼은 최대 {greet.MAX_BUTTONS}개까지예요. 지금 {len(draft.buttons)}개라 "
+                                            f"{room}개만 더 돼요 (보낸 건 {len(btns)}개).")
+                return True
+            draft.buttons = draft.buttons + btns             # 쌓기
+            await self._ask_buttons(bot, draft)              # 더 추가하거나 ✅ 이대로
             return True
 
         # step == "when"
@@ -1034,15 +1045,18 @@ class Announcer:
     async def _ask_buttons(self, bot: Bot, draft: Draft) -> None:
         """(선택) URL 버튼 — 글자와 주소를 '글자 - 주소' 한 줄에 하나. 색은 줄 맨 앞 🔵🟢🔴, 여러 개 가능.
         인사말 버튼과 같은 입력이라 프리미엄 이모지 아이콘도 됨 (봇 주인이 프리미엄일 때)."""
+        from . import greet   # 늦게 import (순환 방지) — MAX_BUTTONS
         draft.step = "buttons"
         rows = [[InlineKeyboardButton("⏭ 버튼 없이", callback_data=f"an:{draft.token}:nobtn")]]
         now = ""
         if draft.buttons:
-            rows[0].insert(0, InlineKeyboardButton(f"✅ 지금 버튼 {len(draft.buttons)}개 그대로",
+            rows[0].insert(0, InlineKeyboardButton(f"✅ 이대로 ({len(draft.buttons)}개)",
                                                    callback_data=f"an:{draft.token}:keepbtn"))
-            now = f"\n(지금 담긴 버튼: {len(draft.buttons)}개 · 그대로 두려면 <code>그대로</code>)"
+            now = (f"\n\n📌 지금 <b>{len(draft.buttons)}개</b> 담겼어요 — 더 보내면 계속 <b>추가</b>돼요 "
+                   f"(최대 {greet.MAX_BUTTONS}개). 다 됐으면 <code>✅ 이대로</code>, 비우려면 <code>없음</code>.")
         await self._say(bot, draft, "<b>🔗 URL 버튼</b> (선택) — 글 밑에 누르는 버튼을 달까요?\n"
-                                    "• <code>글자 - https://주소</code> 한 줄에 하나 (여러 개 OK)\n"
+                                    "• <code>글자 - https://주소</code> — 한 줄에 하나씩, 한 번에 여러 줄도 OK\n"
+                                    "• <b>한 개씩 따로 보내도 쌓여요</b> (하나 보내고 또 보내면 추가)\n"
                                     "• 색: 줄 맨 앞에 🔵(파랑)·🟢(초록)·🔴(빨강)\n"
                                     "• 예: <code>🟢 테더코인 받기 - https://t.me/june0247</code>\n"
                                     "• 없으면 아래 버튼 또는 <code>없음</code>" + now,
