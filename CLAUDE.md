@@ -495,6 +495,16 @@
 - **순찰이 @아이디를 빈칸으로 줘도 '지움' 아님** (2026-10-15 블랙컴퍼니 '우주코인 OTC' 순찰마다 @아이디 지워짐↔생김 알림): `mtproto._user` 는 아이디 여러 개(Fragment)면 usernames 첫 번째, `namehist._keep_known_usernames` 는 빈칸이면 마지막 기록 아이디 유지 — 아이디 지움은 그 사람이 말할 때 봇 API 로만. test_namehist_mtproto sweep_blank_username_*.
 - .env MTPROTO_API_ID/HASH(비밀, 템플릿엔 빈칸). ① 봇 토큰 세션(receive_updates=False): 참가자 명단·@아이디 조회 → 이름 기록 전체 멤버 순찰(12시간마다, 첫 발견은 알림 없음).
   ② 사람 계정(선택, `tools/mtproto_login.py` 서버 터미널에서만): 채널 조회수 30분 1번. **클라우드 컨테이너에선 MTProto(TCP) 가 프록시에 막혀 연결 안 됨 → VPS 에서만.**
+- **🚨 가라공격(입장요청 대량) 정리** (2026-11-12 익명방 @poison010poison 2,224개, 과거 트럼프방 전례 — 오너 요청으로 문서화): 가입 승인제 방에
+  중국·러시아 가라봇이 입장요청(join request)을 수천 개 쌓는 공격. 정리 흐름(VPS 에서만, 노래 중이어도 됨 — 실측 안 끊김):
+  1. **봇 API 로는 입장요청 목록 못 봄** (`GetChatInviteImporters` → BotMethodInvalidError) → **사람 계정(자이 @Ban_1599 = `data/voice_assistant.session`, 노래 계정)** 으로 MTProto 조회.
+  2. 조회(Telethon, `MTPROTO_API_ID/HASH` from .env): `GetChatInviteImportersRequest(peer, requested=True, limit=100)` 페이지네이션
+     (offset_date = 마지막 importer.date, offset_user = `InputUser(id, access_hash)`, 중복 `seen` 제거, `res.count` = 전체 수). 한 바퀴에 100씩.
+  3. 분류: 이름에 한글(`[가-힣ㄱ-ㅎㅏ-ㅣ]`) 있으면 **한국인 보존**, 없으면(중국어·러시아어·랜덤 아이디) 가라. 실측 2,224개 중 한국인 1명뿐.
+  4. 거절: **봇 API `declineChatJoinRequest(chat_id, user_id)`** — user_id 리스트만 있으면 봇으로 됨(음성·노래 세션 안 건드림). 429 rate limit 심해서
+     `ThreadPoolExecutor(8)` + `retry_after` 백오프, 초당 ~8~16개. 거절은 밴 아님 → **재신청 가능**이라 오탐도 안전(그래도 한글은 꼭 보존).
+  5. **재발 방지**: 끝나면 **🤖 로봇 인증(join_verify 숫자)** 켜기 → 새 신청자 인증 요구 → 가라봇 자동 차단 (소담에 '사용자 초대' 권한 필요).
+  스크립트 패턴: scratchpad 조회 `jr2.py`·거절 `decline2.py` (세션 = voice_assistant.session). 소담 봇이 그 방 관리자(밴 권한)여야 거절 가능.
 ## 👋 퇴장 인사 (`farewell.py`, `panels/farewell.py`, tests/test_farewell.py)
 - 기본 꺼짐. 스스로 나간 사람만(by.id == user.id — 관리자·자동 관리 내보냄 제외), 상태 업데이트·서비스 메시지 둘 다 받고 60초 차지로 1번.
   말투별 기본 문구(AI 없음) + 🆔 줄, 20초 안 여러 명은 합침, raid 중 없음, 자동 삭제 선택.
@@ -883,7 +893,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 한도: 통화 15분·60초 조용하면 끝·방마다 한 달 120분(VOICE_ROOM_MONTH_MIN)·동시 3통화·이용 중인 방만. 요금은 **실제 토큰**(response.done usage 를 음성·글자·캐시로 나눠 `store.cost_micro` 요금표 + 받아쓰기 분당 $0.003, tests/test_voice_cost.py — 2026-10-01 전엔 usage 를 버리고 추정만 썼음), 요금표에 없는 모델·usage 없음이면 분당 추정(VOICE_USD_PER_MIN 0.08)을
   하루 AI 예산 counters 에 더함 → 예산 다 차면 못 부름.
 - **실제 통화 확인은 VPS 에서만** (컨테이너는 UDP·MTProto 막힘). 테스트는 가짜 Realtime·py-tgcalls.
-- 도우미 계정 = **@Sodam_bot2** (사람 계정, 2026-09-29 오너가 만듦). 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
+- **🔑 지금 도우미(노래·음성) 계정 = 자이 @Ban_1599** (사람 계정, `data/voice_assistant.session`). 예전 @Sodam_bot2 는 2026-10-15 해킹당해서(line 869) 교체됨 — **지금 노래·음성에 들어가는 건 자이 계정이고, 이 세션으로 MTProto 작업(입장요청 조회·거절 등)도 됨**. 전용 api_id(my.telegram.org, data/voice_assistant.api 0600) — 오너 🎙 연결 1단계.
   **기본 소리만**(오너 결정 2026-09-29, VOICE_VIDEO=1 이면 영상 칸에 도우미 프사 I420 — video.py). 오너 연결은 **전화번호 → 코드** 두 단계
   (서버 MTPROTO 키 사용, 전용 키는 [🔑 고급] m:vcla). 멜론봇과 같음: 오너 한 번 로그인 → 방 관리자는 권한만 주고 '소담아 음성방 들어와'. 🎙 방 화면 [📖 사용 안내]·[✅ 확인하기](Bot API 로 권한 점검).
   스킬 `.claude/skills/telegram-voice-assistant/SKILL.md`. 봇 계정으로 음성채팅 제한을 우회·탐색하지 않음 (정책·토큰 위험).

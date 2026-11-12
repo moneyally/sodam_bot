@@ -165,7 +165,7 @@ class FakeBot:
         self.calls.append(("delete", chat_id, message_id))
 
     async def copy_message(self, chat_id, from_chat_id, message_id, **kw):
-        self.calls.append(("copy", chat_id, from_chat_id, message_id))
+        self.calls.append(("copy", chat_id, from_chat_id, message_id, kw))
         return SimpleNamespace(message_id=message_id + 100000)
 
     async def delete_messages(self, chat_id, message_ids):
