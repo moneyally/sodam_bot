@@ -759,8 +759,8 @@ async def wizard_captures_colored_url_buttons_and_publish_attaches():
     assert draft.step == "buttons"                                             # 제한 다음 버튼 단계
     await dm("🟢 테더코인 받기 - https://t.me/june0247\n🔵 광고 문의 - https://t.me/leondesign888")
     assert draft.step == "buttons"                                             # 넣어도 '더 추가' 화면에 머묾 (confirm 아님)
-    assert draft.buttons == [["테더코인 받기", "https://t.me/june0247", None, "success"],
-                             ["광고 문의", "https://t.me/leondesign888", None, "primary"]]
+    assert draft.buttons == [["테더코인 받기", "https://t.me/june0247", None, "success", False],
+                             ["광고 문의", "https://t.me/leondesign888", None, "primary", False]]
     await svc.announcer.on_callback(bot, q, [draft.token, "keepbtn"])          # ✅ 이대로 → 완료
     assert draft.step == "confirm"
     await svc.announcer.on_callback(bot, q, [draft.token, "save"])
