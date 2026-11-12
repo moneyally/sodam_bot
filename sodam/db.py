@@ -828,7 +828,8 @@ class DB:
 
     # ── 예약 공지 ─────────────────────────────────────────
     SCHEDULE_FIELDS = {"kind", "at_time", "interval_min", "title", "text", "media_type", "media_id", "media_list",
-                       "pin", "del_prev", "start_ts", "end_ts", "active_from", "active_to", "fmt", "buttons"}
+                       "pin", "del_prev", "start_ts", "end_ts", "active_from", "active_to", "fmt", "buttons",
+                       "category", "variants"}   # category: announce 예약공지 / greet 인사멘트 · variants: 멘트 풀 JSON
 
     async def add_schedule(self, chat_id: int, *, kind: str, at_time: str | None, interval_min: int | None,
                            title: str, text: str, media_type: str | None, media_id: str | None,
@@ -836,19 +837,20 @@ class DB:
                            at_ts: int | None = None, deliver: str = "room", fmt: str = "", del_prev: bool = True,
                            start_ts: int | None = None, end_ts: int | None = None,
                            active_from: int | None = None, active_to: int | None = None,
-                           media_list: str | None = None, buttons: str | None = None) -> int:
+                           media_list: str | None = None, buttons: str | None = None,
+                           category: str = "announce", variants: str | None = None) -> int:
         html_fmt = fmt == "html"   # HTML 은 태그 중간을 자르면 발송 실패 → 길이는 마법사가 보이는 글자로 이미 확인
         return await self._write(
             "INSERT INTO schedules(chat_id, kind, at_time, interval_min, title, text, media_type, media_id, "
             "media_list, pin, created_by, last_sent, action, skill, at_ts, deliver, fmt, del_prev, "
-            "start_ts, end_ts, active_from, active_to, buttons) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "start_ts, end_ts, active_from, active_to, buttons, category, variants) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             # 반복 공지는 등록 시점부터 간격을 센다 (등록하자마자 올라가지 않게)
             (chat_id, kind, at_time, interval_min, title if html_fmt else title[:100],
              text if html_fmt else text[:3500], media_type, media_id, media_list,
              int(pin), created_by, now() if kind == "interval" else None, action, skill, at_ts,
              "me" if deliver == "me" else "room", "html" if html_fmt else "", int(del_prev),
-             start_ts, end_ts, active_from, active_to, buttons))
+             start_ts, end_ts, active_from, active_to, buttons, category, variants))
 
     async def update_schedule(self, chat_id: int, sid: int, **fields: Any) -> bool:
         fields = {k: v for k, v in fields.items() if k in self.SCHEDULE_FIELDS}
@@ -866,9 +868,12 @@ class DB:
         row = await self._one("SELECT COUNT(*) AS n FROM schedules WHERE chat_id=?", (chat_id,))
         return row["n"]
 
-    async def schedules(self, chat_id: int | None = None) -> list[aiosqlite.Row]:
+    async def schedules(self, chat_id: int | None = None, category: str | None = None) -> list[aiosqlite.Row]:
         if chat_id is None:
-            return await self._all("SELECT * FROM schedules WHERE enabled=1")
+            return await self._all("SELECT * FROM schedules WHERE enabled=1")   # run_due: 종류 무관 전부
+        if category is not None:   # 목록 분리: 'announce' 예약공지(제휴) / 'greet' 인사멘트 — 안 섞이게
+            return await self._all("SELECT * FROM schedules WHERE chat_id=? AND COALESCE(category,'announce')=? "
+                                   "ORDER BY id", (chat_id, category))
         return await self._all("SELECT * FROM schedules WHERE chat_id=? ORDER BY id", (chat_id,))
 
     async def get_schedule(self, chat_id: int, sid: int) -> aiosqlite.Row | None:
