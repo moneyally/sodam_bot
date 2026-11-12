@@ -29,6 +29,7 @@ from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
 from . import autoreply, emojilab, leavelock, mediastore, medialog, modactions, ownerlock
 from .panels import motionbanner
+from .panels import repost as _repost
 
 from .agent import run_agent
 from .db import disk_full
@@ -1308,6 +1309,8 @@ async def on_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await motionbanner.maybe_offer(svc, bot, msg, user):   # 전달된 커스텀 이모지 배너(텔레모션) → 안 깨지게 고쳐 방에 재전송
         return
     if await emojilab.maybe_capture(svc, bot, msg, user):   # 오너가 보낸 타일 이모지 → 조각 저장 (전달·AI 보다 먼저)
+        return
+    if await _repost.maybe_offer(svc, bot, msg, user):   # 전달된 완성 글(사진+글+버튼) → 방 골라 그대로 재전송
         return
     if _LOOKUP_ONLY.fullmatch(text):  # @아이디나 숫자 ID 만 보내면 전체 기록
         role = await svc.perms.role(bot, msg.chat_id, user.id)

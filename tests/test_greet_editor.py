@@ -392,7 +392,7 @@ async def greet_copies_chosen_post_as_is():
     assert "그대로 복사" in reply[0], reply
     assert (await db.get_settings(CHAT))["greet_copy"] == [1, 777]
     await greet(svc, bot, [(20, "새사람")])
-    assert bot.named("copy")[-1][1:] == (CHAT, 1, 777) and not bot.named("send_message"), bot.calls
+    assert bot.named("copy")[-1][1:4] == (CHAT, 1, 777) and not bot.named("send_message"), bot.calls
     logged = await db._one("SELECT text FROM messages WHERE chat_id=? AND is_bot=1 ORDER BY id DESC", (CHAT,))
     assert "그대로" in logged["text"]
     await press(svc, bot, 1, f"m:in:{CHAT}:wc")                                   # 이미 있는 글에 답장으로도
@@ -404,7 +404,7 @@ async def greet_copies_chosen_post_as_is():
     q = await press(svc, bot, 1, f"m:w:{CHAT}")
     assert "글 복사 인사: 켜짐" in q.edits[-1]
     await press(svc, bot, 1, f"m:wv:{CHAT}:all")                                  # 미리보기 = 1:1 로 복사
-    assert bot.named("copy")[-1][1:] == (1, 1, 777)
+    assert bot.named("copy")[-1][1:4] == (1, 1, 777)
 
     class Gone(FakeBot):                                                             # 원본이 지워짐 → 사본으로 같은 글
         async def copy_message(self, *a, **kw):
