@@ -18,11 +18,13 @@ from datetime import datetime
 from telegram.error import TelegramError
 
 from .. import cards, cron, menu, persist
-from ..announce import CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, _col, describe_limits, describe_when, parse_time, row_buttons
+from ..announce import (CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, _col, describe_limits, describe_when, parse_time,
+                        row_buttons, row_variants)
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, html_balanced, html_plain, html_truncate, rich_html
 
 PREVIEW_CHARS = 300
+GREET_SHOW = 6       # 🌅 인사멘트 항목 화면에 보여 줄 멘트 개수
 
 
 def _plain(row, key: str) -> str:
@@ -75,7 +77,7 @@ GONE = "없는 예약공지예요. 목록을 새로 불러왔어요."
 
 # ── 화면 ──────────────────────────────────────────────────
 async def s_list(c: PanelCtx) -> Screen:
-    rows = await c.svc.db.schedules(c.cid)
+    rows = await c.svc.db.schedules(c.cid, "announce")   # 🌅 인사멘트(greet)는 자기 허브에만 — 제휴 공지와 안 섞이게
     lines = [f"🗓️ <b>예약공지</b> ({len(rows)}/{MAX_PER_CHAT})",
              "정해진 시각이나 간격마다 방에 공지를 올려요."]
     if rows:
@@ -105,15 +107,21 @@ async def s_item(c: PanelCtx) -> Screen:
     last = datetime.fromtimestamp(r["last_sent"], tz).strftime("%m/%d %H:%M") if r["last_sent"] and r["last_msg_id"] else "아직 없음"
     lim = describe_limits(_col(r, "start_ts", None), _col(r, "end_ts", None),
                           _col(r, "active_from", None), _col(r, "active_to", None), tz)
-    lines = [f"🗓️ <b>예약공지 #{r['id']}</b>",
+    greet = _col(r, "category", "announce") == "greet"
+    vs = row_variants(r)
+    lines = [f"{'🌅 <b>인사멘트' if greet else '🗓️ <b>예약공지'} #{r['id']}</b>",
              f"상태: {'🟢 켜짐' if r['enabled'] else '⏸ 꺼짐'}",
              f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else "")
              + (" · 📚 이전 글 쌓기" if r["kind"] != "once" and not r["del_prev"] else "")
              + (f" · 🔗 버튼 {len(row_buttons(r))}개" if row_buttons(r) else "")
+             + (f" · 🌅 멘트 {len(vs)}개 돌아가며" if greet and vs else "")
              + (" · " + lim if lim else ""),
              f"제목: {_shown(r, 'title', 100) if r['title'] else '(없음)'}",
              f"최근 발송: {last}",
              f"내용:\n<blockquote>{media}{body or '(글 없음)'}</blockquote>"]
+    if greet:   # 인사멘트는 제목 대신 멘트 목록을 보여 준다
+        lines[3] = "멘트:" + "".join(f"\n • {esc((html_plain(v) if r['fmt']=='html' else v)[:60])}" for v in vs[:GREET_SHOW])
+        lines[5] = ""
     sid = r["id"]
     if r["action"] != "post":   # 알람·AI 작업: 제목·사진 대신 종류·지시 (수정은 지우고 다시 만들기)
         lines[0] = f"{cron.describe(r)} <b>#{sid}</b>"
@@ -122,7 +130,8 @@ async def s_item(c: PanelCtx) -> Screen:
     toggle = (B("⏸ 끄기", f"m:sct:{c.cid}:{sid}:0") if r["enabled"] else B("▶️ 켜기", f"m:sct:{c.cid}:{sid}:1"))
     first = [B("👀 미리보기", f"m:scp:{c.cid}:{sid}")] + ([B("✏️ 수정", f"m:sce:{c.cid}:{sid}")] if r["action"] == "post" else [])
     kb = menu._kb([first, [toggle, B("🗑 삭제", f"m:scd:{c.cid}:{sid}")],
-                   [B("📤 다른 방에도", f"m:scx:{c.cid}:{sid}"), B("⬅️ 목록", f"m:sc:{c.cid}")]])
+                   [B("📤 다른 방에도", f"m:scx:{c.cid}:{sid}"),
+                    B("⬅️ 목록", f"m:{'gm' if greet else 'sc'}:{c.cid}")]])
     return Screen("\n".join(lines), kb)
 
 
@@ -194,8 +203,8 @@ async def t_delete(c: PanelCtx, sid) -> Screen:
     return screen
 
 
-async def _wizard(c: PanelCtx, row=None) -> Screen:
-    reason = await c.svc.announcer.start_dm(c.bot, c.uid, c.cid, edit_row=row)
+async def _wizard(c: PanelCtx, row=None, category: str = "announce") -> Screen:
+    reason = await c.svc.announcer.start_dm(c.bot, c.uid, c.cid, edit_row=row, category=category)
     if reason:
         return Screen(None, toast=reason, alert=True)
     return Screen(None, toast="✏️ 아래 안내대로 보내주세요." if row is not None else "🗓️ 아래 안내대로 보내주세요.")

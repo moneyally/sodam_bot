@@ -46,6 +46,7 @@ MIN_INTERVAL, MAX_INTERVAL = 30, 7 * 1440
 CAPTION_LIMIT, TEXT_LIMIT = 1024, 4096
 MEDIA_LABEL = {"photo": "사진", "video": "영상", "animation": "GIF", "document": "파일"}
 MAX_MEDIA = 10                # 텔레그램 앨범(미디어 그룹) 한 번에 2~10개
+GREET_MAX = 20                # 🌅 인사멘트 멘트 풀 최대 개수 (그 시각마다 돌려가며 하나)
 ALBUM_KINDS = ("photo", "video")   # 앨범에 섞어 넣을 수 있는 건 사진·영상뿐 (GIF·파일은 한 개만)
 KEEP = {"그대로", "유지", "="}
 CANCEL = {"취소", ".취소", "/cancel"}
@@ -447,6 +448,8 @@ class Draft:
     active_from: int | None = None  # 하루 중 올릴 시간대 [from,to) 한국 시 (None=종일)
     active_to: int | None = None
     buttons: list = field(default_factory=list)   # URL 버튼 [[글자,url,이모지id,색], …] (greet_buttons 와 같은 꼴)
+    category: str = "announce"    # 'announce' 예약공지(제휴) / 'greet' 🌅 인사멘트 (멘트 풀 돌리기)
+    variants: list = field(default_factory=list)   # 🌅 인사멘트 멘트 풀 [멘트, …] — 그 시각마다 돌려가며 하나
     token: str = field(default_factory=lambda: secrets.token_hex(3))
     expires: float = field(default_factory=lambda: time.time() + WIZARD_TTL)
     cleanup: list[int] = field(default_factory=list)
@@ -492,6 +495,17 @@ def row_buttons(row) -> list:
     except (ValueError, TypeError):
         return []
     return got if isinstance(got, list) else []
+
+
+def row_variants(row) -> list[str]:
+    """🌅 인사멘트의 멘트 풀 (variants 칸 JSON → [멘트, …]). 비었으면 [] → 그러면 text 하나만 쓴다 (기존 공지).
+    인사멘트는 그 시각마다 이 풀에서 돌려가며(무반복 순환) 하나를 올린다 — '복붙 티' 방지 (2026-11 오너)."""
+    raw = _col(row, "variants", None)
+    try:
+        got = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return []
+    return [v for v in got if isinstance(v, str) and v.strip()] if isinstance(got, list) else []
 
 
 def button_markup(buttons: list, *, icons: bool = True, extra: list | None = None):
@@ -647,8 +661,16 @@ class Announcer:
                 raise
 
     async def publish(self, bot: Bot, row) -> None:
-        """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire."""
+        """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire.
+        🌅 인사멘트(variants 여러 개)면 그 풀에서 무반복 순환으로 하나 골라 text 대신 쓴다."""
         now_ts = int(time.time())
+        variants = row_variants(row)
+        if variants and _col(row, "action", "post") == "post":   # 멘트 풀 돌리기 (무반복 순환)
+            idx = (_col(row, "variant_cursor", 0) or 0) % len(variants)
+            row = dict(row)                                       # 원본 Row 는 불변 → 복사본에 멘트 끼움
+            row["text"] = variants[idx]
+            await self.svc.db._write("UPDATE schedules SET variant_cursor=? WHERE id=?",
+                                     ((idx + 1) % len(variants), row["id"]))
         if row["kind"] == "once":
             await self.svc.db._write("UPDATE schedules SET enabled=0 WHERE id=?", (row["id"],))
         if row["action"] != "post":
@@ -817,12 +839,15 @@ class Announcer:
             return
         await self._begin(bot, Draft(chat_id, msg.from_user.id), edit_row, trigger_msg_id=msg.message_id)
 
-    async def start_dm(self, bot: Bot, user_id: int, chat_id: int, edit_row=None) -> str | None:
-        """1:1 버튼 메뉴에서 시작: 대화는 관리자 1:1, 공지는 chat_id 방에. 못 하면 이유(문자열)."""
+    async def start_dm(self, bot: Bot, user_id: int, chat_id: int, edit_row=None,
+                       category: str = "announce") -> str | None:
+        """1:1 버튼 메뉴에서 시작: 대화는 관리자 1:1, 공지는 chat_id 방에. 못 하면 이유(문자열).
+        category='greet' 면 🌅 인사멘트 마법사 (제목 없이 멘트 여러 개 쌓기 → 시각)."""
         if edit_row is None and await self.svc.db.count_schedules(chat_id) >= MAX_PER_CHAT:
-            return f"예약공지는 방당 {MAX_PER_CHAT}개까지예요. 안 쓰는 걸 지워주세요."
+            what = "인사멘트" if category == "greet" else "예약공지"
+            return f"{what}는 방당 {MAX_PER_CHAT}개까지예요. 안 쓰는 걸 지워주세요."
         from .subscription import chat_title  # 순환 import 방지
-        await self._begin(bot, Draft(chat_id, user_id, ui_chat_id=user_id), edit_row,
+        await self._begin(bot, Draft(chat_id, user_id, ui_chat_id=user_id, category=category), edit_row,
                           where=await chat_title(self.svc, chat_id))
         return None
 
@@ -830,6 +855,8 @@ class Announcer:
                      where: str | None = None) -> None:
         if edit_row is not None:
             draft.edit_id = edit_row["id"]
+            draft.category = _col(edit_row, "category", "announce")
+            draft.variants = row_variants(edit_row)
             for k in ("title", "text", "kind", "at_time", "interval_min"):
                 setattr(draft, k, edit_row[k])
             draft.set_media(media_items(edit_row))   # 여러 장(앨범)이면 전부 불러옴 (media_type/id 는 첫 장)
@@ -847,13 +874,43 @@ class Announcer:
         if old and old.cleanup:  # 같은 곳에서 하던 마법사는 버리고 새로 시작
             await self._cleanup(bot, old)
         self.drafts[draft.key] = draft
-        head = f"✏️ 예약공지 #{draft.edit_id} 수정" if draft.edit_id else "🗓️ 예약공지 만들기"
         room = f"\n💬 올릴 방: <b>{esc(where)}</b>" if where else ""
+        if draft.category == "greet":   # 🌅 인사멘트 — 제목 없이 멘트 쌓기부터
+            draft.step = "body"
+            head = f"✏️ 🌅 인사멘트 #{draft.edit_id} 수정" if draft.edit_id else "🌅 인사멘트 만들기"
+            await self._ask_greet_body(bot, draft, f"{head} (언제든 <code>취소</code>){room}")
+            self._saved(draft.key)
+            return
+        head = f"✏️ 예약공지 #{draft.edit_id} 수정" if draft.edit_id else "🗓️ 예약공지 만들기"
         now_title = draft.title if draft.fmt == "html" else esc(draft.title)
         keep = f"\n(지금: {now_title or '없음'} · 그대로 두려면 <code>그대로</code>)" if draft.edit_id else ""
         await self._say(bot, draft, f"{head} (언제든 <code>취소</code>){room}\n\n"
                                     f"<b>1/7 제목</b>을 보내주세요. 제목 없이 하려면 <code>없음</code>{keep}")
         self._saved(draft.key)
+
+    def _greet_more_kb(self, draft: Draft):
+        rows = []
+        if draft.variants:
+            rows.append([InlineKeyboardButton(f"✅ 이대로 ({len(draft.variants)}개)",
+                                              callback_data=f"an:{draft.token}:gdone")])
+        rows.append([InlineKeyboardButton("🗑 취소", callback_data=f"an:{draft.token}:cancel")])
+        return InlineKeyboardMarkup(rows)
+
+    async def _ask_greet_body(self, bot: Bot, draft: Draft, head: str = "") -> None:
+        """🌅 인사멘트 멘트 쌓기 안내 — 여러 개 넣으면 그 시각마다 돌려가며 하나씩 (복붙 티 방지)."""
+        draft.step = "body"
+        now = ""
+        if draft.variants:
+            now = (f"\n\n📌 지금 <b>{len(draft.variants)}개</b> 담겼어요 — 더 보내면 계속 추가, "
+                   "다 됐으면 <b>✅ 이대로</b>.")
+        pre = (head + "\n\n") if head else ""
+        await self._say(bot, draft, pre +
+                        "<b>인사 멘트</b>를 보내주세요 — <b>여러 개</b> 넣으면 그 시각마다 "
+                        "<b>돌려가며 하나씩</b> 올려요 (매번 같은 글이 아니라 자연스럽게).\n"
+                        "• <b>한 개씩 따로 보내도 쌓여요</b> (하나 보내고 또 보내고)\n"
+                        "• 겨울 느낌·이모지·움직이는 이모지 다 돼요\n"
+                        "• <code>{규칙}</code>·<code>{날짜}</code> 도 쓸 수 있어요" + now,
+                        self._greet_more_kb(draft))
 
     async def handle_message(self, bot: Bot, msg: Message) -> bool:
         """마법사 진행 중인 관리자의 메시지면 처리하고 True."""
@@ -905,6 +962,26 @@ class Announcer:
                             "• 글만 보내면 다음 단계에서 사진·영상을 따로 받아요 (사진에 설명을 붙여 한 번에 보내도 돼요)\n"
                             "• <code>{규칙}</code> 을 쓰면 방 규칙이, <code>{날짜}</code> 를 쓰면 오늘 날짜가 들어가요"
                             + keep)
+            return True
+
+        if draft.step == "body" and draft.category == "greet":   # 🌅 인사멘트: 멘트 여러 개 쌓기
+            if editing and text in KEEP:                          # '그대로' = 지금 멘트로 완료 → 시각
+                await self._ask_when(bot, draft)
+                return True
+            ment = self._take(draft, text, rich_html(msg), "text").strip()
+            if not ment:
+                await self._say(bot, draft, "인사 멘트를 글로 보내주세요. (다 됐으면 아래 <b>✅ 이대로</b>)",
+                                self._greet_more_kb(draft))
+                return True
+            if len(ment) > 500:
+                await self._say(bot, draft, "인사 멘트는 짧게 500자 이내로요.", self._greet_more_kb(draft))
+                return True
+            if len(draft.variants) >= GREET_MAX:
+                await self._say(bot, draft, f"멘트는 최대 {GREET_MAX}개예요. 아래 <b>✅ 이대로</b> 로 넘어가세요.",
+                                self._greet_more_kb(draft))
+                return True
+            draft.variants.append(ment)                          # 쌓기 (한 개씩 보내도 쌓임)
+            await self._ask_greet_body(bot, draft)               # "N개 · 더 보내 또는 ✅ 이대로"
             return True
 
         if draft.step == "body":
@@ -1013,6 +1090,9 @@ class Announcer:
             except ValueError as e:
                 await self._say(bot, draft, f"❌ {e}")
                 return True
+        if draft.category == "greet":   # 🌅 인사멘트는 고정·유효기간·버튼 단계 생략 → 바로 미리보기
+            await self._ask_confirm(bot, draft)
+            return True
         draft.step = "pin"
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("📌 고정해서 올리기", callback_data=f"an:{draft.token}:pin1"),
@@ -1068,10 +1148,12 @@ class Announcer:
         keep = "" if draft.del_prev else " · 📚 이전 글 쌓기"
         lim = describe_limits(draft.start_ts, draft.end_ts, draft.active_from, draft.active_to, self.svc.cfg.tz)
         btn_note = f" · 🔗 버튼 {len(draft.buttons)}개" if draft.buttons else ""
+        greet_note = (f" · 🌅 멘트 {len(draft.variants)}개 돌아가며"
+                      if draft.category == "greet" and draft.variants else "")
         await self._say(bot, draft, "👀 <b>미리보기</b> — "
                                     f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
                                     f"{' · 📌 고정' if draft.pin else ''}{keep}"
-                                    f"{' · ' + lim if lim else ''}{btn_note}")
+                                    f"{' · ' + lim if lim else ''}{btn_note}{greet_note}")
         save_cancel = [[
             InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
             InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
@@ -1135,6 +1217,18 @@ class Announcer:
 
     async def _ask_when(self, bot: Bot, draft: Draft) -> None:
         draft.step = "when"
+        if draft.category == "greet":   # 🌅 인사멘트: 시간대 프리셋 버튼 + 직접 입력
+            now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
+                   f"<code>그대로</code>)") if draft.edit_id is not None else ""
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🌅 아침 8시", callback_data=f"an:{draft.token}:gt:0800"),
+                InlineKeyboardButton("🌞 점심 12시", callback_data=f"an:{draft.token}:gt:1200"),
+                InlineKeyboardButton("🌙 저녁 7시", callback_data=f"an:{draft.token}:gt:1900"),
+            ]])
+            await self._say(bot, draft, "<b>언제</b> 올릴까요? 아래 시간대를 누르거나 직접 보내주세요.\n"
+                                        "• 직접: <code>매일 08:30</code> · <code>평일 09:00</code> · "
+                                        "<code>주말 11:00</code>" + now, kb)
+            return
         now = (f"\n(지금: {describe_when(draft.kind, draft.at_time, draft.interval_min)} · "
                f"<code>그대로</code>)") if draft.edit_id is not None else ""
         await self._say(bot, draft, "<b>4/7 언제</b> 올릴까요? (한 줄에 하나만)\n"
@@ -1201,6 +1295,23 @@ class Announcer:
             await query.answer()
             await self._ask_confirm(bot, draft)
             return
+        if action == "gdone" and draft.step == "body" and draft.category == "greet":   # 🌅 멘트 다 넣음 → 시각
+            if not draft.variants:
+                await query.answer("인사 멘트를 하나 이상 넣어주세요", show_alert=True)
+                return
+            draft.text = draft.variants[0]   # 미리보기·호환용 첫 멘트
+            await query.answer()
+            await self._ask_when(bot, draft)
+            return
+        if action == "gt" and draft.step == "when" and draft.category == "greet":   # 🌅 시간대 프리셋
+            hhmm = (parts + ["", "", ""])[2]
+            if len(hhmm) == 4 and hhmm.isdecimal():
+                draft.kind, draft.at_time, draft.interval_min = "daily", f"{hhmm[:2]}:{hhmm[2:]}", None
+                await query.answer()
+                await self._ask_confirm(bot, draft)
+            else:
+                await query.answer()
+            return
         if action == "cancel":
             await query.answer()
             await self._finish(bot, draft, "예약공지 만들기를 취소했어요.")
@@ -1229,7 +1340,9 @@ class Announcer:
                       pin=int(draft.pin), del_prev=int(draft.del_prev),
                       start_ts=draft.start_ts, end_ts=draft.end_ts,
                       active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt,
-                      buttons=json.dumps(draft.buttons, ensure_ascii=False) if draft.buttons else None)
+                      buttons=json.dumps(draft.buttons, ensure_ascii=False) if draft.buttons else None,
+                      category=draft.category,
+                      variants=json.dumps(draft.variants, ensure_ascii=False) if draft.variants else None)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
                 await self._finish(bot, draft, f"예약공지 #{draft.edit_id} 는 그사이 삭제됐어요. 저장하지 않았어요.")
@@ -1243,6 +1356,10 @@ class Announcer:
         await db.log_mod(draft.chat_id, draft.user_id, None, "schedule",
                          f"#{sid} {html_plain(draft.title) if draft.fmt == 'html' else draft.title}")
         when = describe_when(draft.kind, draft.at_time, draft.interval_min)
+        if draft.category == "greet":
+            await self._finish(bot, draft, f"✅ 🌅 인사멘트 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
+                                           f"{when} · 멘트 <b>{len(draft.variants)}개</b> (그 시각마다 돌려가며 하나씩)")
+            return
         await self._finish(bot, draft, f"✅ 예약공지 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
                                        f"{when}{' · 📌' if draft.pin else ''} "
                                        f"{draft.title if draft.fmt == 'html' else esc(draft.title)}")

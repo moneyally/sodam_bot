@@ -806,6 +806,46 @@ async def wizard_buttons_accumulate_across_messages():
 
 
 @test
+async def greet_wizard_stacks_variants_rotates_and_stays_separate():
+    """🌅 인사멘트: 멘트 여러 개 쌓기 → 🌅 시각 프리셋 → 저장(category='greet', variants).
+    발송은 그 풀에서 무반복 순환, 예약공지 목록과는 안 섞인다 (2026-11 오너)."""
+    import json
+    from sodam.panels import greetmsg  # noqa: F401  (m:gmn 라우트 등록)
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:gmn:{CHAT}")                              # ➕ 새 인사멘트
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert draft.category == "greet" and draft.step == "body", draft.step
+    await dm("좋은 아침이에요")                                          # 멘트 1
+    assert len(draft.variants) == 1, draft.variants
+    await dm("상쾌한 아침, 오늘도 화이팅")                               # 멘트 2 — 쌓임 (덮어쓰기면 1개)
+    assert len(draft.variants) == 2, draft.variants
+    q = FakeQuery(ADMIN, fake_user(ADMIN))
+    await svc.announcer.on_callback(bot, q, [draft.token, "gdone"])     # ✅ 이대로 → 시각
+    assert draft.step == "when"
+    await svc.announcer.on_callback(bot, q, [draft.token, "gt", "0800"])  # 🌅 아침 8시
+    assert draft.step == "confirm" and draft.kind == "daily" and draft.at_time == "08:00"
+    await svc.announcer.on_callback(bot, q, [draft.token, "save"])
+    rows = await db.schedules(CHAT, "greet")
+    assert len(rows) == 1 and rows[0]["category"] == "greet"
+    assert json.loads(rows[0]["variants"]) == ["좋은 아침이에요", "상쾌한 아침, 오늘도 화이팅"]
+    assert await db.schedules(CHAT, "announce") == []                  # 예약공지 목록엔 안 뜸 (분리)
+    # 발송: 멘트1 → 멘트2 → 멘트1 (무반복 순환, variant_cursor 갱신)
+    r = rows[0]
+    await svc.announcer.publish(bot, r)
+    assert "좋은 아침이에요" in sent_to(bot, CHAT)[-1][2], sent_to(bot, CHAT)[-1]
+    r = await db.get_schedule(CHAT, r["id"])
+    assert r["variant_cursor"] == 1
+    await svc.announcer.publish(bot, r)
+    assert "상쾌한 아침" in sent_to(bot, CHAT)[-1][2]
+    r = await db.get_schedule(CHAT, r["id"])
+    assert r["variant_cursor"] == 0                                    # 다 돌면 처음으로
+    await svc.announcer.publish(bot, r)
+    assert "좋은 아침이에요" in sent_to(bot, CHAT)[-1][2]                # 다시 멘트1
+    await db.close()
+
+
+@test
 async def buttons_none_skips_and_publish_has_no_markup():
     db, svc, bot, _ = await setup()
     dm = dm_ctx(svc, bot)

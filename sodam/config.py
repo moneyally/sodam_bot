@@ -41,7 +41,7 @@ class Config:
     image_quality: str = "medium"                    # low·medium·high (비쌀수록 오래 걸림)
     # 구독 결제 (PAY_ADDRESS 가 비어 있으면 결제 기능 꺼짐 = 모든 방 무료)
     pay_address: str = ""
-    sub_price_usdt: str = "30"
+    sub_price_usdt: str = "50"
     sub_days: int = 30
     trial_days: int = 3
     free_ai_per_day: int = 10
@@ -111,7 +111,7 @@ def load_config() -> Config:
         lols_api=os.getenv("LOLS_API", "https://api.lols.bot/account").strip(),
         cache_retention=_retention(os.getenv("OPENAI_CACHE_RETENTION", "")),
         pay_address=_pay_address(os.getenv("PAY_ADDRESS", "")),
-        sub_price_usdt=_price(os.getenv("SUB_PRICE_USDT", "30")),
+        sub_price_usdt=_price(os.getenv("SUB_PRICE_USDT", "50")),
         sub_days=max(1, int(os.getenv("SUB_DAYS", "30"))),
         trial_days=max(0, int(os.getenv("TRIAL_DAYS", "3"))),
         free_ai_per_day=max(0, int(os.getenv("FREE_AI_PER_DAY", "10"))),
