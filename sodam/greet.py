@@ -43,7 +43,7 @@ FALLBACKS = [
 
 MEDIA_TYPES = {"photo": "사진", "video": "영상", "animation": "GIF"}
 MAX_TEMPLATE = 800        # 인사말 글자 수 (이름 15명까지 붙어도 사진 설명 1024자 안쪽이 되게)
-MAX_BUTTONS = 6
+MAX_BUTTONS = 50
 MAX_BUTTON_TEXT = 30
 MAX_URL = 512
 CAPTION_LIMIT = 1024      # 텔레그램 사진·영상 설명 글자 한도
@@ -233,14 +233,16 @@ def copy_of(s: dict) -> tuple[int, int] | None:
     return None
 
 
-def button_rows(s: dict, icons: bool = True) -> list[list[InlineKeyboardButton]]:
+def button_rows(s: dict, icons: bool = True, per_row: int = 2) -> list[list[InlineKeyboardButton]]:
     """버튼 앞 프리미엄 이모지(icon_custom_emoji_id)는 PTB 21 이 모르는 칸 → api_kwargs 로 그대로 실림 (brand.py 와 같은 방식).
-    봇 주인이 프리미엄이 아니면 텔레그램이 거절 → send_greeting 이 icons=False 로 다시 보냄."""
-    out = []
+    봇 주인이 프리미엄이 아니면 텔레그램이 거절 → send_greeting 이 icons=False 로 다시 보냄.
+    per_row = 한 줄에 몇 개씩 (기본 2 = 사진처럼 2열, 2026-11-12 오너 '일렬 말고 이열로 깔끔하게')."""
+    btns = []
     for t, u, icon, style in clean_buttons(s.get("greet_buttons")):
         extra = {"icon_custom_emoji_id": icon} if icons and icon else None
-        out.append([InlineKeyboardButton(t, url=u, style=style or None, api_kwargs=extra)])
-    return out
+        btns.append(InlineKeyboardButton(t, url=u, style=style or None, api_kwargs=extra))
+    n = max(1, per_row)
+    return [btns[i:i + n] for i in range(0, len(btns), n)]
 
 
 def with_names(template: str, tag: bool = True) -> str:
