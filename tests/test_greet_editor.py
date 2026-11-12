@@ -145,7 +145,7 @@ async def edit_buttons_and_reject_bad_input():
         "공지 - https://<b>.com",
         "주소없음",
         "가" * 31 + " - https://example.com",
-        "\n".join(f"b{i} - https://example.com" for i in range(7)),
+        "\n".join(f"b{i} - https://example.com" for i in range(51)),   # 최대 50개 초과
         "좋음 - https://example.com\n나쁨 - ftp://example.com",           # 하나라도 틀리면 전부 거절
     ]
     for text in bad:
@@ -181,7 +181,7 @@ async def full_preview_goes_to_dm_and_closes():
     assert (chat_id, media) == (1, "PHOTO") and not bot.named("send_message")
     assert caption.startswith('<a href="tg://user?id=1">방장&lt;b&gt;</a> 님 &lt;환영&gt; &amp;')
     rows = kw["reply_markup"].inline_keyboard
-    assert [b.url for r in rows[:2] for b in r] == [u for _, u in BTNS]
+    assert [b.url for r in rows[:-1] for b in r] == [u for _, u in BTNS]   # 2열(사진처럼) · 마지막 행은 닫기
     close = rows[-1][0]
     assert "닫기" in close.text and close.callback_data.startswith("m:k:")
     q = await press(svc, bot, 1, close.callback_data)
@@ -298,7 +298,7 @@ async def greeter_sends_media_and_buttons():
     assert (chat_id, media, kw["parse_mode"]) == (CHAT, "GIF", "HTML")
     assert caption == ('<a href="tg://user?id=20">&lt;b&gt;해커&lt;/b&gt;</a>, <a href="tg://user?id=21">신입</a>'
                        " 대표님 &lt;환영&gt; &amp; 반가워요")
-    assert [[b.url for b in r] for r in kw["reply_markup"].inline_keyboard] == [[u] for _, u in BTNS]
+    assert [b.url for r in kw["reply_markup"].inline_keyboard for b in r] == [u for _, u in BTNS]   # 2열
     assert not bot.named("send_message")
     logged = await db._one("SELECT text FROM messages WHERE chat_id=? AND is_bot=1 ORDER BY id DESC", (CHAT,))
     assert logged["text"] == "<b>해커</b>, 신입 대표님 <환영> & 반가워요", logged["text"]   # AI 맥락엔 {names} 대신 이름
