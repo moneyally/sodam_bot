@@ -328,7 +328,7 @@ class DB:
         self.conn = await pending
         self.conn.row_factory = aiosqlite.Row
         await self._all("PRAGMA journal_mode=WAL")            # 결과 행을 돌려주는 PRAGMA 는 _all (아래 prune 주석)
-        await self._all("PRAGMA busy_timeout=5000")  # 딜러 봇과 같은 DB 를 쓸 때 잠깐 잠겨도 기다림
+        await self._all("PRAGMA busy_timeout=15000")  # 딜러·음성 등 같은 DB 를 쓰는 다른 프로세스가 긴 쓰기(뉴스 수집 등)를 잡아도 기다림 (5s→15s, 2026-11-13 database is locked 완화)
         # sqlite.org/pragma.html: WAL 에선 NORMAL 도 DB 가 깨지지 않음 (정전 때 마지막 커밋 몇 개만 잃을 수 있음) → 쓰기가 빠름
         await self.conn.execute("PRAGMA synchronous=NORMAL")
         await self._all(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
