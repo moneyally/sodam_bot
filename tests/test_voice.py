@@ -15,7 +15,7 @@ from sodam.panels import voice as P
 from sodam.permissions import Role
 from sodam.voice import audio, store
 from sodam.voice.bridge import SEND_BYTES, Bridge
-from sodam.voice.worker import Worker
+from sodam.voice.worker import ORPHAN_GRACE, Worker
 
 test, run_all = runner()
 CHAT = -100555
@@ -1734,3 +1734,33 @@ def update_sh_does_not_restart_voice_if_a_call_started_during_tests():
     r = _run_update(clone, log, **env)
     assert r.returncode == 0 and restarts_voice(log), r.stdout + r.stderr + log.read_text()
     assert not pending.exists()
+
+
+@test
+async def sweep_clears_orphan_in_call():
+    """재생·통화 없이 in_call 에만 남은 좀비 방 자동 청소 (동시 제한 'busy' 오판 방지, 2026-11-13).
+    실제: 음악 세션이 끝났는데 in_call 에서 안 빠져 MAX_CALLS 3칸을 좀비가 차지 → 새 방 거절."""
+    leaves = []
+
+    async def fake_leave(cid):
+        leaves.append(cid)
+
+    # 111=좀비(재생·통화 없고 grace 지남), 222=노래중(players), 333=AI통화중(bridges)
+    fs = SimpleNamespace(in_call={111, 222, 333}, players={222: object()}, bridges={333: object()},
+                         _orphan_since={111: time.monotonic() - (ORPHAN_GRACE + 10)}, _leave=fake_leave)
+    await Worker._sweep_orphans(fs)
+    assert 111 not in fs.in_call                      # 좀비 청소됨
+    assert 222 in fs.in_call and 333 in fs.in_call    # 진짜 재생/통화 중은 유지 (뮤테이션: live 체크 지우면 실패)
+    assert leaves == [111]                            # 음성채팅에서도 나감
+    assert 111 not in fs._orphan_since                # 추적에서 제거
+
+    # 방금 orphan 된 건 grace 전이라 유지 (성급히 안 지움)
+    fs2 = SimpleNamespace(in_call={444}, players={}, bridges={}, _orphan_since={}, _leave=fake_leave)
+    await Worker._sweep_orphans(fs2)
+    assert 444 in fs2.in_call                         # 아직 grace 안 지남 → 유지
+    assert fs2._orphan_since.get(444)                 # 처음 orphan 시각 기록됨
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(0 if asyncio.run(run_all()) else 1)
