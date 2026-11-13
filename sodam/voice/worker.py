@@ -38,6 +38,7 @@ BACKEND = os.getenv("VOICE_BACKEND_MODEL", BACKEND_MODEL)
 POLL = 1.0
 VIDEO = os.getenv("VOICE_VIDEO", "0") == "1"             # 기본 소리만 (오너 결정 2026-09-29). 영상 칸에 프사: VOICE_VIDEO=1
 MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
+ORPHAN_GRACE = int(os.getenv("VOICE_ORPHAN_GRACE", "90"))  # 실제 재생·통화 없이 in_call 에만 남은 좀비를 이 초 넘으면 청소
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 
 
@@ -158,6 +159,7 @@ class Worker:
         self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
+        self._orphan_since: dict[int, float] = {}   # in_call 에 있지만 재생·통화 없는 방 → 처음 그렇게 된 시각(monotonic)
 
     # ── 로그인 ──────────────────────────────────────────
     async def resume(self) -> None:
@@ -1216,6 +1218,26 @@ class Worker:
             except Exception as e:
                 log.debug("남은 통화 정리 %s: %s", chat_id, e)
 
+    async def _sweep_orphans(self) -> None:
+        """실제 재생(players)·통화(bridges)가 없는데 in_call 에만 남은 좀비 방을 청소 (ORPHAN_GRACE 초 지나면).
+        세션 끝 정리가 가끔 누락돼 in_call 이 안 비면 MAX_CALLS 를 차지해 새 방이 'busy' 로 거절되던 버그 방지 (2026-11-13)."""
+        now = time.monotonic()
+        live = set(self.players) | set(self.bridges)
+        for chat_id in list(self.in_call):
+            if chat_id in live:
+                self._orphan_since.pop(chat_id, None)
+                continue
+            t0 = self._orphan_since.setdefault(chat_id, now)
+            if now - t0 >= ORPHAN_GRACE:
+                self.in_call.discard(chat_id)
+                self._orphan_since.pop(chat_id, None)
+                log.warning("좀비 in_call 청소 (재생·통화 없음) %s", chat_id)
+                with contextlib.suppress(Exception):
+                    await self._leave(chat_id)
+        for chat_id in list(self._orphan_since):      # in_call 에서 이미 빠진 방은 추적에서 제거
+            if chat_id not in self.in_call:
+                self._orphan_since.pop(chat_id, None)
+
     async def run(self) -> None:
         orphans = [r["chat_id"] for r in await self.db._all("SELECT DISTINCT chat_id FROM voice_calls WHERE end_ts IS NULL")]
         await store.close_orphans(self.db)
@@ -1232,6 +1254,7 @@ class Worker:
         while True:
             try:
                 await self.step()
+                await self._sweep_orphans()
             except Exception as e:
                 log.warning("음성 담당 반복 오류: %s", e)
             await asyncio.sleep(POLL)
