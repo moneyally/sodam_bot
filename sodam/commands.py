@@ -474,7 +474,9 @@ async def c_nickname(ctx: CmdCtx) -> None:
 async def c_sports(ctx: CmdCtx) -> None:
     """일정·스코어·순위·팀·알림 구독 (sodam/sports/ui.py). 배당·베팅 정보는 없음."""
     from .sports import ui as sports_ui
-    await ctx.reply(await sports_ui.command(ctx.svc, ctx.chat_id, ctx.user.id, ctx.role >= Role.ADMIN, ctx.args))
+    text = await sports_ui.command(ctx.svc, ctx.chat_id, ctx.user.id, ctx.role >= Role.ADMIN, ctx.args)
+    for ch in _split_msg([text]):     # e스포츠·세계 축구는 경기가 많아 4096자 넘을 수 있음 → 줄 단위로 쪼개 보냄 ('Message is too long' 방지)
+        await ctx.reply(ch)
 
 
 def _music(fn_name: str):

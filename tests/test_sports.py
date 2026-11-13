@@ -3,6 +3,7 @@
 실제 요청 2026-09-29: '스포츠봇 되긴 하는데 축구만 돼서' (TheSportsDB 무료 키 = 검색 1개·일정 3개·영어 팀명만) +
 방 관리자 '자동 알림 되는 스포츠봇'. 네트워크 없음: tests/fixtures/sports/*.json = 2026-09-29 실제 응답을 줄인 것.
 """
+import dataclasses
 import json
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from fakes import FakeBot, FakeMsg, FakeQuery, fake_user, make_db, make_svc, run
 import sodam.panels  # noqa: F401
 from sodam import commands, menu, tools
 from sodam.commands import CmdCtx
+from sodam.sports import ui as sports_ui
 from sodam.permissions import Role
 from sodam.sports import Sports, alerts
 from sodam.sports.alerts import Snap, diff, in_quiet
@@ -341,6 +343,53 @@ async def ai_tool_answers_korean_questions():
 def game(state="pre", hs=None, as_=None, goals=(), league="epl", home="Tottenham Hotspur", away="Arsenal", start=None):
     return Game("espn:1", league, start or ts(2026, 9, 29, 20), home, away, hs, as_, state, "57'" if state == "in" else "",
                 tuple(goals), "20260929")
+
+
+@test
+async def esports_many_leagues_fit_in_one_message():
+    """실제 2026-11-13: '.스포츠 이스포츠' → "Message is too long". e스포츠는 리그 6개라
+    리그별 WORLD_MAX 만으론 합쳐서 4096자 초과 → 전체 상한(TOTAL_MAX)으로 한 답 안에."""
+    svc, db, fetch, clock = await setup(ts(2026, 11, 13, 19, 0))
+    ui = sports_ui.UI(svc.sports)
+    found = sports_ui.resolve("이스포츠")
+    leagues = found[1]
+    assert len(leagues) >= 6 and all(lg.sport == "esports" for lg in leagues), leagues
+
+    def many(lg):   # 리그마다 하루 80경기 (수백 경기 상황 재현)
+        return [dataclasses.replace(
+            game(state="post", hs=2, as_=1, league=lg.code, home=f"{lg.code}A{i}", away=f"{lg.code}B{i}"),
+            key=f"bo3:{lg.code}:{i}", title=f"{lg.name} 2026 메이저 결승") for i in range(80)]
+
+    ui._usable = lambda lgs: (lgs, [])
+
+    async def fake_days(lgs, d):
+        return [(lg, many(lg)) for lg in lgs]
+
+    ui._days = fake_days
+    out = await ui.games_text("이스포츠")
+    assert len(out) <= 4096, f"{len(out)}자 — 한 메시지 한도(4096) 초과"
+    assert out.count(" 2-1 ") <= sports_ui.TOTAL_MAX, out.count(" 2-1 ")   # 출력 경기 수는 전체 상한 안
+    assert "그 밖에" in out and "경기 더" in out, out   # 상한 넘은 경기는 안내 한 줄로
+
+
+@test
+async def c_sports_splits_overlong_reply():
+    """순위·팀 등 어떤 .스포츠 답이든 4096자 넘으면 줄 단위로 쪼개 보냄 (텔레그램 거절 방지 안전망)."""
+    svc, db, fetch, clock = await setup(ts(2026, 11, 13, 19, 0))
+    orig = sports_ui.command
+
+    async def fake(*a, **k):
+        return "\n".join(f"<b>줄 {i}</b> 경기 내용 가나다라마바사아자차카타" for i in range(1000))
+
+    sports_ui.command = fake
+    try:
+        c_, args, argstr = commands.parse(".스포츠 오늘", "sodambot")
+        msg = FakeMsg(CHAT, ADMIN, ".스포츠 오늘")
+        await commands.dispatch(CmdCtx(svc, FakeBot(), msg, CHAT, ADMIN, Role.ADMIN, args, argstr), c_)
+        assert len(msg.replies) >= 2, "긴 답은 여러 메시지로 쪼개야 함"
+        assert all(len(r) <= 4096 for r in msg.replies), [len(r) for r in msg.replies]
+    finally:
+        sports_ui.command = orig
 
 
 def snap(g):
