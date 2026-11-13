@@ -354,18 +354,31 @@ tempfile.tempdir = tempfile.mkdtemp(prefix="sodam-test-")
 atexit.register(shutil.rmtree, tempfile.tempdir, True)
 
 OPEN_DBS: list[DB] = []
+_VISION_ORIG: dict = {}   # vision 모듈 전역의 원본 (테스트가 가짜로 바꿔 놓은 걸 테스트마다 되돌림)
 
 
 def _reset_global_caches() -> None:
     """테스트마다 '새 세상' — production 은 DB 하나라 괜찮지만 테스트는 DB 를 새로 만드는데,
     카지노 난이도(질 확률)는 모듈 전역 캐시(_lose, monotonic 30초)·(_room_pct, 방별)라 앞 테스트
     (test_casino_tilt 가 80%로 올림)가 새 DB 인 다음 테스트로 새어들어 게임이 '지게' 조작됨
-    → fix_games_audit 가 느려지고 틀림 (2026-11-04 추적: tilt→fix_games_audit 멈춤·KeyError)."""
+    → fix_games_audit 가 느려지고 틀림 (2026-11-04 추적: tilt→fix_games_audit 멈춤·KeyError).
+
+    vision._media_of/_fetch 도 같은 문제 — test_nsfwguard 의 patch_scores 가 모듈 전역을 가짜로
+    바꿔 놓고 안 되돌려서, 뒤에 도는 test_vision 이 duration 없는 가짜 Media 를 받아 AttributeError
+    (단독으로 돌리면 통과, 전체 테스트에서만 FAIL → 서버 자동 배포가 막힘. 2026-11-13 추적)."""
     try:
         from sodam.casino import core as _c
         _c._lose.update(pct=0, at=-1e9)
         for _d in (_c._room_pct, _c._overload_note, _c._last_bet, _c._STAKED, _c._room_noticed):
             _d.clear()
+    except Exception:
+        pass
+    try:
+        from sodam import vision as _v
+        if not _VISION_ORIG:          # 첫 테스트 = 아직 아무도 안 건드린 원본
+            _VISION_ORIG.update(media_of=_v._media_of, fetch=_v._fetch)
+        else:
+            _v._media_of, _v._fetch = _VISION_ORIG["media_of"], _VISION_ORIG["fetch"]
     except Exception:
         pass
 
