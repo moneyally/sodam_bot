@@ -17,6 +17,7 @@ EXAMPLES = "예: EPL · 라리가 · 챔스 · MLB · NBA · KBO · 토트넘 ·
 NOT_READY = "국내 리그(KBO·K리그·KBL·V리그 등)는 아직 준비 중이에요."
 PER_LEAGUE = 10
 WORLD_MAX = 60       # 세계 축구 한 화면 경기 수 (진행 중 먼저)
+TOTAL_MAX = 45       # 한 '.스포츠' 답에 보여줄 전체 경기 수 — 여러 리그(e스포츠 6개·세계 축구)를 합쳐도 4096자 안에 들어가게
 CHOICES = 4          # 경기 후보 버튼 수
 WEEK = "월화수목금토일"
 
@@ -106,7 +107,7 @@ class UI:
         if not ok:
             return f"{esc(name)} 정보는 아직 볼 수 없어요. {NOT_READY if any(lg.korean for lg in missing) else ''}".strip()
         head = "🔴 <b>지금 진행 중</b>" if live_only else f"📅 <b>{_day_label(d, today)} {esc(name)} 경기</b>"
-        out, failed, total = [head], [], 0
+        out, failed, total, shown, cut = [head], [], 0, 0, 0
         for lg, games in await self._days(ok, d):
             if games is None:
                 failed.append(lg.name)
@@ -118,23 +119,33 @@ class UI:
             if not games:
                 continue
             total += len(games)
-            if lg.code == "world" or lg.sport == "esports":   # 세계 축구·e스포츠: 대회 이름마다 묶어서 (하루 수백 경기 → 앞 WORLD_MAX 만)
+            budget = TOTAL_MAX - shown    # 여러 리그 합쳐 TOTAL_MAX 넘으면 더 안 뿌리고 "그 밖에 N경기"로 (4096자 초과 방지)
+            if budget <= 0:
+                cut += len(games)
+                continue
+            if lg.code == "world" or lg.sport == "esports":   # 세계 축구·e스포츠: 대회 이름마다 묶어서 (하루 수백 경기 → 앞 WORLD_MAX·전체 TOTAL_MAX 만)
+                cap = min(WORLD_MAX, budget)
                 out.append(f"\n🌍 <b>세계 축구 {len(games)}경기</b>" if lg.code == "world"
                            else f"\n{fmt.emoji(lg.code)} <b>{esc(lg.name)} {len(games)}경기</b>")
                 head = None
                 rank = {"in": 0, "pre": 1}             # 진행 중 → 곧 → 끝난 순 (e스포츠는 끝난 경기가 하루 수십 개)
-                for g in sorted(games, key=lambda g: (rank.get(g.state, 2), g.title, g.start))[:WORLD_MAX]:
+                for g in sorted(games, key=lambda g: (rank.get(g.state, 2), g.title, g.start))[:cap]:
                     if g.title != head:
                         out.append(f"<i>{esc(g.title or '기타')}</i>")
                         head = g.title
                     out.append(fmt.line(g))
-                if len(games) > WORLD_MAX:
-                    out.append(f"… 외 {len(games) - WORLD_MAX}경기 (팀 이름으로 찾기: <code>.스포츠 팀이름</code>)")
+                shown += min(len(games), cap)
+                if len(games) > cap:
+                    out.append(f"… 외 {len(games) - cap}경기 (팀 이름으로 찾기: <code>.스포츠 팀이름</code>)")
                 continue
+            cap = min(PER_LEAGUE, budget)
             out.append(f"\n{fmt.emoji(lg.code)} <b>{esc(lg.name)}</b>")
-            out += [fmt.line(g) for g in games[:PER_LEAGUE]]
-            if len(games) > PER_LEAGUE:
-                out.append(f"… 외 {len(games) - PER_LEAGUE}경기")
+            out += [fmt.line(g) for g in games[:cap]]
+            shown += min(len(games), cap)
+            if len(games) > cap:
+                out.append(f"… 외 {len(games) - cap}경기")
+        if cut:
+            out.append(f"\n… 그 밖에 {cut}경기 더 — 리그·팀 이름으로 좁혀서 찾아줘 (<code>.스포츠 롤</code>)")
         if not total:
             if failed and len(failed) == len(ok):
                 return "경기 정보를 가져오지 못했어요. 잠시 후 다시 해주세요."
