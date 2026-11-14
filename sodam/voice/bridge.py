@@ -575,14 +575,22 @@ class Bridge:
                     nxt = self.clock()
 
     async def _watch(self) -> None:
-        while True:
-            now = self.clock()
-            if now - self._t0 >= self.max_sec:
-                return self.stop("time")
-            talking = self._speaking and now - self._speech_t < SPEAK_MAX   # 끝없는 '말하는 중'(음악·끊긴 연결)은 안 셈
-            if now - self._last_voice >= self.idle_sec and not self.out and not talking:
-                return self.stop("idle")                # 누가 말하는 중(speech_started 뒤)·재생 중엔 안 끝냄 — max_sec 가 상한
-            await self.sleep(1.0)
+        # 이 워치독이 max_sec·idle 를 감시해 통화를 끝낸다(stop→_done.set). 어쩌다 예외로 죽으면
+        # 통화가 영영 안 끝나므로(2026-11-14 hang 감사), 죽어도 stop 으로 마무리해 _done 을 반드시 set.
+        try:
+            while True:
+                now = self.clock()
+                if now - self._t0 >= self.max_sec:
+                    return self.stop("time")
+                talking = self._speaking and now - self._speech_t < SPEAK_MAX   # 끝없는 '말하는 중'(음악·끊긴 연결)은 안 셈
+                if now - self._last_voice >= self.idle_sec and not self.out and not talking:
+                    return self.stop("idle")            # 누가 말하는 중(speech_started 뒤)·재생 중엔 안 끝냄 — max_sec 가 상한
+                await self.sleep(1.0)
+        except asyncio.CancelledError:
+            raise                                       # 정상 종료(run 이 끝나며 cancel)는 그대로
+        except Exception as e:
+            log.warning("통화 워치독 죽음 → 통화 종료: %s", e)
+            self.stop("error:watchdog")
 
     async def _lag(self) -> None:
         """이벤트 루프가 얼마나 늦게 깨워 주는지 (CPU 경쟁·막는 작업이 있으면 커짐 → 재생 빈틈). 통화당 최대 1만 개."""
