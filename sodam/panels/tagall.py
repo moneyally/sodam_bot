@@ -134,13 +134,17 @@ async def offer(svc, bot, chat_id: int, caller, text: str) -> str:
     return "확인 카드를 보냈음. 요청한 관리자가 [📣 태그 시작]을 눌러야 시작된다고 짧게 안내. 아직 태그한 게 아니니 했다고 말하지 말 것."
 
 
+SEND_TRIES = 6   # RetryAfter(429) 재시도 상한 — 예전 while True 는 텔레그램이 계속 막으면 무한이었음 (2026-11-14 hang 감사)
+
+
 async def _send(bot, chat_id: int, text: str):
-    while True:
+    for _ in range(SEND_TRIES):
         try:
             return await bot.send_message(chat_id, text, parse_mode="HTML")
         except RetryAfter as e:
             wait = e.retry_after.total_seconds() if isinstance(e.retry_after, timedelta) else float(e.retry_after)
             await asyncio.sleep(min(wait, 60) + 0.5)
+    return None   # 상한 넘으면 이 묶음은 포기 (전체가 무한 반복하지 않게)
 
 
 async def run(svc, bot, chat_id: int, by: int, text: str, sleep=asyncio.sleep) -> int:

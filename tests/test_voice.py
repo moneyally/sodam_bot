@@ -1162,7 +1162,7 @@ async def timeline_shows_voice_calls_and_who_talks_after_whom():
 
 
 # ── 통화 안정성 (2026-09-30 '렉 때문에 끊겼어요' 조사: 오류 세기·idle·답마다 재생 ms·재연결·계측·배포 우선순위) ──
-class _Tick(Exception):
+class _Tick(BaseException):   # 루프를 n 번 돌리고 끊는 '제어 흐름' 예외 → BaseException 이라 _watch 의 except Exception(진짜 버그) 가드에 안 걸림
     """가짜 sleep 이 루프를 멈추게."""
 
 
