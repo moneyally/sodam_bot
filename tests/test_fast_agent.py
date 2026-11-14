@@ -15,6 +15,26 @@ test, run_all = runner()
 
 
 @test
+async def keep_typing_self_ends_and_does_not_loop_forever():
+    """'입력 중' 태스크는 TYPING_MAX_SEC 뒤 스스로 끝나야 한다 — cancel 이 어쩌다 안 되거나
+    run_agent 가 매달려도 '입력 중' 이 몇십 분 유령으로 남지 않게 (2026-11-14 태산방 30분 먹통)."""
+    old = handlers.TYPING_MAX_SEC
+    handlers.TYPING_MAX_SEC = 0.15
+
+    class _Bot:
+        async def send_chat_action(self, *a, **k):
+            pass
+
+    try:
+        # 상한이 있으면 0.15초에 스스로 끝남. 없으면(while True) 무한 반복 → wait_for 가 TimeoutError
+        await asyncio.wait_for(handlers._keep_typing(_Bot(), -100, every=0.05), timeout=3.0)
+    except asyncio.TimeoutError:
+        raise AssertionError("입력중 태스크가 상한 없이 무한 반복 — 유령 입력중 영구화")
+    finally:
+        handlers.TYPING_MAX_SEC = old
+
+
+@test
 async def a_hung_model_call_is_cut_at_cap_not_hanging_13min():
     # 2026-10-26 실측: 스트리밍 추론 한 호출이 783초 매달림 (DEADLINE 은 라운드 사이에서만 재서 못 끊음)
     r = await Room().open(admins={BOSS.id})

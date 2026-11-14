@@ -746,9 +746,16 @@ ENDED_NOTICE = ("⛔ {name} {what}이 끝났어요. AI 대화·게임·예약공
                 "방 관리(캡차·도배·금지어·경고)는 계속 무료로 동작해요. 관리자님은 아래 버튼에서 연장할 수 있어요.")
 
 
+TYPING_MAX_SEC = 180.0      # '입력 중' 을 최대 이만큼만 (cancel 이 안 돼도 저절로 꺼짐 — 유령 입력중 영구화 방지, 2026-11-14 태산방 30분 먹통)
+REPLY_HARD_TIMEOUT = 170.0  # run_agent 전체 상한 (내부 CALL_CAP·DEADLINE 가 안 먹는 극단 hang 안전망) — 이보다 조금 큰 TYPING_MAX 로 입력중도 뒤따라 꺼짐
+
+
 async def _keep_typing(bot, chat_id: int, every: float = 4.0) -> None:
-    """AI 가 생각하는 동안 '입력 중…' 을 계속 (한 번 보내면 5초만 보임 — 긴 작업이 멈춘 것처럼 보이던 것)."""
-    while True:
+    """AI 가 생각하는 동안 '입력 중…' 을 계속 (한 번 보내면 5초만 보임 — 긴 작업이 멈춘 것처럼 보이던 것).
+    TYPING_MAX_SEC 넘으면 스스로 끝낸다: run_agent 가 어쩌다 매달려 finally(typing.cancel)에 못 가도
+    '입력 중' 이 몇십 분씩 유령으로 남지 않게 (정상 답은 CALL_CAP 90초·DEADLINE 안이라 훨씬 일찍 꺼짐)."""
+    end = time.monotonic() + TYPING_MAX_SEC
+    while time.monotonic() < end:
         await asyncio.sleep(every)
         try:
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
@@ -979,9 +986,16 @@ async def _answer(context: ContextTypes.DEFAULT_TYPE, msg: Message, role: Role, 
         ctx.room_read = True
     typing = asyncio.create_task(_keep_typing(bot, chat_id))   # 텔레그램 '입력 중'은 5초면 꺼짐 → 답이 나올 때까지 4초마다
     try:
-        answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
-                                 request=request or "(사진만 보냄)", mode=via, hints=hints,
-                                 images=image.parts() if image else None, steer=steer)
+        # 전체 상한: run_agent 안의 CALL_CAP·DEADLINE 가 어쩌다 안 먹어도(스트리밍 추론·도구 매달림 등)
+        # 여기서 끊어 답이 영영 안 나오고 '입력 중' 만 도는 걸 막는다 (2026-11-14 태산방 19분 hang).
+        answer = await asyncio.wait_for(
+            run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=reply_to,
+                      request=request or "(사진만 보냄)", mode=via, hints=hints,
+                      images=image.parts() if image else None, steer=steer),
+            timeout=REPLY_HARD_TIMEOUT)
+    except asyncio.TimeoutError:
+        log.warning("run_agent 전체 상한(%ss) 초과 chat=%s — 끊고 포기", REPLY_HARD_TIMEOUT, chat_id)
+        answer = "지금 좀 밀려서 늦었어 — 잠깐 있다 다시 불러줘 🙏"
     except BudgetExceeded:
         answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
     except OpenAIError as e:
