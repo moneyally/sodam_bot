@@ -202,6 +202,7 @@ SEARCH_POOL = 200          # 여러 낱말 검색: bm25 상위 이만큼을 받�
 KEEP_DAYS = 90             # 대화·요청 기록 보관 (일)
 COUNTER_KEEP_DAYS = 400    # 일일 카운터 보관 (일)
 WAL_LIMIT = 64 * 1024 * 1024
+SLOW_WRITE_SEC = 4.0   # 이보다 오래 DB 를 잡은 쓰기·백업은 경고 로그로 (database is locked 범인 특정용, 2026-11-14)
 
 
 def now() -> int:
@@ -328,7 +329,7 @@ class DB:
         self.conn = await pending
         self.conn.row_factory = aiosqlite.Row
         await self._all("PRAGMA journal_mode=WAL")            # 결과 행을 돌려주는 PRAGMA 는 _all (아래 prune 주석)
-        await self._all("PRAGMA busy_timeout=15000")  # 딜러·음성 등 같은 DB 를 쓰는 다른 프로세스가 긴 쓰기(뉴스 수집 등)를 잡아도 기다림 (5s→15s, 2026-11-13 database is locked 완화)
+        await self._all("PRAGMA busy_timeout=30000")  # 딜러·음성 등 같은 DB 를 쓰는 다른 프로세스가 긴 쓰기를 잡아도 기다림 (5s→15s→30s, 2026-11-14 하루 11번 locked — 15초도 넘김). 락을 금방 얻으면 바로 진행하니 정상 쓰기는 안 느려짐, 극단만 흡수
         # sqlite.org/pragma.html: WAL 에선 NORMAL 도 DB 가 깨지지 않음 (정전 때 마지막 커밋 몇 개만 잃을 수 있음) → 쓰기가 빠름
         await self.conn.execute("PRAGMA synchronous=NORMAL")
         await self._all(f"PRAGMA journal_size_limit={WAL_LIMIT}")  # 체크포인트 뒤 WAL 파일을 이 크기로 줄임
@@ -423,11 +424,20 @@ class DB:
             c.execute("RELEASE atomic")
             c.commit()
             return out
-        return await self.conn._execute(run, self.conn._conn)
+        t0 = time.monotonic()
+        out = await self.conn._execute(run, self.conn._conn)
+        dt = time.monotonic() - t0
+        if dt >= SLOW_WRITE_SEC:   # 이 쓰기가 DB 를 오래 잡았다 = 다른 쓰기를 locked 시킨 범인일 수 있음
+            log.warning("느린 atomic %.1f초: %s", dt, getattr(fn, "__qualname__", repr(fn))[:120])
+        return out
 
     async def _write(self, sql: str, params: tuple = ()) -> int:
+        t0 = time.monotonic()
         cur = await self.conn.execute(sql, params)
         await self.conn.commit()
+        dt = time.monotonic() - t0
+        if dt >= SLOW_WRITE_SEC:
+            log.warning("느린 쓰기 %.1f초: %s", dt, " ".join(sql.split())[:120])
         return cur.lastrowid
 
     async def cached(self, key: tuple, load: Callable[[], Awaitable[T]], ttl: float = SETTINGS_TTL) -> T:
@@ -1095,8 +1105,12 @@ class DB:
     # ── 백업 ──────────────────────────────────────────────
     async def backup_to(self, path: str) -> None:
         """온라인 백업 (봇이 돌아가는 중에도 일관된 복사본)."""
+        t0 = time.monotonic()
         async with aiosqlite.connect(path) as target:
             await self.conn.backup(target)
+        dt = time.monotonic() - t0
+        if dt >= SLOW_WRITE_SEC:   # 백업이 그동안 DB 커넥션을 점유 → 다른 쓰기가 밀릴 수 있음
+            log.warning("느린 백업 %.1f초 (그동안 DB 점유, locked 유발 가능)", dt)
 
     # ── 관리 로그 ─────────────────────────────────────────
     async def log_mod(self, chat_id: int, actor_id: int | None, target_id: int | None,
