@@ -34,6 +34,19 @@ DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금�
 # 한 호출이 매달리면 못 끊었다 (실측 2026-10-26: 스트리밍 추론 한 호출이 783초 — OpenAI timeout=60 은 조각 간격만).
 # 정상 추론은 이 안에 끝남 → 넘으면 그 호출을 끊고 지금까지로 답한다 (asyncio.wait_for).
 CALL_CAP = 90
+SLOW_TOOL_SEC = 20.0   # 이보다 오래 걸린 도구는 경고 로그로 (어느 도구가 매달려 '입력중' 먹통을 내는지 특정, 2026-11-14)
+
+
+async def _timed_execute(name, args, ctx):
+    """도구 하나 실행 + 걸린 시간 측정. 느리면(= hang 의심) 어느 도구·인자였는지 로그에 남긴다.
+    모델 호출은 CALL_CAP 로 막히지만 도구 실행엔 상한이 없어서, 매달리면 여기 로그가 범인을 가리킨다."""
+    t0 = time.monotonic()
+    try:
+        return await execute(name, args, ctx)
+    finally:
+        dt = time.monotonic() - t0
+        if dt >= SLOW_TOOL_SEC:
+            log.warning("느린 도구 %.0f초: %s(%s) chat=%s", dt, name, (args or "")[:80], ctx.chat_id)
 TOOL_RESULT_CHARS = 4000  # 도구 결과를 모델에 넣는 최대 길이 (넘으면 앞+뒤만, util.clip_mid — 끝의 합계 줄이 살게)
 MAX_TOKENS = 1500     # 추론 모델은 생각 토큰도 여기 포함됨
 THINK_MAX_TOKENS = 4000  # 생각하는 실행(llm.think): 추론 토큰 포함 상한 (gpt-5.4 출력 $15/1M → 최대 $0.06)
@@ -730,7 +743,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 break
             head.append(c)
         if len(head) > 1:
-            early = {c.id: asyncio.create_task(execute(c.function.name, c.function.arguments, ctx)) for c in head}
+            early = {c.id: asyncio.create_task(_timed_execute(c.function.name, c.function.arguments, ctx)) for c in head}
             run.event("parallel", n=len(head))
         for c in calls:
             if c.function.name == FIND_TOOL and ts.deferred:   # 도구 불러오기는 코드가 바로 (실행되는 일 없음)
@@ -747,7 +760,7 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                 result = ("이 방에서는 꺼져 있는 기능이라 사용할 수 없음 (관리자가 설정에서 켜야 함)."
                           if c.function.name in shown_names else "이 도구는 지금 사용할 수 없음.")
             else:
-                result = await (early.pop(c.id) if c.id in early else execute(c.function.name, c.function.arguments, ctx))
+                result = await (early.pop(c.id) if c.id in early else _timed_execute(c.function.name, c.function.arguments, ctx))
                 wrote = wrote or c.function.name not in READ_ONLY
                 results.append(result)
                 read = read or c.function.name in READ_ONLY
