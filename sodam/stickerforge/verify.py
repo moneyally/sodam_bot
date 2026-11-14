@@ -17,11 +17,19 @@ from PIL import Image
 from .const import ffmpeg
 
 LIMITS = {"sticker": (512, 256 * 1024), "icon": (100, 32 * 1024), "emoji": (100, 64 * 1024)}
+# engine.py 와 같은 값 (순환 import 피하려고 여기 따로). ffmpeg 이 깨진 입력에서 매달리면 AI 답이 통째로
+# 멈추고 _LOCK 까지 잡혀 이후 모든 스티커/움프 렌더가 영구 정지하던 것 (2026-11-14 hang 감사). to_thread 라
+# 바깥 wait_for 로는 못 끊음 — subprocess timeout 만이 방어.
+FFMPEG_TIMEOUT = int(os.getenv("STICKER_FFMPEG_TIMEOUT", "120") or 120)
 
 
 def _probe(path) -> dict:
     """ffprobe 없이 `ffmpeg -i` 출력으로 (imageio-ffmpeg 에는 ffprobe 가 없음)."""
-    err = subprocess.run([ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True).stderr
+    try:
+        err = subprocess.run([ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True,
+                             timeout=FFMPEG_TIMEOUT).stderr
+    except subprocess.TimeoutExpired:   # ffmpeg 매달림 → 검증 실패로 이어지게 빈 정보 반환 (무한 대기 대신)
+        return {"codec": "?", "w": 0, "h": 0, "fps": 0.0, "dur": 99.0, "alpha": False, "audio": False}
     v = re.search(r"Stream #0:\d+.*?: Video: (\w+).*?, (\d+)x(\d+).*?, ([\d.]+) fps", err)
     d = re.search(r"Duration: (\d+):(\d+):([\d.]+)", err)
     return {"codec": v.group(1) if v else "?", "w": int(v.group(2)) if v else 0, "h": int(v.group(3)) if v else 0,
@@ -34,7 +42,8 @@ def _decode_frame(path, n=0):
     with tempfile.TemporaryDirectory() as tmp:
         png = os.path.join(tmp, "f.png")
         subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-c:v", "libvpx-vp9", "-i", path,
-                        "-vf", f"select='eq(n\\,{n})'", "-frames:v", "1", "-pix_fmt", "rgba", png], check=True)
+                        "-vf", f"select='eq(n\\,{n})'", "-frames:v", "1", "-pix_fmt", "rgba", png],
+                       check=True, timeout=FFMPEG_TIMEOUT)   # 매달리면 TimeoutExpired → render 가 실패로 처리
         return Image.open(png).convert("RGBA")
 
 
