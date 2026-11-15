@@ -15,7 +15,7 @@ import random
 import re
 import time
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from openai import OpenAIError
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
@@ -98,25 +98,36 @@ _CODE_IN_CODE = re.compile(r"<code>((?:<code>[^<]*</code>(?:, )?)+)</code>")
 
 # ── 검사 ──────────────────────────────────────────────────
 def normalize_url(url: str) -> str | None:
-    """버튼에 써도 되는 주소면 정리해서 돌려준다. https:// · tg:// 만 (http·javascript 등은 거절)."""
+    """버튼에 써도 되는 주소면 정리해서 돌려준다. http(s):// · tg:// 만 (javascript 등은 거절).
+    한글 등 IDN 도메인(텐카지노.com)은 텔레그램이 받는 punycode(xn--…)로 바꿔서 돌려준다."""
     if not isinstance(url, str) or len(url) > MAX_URL or _URL_BAD.search(url):
         return None
     low = url[:8].lower()
     if low.startswith("tg://"):
         url = "tg://" + url[5:]
         return url if _TG.fullmatch(url) else None
-    if not low.startswith("https://"):
+    # http:// 도 허용 (오너 결정 2026-11-15). 위험한 스킴(javascript·socks 등)은 그대로 거절.
+    scheme = "https://" if low.startswith("https://") else ("http://" if url[:7].lower() == "http://" else None)
+    if scheme is None:
         return None
-    url = "https://" + url[8:]
+    url = scheme + url[len(scheme):]
     try:
         parts = urlsplit(url)
         parts.port  # 이상한 포트면 ValueError
     except ValueError:
         return None
-    # user@host 형태(https://google.com@나쁜곳.com)는 주소를 속이는 데 쓰여서 거절
-    if "@" in parts.netloc or not _HOST.fullmatch(parts.hostname or ""):
+    host = parts.hostname or ""
+    if "@" in parts.netloc:        # user@host 형태(https://google.com@나쁜곳.com)는 주소 속임수 → 거절
         return None
-    return url
+    if any(ord(c) > 127 for c in host):   # 한글 등 비ASCII 도메인 → punycode 로 (텔레그램이 받는 형태)
+        try:
+            ascii_host = host.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return None
+        if not _HOST.fullmatch(ascii_host):
+            return None
+        return urlunsplit(parts._replace(netloc=parts.netloc.replace(host, ascii_host, 1)))
+    return url if _HOST.fullmatch(host) else None
 
 
 def clean_button_text(text: str) -> str | None:
@@ -218,7 +229,7 @@ def parse_buttons(raw: str, entities=None) -> tuple[list[list], str | None]:
         if not text:
             return [], f"{where}: 버튼 글자는 1~{MAX_BUTTON_TEXT}자로 써주세요."
         if not url:
-            return [], f"{where}: 주소는 <code>https://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요."
+            return [], f"{where}: 주소는 <code>https://</code>·<code>http://</code> 또는 <code>tg://</code> 로 시작하는 올바른 주소만 돼요 (한글 도메인도 돼요)."
         if same or style or icon:
             out.append([text, url, icon, style, same])   # 색·이모지·같은줄 있으면 5칸 (앞 칸은 None/False)
         else:

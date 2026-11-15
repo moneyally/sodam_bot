@@ -138,7 +138,7 @@ async def edit_buttons_and_reject_bad_input():
     await press(svc, bot, 1, f"m:in:{CHAT}:wb")
     bad = [
         "공지 - javascript:alert(1)",
-        "공지 - http://example.com",
+        "공지 - ssh://example.com",   # http:// 는 이제 허용 (2026-11-15) — 위험한 다른 스킴은 그대로 거부
         "공지 - https://google.com@evil.com",
         "공지 - https://exa mple.com",
         "공지 - data:text/html,hi",
@@ -166,6 +166,13 @@ async def edit_buttons_and_reject_bad_input():
     # `.설정 전체` 표시가 목록 속 목록에서 안 터짐
     assert "📢 공지 (https://t.me/sodam_notice)" in render("greet_buttons", saved)
     assert normalize_url("tg://user?id=1") and not normalize_url("tg://x y") and not normalize_url("https://a")
+    # 한글 등 IDN 도메인 → punycode 로 (텐카지노.com 이 거부되던 것, 2026-11-15)
+    assert normalize_url("https://텐카지노.com/") == "https://xn--o80bl47bgkdwod.com/"
+    assert normalize_url("http://텐카지노.com/") == "http://xn--o80bl47bgkdwod.com/"
+    assert normalize_url("http://google.com/") == "http://google.com/"   # http:// 허용
+    # 위험한 건 여전히 거부
+    assert normalize_url("javascript:alert(1)") is None and normalize_url("https://a@b.com/") is None
+    assert normalize_url("ftp://x.com") is None
 
 
 @test
@@ -433,7 +440,7 @@ async def greeter_falls_back_and_revalidates():
 
     # .set·AI 도구로 들어온 이상한 값: 버튼은 검사를 통과한 것만, 미디어 종류가 이상하면 글만
     await db.set_setting(CHAT, "greet_buttons", ["공지 - https://x.com", ["나쁨", "javascript:alert(1)"],
-                                                 ["http", "http://x.com"], ["좋음", "https://ok.com"]])
+                                                 ["나쁨2", "ftp://x.com"], ["좋음", "https://ok.com"]])
     await db.set_setting(CHAT, "greet_media_type", "document")
     await db.set_setting(CHAT, "greet_media_id", "DOC")
     assert clean_buttons((await db.get_settings(CHAT))["greet_buttons"]) == [("좋음", "https://ok.com", None, None, False)]
