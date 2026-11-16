@@ -4,6 +4,9 @@
 set -euo pipefail
 CLONES=/opt/sodam/data/clones
 [ -d "$CLONES" ] || exit 0
+# path 유닛의 MakeDirectory 가 root 로 만들면 봇(sodam)이 클론 .env·DB 폴더를 못 씀 → 늘 봇 소유로
+# (2026-11-17 프레스티지 [✅ 만들기] → PermissionError data/clones/prestige11bot)
+chown sodam:sodam "$CLONES" 2>/dev/null || true
 
 # ① .env 가 있는 클론은 켠다 (이미 켜져 있으면 무해)
 shopt -s nullglob

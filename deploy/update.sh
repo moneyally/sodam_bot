@@ -401,6 +401,8 @@ clone_setup() {
         cp "$APP_DIR/deploy/$u" "$UNIT_DIR/" && changed=1 && log "clone unit: $u 갱신"
     done
     [ -f "$APP_DIR/deploy/clone-apply.sh" ] && chmod +x "$APP_DIR/deploy/clone-apply.sh" || true
+    # 클론 폴더는 봇 소유여야 함 (path 유닛 MakeDirectory 가 root 로 만들면 [✅ 만들기] 가 PermissionError)
+    mkdir -p "$APP_DIR/data/clones" && chown "$RUN_AS:$RUN_AS" "$APP_DIR/data/clones" 2>/dev/null || true
     if [ "$changed" = 1 ]; then
         $SYSTEMCTL daemon-reload || true
         $SYSTEMCTL enable --now sodam-clone-apply.path 2>/dev/null || true

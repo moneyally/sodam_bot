@@ -180,6 +180,9 @@ def scripts_parse_and_units_sane():
     up = (DEPLOY / "update.sh").read_text()
     assert "voice_setup" in up and "requirements-voice.txt" in up and (ROOT / "requirements-voice.txt").exists()
     assert "clone_setup" in up, "update.sh 가 클론 유닛을 설치하지 않음"   # 🏷 화이트라벨 자동 켜기
+    # 클론 폴더가 root 소유면 [✅ 만들기] 가 PermissionError (2026-11-17 실서버) → 둘 다 봇 소유로 맞춤
+    assert 'chown "$RUN_AS:$RUN_AS" "$APP_DIR/data/clones"' in up, "update.sh 가 클론 폴더 주인을 봇으로 안 맞춤"
+    assert 'chown sodam:sodam "$CLONES"' in (DEPLOY / "clone-apply.sh").read_text(), "clone-apply.sh 가 클론 폴더 주인을 안 맞춤"
     # update.sh 가 기다리는 줄이 실제 시작 로그와 같은 모양인지
     src = (ROOT / "sodam" / "__main__.py").read_text()
     assert '시작!%s' in src and '(버전 {version})' in src
