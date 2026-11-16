@@ -326,5 +326,20 @@ async def transfer_room_input_accepts_name_and_number():
     assert "프레스티지" in screen.text and "구독: 있음" in screen.text, screen.text
 
 
+@test
+async def clone_name_calls_use_right_vocative():
+    """받침 없는 클론 이름은 '프레스티지야' 로 불려야 한다 (2026-11-17: '이름아·이름이' 고정이라 못 알아들음).
+    소담(받침 있음)은 예전 그대로 '소담아·소담이'. 뮤테이션: 받침 구분 빼면 FAIL."""
+    from types import SimpleNamespace as S
+    from sodam import handlers
+    from sodam.config import default_call_names
+    assert default_call_names("소담") == ["소담아", "소담이", "소담"]
+    names = tuple(sorted(default_call_names("프레스티지"), key=len, reverse=True))
+    bot = S(username="prestige11_bot", id=5)
+    for text in ("프레스티지야 안녕", "야 프레스티지야 뭐해", "프레스티지 안녕"):
+        msg = S(reply_to_message=None, entities=[], chat=S(type="supergroup"), text=text, caption=None)
+        assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
