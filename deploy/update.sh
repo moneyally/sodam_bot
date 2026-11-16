@@ -389,6 +389,26 @@ unit_setup() {
     done
 }
 
+# 🏷 화이트라벨 클론봇 (sodam/clone.py, docs/WHITELABEL_DESIGN.md): 인스턴스 유닛 sodam@.service +
+# 자동 켜기 데몬(sodam-clone-apply.path/.service)을 설치. 봇은 data/clones/*.env 만 쓰고, 이 데몬이 보고 켠다.
+# 전부 실패해도 본체 배포는 안 깨지게 (|| true). 자동 켜기 전엔 반자동(ssh systemctl enable --now sodam@<slug>).
+clone_setup() {
+    [ -n "$RUN_AS" ] || return 0
+    local changed=0 u
+    for u in sodam@.service sodam-clone-apply.service sodam-clone-apply.path; do
+        [ -f "$APP_DIR/deploy/$u" ] || continue
+        cmp -s "$APP_DIR/deploy/$u" "$UNIT_DIR/$u" && continue
+        cp "$APP_DIR/deploy/$u" "$UNIT_DIR/" && changed=1 && log "clone unit: $u 갱신"
+    done
+    [ -f "$APP_DIR/deploy/clone-apply.sh" ] && chmod +x "$APP_DIR/deploy/clone-apply.sh" || true
+    if [ "$changed" = 1 ]; then
+        $SYSTEMCTL daemon-reload || true
+        $SYSTEMCTL enable --now sodam-clone-apply.path 2>/dev/null || true
+    fi
+    # 이미 등록된 클론 .env 를 한 번 반영 (배포 때 가볍게 — 꺼진 클론 복구)
+    [ -x "$APP_DIR/deploy/clone-apply.sh" ] && "$APP_DIR/deploy/clone-apply.sh" 2>/dev/null || true
+}
+
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
 restart_and_verify() {
     local ver=$1 since u ok
@@ -536,6 +556,7 @@ if restart_and_verify "$VER"; then
     imagemagick_setup
     workshop_setup
     unit_setup
+    clone_setup
     exit 0
 fi
 

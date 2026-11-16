@@ -1,0 +1,10 @@
+# /etc/systemd/system/sodam-clone-apply.service — data/clones/*.env 를 보고 sodam@<slug> 를 켜고 끈다.
+# sodam-clone-apply.path(디렉터리 변화 감시)가 호출. root 로 돈다 — 봇 프로세스는 NoNewPrivileges 라
+# systemctl 을 못 하므로, 봇은 .env 파일만 쓰고 이 데몬이 그 파일을 보고 반영한다. (docs/WHITELABEL_DESIGN.md)
+[Unit]
+Description=Apply sodam clone .env files (enable/disable sodam@<slug>)
+After=sodam.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sodam/deploy/clone-apply.sh

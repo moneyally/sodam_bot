@@ -1,8 +1,16 @@
 # 화이트라벨 클론봇 설계 (방마다 봇 이름·프사 커스텀)
 
 > 오너 아이디어(2026-10-26): "소담이 하나보다, **각 방마다 봇 프사·이름을 꾸미고 봇 이름을 지정**해서 파는 게 더 잘 팔릴 것 같다."
-> 조사 = 전체 코드를 4갈래 서브에이전트로(실행구조·DB종속·결제오너·인프라) 실측. **이 문서는 설계만. 구현 아직 안 함.**
+> 조사 = 전체 코드를 4갈래 서브에이전트로(실행구조·DB종속·결제오너·인프라) 실측.
 > 경쟁사 확인: GroupHelp·시큐리티봇도 이 방식(구매자가 BotFather로 자기 봇 만들어 토큰 넘기면 같은 코드·인프라가 그 봇을 돌림). **무료로 제공**(공유 인프라, 봇마다 토큰만).
+>
+> **⚙️ 1차 구현 완료 (2026-11-16, 오너 '지금 팔 데 급함')**: `sodam/clone.py`(핵심) · `sodam/panels/clone.py`(오너 1:1 마법사 🏷 화이트라벨 m:cl) ·
+> `deploy/sodam@.service`(인스턴스 유닛) · `deploy/sodam-clone-apply.{path,service}`+`clone-apply.sh`(자동 켜기 데몬, root) · `update.sh clone_setup`.
+> tests/test_clone.py(14개·뮤테이션 4개) + test_deploy.py 에 클론 유닛 검사. **봇 프사·영상프사는 봇 API 로 됨** — 아래 '제일 중요한 사실' 수정:
+> Bot API 9.4(2026-02)에 `setMyProfilePhoto`(정적 JPG·`InputProfilePhotoAnimated` MP4 영상프사) 추가 → 마법사가 토큰·이름·설명·사진·영상프사 전부 적용(apply_branding).
+> @아이디만 봇 API 로 못 바꿈(BotFather `/setusername`) → 마법사는 getMe 로 읽어서 보여주기만. 서버 PTB 22.8 이 네이티브 지원 확인.
+> **미착수(2차)**: 미니앱 봇별 Caddy 경로(지금 클론은 미니앱만 제한, 나머지 다 됨) · 음성 멀티봇 · persona 완전 화이트라벨("소담" 하드코딩) · 방 넘어 기억 공유.
+> **켜기**: 자동 데몬(sodam-clone-apply) 배포 반영 전엔 반자동 — ssh `sudo systemctl enable --now sodam@<slug>`.
 
 ---
 
