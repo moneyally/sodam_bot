@@ -280,6 +280,27 @@ def register_schema(sql: str, *, migrate: dict[str, str] | None = None) -> None:
 
 
 EXTRA_MIGRATE: dict[str, str] = {}
+
+# 방(chat_id)에 묶인 핵심 표 — migrate_chat(슈퍼그룹 전환)과 clone_migrate(방→클론봇 이관)의 단일 출처.
+# single: chat_id 가 PK · composite: chat_id 가 PK 일부 · plain: chat_id 가 그냥 컬럼.
+# (모듈 표는 register_schema(migrate=) 로 EXTRA_MIGRATE 에 자동 등록 → 둘 다 자동 포함)
+CHAT_MIGRATE_SINGLE = ["chats", "subscriptions"]
+CHAT_MIGRATE_COMPOSITE = ["members", "bot_admins", "banned_words", "sports_subs", "sports_sent",
+                          "chat_state", "captcha", "counters"]
+CHAT_MIGRATE_PLAIN = ["messages", "requests", "warnings", "invoices", "payments", "schedules",
+                      "knowledge_docs", "knowledge_chunks", "mod_log"]
+
+
+def chat_scoped_tables() -> list[tuple[str, str]]:
+    """방 이관·전환이 옮길 표 → [(표, 종류)]. 종류 single/composite/plain 은 복사, drop 은 재생성 캐시(복사 안 함).
+    migrate_chat 과 clone_migrate 가 이 한 곳을 공유 → 새 표가 register_schema(migrate=) 로 추가되면 둘 다 자동 포함."""
+    out = [(t, "single") for t in CHAT_MIGRATE_SINGLE]
+    out += [(t, "composite") for t in CHAT_MIGRATE_COMPOSITE]
+    out += [(t, "plain") for t in CHAT_MIGRATE_PLAIN]
+    out += list(EXTRA_MIGRATE.items())
+    return out
+
+
 EXTRA_COLUMNS: dict[str, dict[str, str]] = {}   # register_columns: 기능 모듈 테이블에 나중에 더한 컬럼 (예전 DB 는 _migrate 가 추가)
 
 
@@ -1012,11 +1033,7 @@ class DB:
 
     async def migrate_chat(self, old: int, new: int) -> None:
         """일반 그룹 → 슈퍼그룹 전환 시 방 ID 가 바뀜: 구독·설정·자료·기록을 새 ID 로 옮긴다 (옛 데이터가 기준)."""
-        single = ["chats", "subscriptions"]                        # chat_id 가 PK
-        composite = ["members", "bot_admins", "banned_words", "sports_subs", "sports_sent",
-                     "chat_state", "captcha", "counters"]           # chat_id 가 PK 일부
-        plain = ["messages", "requests", "warnings", "invoices", "payments", "schedules",
-                 "knowledge_docs", "knowledge_chunks", "mod_log"]
+        single, composite, plain = CHAT_MIGRATE_SINGLE, CHAT_MIGRATE_COMPOSITE, CHAT_MIGRATE_PLAIN   # 단일 출처(위 상수)
         def run(c: sqlite3.Connection) -> None:   # 전부 옮기거나 하나도 안 옮기거나
             for t in single:
                 if c.execute(f"SELECT 1 FROM {t} WHERE chat_id=?", (old,)).fetchone():
