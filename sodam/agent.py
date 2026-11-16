@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,23 @@ DEADLINE = {"group": 25, "dm": 45}   # 초: 넘으면 더 찾지 않고 지금�
 # 정상 추론은 이 안에 끝남 → 넘으면 그 호출을 끊고 지금까지로 답한다 (asyncio.wait_for).
 CALL_CAP = 90
 SLOW_TOOL_SEC = 20.0   # 이보다 오래 걸린 도구는 경고 로그로 (어느 도구가 매달려 '입력중' 먹통을 내는지 특정, 2026-11-14)
+
+# 🧭 동시 AI 답 생성 상한 (바쁜 방·여러 방 폭주 때 OpenAI 왕복·메모리·비용·CPU 를 한꺼번에 묶는 안전판, 2026-11-16).
+# 실측상 지금 동시 2~4개라 24 는 거의 안 걸림 — 폭주할 때만 25번째부터 앞 하나 끝날 때까지 잠깐 기다림(완충, 바깥 REPLY_HARD_TIMEOUT 안).
+# 동시 N개 × 호출비라 예산 초과분도 자동으로 작게 bound 됨(24 × ~$0.013 ≈ $0.3 → 하루 한도에 무의미). 0=끔(무제한, 예전과 같음).
+# 화이트라벨 클론은 프로세스마다 이 상한이 따로 — 봇별 자기 동시성만 묶는다(전체 서버는 systemd cgroup 몫). 루프별 세마포어라 테스트 여러 루프에서도 안전.
+MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "24") or "24")
+_SEM_BY_LOOP: dict = {}
+
+
+def _run_sem() -> "asyncio.Semaphore | None":
+    if MAX_CONCURRENT <= 0:
+        return None
+    loop = asyncio.get_running_loop()
+    sem = _SEM_BY_LOOP.get(loop)
+    if sem is None:
+        sem = _SEM_BY_LOOP[loop] = asyncio.Semaphore(MAX_CONCURRENT)
+    return sem
 
 
 async def _timed_execute(name, args, ctx):
@@ -374,7 +392,17 @@ def wants_thinking(mode_setting: str, request: str, mode: str, role: int = Role.
     return bool(_WHY.search(text) or _CHAIN.search(text) or len(_ACTS.findall(text)) >= 2)
 
 
-async def run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
+async def run_agent(*args, **kwargs) -> str:
+    """동시 AI 답 생성 상한(MAX_CONCURRENT)을 건 얇은 래퍼 — 폭주 때 OpenAI 왕복·메모리·비용을 완충.
+    상한을 끄면(0) 바로 통과해 예전과 같다. 세마포어 대기는 바깥 REPLY_HARD_TIMEOUT 안에서 일어난다."""
+    sem = _run_sem()
+    if sem is None:
+        return await _run_agent(*args, **kwargs)
+    async with sem:
+        return await _run_agent(*args, **kwargs)
+
+
+async def _run_agent(ctx: ToolCtx, *, style_key: str, notes: dict, history: list,
                     reply_to: str | None, request: str, mode: str = "call",
                     extras: dict | None = None, hints: list[str] | None = None,
                     images: list[dict] | None = None, steer: Steer | None = None) -> str:
