@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS rank_user_reset (
     ts       INTEGER NOT NULL,
     PRIMARY KEY (chat_id, user_id)
 );
-""")
+""", migrate={"rank_rooms": "plain", "rank_awards": "composite", "rank_user_reset": "composite"})   # 방 이관·슈퍼그룹 전환 때 🏆 순위 설정·시상·특정인 초기화 따라감
 
 PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "thisweek": ("이번주", "이번 주"), "week": ("주간", "최근 7일"),
            "month": ("월간", "최근 30일"), "lastweek": ("지난주", "지난 주")}

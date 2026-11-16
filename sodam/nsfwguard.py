@@ -68,7 +68,7 @@ dbmod.register_schema(
     "CREATE TABLE IF NOT EXISTS nsfw_bad (file_uid TEXT PRIMARY KEY, chat_id INTEGER, score REAL, ts INTEGER)")
 dbmod.register_schema(   # 관리자가 '괜찮음' 한 조각 — 그 방에선 다시 안 지움
     "CREATE TABLE IF NOT EXISTS nsfw_ok (chat_id INTEGER NOT NULL, file_uid TEXT NOT NULL, "
-    "PRIMARY KEY (chat_id, file_uid))")
+    "PRIMARY KEY (chat_id, file_uid))", migrate={"nsfw_ok": "composite"})   # 방 이관·슈퍼그룹 전환 때 '괜찮음' 표시 따라감
 dbmod.register_schema(   # 차단된 스티커 세트 (조각낸 신체사진 = 같은 커스텀 팩)
     "CREATE TABLE IF NOT EXISTS nsfw_set (set_name TEXT PRIMARY KEY, ts INTEGER)")
 dbmod.register_schema(   # 팩에서 걸린 조각들 (distinct 수가 SET_HITS_TO_BLOCK 되면 팩 통째 차단)

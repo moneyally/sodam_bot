@@ -2,6 +2,14 @@
 
 작성 2026-11-16. 오너 결정: **과거 기록까지 전부 옮김(완벽)**.
 
+**✅ 1차 구현 완료 (2026-11-16)**: 엔진 `sodam/clone_migrate.py`(ATTACH + 공통컬럼 INSERT SELECT,
+열린베팅 체크·포인트 합 검증·재이관 멱등) + 표목록 단일출처 `db.chat_scoped_tables()`(migrate_chat 공유)
++ migrate 누락표 4개 선언 추가(autoreply·chatrank·nsfwguard — 슈퍼그룹 전환 버그도 같이 고침)
++ UI `panels/clone.py` 🏷 클론상세 [📦 기존 방 넘기기]→방ID→미리보기→[✅ 이관].
+tests/test_clone_migrate.py(뮤테이션: DELETE 멱등·열린베팅 체크). **전제: 클론은 빈 봇**(id 유지→
+knowledge 관계 보존). **봇 교체(방에서 본체 빼고 클론 넣기)는 수동**, 본체 조용모드(migrated_to 기록만 함)·
+여러 방 한 클론(id 충돌)·이름검색 방선택은 2차.
+
 ## 왜
 화이트라벨 클론봇(`clone.py`)은 봇마다 **별도 DB**(`data/clones/<slug>/sodam.db`)로 격리된다.
 그래서 **이미 본체 소담봇이 관리하던 방**을 구매자 클론봇으로 넘기면, 그 방의 구독기간·**손님 포인트**·

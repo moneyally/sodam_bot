@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS auto_replies (
     last_used  INTEGER NOT NULL DEFAULT 0,
     UNIQUE(chat_id, key)
 );
-""")
+""", migrate={"auto_replies": "plain"})   # 방 이관·슈퍼그룹 전환 때 💬 자동답글 따라감
 
 _ZW = re.compile(r"[​-‏⁠﻿ㅤᅟᅠ]")
 _TRAIL = "?!.~ ？！。…"
