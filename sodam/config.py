@@ -30,6 +30,13 @@ def call_names_for(bot_name: str) -> list[str]:
     return names
 
 
+def default_backup_dir(db_path: str) -> str:
+    """백업 폴더 기본값 = DB 가 있는 폴더 안 backups. 본체(data/sodam.db)는 예전과 같은 data/backups,
+    클론(data/clones/<slug>/sodam.db)은 제 폴더 안 — 예전엔 둘 다 'data/backups' 라 05:00 에 같은 이름으로 동시에 쓰다
+    서로 파일을 지워 본체 백업이 실패하고 그날 백업이 다 날아감, 오래된 것 정리도 서로의 백업을 지울 수 있었음 (2026-11-17)."""
+    return str(Path(db_path).parent / "backups")
+
+
 def _ids(raw: str) -> frozenset[int]:
     return frozenset(int(x) for x in raw.replace(" ", "").split(",") if x)
 
@@ -121,7 +128,7 @@ def load_config() -> Config:
         tz=ZoneInfo(os.getenv("TIMEZONE", "Asia/Seoul")),
         log_chat_id=int(log_chat) if log_chat else None,
         sportsdb_key=os.getenv("SPORTSDB_KEY", "123").strip(),
-        backup_dir=os.getenv("BACKUP_DIR", "").strip() or "data/backups",
+        backup_dir=os.getenv("BACKUP_DIR", "").strip() or default_backup_dir(os.getenv("DB_PATH", "data/sodam.db")),
         backup_keep=max(1, int(os.getenv("BACKUP_KEEP", "14"))),
         backup_time=parse_hhmm(os.getenv("BACKUP_TIME", "").strip() or "05:00"),
         image_model=os.getenv("OPENAI_IMAGE_MODEL", "").strip() or "gpt-image-2.5-flare",
