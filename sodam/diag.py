@@ -124,8 +124,8 @@ async def notify_token(svc, bot, *, force: bool = False) -> bool:
 
 # ── 서버 갱신 결과 (deploy/update.sh report → data/*.status) → 실패면 오너 1:1 ─────────
 STATUS_FILES = {"update.status": "🛠 서버 갱신", "diag_setup.status": "🔌 원격 점검 설치",
-                "workshop_setup.status": "🧪 작업실 설치"}
-FAIL_MARKS = ("tests_failed", "rollback", "diag_fail", "workshop_fail")
+                "workshop_setup.status": "🧪 작업실 설치", "clone.status": "🏷 클론봇 새 버전 재시작"}
+FAIL_MARKS = ("tests_failed", "rollback", "diag_fail", "workshop_fail", "clone_fail")
 
 
 async def report_server_status(svc, bot) -> int:

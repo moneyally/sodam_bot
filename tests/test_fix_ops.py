@@ -276,6 +276,30 @@ def update_sh_restarts_when_tests_pass():
 
 
 @test
+def update_sh_restarts_running_clones_with_new_version():
+    """2026-11-17: 새 버전이 본체만 재시작돼 클론봇은 옛 코드로 계속 돎. 켜져 있는 클론(sodam@<slug>)도 같이,
+    클론 시작이 확인 안 되면 clone.status 에 clone_fail (본체는 안 되돌림). 뮤테이션: clone_restart 부르는 줄 빼면 FAIL."""
+    clone, log = _fake_repo(tests_pass=True)
+    (log.parent / "start_ok").write_text("")
+    (clone / "data" / "clones").mkdir(parents=True)
+    (clone / "data" / "clones" / "prestige.env").write_text("x\n")
+    r = _run_update(clone, log)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "restart sodam@prestige" in log.read_text(), log.read_text()
+    assert "ok " in (clone / "data" / "clone.status").read_text()
+    # 클론이 새 버전으로 안 뜨면 알림 줄 (본체 성공은 그대로)
+    clone2, log2 = _fake_repo(tests_pass=True)
+    (clone2 / "data" / "clones").mkdir(parents=True)
+    (clone2 / "data" / "clones" / "b.env").write_text("x\n")
+    j = log2.parent / "journalctl"
+    j.write_text(f'#!/bin/sh\ncase "$*" in *sodam@*) true;; *) echo "소담 (@t) 시작! '
+                 f'(버전 $(git -C {clone2} rev-parse --short HEAD)) 모델=x";; esac\n')
+    r = _run_update(clone2, log2)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "clone_fail" in (clone2 / "data" / "clone.status").read_text()
+
+
+@test
 def update_sh_rolls_back_when_start_line_missing():
     clone, log = _fake_repo(tests_pass=True)
     before = _head(clone)

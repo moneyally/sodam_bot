@@ -411,6 +411,38 @@ clone_setup() {
     [ -x "$APP_DIR/deploy/clone-apply.sh" ] && "$APP_DIR/deploy/clone-apply.sh" 2>/dev/null || true
 }
 
+# 🏷 본체가 새 버전으로 뜬 뒤, 켜져 있는 클론(sodam@<slug>)도 같은 코드로 다시 켬.
+# 예전엔 본체만 재시작 → 클론은 옛 코드로 계속 돎 (2026-11-17, 클론 늘기 전에). 꺼 둔 클론은 안 건드림.
+# 클론이 안 떠도 본체는 그대로 (되돌리지 않음) — data/clone.status 로 오너에게 알림.
+clone_restart() {
+    local ver=$1 f slug units="" since u bad=""
+    for f in "$APP_DIR"/data/clones/*.env; do
+        [ -f "$f" ] || continue
+        slug=$(basename "$f" .env)
+        $SYSTEMCTL is-active -q "sodam@$slug" 2>/dev/null && units="$units sodam@$slug"
+    done
+    [ -n "$units" ] || return 0
+    since=$(date +%s)
+    # shellcheck disable=SC2086
+    $SYSTEMCTL restart $units || true
+    for _ in $(seq "$START_WAIT"); do
+        sleep 1
+        bad=""
+        for u in $units; do
+            $JOURNALCTL -u "$u" --since "@$since" -o cat --no-pager 2>/dev/null \
+                | grep -qF "시작! (버전 $ver" || bad="$bad $u"
+        done
+        [ -z "$bad" ] && break
+    done
+    if [ -n "$bad" ]; then
+        log "!! 클론 새 버전 시작 확인 안 됨:$bad (본체는 그대로)"
+        report clone.status "clone_fail $ver$bad"
+    else
+        log "클론 재시작 ok:$units"
+        report clone.status "ok $ver$units"
+    fi
+}
+
 # 재시작 후 서비스가 살아 있고 그 뒤 로그에 '시작! (버전 X' 가 뜨면 성공
 restart_and_verify() {
     local ver=$1 since u ok
@@ -550,6 +582,7 @@ echo "$VER" > "$APP_DIR/VERSION"
 if restart_and_verify "$VER"; then
     log "ok: 버전 $VER 실행 중"
     report update.status "ok $VER"
+    clone_restart "$VER"
     voice_setup
     diag_setup
     sshws_setup
