@@ -10,6 +10,16 @@ from .settings import parse_hhmm
 from .tron import valid_tron_address
 
 
+def default_call_names(name: str) -> list[str]:
+    """봇 이름 → 부르는 말. 받침 있으면 '소담아·소담이', 없으면 '프레스티지야' (한국어 호격).
+    예전엔 늘 '이름아·이름이' 라서 받침 없는 클론 이름은 '프레스티지야' 를 못 알아들음 (2026-11-17)."""
+    last = name[-1:] if name else ""
+    if "가" <= last <= "힣":
+        has_batchim = (ord(last) - 0xAC00) % 28 != 0
+        return [name + "아", name + "이", name] if has_batchim else [name + "야", name]
+    return [name + "아", name + "야", name]          # 한글이 아니면 둘 다
+
+
 def _ids(raw: str) -> frozenset[int]:
     return frozenset(int(x) for x in raw.replace(" ", "").split(",") if x)
 
@@ -78,10 +88,11 @@ def load_config() -> Config:
     # OPENAI_API_KEY 가 없으면 AI 기능만 꺼진 채로 실행 (관리·캡차·예약공지 등은 동작)
 
     bot_name = os.getenv("BOT_NAME", "").strip() or "소담"
-    raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or f"{bot_name}아,{bot_name}이,{bot_name}"
+    raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or ",".join(default_call_names(bot_name))
     names = [n.strip() for n in raw_names.split(",") if n.strip()]
-    # 외국인(번역기)이 영어로 'Sodam help me …' 처럼 부르면 호출로 인식 (대소문자 무시)
-    raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or "sodam"
+    # 외국인(번역기)이 영어로 'Sodam help me …' 처럼 부르면 호출로 인식 (대소문자 무시).
+    # 클론봇(다른 이름)은 'sodam' 으로 불리면 안 되니 기본은 이름이 소담일 때만.
+    raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or ("sodam" if bot_name == "소담" else "")
     en_names = [n.strip().lower() for n in raw_en.split(",") if n.strip()]
     log_chat = os.getenv("LOG_CHAT_ID", "").strip()
     return Config(
