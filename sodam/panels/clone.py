@@ -282,16 +282,51 @@ async def r_transfer_start(c: PanelCtx) -> Screen:
         return await s_main(c)
     c.svc.inputs[c.uid] = menu.PendingInput("cltxroom", 0, args=[slug])
     return Screen(
-        "📦 <b>기존 방 넘기기</b>\n\n이 클론봇으로 넘길 <b>기존 방의 숫자 ID</b>를 보내줘.\n"
+        "📦 <b>기존 방 넘기기</b>\n\n이 클론봇으로 넘길 <b>방 이름</b>이나 <b>공개 링크</b>(t.me/…) 또는 <b>숫자 ID</b>를 보내줘.\n"
         "(그 방 구독·손님 포인트·설정·기억·기록이 이 봇 DB 로 복사돼. 방에서 봇 교체는 복사 뒤 손으로)\n\n"
         "5분 안에. 그만두려면 <code>취소</code>.",
         menu._kb([[B("❌ 취소", f"m:cls:{slug}")]]))
 
 
+_INVITE = re.compile(r"t\.me/(?:\+|joinchat/)", re.I)
+_PUBLIC = re.compile(r"(?:t\.me/|telegram\.me/|^@)([A-Za-z][A-Za-z0-9_]{3,31})/?$", re.I)
+
+
+async def _find_room(c: PanelCtx, raw: str) -> tuple[int | None, str]:
+    """방 숫자 ID · 공개 링크(t.me/이름, @이름) · 방 이름 → (방 ID, 안 되면 이유).
+    숫자 ID 를 모르는 게 보통이라 (2026-11-17 오너 '링크도 먹게 해야 하는 거 아님?') 이름·링크도 받음."""
+    raw = raw.strip()
+    n = to_int(raw)
+    if n:
+        return (n, "") if await c.svc.db.has_chat(n) else (None, "그 숫자 ID 방은 소담 기록에 없어.")
+    if _INVITE.search(raw):
+        return None, "비공개 초대링크(t.me/+…)는 봇이 못 읽어. 방 이름으로 보내줘."
+    m = _PUBLIC.search(raw)
+    if m:
+        try:
+            chat = await c.bot.get_chat("@" + m.group(1))
+        except TelegramError:
+            return None, f"@{esc(m.group(1))} 방을 텔레그램에서 못 찾았어. 방 이름으로 보내줘."
+        return (chat.id, "") if await c.svc.db.has_chat(chat.id) else (None, "그 방엔 소담이 없어서 넘길 기록이 없어.")
+    if len(raw) < 2:
+        return None, "방 이름을 두 글자 이상 보내줘."
+    rows = await c.svc.db._all("SELECT chat_id, title FROM chats WHERE chat_id < 0 AND title LIKE ? "
+                               "ORDER BY title LIMIT 8", (f"%{raw}%",))
+    exact = [r for r in rows if (r["title"] or "").strip() == raw]
+    if len(exact) == 1 or len(rows) == 1:
+        return (exact or rows)[0]["chat_id"], ""
+    if not rows:
+        return None, f"'{esc(raw[:30])}' 이름의 방을 못 찾았어."
+    pick = "\n".join(f"• {esc(r['title'] or '')} — <code>{r['chat_id']}</code>" for r in rows)
+    return None, f"비슷한 방이 여러 개야. 넘길 방의 숫자를 복사해서 보내줘:\n{pick}"
+
+
 async def i_transfer_room(c: PanelCtx, msg) -> tuple[bool, str]:
     slug = c.args[0] if c.args else ""
-    cid = to_int((msg.text or "").strip())
-    if not cid or not await c.svc.db.has_chat(cid):
+    cid, why = await _find_room(c, msg.text or "")
+    if not cid:
+        return False, why
+    if not await c.svc.db.has_chat(cid):
         return False, "그 방 ID 를 못 찾았어. 봇이 들어가 있는 방의 숫자 ID 를 보내줘."
     await c.svc.db.set_state(0, f"{TX_KEY}:{c.uid}", {"slug": slug, "chat_id": cid})
     return True, ""
@@ -318,7 +353,7 @@ async def s_tx_preview(c: PanelCtx) -> Screen:
         f"넘길 방: <b>{esc(title)}</b> (<code>{cid}</code>)",
         f"받을 봇: <b>{esc(r['name'])}</b> (@{esc(r['username'])})",
         f"멤버: {mrow['n'] if mrow else 0}명 · 포인트 합: {pts:,}",
-        f"구독: {'있음' if sub and sub.get('paid_until') else '없음'}", "",
+        f"구독: {'있음' if sub and sub['paid_until'] else '없음'}", "",   # sqlite3.Row 는 .get 없음
     ]
     if bets:
         lines.append(f"🎰 지금 열린 베팅 {bets}건 — 게임 끝나고 해야 돈이 안 꼬여. 지금은 못 함.")
