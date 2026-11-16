@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import re
+
 from telegram import Message
 from telegram.error import TelegramError
 
-from .. import clone, clone_migrate, menu
+from .. import clone, clone_migrate, menu, namehist
 from ..announce import extract_media
 from ..menu import OWNER, B, PanelCtx, Route, Screen
 from ..util import esc, to_int
@@ -125,7 +127,7 @@ _PROMPTS = {
     "clname": "✏️ 새 <b>봇 이름</b>을 글자로 보내줘 (최대 32자).",
     "clpic": ("🖼 프사로 쓸 <b>사진</b>이나 <b>영상(움짤)</b>을 보내줘. 영상이면 움직이는 프사가 돼.\n\n"
               "안 바꿀 거면 안 보내도 돼 — 구매자가 BotFather 에서 넣은 프사 그대로 둬 (<code>취소</code>)."),
-    "clbuyer": "👤 구매자 텔레그램 <b>숫자 ID</b>를 보내줘 (🆔 로 확인). 없이 갈 거면 안 보내도 돼.",
+    "clbuyer": "👤 구매자 <b>@아이디</b>나 <b>숫자 ID</b>를 보내줘. 없이 갈 거면 안 보내도 돼.",
 }
 
 
@@ -165,15 +167,32 @@ async def i_pic(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     return True, f"✅ {label} 받았어."
 
 
+async def _resolve_handle(c: PanelCtx, raw: str) -> int | None:
+    """@아이디 → 숫자 ID: 소담 기록(users) 먼저, 없으면 텔레그램 직접(namehist.resolve_remote)."""
+    handle = raw.strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{4,32}", handle):
+        return None
+    row = await c.svc.db._one("SELECT user_id FROM users WHERE username=? COLLATE NOCASE", (handle,))
+    if row:
+        return row["user_id"]
+    try:
+        uid, _ = await namehist.resolve_remote(c.svc, "@" + handle, c.uid)
+    except Exception:
+        return None
+    return uid or None
+
+
 async def i_buyer(c: PanelCtx, msg: Message) -> tuple[bool, str]:
     d = await _get_draft(c)
     if not d:
         return False, "진행 중인 클론이 없어."
     raw = (msg.text or "").strip()
-    from ..util import to_int
     bid = to_int(raw)
     if bid is None or bid <= 0:
-        return False, "구매자 텔레그램 숫자 ID 를 보내줘 (🆔 로 확인). 없이 갈 거면 그대로 둬도 돼."
+        bid = await _resolve_handle(c, raw)   # @아이디도 받음 (예전엔 숫자만 받아 '@Zzaggung' 을 거절, 2026-11-16)
+    if not bid:
+        return False, ("구매자를 못 찾았어. 숫자 ID 나 @아이디 로 보내줘 (🆔 로 확인). "
+                       "소담이 한 번도 못 본 아이디면 숫자 ID 가 확실해.")
     d["buyer"] = bid
     await _set_draft(c, d)
     return True, f"✅ 구매자 {bid} 를 그 봇의 오너로 추가할게 (나도 계속 총괄 오너)."
