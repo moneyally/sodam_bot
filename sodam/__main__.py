@@ -24,7 +24,7 @@ from .llm import LLM
 from .moderation import Moderator
 from .mtproto import MTProto
 from .permissions import Permissions
-from . import btnstyle, casino, cleanup, hooks, namehist, persist
+from . import brandname, btnstyle, casino, cleanup, hooks, namehist, persist
 from .ratelimit import ChatRateLimiter
 
 btnstyle.install()   # 인라인 버튼 색(Bot API 9.4) 전역 자동 입히기 — 한 곳에서 전 버튼
@@ -290,6 +290,7 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)  # 30초마다 도는 작업 로그 소음 제거
     cfg = load_config()
+    brandname.install(cfg.bot_name)   # 🏷 화이트라벨: 보내는 글의 '소담' → 이 봇 이름 (본체면 아무것도 안 함)
     _log_in_local_time(cfg.tz)
     db = DB(cfg.db_path)
     app = build_app(cfg, db)
