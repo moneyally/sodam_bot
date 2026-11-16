@@ -341,5 +341,20 @@ async def clone_name_calls_use_right_vocative():
         assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
 
 
+@test
+async def clone_also_answers_to_sodam():
+    """넘겨받은 방 멤버가 하던 대로 '소담아' 불러도 클론이 답해야 (2026-11-17 오너 '둘 다 먹히게').
+    본체 소담은 예전 그대로. 뮤테이션: 소담 이름 덧붙이기 빼면 FAIL."""
+    from types import SimpleNamespace as S
+    from sodam import handlers
+    from sodam.config import call_names_for
+    assert call_names_for("소담") == ["소담아", "소담이", "소담"]
+    names = tuple(sorted(call_names_for("프레스티지"), key=len, reverse=True))
+    bot = S(username="prestige11_bot", id=5)
+    for text in ("프레스티지야 안녕", "소담아 안녕", "소담이 뭐해"):
+        msg = S(reply_to_message=None, entities=[], chat=S(type="supergroup"), text=text, caption=None)
+        assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
