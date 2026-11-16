@@ -112,11 +112,32 @@ async def s_draft(c: PanelCtx) -> Screen:
     ]
     tok = menu.token(c.svc, c.uid, 0, "clmake", c.uid)
     kb = [
-        [B("✏️ 봇 이름", "m:in:0:clname"), B("🖼 프사/영상", "m:in:0:clpic")],
-        [B("👤 구매자 ID", "m:in:0:clbuyer")],
+        [B("✏️ 봇 이름", "m:clein:name"), B("🖼 프사/영상", "m:clein:pic")],
+        [B("👤 구매자 ID", "m:clein:buyer")],
         [B("✅ 만들기", f"m:k:{tok}"), B("🗑 취소", "m:clcancel")],
     ]
     return Screen("\n".join(lines), menu._kb(kb))
+
+
+# 글자 입력 시작 — 오너 1:1 전용이라 방(scoped "in" 라우트)을 안 쓰고 svc.inputs 를 직접 세팅.
+# (m:in:0:... 은 scoped 라서 has_chat(0) 실패 → "없는 그룹이에요" 였음. r_new 의 cltok 과 같은 방식)
+_PROMPTS = {
+    "clname": "✏️ 새 <b>봇 이름</b>을 글자로 보내줘 (최대 32자).",
+    "clpic": ("🖼 프사로 쓸 <b>사진</b>이나 <b>영상(움짤)</b>을 보내줘. 영상이면 움직이는 프사가 돼.\n\n"
+              "안 바꿀 거면 안 보내도 돼 — 구매자가 BotFather 에서 넣은 프사 그대로 둬 (<code>취소</code>)."),
+    "clbuyer": "👤 구매자 텔레그램 <b>숫자 ID</b>를 보내줘 (🆔 로 확인). 없이 갈 거면 안 보내도 돼.",
+}
+
+
+async def r_startinput(c: PanelCtx) -> Screen:
+    if not await _is_owner(c):
+        return NOT_OWNER
+    kind = "cl" + c.arg(0)
+    if kind not in _PROMPTS:
+        return await s_draft(c)
+    c.svc.inputs[c.uid] = menu.PendingInput(kind, 0)
+    return Screen(_PROMPTS[kind] + "\n\n5분 안에. 그만두려면 <code>취소</code>.",
+                  menu._kb([[B("❌ 취소", "m:cl")]]))
 
 
 async def i_name(c: PanelCtx, msg: Message) -> tuple[bool, str]:
@@ -242,7 +263,8 @@ async def t_remove(c: PanelCtx, slug) -> Screen:
 
 # ── 등록 ────────────────────────────────────────────────────────
 menu.register_main(97, "cl", "🏷 화이트라벨", need=OWNER)
-for _code, _fn in (("cl", s_main), ("clnew", r_new), ("cls", s_clone), ("clcancel", r_cancel)):
+for _code, _fn in (("cl", s_main), ("clnew", r_new), ("cls", s_clone),
+                   ("clcancel", r_cancel), ("clein", r_startinput)):
     menu.register_route(_code, Route(_fn, OWNER, scoped=False))
 menu.register_input("cltok", "", "cl", i_token, s_draft, need=OWNER)
 menu.register_input("clname", "", "cl", i_name, s_draft, need=OWNER)
