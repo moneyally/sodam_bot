@@ -1,0 +1,51 @@
+# /etc/systemd/system/sodam@.service — 화이트라벨 클론봇 인스턴스 (sodam/clone.py, docs/WHITELABEL_DESIGN.md).
+# sodam@<slug> → SODAM_ENV=data/clones/<slug>.env (딜러와 같은 "토큰 다름·코드 같음" 패턴, 단 별도 DB).
+# data/clones/<slug>.env 가 있을 때만 켜짐. 켜고 끄기는 root 데몬 sodam-clone-apply 가 함(봇은 파일만 씀).
+# 로그: journalctl -u sodam-<slug> -f    하트비트: data/clones/<slug>/heartbeat
+[Unit]
+Description=Sodam whitelabel clone bot (%i)
+Wants=network-online.target
+After=network-online.target sodam.service
+ConditionPathExists=/opt/sodam/data/clones/%i.env
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sodam
+Group=sodam
+WorkingDirectory=/opt/sodam
+ExecStart=/opt/sodam/.venv/bin/python -m sodam
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SODAM_ENV=data/clones/%i.env
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sodam-%i
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sodam/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

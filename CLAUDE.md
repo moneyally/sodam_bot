@@ -1061,7 +1061,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - 관계(🕸️ scamring)·의미 검색(🔎 semsearch)은 2026-09-28 추가. PostgreSQL 은 여러 서버로 나눌 때.
 
 ## 운영 서버 (2026-09-28 VPS 이사 완료)
-- **봇은 Hetzner VPS 에서 돈다**: cx23(2 vCPU·4GB·40GB) nbg1, Ubuntu 24.04, IP 178.104.55.232, `/opt/sodam` (systemd `sodam`,
+- **봇은 Hetzner VPS 에서 돈다**: cx32(4 vCPU·8GB, 2026-11 실측 nproc 4·MemTotal 7.6GB — 예전 cx23 2코어에서 증설됨) nbg1, Ubuntu 24.04, IP 178.104.55.232, `/opt/sodam` (systemd `sodam`,
   하트비트 감시·매일 백업·보안 업데이트). 월 약 €6.5. 클라우드 컨테이너의 옛 봇은 끔 — `.env` 를 `.env.migrated-to-vps` 로 치워
   다시 켜질 수 없음. **컨테이너에서 봇을 켜지 말 것** (같은 토큰 두 곳 = 409 Conflict + DB 갈라짐). 세션 시작 훅·생존 확인 Routine 도 끔.
 - **배포 = GitHub main 에 머지** → 서버 `sodam-autoupdate.timer` 가 2분마다 가져가서 전체 테스트 통과해야 재시작, 시작 로그 없으면 자동 되돌림.
@@ -1070,6 +1070,12 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   requirements.txt 가 지난 설치 성공(data/requirements.installed sha256)과 같으면 pip 건너뜀 · 새 커밋 없을 때 설치 재시도는 10분에 한 번(data/update.retry).
   새 무거운 테스트(그림·영상 렌더 수십 초)를 만들면 run_all.HEAVY 에 대략 초를 넣을 것.
   (claude/button-panels 에 푸시 → PR → main 머지.) 확인은 텔레그램 오너 알림 '▶️ 소담 시작 (버전 …)'.
+- **📢 배포 공지 (오너 결정 2026-11-16, 다른 봇들처럼)**: 사용자(대표님들)에게 보일 **새 기능·고침**을 배포(서버 반영 확인)한 뒤, **소담 봇 공지채널**
+  (@sodam_33 = `t.me/sodam_33`, chat_id -1004315310264, 소담봇이 관리자·can_post 실측 2026-11-16)에 공지를 올린다. 올리기 = ssh 로 서버 `/opt/sodam/.env`
+  토큰 sendMessage(`parse_mode=HTML`·`disable_web_page_preview=true`). **AI 티 안 나게** — 업자 소통방 톤(짧게, 담백하게. '~를 통해'·'~할 수 있게
+  되었습니다'·'향상된'·'제공합니다'·과한 이모지 같은 AI 상투어 금지), **기능별 섹션**(이모지 + 한 줄, 뭐가 되는지 손님 말로). 내부 수정(DB락·먹통·리팩터·
+  캐시·시크릿 욕 같은 손님이 몰라도 되거나 민감한 것)은 빼고 **쓸 만한 기능만**. 외부 발행이라 **쏘기 전 오너에게 초안 확인**. 입금주소·외부링크·비밀값 금지.
+  여러 배포가 공지 안 됐으면 몰아서 한 번에. (sodam-deploy 스킬 6단계)
 - 컨테이너 → VPS SSH 는 막힘 (egress 프록시가 TLS 만 통과). 서버 조작은 Hetzner Cloud API(HTTPS, 토큰은 사용자에게) 또는
   사용자가 PowerShell `ssh root@IP`. 이사는 cloud-init user_data 부트스트랩 + 텔레그램 오너 1:1 **고정 메시지를 우편함**으로
   (#ready → #bundle 암호화 꾸러미 → #done) 했음 — getUpdates 는 안 부름. 같은 방식으로 다시 할 수 있음.
@@ -1110,6 +1116,14 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
   (commands 밴해제·cas·예약공지·지식삭제, db.find_members, captcha, games 업다운·퀴즈 콜백).
 - `_is_admin_safe(fresh=)` : 결제 노출 판단(봇 초대·만료 안내)만 캐시 무시 + 텔레그램 관리자(`perms.is_tg_admin`) 기준. 딥링크 연타는 캐시 사용.
 - `subscription.on_deep_link` 삭제 (딥링크는 `menu.group_panel` 로). 결제 버튼(`pay:new`)도 TG 관리자·fresh 확인.
+
+## 🏷 화이트라벨 클론봇 (`clone.py`·`panels/clone.py`, 설계 docs/WHITELABEL_DESIGN.md, tests/test_clone.py·test_deploy.py, 2026-11-16 오너 '지금 팔 데 급함')
+- 구매자가 BotFather 로 자기 봇(이름·@아이디·프사 직접) 만들어 **토큰**을 넘기면, **같은 소담 코드**가 별도 .env + 별도 DB 로 그 봇을 돌림 (딜러봇 `SODAM_ENV=.env.dealer` 선례를 일반화). "프랜차이즈" — 두뇌는 소담, 간판만 구매자 것.
+- **봇 프사·영상프사는 봇 API 로 됨** (Bot API 9.4, 2026-02 `setMyProfilePhoto`, PTB 22.8 네이티브). 마법사가 토큰·이름·설명·사진·영상프사 전부 적용(`clone.apply_branding` = setMyName/setMyDescription/setMyShortDescription/setMyProfilePhoto, 각 항목 따로 — 하나 실패해도 나머지). **@아이디만 봇 API 로 못 바꿈** → getMe 로 읽어 보여주기만 (BotFather `/setusername`). ⚠️ CLAUDE.md 옛 전제 '봇 프사는 API 로 못 바꿈' 은 9.4 로 **무효**.
+- **격리 = 봇별 `data/clones/<slug>.env` + 별도 DB 폴더 `data/clones/<slug>/`** (DB·keys.env·세션·미디어·하트비트가 전부 db_path 부모폴더 기준이라 자동 분리). 공유키(OPENAI_*·요금)만 본체 .env 에서 `clone.SHARE_KEYS` 로 복사, 전용값(토큰·DB_PATH·OWNER_IDS·BOT_NAME·PORT·PAY_ADDRESS)은 `write_env` 가 직접 (`NEVER_SHARE` 이중 방어). 본사오너(자이)는 모든 클론 OWNER_IDS 에, 구매자는 자기 클론 로컬 오너.
+- **마법사** (오너 1:1 전용 🏷 m:cl, need=OWNER): [➕ 새 클론] → 토큰 붙여넣기(`i_token` getMe 검증·**즉시 삭제**) → 봇 이름(`i_name`)·프사/영상(`i_pic` media=True)·구매자 ID(`i_buyer`) → 미리보기(`s_draft`) → [✅ 만들기](token_action `clmake` → apply_branding + write_env + register). draft 는 chat_state(0, `clone:draft:<uid>`). 클론 삭제 `clremove` → remove_env(.env 지움).
+- **켜기 = systemd 인스턴스 유닛 `sodam@<slug>.service`** (`SODAM_ENV=data/clones/<slug>.env`, ConditionPathExists). 봇은 NoNewPrivileges 라 systemctl 못 함 → **root 데몬 `sodam-clone-apply.path`**(data/clones 변화 감시) → `clone-apply.sh`(env 있으면 enable --now, 사라지면 disable --now). update.sh `clone_setup` 이 설치. **자동 켜기 배포 반영 전엔 반자동**: ssh `sudo systemctl enable --now sodam@<slug>`.
+- 과금 = 방당 유지(기존 구독 테이블 그대로). 오너 결정(LATER.md): 결제 8만원 수동 부여·음성 제외·완전 화이트라벨 목표. **미착수(2차)**: 미니앱 봇별 Caddy 경로(지금 클론은 미니앱만 제한·나머지 다 됨)·음성 멀티봇·persona "소담" 하드코딩 제거·방 넘어 기억 공유·본사 전체매출 가로집계·완전자동 발급 봇.
 
 ## 확장 규칙 (여러 에이전트가 동시에 작업해도 파일이 안 겹치게)
 - 새 버튼 화면 = `sodam/panels/<이름>.py` 하나 추가. `menu.register_screen / register_hub / register_main /

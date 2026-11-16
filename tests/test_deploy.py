@@ -164,6 +164,13 @@ def scripts_parse_and_units_sane():
                      "PrivateTmp=true", "TimeoutStopSec=", "User=sodam"):
             assert need in u, f"{name}: {need} 없음"
     assert "SODAM_ENV=.env.dealer" in (DEPLOY / "sodam-dealer.service").read_text()
+    # 🏷 화이트라벨 클론 인스턴스 유닛 (sodam/clone.py) — 딜러와 같은 보안·별도 .env
+    inst = (DEPLOY / "sodam@.service").read_text()
+    assert "SODAM_ENV=data/clones/%i.env" in inst, "sodam@.service: 클론 .env 경로 없음"
+    assert "ConditionPathExists=/opt/sodam/data/clones/%i.env" in inst, "sodam@.service: Condition 없음"
+    for need in ("Restart=always", "NoNewPrivileges=true", "ProtectSystem=strict",
+                 "ReadWritePaths=/opt/sodam/data", "User=sodam", "ExecStart=/opt/sodam/.venv/bin/python -m sodam"):
+        assert need in inst, f"sodam@.service: {need} 없음"
     v = (DEPLOY / "sodam-voice.service").read_text()      # 📞 음성 담당: update.sh voice_setup 이 설치
     for need in ("ExecStart=/opt/sodam/.venv/bin/python -m sodam.voice.worker", "Restart=always", "User=sodam",
                  "ReadWritePaths=/opt/sodam/data", "AF_NETLINK"):
@@ -172,6 +179,7 @@ def scripts_parse_and_units_sane():
         "systemd 값 줄 끝 주석은 값이 돼 버림"
     up = (DEPLOY / "update.sh").read_text()
     assert "voice_setup" in up and "requirements-voice.txt" in up and (ROOT / "requirements-voice.txt").exists()
+    assert "clone_setup" in up, "update.sh 가 클론 유닛을 설치하지 않음"   # 🏷 화이트라벨 자동 켜기
     # update.sh 가 기다리는 줄이 실제 시작 로그와 같은 모양인지
     src = (ROOT / "sodam" / "__main__.py").read_text()
     assert '시작!%s' in src and '(버전 {version})' in src

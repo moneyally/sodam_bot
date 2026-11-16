@@ -42,3 +42,19 @@ python .claude/skills/sodam-deploy/scripts/wait_deploy.py <커밋 sha 앞 7자�
 | 코드 | 합쳐짐 (PR #N) |
 | 서버 버전 | 실제 값 (확인 시각) |
 | 반영 | ✅ 확인 / ⏳ 대기(예상 HH:MM) / ❌ 실패(테스트 이름) |
+
+## 6. 📢 공지채널에 배포 공지 (서버 반영 확인 후, 오너 결정 2026-11-16)
+사용자(대표님들)에게 **보일 만한 새 기능·고침**이 서버에 반영된 걸 확인했으면, **소담 봇 공지채널**에 공지를 올린다.
+- 채널: @sodam_33 (`t.me/sodam_33`, chat_id `-1004315310264`). 소담봇이 관리자·`can_post=True` (실측 2026-11-16).
+- **작성법 — AI 티 안 나게**: 업자 소통방 톤으로 짧고 담백하게. 금지: '~를 통해', '~할 수 있게 되었습니다', '향상된', '제공합니다', 과한 수식어·이모지, 번호 매긴 장황한 설명.
+  **기능별 섹션** = 이모지 한 개 + 굵은 제목 + 한두 줄(손님 말로 "뭐가 되는지"). 내부 수정(DB락·먹통·리팩터·캐시·시크릿 욕 등 손님이 몰라도 되거나 민감한 것)은 **뺀다**. 쓸 만한 기능만.
+- **쏘기 전 오너에게 초안 확인** (외부 발행). 입금주소·외부링크·비밀값 금지. 여러 배포가 공지 안 됐으면 몰아서 한 번에.
+- 올리기(서버에서, 토큰은 서버 .env):
+```bash
+python tools/ssh_ws.py 'cd /opt/sodam && TOK=$(grep -m1 "^TELEGRAM_BOT_TOKEN=" .env | cut -d= -f2-) && \
+  curl -s "https://api.telegram.org/bot$TOK/sendMessage" \
+  --data-urlencode chat_id=-1004315310264 --data-urlencode parse_mode=HTML \
+  --data-urlencode disable_web_page_preview=true \
+  --data-urlencode text="$(cat /opt/sodam/data/announce.txt)"'
+```
+  (공지문은 `--put` 로 서버 `data/announce.txt` 에 올린 뒤 위 명령으로 보냄 — 긴 글·줄바꿈·따옴표 안전.)

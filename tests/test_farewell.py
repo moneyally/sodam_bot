@@ -295,7 +295,8 @@ async def panel_flow():
     assert (await svc.db.get_settings(CHAT))["farewell_template"] == "잘 가요 {name} <3"
     # URL 버튼 (입장 인사와 같은 형식·검사)
     await press(svc, bot, ADMIN, f"m:in:{CHAT}:fwb")
-    msg = FakeMsg(ADMIN, fake_user(ADMIN, "방장"), "공지 - http://bad.example")
+    # http·https 는 이제 허용(2026-11 http·한글도메인) → 진짜 거절되는 스킴으로 검사
+    msg = FakeMsg(ADMIN, fake_user(ADMIN, "방장"), "공지 - ssh://bad.example")
     await handlers.on_private(SimpleNamespace(message=msg), ctx)
     assert "https://" in msg.replies[-1] and (await svc.db.get_settings(CHAT))["farewell_buttons"] == []
     msg = FakeMsg(ADMIN, fake_user(ADMIN, "방장"), "공지 - https://t.me/notice")
