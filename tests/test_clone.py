@@ -356,5 +356,30 @@ async def clone_also_answers_to_sodam():
         assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
 
 
+@test
+async def clone_backups_go_in_its_own_folder():
+    """클론 백업이 본체와 같은 data/backups 에 같은 이름으로 써서 05:00 에 본체 백업이 실패하고 그날 백업이 날아감 (2026-11-17).
+    BACKUP_DIR 이 없으면 DB 폴더 안 backups. 본체는 예전 그대로 data/backups. 뮤테이션: 기본값을 'data/backups' 로 되돌리면 FAIL."""
+    import os
+    from sodam.config import load_config
+    keep = {k: os.environ.get(k) for k in ("TELEGRAM_BOT_TOKEN", "DB_PATH", "BACKUP_DIR", "SODAM_ENV")}
+    try:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "1:x"
+        os.environ["SODAM_ENV"] = "/nonexistent.env"
+        os.environ.pop("BACKUP_DIR", None)
+        os.environ["DB_PATH"] = "data/clones/prestige11bot/sodam.db"
+        assert load_config().backup_dir == "data/clones/prestige11bot/backups"
+        os.environ["DB_PATH"] = "data/sodam.db"
+        assert load_config().backup_dir == "data/backups"
+        os.environ["BACKUP_DIR"] = "/srv/bk"
+        assert load_config().backup_dir == "/srv/bk"
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
