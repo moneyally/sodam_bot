@@ -231,5 +231,42 @@ async def remove_env_deletes_file_keeps_db_dir():
     assert (clone.clones_dir(db_path) / "tenkabot").is_dir()   # DB 폴더(기록)는 남김
 
 
+@test
+async def input_buttons_work_in_owner_dm_without_group():
+    """조립 화면의 ✏️ 이름·🖼 프사·👤 구매자 버튼은 오너 1:1(방 없음)에서 눌려야 한다.
+    예전 'm:in:0:...' 은 scoped "in" 라우트라 has_chat(0) 실패로 '없는 그룹이에요' 였음
+    (2026-11-16 프레스티지 클론, 실서버 재현). 뮤테이션: 버튼을 m:in:0 으로 되돌리면 alert 로 FAIL."""
+    from fakes import FakeBot, FakeQuery, fake_user, make_svc
+    from sodam import menu
+    from sodam.panels import clone as cp
+
+    db = await make_db()
+    svc = await make_svc(db)
+    OWNER = 7
+    svc.perms.owner_ids = {OWNER}
+    bot = FakeBot()
+    await db.set_state(0, f"clone:draft:{OWNER}", {
+        "token": "1:AA", "bot_id": 5, "username": "prestige11_bot",
+        "cur_name": "프레스티지", "name": "프레스티지",
+        "photo_id": None, "photo_kind": None, "buyer": 0})
+
+    # 조립 화면을 그려 실제 입력 버튼들을 뽑는다
+    screen = await cp.s_draft(menu.PanelCtx(svc, bot, OWNER, 0, []))
+    datas = [b.callback_data for row in screen.kb.inline_keyboard for b in row]
+    inputs = [d for d in datas if d and (d.startswith("m:clein:") or d.startswith("m:in:"))]
+    assert inputs and all(d.startswith("m:clein:") for d in inputs), \
+        f"입력 버튼이 1:1 전용(clein)이 아니라 scoped in: {inputs}"
+
+    # 눌러서 글자 입력 대기가 서는지 — '없는 그룹이에요' alert 없이
+    for data, kind in (("m:clein:name", "clname"), ("m:clein:pic", "clpic"), ("m:clein:buyer", "clbuyer")):
+        svc.menu_limiter._hits.clear()
+        svc.inputs.pop(OWNER, None)
+        q = FakeQuery(OWNER, fake_user(OWNER, "오너"), data)
+        await menu.on_callback(svc, bot, q, data.split(":")[1:])
+        assert not any(a[1] for a in q.answers), f"{data} 에서 alert: {q.answers}"   # show_alert=True 없음
+        assert svc.inputs.get(OWNER) and svc.inputs[OWNER].kind == kind, \
+            f"{data} 가 글자 입력({kind})을 안 세움: {svc.inputs.get(OWNER)}"
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
