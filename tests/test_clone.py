@@ -294,5 +294,37 @@ async def buyer_step_accepts_at_username():
     assert not ok, note
 
 
+@test
+async def transfer_room_input_accepts_name_and_number():
+    """방 넘기기 입력은 숫자 ID 말고 방 이름도 받아야 한다 (2026-11-17 오너 '숫자 말고 링크도 먹게').
+    여러 개 걸리면 고르게 목록, 비공개 초대링크는 이유와 함께 거절. 뮤테이션: 이름 검색을 빼면 FAIL."""
+    from fakes import FakeBot, make_svc
+    from sodam import menu
+    from sodam.panels import clone as cp
+
+    db = await make_db()
+    svc = await make_svc(db)
+    await db.ensure_chat(-1003487123881, "프레스티지")
+    await db.ensure_chat(-1001, "벳블리 소통방")
+    await db.ensure_chat(-1002, "벳블리 공지")
+    c = menu.PanelCtx(svc, FakeBot(), 7, 0, ["prestige11bot"])
+    assert (await cp._find_room(c, "프레스티지"))[0] == -1003487123881          # 이름
+    assert (await cp._find_room(c, "-1003487123881"))[0] == -1003487123881      # 숫자
+    cid, why = await cp._find_room(c, "벳블리")                                  # 여러 개 → 목록
+    assert cid is None and "-1001" in why and "-1002" in why, why
+    cid, why = await cp._find_room(c, "https://t.me/+AbCdEf123")                # 비공개 초대링크
+    assert cid is None and "비공개" in why, why
+    assert (await cp._find_room(c, "없는방이름"))[0] is None
+
+    # 미리보기 화면이 실제 DB 행(sqlite3.Row)으로 그려져야 함 — 예전 sub.get(...) 이 AttributeError (2026-11-17 실서버)
+    await clone.register(db, slug="prestige11bot", info=clone.BotInfo(5, "prestige11_bot", "프레스티지"),
+                         name="프레스티지", port=8791, buyer_id=0)
+    await db.extend_paid(-1003487123881, 86400, 1000)
+    svc.perms.owner_ids = {7}
+    await db.set_state(0, "clone:tx:7", {"slug": "prestige11bot", "chat_id": -1003487123881})
+    screen = await cp.s_tx_preview(c)
+    assert "프레스티지" in screen.text and "구독: 있음" in screen.text, screen.text
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
