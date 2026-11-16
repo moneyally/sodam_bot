@@ -53,22 +53,46 @@ class Cmd:
     right: str | None = None  # "restrict"|"delete": 텔레그램 관리자 권한까지 확인 (permissions.Permissions.can)
 
 
-async def _target(ctx: CmdCtx, *, sanction: bool = True) -> tuple[int, str, list[str]] | None:
-    """답장 대상 또는 첫 인자(@username/ID/이름)로 대상 찾기. (id, 이름, 남은 인자)"""
+async def _resolve_outside(ctx: CmdCtx, arg: str) -> tuple[int, str] | None:
+    """방 밖 사람도 찾기 (밴·공동차단용): 숫자 ID 는 그대로 · @아이디는 소담 기록(users) 한 명 또는
+    텔레그램 직접 조회(namehist.resolve_remote). 이름만으로는 안 함(엉뚱한 사람 제재 방지).
+    수배·공동차단 대상은 보통 그 방에 안 들어온 사람이라 find_members(방 멤버)로는 못 찾음."""
+    svc = ctx.svc
+    n = to_int(arg)
+    if n and n > 0:
+        return n, f"ID {n}"
+    handle = arg.lstrip("@")
+    if re.fullmatch(r"[A-Za-z0-9_]{4,32}", handle):
+        g = await svc.db._one(
+            "SELECT user_id, first_name, last_name, username FROM users WHERE username=? COLLATE NOCASE", (handle,))
+        if g:
+            return g["user_id"], display_name(g["first_name"], g["last_name"], g["username"])
+        uid, _ = await namehist.resolve_remote(svc, "@" + handle, ctx.user.id)
+        if uid:
+            return uid, "@" + handle
+    return None
+
+
+async def _target(ctx: CmdCtx, *, sanction: bool = True, outside: bool = False) -> tuple[int, str, list[str]] | None:
+    """답장 대상 또는 첫 인자(@username/ID/이름)로 대상 찾기. (id, 이름, 남은 인자).
+    outside=True (밴·공동차단): 방 멤버로 못 찾으면 @아이디·숫자ID 를 방 밖까지 조회."""
     reply = ctx.msg.reply_to_message
     if reply and reply.from_user and not reply.from_user.is_bot:
         uid, name, rest = reply.from_user.id, user_name(reply.from_user), ctx.args
     elif ctx.args:
         rows = await ctx.svc.db.find_members(ctx.chat_id, ctx.args[0])
-        if not rows:
+        if not rows and outside and (found := await _resolve_outside(ctx, ctx.args[0])):
+            uid, name, rest = found[0], found[1], ctx.args[1:]
+        elif not rows:
             await ctx.reply(f"'{esc(ctx.args[0])}' 멤버를 못 찾았어요. 답장으로 지정하거나 @username/ID를 써주세요.")
             return None
-        if len(rows) > 1:
+        elif len(rows) > 1:
             await ctx.reply("같은 이름이 여러 명이에요: " + ", ".join(
                 f"{esc(display_name(r['first_name'], r['last_name'], r['username']))}(<code>{r['user_id']}</code>)" for r in rows[:5]))
             return None
-        r = rows[0]
-        uid, name, rest = r["user_id"], display_name(r["first_name"], r["last_name"], r["username"]), ctx.args[1:]
+        else:
+            r = rows[0]
+            uid, name, rest = r["user_id"], display_name(r["first_name"], r["last_name"], r["username"]), ctx.args[1:]
     else:
         await ctx.reply("대상 메시지에 답장하거나 @username 을 적어주세요.")
         return None
@@ -1366,18 +1390,12 @@ async def c_fedban(ctx: CmdCtx) -> None:
     if not ctx.args and not ctx.msg.reply_to_message:
         await ctx.reply(fedban.USAGE)
         return
-    # 이미 나간 계정도 올릴 수 있게 숫자 ID 는 바로 받는다 (답장이 없을 때)
-    raw = to_int(ctx.args[0]) if ctx.args and not ctx.msg.reply_to_message else None
-    if raw and raw > 0 and not await svc.db.find_members(ctx.chat_id, ctx.args[0]):
-        if await svc.perms.protected(ctx.bot, ctx.chat_id, raw):
-            await ctx.reply("관리자·봇·운영자는 공동 차단 명단에 올릴 수 없어요.")
-            return
-        uid, name, rest = raw, f"ID {raw}", ctx.args[1:]
-    else:
-        t = await _target(ctx)
-        if not t:
-            return
-        uid, name, rest = t  # _target 이 관리자·봇·오너(protected)를 거른다
+    # 수배·공동차단 대상은 보통 그 방에 안 들어온 사람 → 답장 우선, 없으면 @아이디·숫자ID 를 방 밖까지 조회.
+    # (예전엔 find_members 로 방 멤버만 찾아, 말 안 한 외부 @아이디를 '못 찾았어요' 로 막았음 — 2026-11-16 알감자)
+    t = await _target(ctx, outside=True)
+    if not t:
+        return
+    uid, name, rest = t  # _target 이 관리자·봇·오너(shield)를 거른다
     reason = " ".join(rest).strip()
     if not reason:
         await ctx.reply("사유를 꼭 적어주세요. 예: <code>.공동차단 @아이디 코인 사기 DM</code>")

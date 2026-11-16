@@ -284,7 +284,7 @@ async def fedban_rules_limit_reason_protected():
     r = await cmd(svc, bot, A, STRONG, f".공동차단 @user{WEAK} 사기")         # 관리자
     assert not await fedban.lookup(db, WEAK), r
     r = await cmd(svc, bot, A, STRONG, f".공동차단 {OWNER} 사기")             # 오너 (방에 없는 숫자 ID)
-    assert "올릴 수 없어요" in r[0] and not await fedban.lookup(db, OWNER), r
+    assert "제재할 수 없어요" in r[0] and not await fedban.lookup(db, OWNER), r   # shield 공통 관문이 거름
     for i in range(fedban.DAILY_LIMIT):
         await cmd(svc, bot, A, STRONG, f".공동차단 {5000 + i} 스팸 {i}")
     r = await cmd(svc, bot, A, STRONG, f".공동차단 {6000} 스팸")
@@ -334,6 +334,33 @@ async def fedban_panel_screens():
     q3 = FakeQuery(STRONG, fake_user(STRONG))
     await menu.on_callback(svc, bot, q3, unmark[0].split(":")[1:])
     assert not await fedban.lookup(db, TARGET), q3.answers
+    _drain()
+
+
+@test
+async def fedban_command_reaches_user_outside_room():
+    """.박제 @아이디 는 그 방에 안 들어온 사람도 소담 기록(users)·텔레그램으로 찾아야 한다
+    (수배·공동차단 대상은 보통 다른 방 사람). 예전엔 find_members(방 멤버)만 봐서 말 안 한 외부
+    @아이디를 '멤버를 못 찾았어요' 로 막았음 (2026-11-16 알감자 @zeroeo1617, 서버 실측 users 엔 있었음).
+    뮤테이션: c_fedban 의 _target(ctx, outside=True) → outside=False(또는 제거) 로 되돌리면 못 찾아 FAIL."""
+    db, svc, bot = await setup()
+    OUT = 856649603
+    await db.upsert_user(fake_user(OUT, "최익현", username="zeroeo1617"))   # users 전역엔 있지만
+    assert not await db.find_members(A, "@zeroeo1617"), "방 멤버가 아니어야 함(테스트 전제)"
+    r = await cmd(svc, bot, A, OWNER, ".박제 @zeroeo1617 다른 방 성범죄 수배")   # 오너=자동 등재
+    assert not any("못 찾" in x for x in r), f"방 밖 @아이디를 못 찾음: {r}"
+    assert await fedban.lookup(db, OUT), f"공동차단 명단 등재 안 됨: {r}"
+    _drain()
+
+
+@test
+async def fedban_outside_still_needs_handle_not_bare_name():
+    """outside 조회는 숫자ID·@아이디만 — 이름만으론 엉뚱한 사람 제재 방지(기존 안전장치 유지)."""
+    db, svc, bot = await setup()
+    await db.upsert_user(fake_user(555001, "홍길동", username="hong_out"))
+    r = await cmd(svc, bot, A, OWNER, ".박제 홍길동 사유")   # @ 없는 이름 → 방 멤버 아니면 못 찾음
+    assert any("못 찾" in x for x in r), f"이름만으론 방 밖 사람을 찾으면 안 됨: {r}"
+    assert not await fedban.lookup(db, 555001)
     _drain()
 
 
