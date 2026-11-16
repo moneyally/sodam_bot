@@ -268,5 +268,31 @@ async def input_buttons_work_in_owner_dm_without_group():
             f"{data} 가 글자 입력({kind})을 안 세움: {svc.inputs.get(OWNER)}"
 
 
+@test
+async def buyer_step_accepts_at_username():
+    """구매자 ID 칸에 @아이디를 넣어도 숫자 ID 로 바꿔 받아야 한다 (2026-11-16 '@Zzaggung' 을 숫자만 받는다고 거절).
+    뮤테이션: _resolve_handle 호출을 빼면 '@아이디' 가 거절돼 FAIL."""
+    from fakes import FakeBot, fake_user, make_svc
+    from sodam import menu
+    from sodam.panels import clone as cp
+
+    db = await make_db()
+    svc = await make_svc(db)
+    OWNER = 7
+    svc.perms.owner_ids = {OWNER}
+    await db.upsert_user(fake_user(7832149165, "짝궁", username="Zzaggung"))
+    await db.set_state(0, f"clone:draft:{OWNER}", {
+        "token": "1:AA", "bot_id": 5, "username": "prestige11_bot",
+        "cur_name": "프레스티지", "name": "프레스티지", "photo_id": None, "photo_kind": None, "buyer": 0})
+    c = menu.PanelCtx(svc, FakeBot(), OWNER, 0, [])
+    ok, note = await cp.i_buyer(c, SimpleNamespace(text="@Zzaggung"))
+    assert ok, note
+    assert (await db.get_state(0, f"clone:draft:{OWNER}", None))["buyer"] == 7832149165
+    ok, _ = await cp.i_buyer(c, SimpleNamespace(text="123456"))           # 숫자는 그대로
+    assert ok and (await db.get_state(0, f"clone:draft:{OWNER}", None))["buyer"] == 123456
+    ok, note = await cp.i_buyer(c, SimpleNamespace(text="홍길동"))          # 이름만은 안 됨
+    assert not ok, note
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
