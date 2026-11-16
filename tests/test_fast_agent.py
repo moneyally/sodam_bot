@@ -116,3 +116,59 @@ async def typing_is_kept_alive_while_thinking():
     await asyncio.sleep(0.05)
     assert n >= 3 and len(sent) == n, (n, len(sent))
     assert "_keep_typing(bot, chat_id)" in open(handlers.__file__).read(), "AI 답 만드는 동안 켜 둠"
+
+
+@test
+async def concurrency_cap_limits_parallel_run_agents():
+    """🧭 동시 AI 답 생성 상한(MAX_CONCURRENT) — 바쁜 방·여러 방이 한꺼번에 불러도 N개까지만 돌게
+    (OpenAI 왕복·메모리·비용 완충, 2026-11-16). 폭주해도 상한 넘게 동시에 뜨지 않는다."""
+    peak = cur = 0
+
+    async def fake(*a, **k):
+        nonlocal peak, cur
+        cur += 1
+        peak = max(peak, cur)
+        await asyncio.sleep(0.03)
+        cur -= 1
+        return "ok"
+
+    orig_run, orig_max = agent._run_agent, agent.MAX_CONCURRENT
+    agent._run_agent = fake
+    agent.MAX_CONCURRENT = 2
+    agent._SEM_BY_LOOP.clear()   # 새 상한으로 세마포어를 다시 만들게
+    try:
+        res = await asyncio.gather(*[
+            run_agent(None, style_key="", notes={}, history=[], reply_to=None, request="x")
+            for _ in range(6)])
+        assert res == ["ok"] * 6
+        assert peak == 2, f"동시 실행이 상한 2 에 묶여야 하는데 {peak} 개가 같이 돌았다"
+    finally:
+        agent._run_agent, agent.MAX_CONCURRENT = orig_run, orig_max
+        agent._SEM_BY_LOOP.clear()
+
+
+@test
+async def concurrency_cap_off_means_unlimited():
+    """상한 0 = 끔 → 예전처럼 전부 동시에 (회귀: 기능을 꺼도 run_agent 가 그대로 돈다)."""
+    cur = peak = 0
+
+    async def fake(*a, **k):
+        nonlocal peak, cur
+        cur += 1
+        peak = max(peak, cur)
+        await asyncio.sleep(0.02)
+        cur -= 1
+        return "ok"
+
+    orig_run, orig_max = agent._run_agent, agent.MAX_CONCURRENT
+    agent._run_agent = fake
+    agent.MAX_CONCURRENT = 0
+    agent._SEM_BY_LOOP.clear()
+    try:
+        await asyncio.gather(*[
+            run_agent(None, style_key="", notes={}, history=[], reply_to=None, request="x")
+            for _ in range(5)])
+        assert peak == 5, f"상한 0 이면 5 개 다 동시여야 하는데 {peak}"
+    finally:
+        agent._run_agent, agent.MAX_CONCURRENT = orig_run, orig_max
+        agent._SEM_BY_LOOP.clear()
