@@ -20,6 +20,16 @@ def default_call_names(name: str) -> list[str]:
     return [name + "아", name + "야", name]          # 한글이 아니면 둘 다
 
 
+def call_names_for(bot_name: str) -> list[str]:
+    """이 봇을 부르는 말 기본값. 화이트라벨 클론은 제 이름 + '소담아·소담이·소담' 도 받음 —
+    소담 쓰던 방을 넘겨받으면 멤버들이 하던 대로 '소담아' 불러도 답하게 (2026-11-17 오너 '둘 다 먹히게').
+    같은 방에 본체 소담이 아직 있으면 둘 다 답하니, 넘길 땐 본체를 빼는 게 순서."""
+    names = default_call_names(bot_name)
+    if bot_name != "소담":
+        names += [n for n in default_call_names("소담") if n not in names]
+    return names
+
+
 def _ids(raw: str) -> frozenset[int]:
     return frozenset(int(x) for x in raw.replace(" ", "").split(",") if x)
 
@@ -88,11 +98,11 @@ def load_config() -> Config:
     # OPENAI_API_KEY 가 없으면 AI 기능만 꺼진 채로 실행 (관리·캡차·예약공지 등은 동작)
 
     bot_name = os.getenv("BOT_NAME", "").strip() or "소담"
-    raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or ",".join(default_call_names(bot_name))
+    raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or ",".join(call_names_for(bot_name))
     names = [n.strip() for n in raw_names.split(",") if n.strip()]
     # 외국인(번역기)이 영어로 'Sodam help me …' 처럼 부르면 호출로 인식 (대소문자 무시).
-    # 클론봇(다른 이름)은 'sodam' 으로 불리면 안 되니 기본은 이름이 소담일 때만.
-    raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or ("sodam" if bot_name == "소담" else "")
+    # 클론봇도 소담 방에서 넘어온 멤버가 'Sodam' 으로 부를 수 있어 같이 받음 (2026-11-17 오너)
+    raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or "sodam"
     en_names = [n.strip().lower() for n in raw_en.split(",") if n.strip()]
     log_chat = os.getenv("LOG_CHAT_ID", "").strip()
     return Config(
