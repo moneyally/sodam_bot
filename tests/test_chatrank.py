@@ -634,7 +634,8 @@ async def rank_command_this_month_from_the_first():
     msg = FakeMsg(ROOM, A, ".순위 이번 달", message_id=78)
     await P.c_rank(CmdCtx(e.svc, e.bot, msg, ROOM, A, Role.MEMBER, ["이번", "달"], "이번 달"))
     [(_, _, text, _)] = e.bot.named("send_message")
-    assert "이번 달" in text and "sin1n1" in text and "다라" not in text, text
+    main = text.split("지난달 당첨자")[0]                       # 지난달 글은 '지난달 당첨자' 칸에만
+    assert "이번 달" in main and "sin1n1" in main and "다라" not in main, text
 
 
 @test
@@ -669,6 +670,30 @@ async def rank_any_month_last_month_and_numbered():
     [(_, _, text, _)] = e.bot.named("send_message")
     prev = first.month - 1 or 12
     assert f"{prev}월" in text and "다라 — 3회" in text and "sin1n1" not in text and "어제 당첨자" not in text, text
+
+
+@test
+async def this_month_board_shows_last_month_winners():
+    """2026-11-17 오너 '.순위 이번달에 왜 지난주가 뜸? 지난달이 떠야': 당첨자 칸이 방 설정(매주 시상식)만 보고 '지난주'.
+    → 보여 주는 기간을 따름: 이번 달 → 지난달 당첨자(지난달 순위), 오늘은 예전대로(매주 시상식이면 지난주).
+    뮤테이션: board 가 yday_winners 에 기간을 안 넘기면 FAIL."""
+    from datetime import datetime
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    e = await setup([(A, 4)])
+    cfg = await cr.get(e.db, ROOM)
+    cfg.award = cr.WEEKLY                                   # 매주 시상식 방
+    await cr.save(e.db, ROOM, cfg, ADMIN.id)
+    first = datetime.now(e.svc.cfg.tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for i in range(2):
+        await e.db._write("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot) VALUES(?,?,?,?,?,0)",
+                          (ROOM, B_.id, 9200 + i, f"지난달 글 {i}", int(first.timestamp()) - 7200))
+    await P.c_rank(CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".순위 이번달", message_id=80), ROOM, A, Role.MEMBER, ["이번달"], "이번달"))
+    [(_, _, text, _)] = e.bot.named("send_message")
+    assert "지난달 당첨자" in text and "지난주 당첨자" not in text and "다라 — 2회" in text, text
+    plain = await P.board(e.svc, e.bot, ROOM)               # 기간 안 고른 기본(오늘) → 지난달 칸 X (예전대로)
+    assert "지난달 당첨자" not in plain, plain
+    assert cr.winners_label(cfg, None, e.svc.cfg.tz) == "지난주 당첨자"   # 매주 시상식 방 기본은 그대로 지난주
 
 
 if __name__ == "__main__":

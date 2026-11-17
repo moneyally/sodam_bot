@@ -71,15 +71,15 @@ async def board(svc, bot, chat_id: int, cfg: cr.Cfg | None = None, period: str |
     main = [(cr.show_name(r, cfg.names), r["n"]) for r in rows]
     yday, ydate = None, ""
     if cfg.yday and (period or cfg.period) not in ("yesterday", "lastweek") and not cr.month_of(period or ""):   # 지난 달 순위엔 '어제 당첨자' X
-        ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
+        ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot, period or cfg.period)
     mine = await cr.my_place(svc, chat_id, me, cfg, period) if me else None
     if cfg.extra and not period:        # 한 카드에 본 기간 + 추가 기간들 (.순위 로 기간 지정하면 그 기간만)
         secs = [cr.section(cfg, label, date, main)]
         for p in cfg.extra:
             l2, d2, r2 = await cr.standings(svc, chat_id, cfg, p, bot)
             secs.append(cr.section(cfg, l2, d2, [(cr.show_name(r, cfg.names), r["n"]) for r in r2]))
-        return cr.render_sections(cfg, secs, yday or None, ydate, mine, cr.winners_label(cfg))
-    return cr.render(cfg, label, date, main, yday or None, ydate, mine, cr.winners_label(cfg))
+        return cr.render_sections(cfg, secs, yday or None, ydate, mine, cr.winners_label(cfg, period, svc.cfg.tz))
+    return cr.render(cfg, label, date, main, yday or None, ydate, mine, cr.winners_label(cfg, period, svc.cfg.tz))
 
 
 # ── 방 명령 ───────────────────────────────────────────────
@@ -259,7 +259,7 @@ async def app_data(svc, bot, chat_id: int, uid: int) -> dict:
            "me": {"rank": rank, "n": n}, "foot": html_plain(cfg.foot).strip()[:600], "yday": [], "ydate": ""}
     if cfg.yday and cfg.period != "yesterday":
         ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
-        out["ydate"], out["ylabel"] = ydate, cr.winners_label(cfg)
+        out["ydate"], out["ylabel"] = ydate, cr.winners_label(cfg, None, svc.cfg.tz)
         out["yday"] = [{"rank": i + 1, "icon": html_plain(cfg.icon(i)), "name": name, "n": cnt, "prize": prize}
                        for i, name, cnt, prize in yday]
     return out
