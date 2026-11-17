@@ -637,5 +637,39 @@ async def rank_command_this_month_from_the_first():
     assert "이번 달" in text and "sin1n1" in text and "다라" not in text, text
 
 
+@test
+async def rank_any_month_last_month_and_numbered():
+    """2026-11-17 오너 '.순위 저번달·.순위 10월도': 이름 목록이 아니라 '몇 월' 틀 하나 (cr.parse_month → 'mYYYYMM').
+    그 달 1일 0시 ~ 다음 달 1일 0시만 셈, 해 없는 '12월'이 지금보다 뒤면 작년, 이번 달 숫자면 thismonth.
+    뮤테이션: span 의 달 키 처리를 빼면 FAIL."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    tz = ZoneInfo("Asia/Seoul")
+    now = datetime(2026, 11, 17, 16, 0, tzinfo=tz).timestamp()
+    assert cr.parse_month("지난달", tz, now) == "m202610" and cr.parse_month("저번 달", tz, now) == "m202610"
+    assert cr.parse_month("10월", tz, now) == "m202610" and cr.parse_month("12월", tz, now) == "m202512"
+    assert cr.parse_month("11월", tz, now) == "thismonth" and cr.parse_month("2025년 3월", tz, now) == "m202503"
+    assert cr.parse_month("13월", tz, now) is None and cr.parse_month("오늘", tz, now) is None
+    assert cr.parse_month("지난달", tz, datetime(2026, 1, 5, tzinfo=tz).timestamp()) == "m202512"   # 1월의 지난달 = 작년 12월
+    since, until, date = cr.span("m202610", tz)
+    assert since == int(datetime(2026, 10, 1, tzinfo=tz).timestamp()) and until == int(datetime(2026, 11, 1, tzinfo=tz).timestamp())
+    assert date == "10/1~10/31" and cr.label("m202610", tz, now) == "10월" and cr.label("m202512", tz, now) == "2025년 12월"
+    assert cr.span("m202612", tz)[1] == int(datetime(2027, 1, 1, tzinfo=tz).timestamp())          # 12월 → 다음 해 1월 1일
+
+    # .순위 지난달 실제로: 지난달 글만, 이번 달 글은 안 셈
+    e = await setup([(A, 4)])                            # A = 이번 달(오늘) 4개
+    d = datetime.now(e.svc.cfg.tz)
+    first = d.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for i in range(3):
+        await e.db._write("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot) VALUES(?,?,?,?,?,0)",
+                          (ROOM, B_.id, 9100 + i, f"지난달 글 {i}", int(first.timestamp()) - 3600))
+    await P.c_rank(CmdCtx(e.svc, e.bot, FakeMsg(ROOM, A, ".순위 지난달", message_id=79), ROOM, A, Role.MEMBER, ["지난달"], "지난달"))
+    [(_, _, text, _)] = e.bot.named("send_message")
+    prev = first.month - 1 or 12
+    assert f"{prev}월" in text and "다라 — 3회" in text and "sin1n1" not in text and "어제 당첨자" not in text, text
+
+
 if __name__ == "__main__":
     run_all()

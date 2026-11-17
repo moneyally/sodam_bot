@@ -332,6 +332,45 @@ def monday(tz, weeks_ago: int = 0, now: float | None = None):
     return d - timedelta(days=d.weekday() + 7 * weeks_ago)
 
 
+_MONTH_KEY = re.compile(r"m(\d{4})(\d{2})")
+
+
+def month_key(y: int, m: int) -> str:
+    """달 하나 = 기간 키 'mYYYYMM' (목록에 이름 박지 않고 어느 달이든)."""
+    return f"m{y:04d}{m:02d}"
+
+
+def month_of(key: str) -> tuple[int, int] | None:
+    mm = _MONTH_KEY.fullmatch(key or "")
+    if not mm or not 1 <= int(mm.group(2)) <= 12:
+        return None
+    return int(mm.group(1)), int(mm.group(2))
+
+
+def parse_month(text: str, tz, now: float | None = None) -> str | None:
+    """'지난달·저번달·전월' / '10월' / '2025년 10월' → 달 키. '10월' 처럼 해가 없고 지금보다 뒤 달이면 작년."""
+    t = (text or "").replace(" ", "")
+    d = datetime.fromtimestamp(now or time.time(), tz).date()
+    if t in ("지난달", "저번달", "전달", "전월"):
+        return month_key(d.year - (d.month == 1), (d.month - 2) % 12 + 1)
+    mm = re.fullmatch(r"(?:(\d{4})년)?(\d{1,2})월(?:달)?", t)
+    if not mm or not 1 <= int(mm.group(2)) <= 12:
+        return None
+    m = int(mm.group(2))
+    y = int(mm.group(1)) if mm.group(1) else (d.year if m <= d.month else d.year - 1)
+    return "thismonth" if (y, m) == (d.year, d.month) else month_key(y, m)
+
+
+def label(key: str, tz=None, now: float | None = None) -> str:
+    """기간 표시 이름 — 정해진 기간은 PERIODS, 달 키는 '10월'(올해 아니면 '2025년 10월')."""
+    ym = month_of(key)
+    if not ym:
+        return PERIODS[key][1]
+    y, m = ym
+    this = datetime.fromtimestamp(now or time.time(), tz).year if tz else y
+    return f"{m}월" if y == this else f"{y}년 {m}월"
+
+
 def span(key: str, tz, now: float | None = None) -> tuple[int, int | None, str]:
     """기간 → (시작, 끝, 날짜 글). 이번 주 = 이번 월요일 0시부터 (매주 월요일 0시에 0부터 다시), 지난 주 = 지난 월~일."""
     if key in ("thisweek", "lastweek"):
@@ -343,6 +382,13 @@ def span(key: str, tz, now: float | None = None) -> tuple[int, int | None, str]:
         d = datetime.fromtimestamp(now or time.time(), tz).date()
         start = datetime(d.year, d.month, 1, tzinfo=tz)
         return int(start.timestamp()), None, f"{d.month}/1~{short_date(d.isoformat())}"
+    ym = month_of(key)
+    if ym:                                               # 'm202610' = 그 달 1일 0시 ~ 다음 달 1일 0시 (.순위 10월·지난달)
+        y, m = ym
+        start = datetime(y, m, 1, tzinfo=tz)
+        end = datetime(y + (m == 12), m % 12 + 1, 1, tzinfo=tz)
+        last = (end - timedelta(days=1)).date()
+        return int(start.timestamp()), int(end.timestamp()), f"{m}/1~{short_date(last.isoformat())}"
     since, until, _ = period_range(PERIODS[key][0], tz)
     if key in ("week", "month"):
         date = f"{short_date(day_of(tz, 6 if key == 'week' else 29))}~{short_date(day_of(tz))}"
@@ -388,7 +434,7 @@ async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=
         rows = [r for r in rows if r["user_id"] not in admins]
     rows = await _apply_fixed(svc, chat_id, cfg, key, date, rows)   # 🏆 순위 고정 지정(오너) — 집계는 그대로, 보일 때만 상단 고정
     rows = rows[:cfg.top]
-    return PERIODS[key][1], date, rows
+    return label(key, svc.cfg.tz), date, rows
 
 
 async def _apply_fixed(svc, chat_id: int, cfg: Cfg, key: str, date: str, rows: list) -> list:

@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import time
+
 import logging
 import re
 from datetime import datetime
@@ -68,7 +70,7 @@ async def board(svc, bot, chat_id: int, cfg: cr.Cfg | None = None, period: str |
     label, date, rows = await cr.standings(svc, chat_id, cfg, period, bot)
     main = [(cr.show_name(r, cfg.names), r["n"]) for r in rows]
     yday, ydate = None, ""
-    if cfg.yday and (period or cfg.period) not in ("yesterday", "lastweek"):
+    if cfg.yday and (period or cfg.period) not in ("yesterday", "lastweek") and not cr.month_of(period or ""):   # 지난 달 순위엔 '어제 당첨자' X
         ydate, yday = await cr.yday_winners(svc, chat_id, cfg, bot)
     mine = await cr.my_place(svc, chat_id, me, cfg, period) if me else None
     if cfg.extra and not period:        # 한 카드에 본 기간 + 추가 기간들 (.순위 로 기간 지정하면 그 기간만)
@@ -86,19 +88,32 @@ _PERIOD_WORDS = {"오늘": "today", "어제": "yesterday", "이번주": "thiswee
                  "이번달": "thismonth", "금월": "thismonth"}
 
 
-def _period_of(args) -> str | None:
-    """'.순위 이번달'·'.순위 이번 달'(띄어 써도) → 기간 키. 모르는 말이면 None (방 기본 기간)."""
-    return _PERIOD_WORDS.get("".join(args or []).replace(" ", ""))
+def _period_of(args, tz=None) -> str | None:
+    """'.순위 이번달'·'.순위 이번 달'(띄어 써도)·'.순위 지난달'·'.순위 10월' → 기간 키. 모르는 말이면 None (방 기본 기간)."""
+    t = "".join(args or []).replace(" ", "")
+    return _PERIOD_WORDS.get(t) or (cr.parse_month(t, tz) if tz else None)
+
+
+def _too_old(key: str | None, tz) -> str:
+    """달 순위가 대화 보관 기간(db.KEEP_DAYS)보다 오래되면 한 줄 안내."""
+    from ..db import KEEP_DAYS
+    if not key or not cr.month_of(key):
+        return ""
+    since, until, _ = cr.span(key, tz)
+    cut = time.time() - KEEP_DAYS * 86400
+    if until and until <= cut:
+        return f"\n\n⚠️ 대화 기록은 {KEEP_DAYS}일만 남아서 그 달 글은 이제 셀 수 없어요."
+    return f"\n\n⚠️ 대화 기록은 {KEEP_DAYS}일만 남아서 그 달 앞부분은 빠졌어요." if since < cut else ""
 
 
 async def c_rank(ctx) -> None:
     if ctx.chat_id > 0:
         await ctx.reply("방에서 <code>.순위</code> 를 쳐 주세요. 1:1 에선 🎁 혜택 메뉴의 🏆 버튼으로 봐요.")
         return
-    period = _period_of(ctx.args)
+    period = _period_of(ctx.args, ctx.svc.cfg.tz)
     if not await persist.claim(ctx.svc.db, f"crk:{ctx.chat_id}:{period or ''}", POST_GAP):
         return                                   # 연달아 치면 조용히 (도배 방지)
-    html = await board(ctx.svc, ctx.bot, ctx.chat_id, period=period)
+    html = await board(ctx.svc, ctx.bot, ctx.chat_id, period=period) + _too_old(period, ctx.svc.cfg.tz)
     await send_html(ctx.bot, ctx.chat_id, html, await room_buttons(ctx.svc, ctx.bot, ctx.chat_id), ctx.msg.message_id)
 
 
@@ -109,11 +124,11 @@ async def c_me(ctx) -> None:
         return
     if not await persist.claim(ctx.svc.db, f"crkme:{ctx.chat_id}:{ctx.user.id}", ME_GAP):
         return
-    period = _period_of(ctx.args)
+    period = _period_of(ctx.args, ctx.svc.cfg.tz)
     cfg = await cr.get(ctx.svc.db, ctx.chat_id)
     rank, n = await cr.my_place(ctx.svc, ctx.chat_id, ctx.user.id, cfg, period)
     row = {"username": getattr(ctx.user, "username", None), "first_name": ctx.user.first_name}
-    html = cr.me_html(cfg, cr.show_name(row, "name" if cfg.names == "mask" else cfg.names), cr.PERIODS[period or cfg.period][1], rank, n)
+    html = cr.me_html(cfg, cr.show_name(row, "name" if cfg.names == "mask" else cfg.names), cr.label(period or cfg.period, ctx.svc.cfg.tz), rank, n)
     await send_html(ctx.bot, ctx.chat_id, html, reply_to=ctx.msg.message_id)
 
 
