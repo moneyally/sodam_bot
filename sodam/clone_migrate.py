@@ -23,6 +23,12 @@ from .db import DB
 # chat_id 가 없는 사람 단위 전역표 — 그 방에 등장한 user 만 복사해야 이름·멘션·사칭추적이 안 깨짐.
 #   users: user_id PK → 이미 있으면 유지(INSERT OR IGNORE) · name_history: id AUTOINCREMENT → id 빼고 복사
 GLOBAL_BY_USER = {"users": "user_id", "name_history": "user_id"}
+# 방 번호 없이 '모든 방 공용'으로 쓰는 배운 목록 — 통째로 (클론에 이미 있는 건 그대로, INSERT OR IGNORE).
+#   음란물 차단(파일·지문·스티커 팩) · 공동 차단 명단. 2026-11-17 전수조사: 이관된 방이 차단 목록 없이 돌고 있었음.
+GLOBAL_ALL = ("nsfw_bad", "nsfw_phash", "nsfw_set", "nsfw_set_hits", "fedban_entries")
+# 오너 전체 기본값(chat_state 0) 중 방 동작을 바꾸는 것 — 게임 난이도(방 설정 casino_difficulty=owner 면 이걸 따름).
+#   빠지면 클론에선 '공정'으로 돌아 본체 때와 달라짐. 클론에 이미 값이 있으면 안 덮음.
+GLOBAL_STATE = ("casino_lose_pct",)
 
 
 def _cols(con: sqlite3.Connection, alias: str, table: str) -> list[str]:
@@ -78,6 +84,18 @@ def _copy_room(src_path: str, dst_path: str, chat_id: int) -> dict:
                         f'{verb} INTO dst."{t}" ({cl}) SELECT {cl} FROM main."{t}" WHERE {col} IN ({ph})', chunk)
                     if t == "users":
                         n_users += cur.rowcount
+        for t in GLOBAL_ALL:
+            dcols = _cols(con, "dst", t)
+            scols = set(_cols(con, "main", t))
+            common = [c for c in dcols if c in scols]
+            if not common:
+                continue
+            cl = ",".join(f'"{c}"' for c in common)
+            counts[t] = con.execute(f'INSERT OR IGNORE INTO dst."{t}" ({cl}) SELECT {cl} FROM main."{t}"').rowcount
+        ph = ",".join("?" * len(GLOBAL_STATE))
+        counts["_global_state"] = con.execute(
+            "INSERT OR IGNORE INTO dst.chat_state(chat_id, key, value) "
+            f"SELECT chat_id, key, value FROM main.chat_state WHERE chat_id=0 AND key IN ({ph})", GLOBAL_STATE).rowcount
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

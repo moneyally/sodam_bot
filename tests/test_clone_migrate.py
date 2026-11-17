@@ -175,6 +175,42 @@ async def transfer_room_copies_media_originals_for_autoreply_and_schedule():
         await dst.close()
 
 
+@test
+async def global_blocklists_and_owner_game_difficulty_follow_the_room():
+    """2026-11-17 이관 전수조사: 이관된 클론에 음란물 차단 목록·공동 차단 명단·오너 게임 난이도(80%)가 없어
+    차단이 안 걸리고 게임은 '공정'으로 돌았음. 공용 목록은 통째로, 난이도는 클론에 값 없을 때만.
+    뮤테이션: GLOBAL_ALL/GLOBAL_STATE 복사를 빼면 FAIL."""
+    import sodam.fedban  # noqa: F401
+    import sodam.nsfwguard  # noqa: F401
+    tmp = tempfile.mkdtemp()
+    srcp, dstp = os.path.join(tmp, "s.db"), os.path.join(tmp, "d.db")
+    src, dst = await _open(srcp), await _open(dstp)
+    A, OTHER = await _seed_src(src)
+    await src._write("INSERT INTO nsfw_bad(file_uid, chat_id, score, ts) VALUES('bad1', ?, 0.9, 1)", (OTHER,))
+    await src._write("INSERT INTO nsfw_set(set_name, ts) VALUES('pornpack', 1)")
+    await src._write("INSERT INTO fedban_entries(user_id, name, ts, no) VALUES(555, '사기꾼', 1, 1)")
+    await src.set_state(0, "casino_lose_pct", 80)
+    await dst.close()
+    await src.close()
+    counts = clone_migrate._copy_room(srcp, dstp, A)
+    assert counts["fedban_entries"] == 1 and counts["_global_state"] == 1, counts
+    dst = await _open(dstp)
+    try:
+        assert await dst._one("SELECT 1 FROM nsfw_bad WHERE file_uid='bad1'")     # 딴 방에서 배운 것도 (공용)
+        assert await dst._one("SELECT 1 FROM nsfw_set WHERE set_name='pornpack'")
+        assert await dst._one("SELECT 1 FROM fedban_entries WHERE user_id=555")
+        assert await dst.get_state(0, "casino_lose_pct", None) == 80
+        await dst.set_state(0, "casino_lose_pct", 30)                          # 클론 오너가 바꾼 값은 다시 이관해도 안 덮음
+    finally:
+        await dst.close()
+    clone_migrate._copy_room(srcp, dstp, A)
+    dst = await _open(dstp)
+    try:
+        assert await dst.get_state(0, "casino_lose_pct", None) == 30
+    finally:
+        await dst.close()
+
+
 class _Bot:
     """get_chat_member 결과를 (방/채널 → 상태)로 흉내 내는 가짜 봇."""
     def __init__(self, bid, where):
