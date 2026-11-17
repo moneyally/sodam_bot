@@ -82,7 +82,8 @@ async def board(svc, bot, chat_id: int, cfg: cr.Cfg | None = None, period: str |
 
 # ── 방 명령 ───────────────────────────────────────────────
 _PERIOD_WORDS = {"오늘": "today", "어제": "yesterday", "이번주": "thisweek", "금주": "thisweek", "지난주": "lastweek", "저번주": "lastweek",
-                 "주간": "week", "7일": "week", "월간": "month", "이번달": "month"}
+                 "주간": "week", "7일": "week", "월간": "month", "30일": "month",
+                 "이번달": "thismonth", "금월": "thismonth"}
 
 
 async def c_rank(ctx) -> None:
@@ -759,7 +760,7 @@ def _register_tool() -> None:
         {"action": {"type": "string", "enum": ["show", "set"]},
          "room": {"type": "string", "description": "1:1 에서 방 이름"},
          "period": {"type": "string", "enum": list(cr.PERIOD_CHOICES),
-                    "description": "today 오늘 · yesterday 어제 · thisweek 이번 주(월요일 0시부터, 매주 0부터 다시) · week 최근 7일 · month 최근 30일"},
+                    "description": "today 오늘 · yesterday 어제 · thisweek 이번 주(월요일 0시부터, 매주 0부터 다시) · week 최근 7일 · thismonth 이번 달(1일 0시부터, 매달 0부터 다시) · month 최근 30일"},
          "top": {"type": "integer", "description": "몇 등까지 3~20"},
          "prizes": {"type": "array", "items": {"type": "string"}, "description": "1등부터 상품 글 (예: ['50,000원','40,000원'])"},
          "icons": {"type": "string", "description": "보통 이모지 등수 그림, 띄어서 (예: '🥇 🥈 🥉 4️⃣ 5️⃣')"},
