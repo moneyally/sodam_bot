@@ -696,5 +696,28 @@ async def this_month_board_shows_last_month_winners():
     assert cr.winners_label(cfg, None, e.svc.cfg.tz) == "지난주 당첨자"   # 매주 시상식 방 기본은 그대로 지난주
 
 
+@test
+async def reset_does_not_wipe_past_months():
+    """2026-11-17 일루왕 '.순위 저번달 → 아직 10월 기록이 없어요' (10월 글 19만 개): 11/2 '채팅 수 초기화'가 모든 기간 시작점을
+    11/2 로 당겨 10월이 0. → 초기화는 그 기간 끝나기 전에 한 것만 (방 전체·사람별 둘 다). 이번 달은 그대로 초기화 뒤만.
+    뮤테이션: cut_reset 을 max(since, reset_at) 로 되돌리면 FAIL."""
+    from datetime import datetime
+    e = await setup([(A, 4)])
+    first = datetime.now(e.svc.cfg.tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for i in range(3):   # 지난달 글
+        await e.db._write("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot) VALUES(?,?,?,?,?,0)",
+                          (ROOM, B_.id, 9300 + i, f"지난달 글 {i}", int(first.timestamp()) - 7200))
+    cfg = await cr.get(e.db, ROOM)
+    cfg.reset_at = int(first.timestamp()) + 60          # 이번 달 1일에 방 전체 초기화
+    await cr.save(e.db, ROOM, cfg, ADMIN.id)
+    await cr.member_reset(e.db, ROOM, B_.id, ADMIN.id)   # 다라도 지금 사람별 초기화
+    prev = cr.parse_month("지난달", e.svc.cfg.tz)
+    _, _, rows = await cr.standings(e.svc, ROOM, await cr.get(e.db, ROOM), prev)
+    assert [(r["user_id"], r["n"]) for r in rows] == [(B_.id, 3)], rows      # 지난달은 초기화 무관
+    assert await cr.my_place(e.svc, ROOM, B_.id, await cr.get(e.db, ROOM), prev) == (1, 3)
+    _, _, now_rows = await cr.standings(e.svc, ROOM, await cr.get(e.db, ROOM), "thismonth")
+    assert B_.id not in [r["user_id"] for r in now_rows]                        # 이번 달은 초기화 그대로
+
+
 if __name__ == "__main__":
     run_all()
