@@ -81,6 +81,31 @@ async def send_path_rewrites_text_buttons_and_media():
         Bot._post, brandname._NAME, brandname._INSTALLED = saved
 
 
+@test
+async def each_bot_object_can_have_its_own_name():
+    """음성 담당 한 프로세스가 본체 봇·클론 봇 글을 같이 보냄 → 봇 객체마다 이름 (voice/tenants.py).
+    뮤테이션: _post 가 봇별 이름을 안 보면 FAIL."""
+    sent = []
+
+    async def fake_post(self, endpoint, data=None, **kw):
+        sent.append(data["text"])
+        return True
+    saved = (Bot._post, brandname._NAME, brandname._INSTALLED, dict(brandname._BOT_NAMES))
+    Bot._post = fake_post
+    brandname._INSTALLED, brandname._NAME = False, None
+    try:
+        main, clone = Bot("1:a"), Bot("2:b")
+        brandname.set_bot_name(clone, N)
+        brandname.set_bot_name(main, "소담")          # 본체 이름은 등록 안 됨 (그대로)
+        await Bot._post(main, "sendMessage", {"text": "소담이 노래 틀어요"})
+        await Bot._post(clone, "sendMessage", {"text": "소담이 노래 틀어요"})
+        assert sent == ["소담이 노래 틀어요", "프레스티지가 노래 틀어요"], sent
+    finally:
+        Bot._post, brandname._NAME, brandname._INSTALLED = saved[:3]
+        brandname._BOT_NAMES.clear()
+        brandname._BOT_NAMES.update(saved[3])
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if asyncio.run(run_all()) else 0)

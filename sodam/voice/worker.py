@@ -160,6 +160,7 @@ class Worker:
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
         self._orphan_since: dict[int, float] = {}   # in_call 에 있지만 재생·통화 없는 방 → 처음 그렇게 된 시각(monotonic)
+        self.tenants: Any = None                # 🏷 클론 봇 노래도 같이 (voice/tenants.py Tenants) — main 이 붙임
 
     # ── 로그인 ──────────────────────────────────────────
     async def resume(self) -> None:
@@ -595,6 +596,8 @@ class Worker:
             except Exception as e:
                 log.warning("음성 기록 정리 실패: %s", e)
             await self.health()
+        if self.tenants is not None:                     # 🏷 클론 봇들의 노래 일감 (같은 도우미 계정)
+            await self.tenants.tick()
 
     async def drain(self) -> None:
         """돌고 있는 일감이 끝날 때까지 (테스트·종료용)."""
@@ -673,6 +676,8 @@ class Worker:
     async def _get_player_locked(self, chat_id: int, p: dict, by: int | None) -> tuple[Any, str]:
         pl = self.players.get(chat_id)
         if pl is not None and not pl.done:
+            if getattr(pl, "db", self.db) is not self.db:   # 🏷 같은 방을 다른 봇(본체·클론)이 이미 틀고 있음 → 대기열이 갈라지지 않게
+                return None, "busy"
             return pl, "ok"
         old = self.ptasks.get(chat_id)
         if old is not None and not old.done():      # 앞 DJ 가 끝나는 중 (멈췄지만 정리 중) → 정리 끝날 때까지 기다림.
@@ -1250,6 +1255,11 @@ class Worker:
             await self.music_resume(music_chats)
         except Exception as e:
             log.warning("어시스턴트 세션 열기 실패: %s", e)
+        if self.tenants is not None:
+            try:
+                await self.tenants.start()
+            except Exception as e:
+                log.warning("클론 노래 연결 시작 실패: %s", e)
         log.info("📞 음성 담당 시작 (어시스턴트 %s)", "있음" if self.client else "없음")
         while True:
             try:
@@ -1298,6 +1308,10 @@ async def main() -> None:
     w = Worker(cfg, db, calls_factory=PyTgCalls, realtime_connect=lambda model: (oai.live.connect(max_retries=0) if model.startswith("gpt-live")   # Live: 다시 연결은 우리가 (새 세션)
                                                     else oai.realtime.connect(model=model)),
                media=_media(), web_search=svc.llm.web_search, svc=svc, bot=bot)
+    from pathlib import Path as _P
+
+    from .tenants import Tenants, open_tenant
+    w.tenants = Tenants(w, _P(cfg.db_path).parent, lambda spec: open_tenant(spec, cfg.tz))   # 🏷 클론 봇 노래
     import signal
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -1310,6 +1324,7 @@ async def main() -> None:
         await asyncio.wait_for(w.shutdown(), 20)
     finally:
         runner.cancel()
+        await w.tenants.close()
         await db.close()
 
 
