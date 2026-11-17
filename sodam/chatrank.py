@@ -409,12 +409,19 @@ def award_key(tz, cfg: "Cfg", now: float | None = None) -> tuple[str, str]:
     return day_of(tz, 1, now), "yesterday"
 
 
+def cut_reset(since: int, until: int | None, reset_at: int) -> int:
+    """방 '채팅 수 초기화'는 그 기간이 끝나기 전에 한 것만 시작점을 당김 — 11/2 초기화가 '.순위 10월' 을 0 으로 만들지 않게."""
+    if reset_at and (until is None or reset_at < until):
+        return max(since, reset_at)
+    return since
+
+
 async def standings(svc, chat_id: int, cfg: Cfg, period: str | None = None, bot=None) -> tuple[str, str, list]:
     """(표시 이름, 날짜, [(row, 횟수)]) — 관리자 빼기면 텔레그램 관리자 목록으로 거름(봇이 모르면 안 거름)."""
     from . import stats
     key = period or cfg.period
     since, until, date = span(key, svc.cfg.tz)
-    since = max(since, cfg.reset_at)                   # 🔄 채팅 수 초기화 뒤 글만
+    since = cut_reset(since, until, cfg.reset_at)      # 🔄 채팅 수 초기화 뒤 글만 (그 기간 끝나기 전에 한 초기화만)
     rule = await stats.min_chars(svc.db, chat_id)
     extra = 10 if cfg.no_admin else 0
     ck = (svc.db.__dict__.setdefault("_rank_tok", next(_SEQ)), chat_id, key, since, cfg.top + extra, rule)   # id() 는 시험에서 재사용됨
@@ -474,20 +481,21 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     from . import stats
     from .db import count_filter
     since, until, _ = span(period or cfg.period, svc.cfg.tz)
-    since = max(since, cfg.reset_at)
+    since = cut_reset(since, until, cfg.reset_at)
     end = until if until is not None else 1 << 62
     m = await stats.min_chars(svc.db, chat_id)
     mine = await svc.db._one("SELECT COUNT(*) n FROM messages WHERE chat_id=? AND user_id=? AND ts>=? AND ts<? AND is_bot=0 "
-                             "AND ts >= COALESCE((SELECT reset_at FROM rank_user_reset WHERE chat_id=? AND user_id=?),0) "
-                             + count_filter("messages", m), (chat_id, user_id, since, end, chat_id, user_id, *m.args))
+                             "AND ts >= COALESCE((SELECT reset_at FROM rank_user_reset WHERE chat_id=? AND user_id=? AND reset_at<?),0) "
+                             + count_filter("messages", m), (chat_id, user_id, since, end, chat_id, user_id, end, *m.args))
     n = int(mine["n"] if mine else 0)
     if not n:
         return 0, 0
     above = await svc.db._one("SELECT COUNT(*) n FROM (SELECT messages.user_id, COUNT(*) c FROM messages "
                               "LEFT JOIN rank_user_reset r ON r.chat_id=messages.chat_id AND r.user_id=messages.user_id "
                               "WHERE messages.chat_id=? AND messages.ts>=? AND messages.ts<? AND messages.is_bot=0 "
-                              "AND messages.ts >= COALESCE(r.reset_at,0) " + count_filter("messages", m) + " GROUP BY messages.user_id) WHERE c>?",
-                              (chat_id, since, end, *m.args, n))
+                              "AND (r.reset_at IS NULL OR r.reset_at >= ? OR messages.ts >= r.reset_at) " + count_filter("messages", m)
+                              + " GROUP BY messages.user_id) WHERE c>?",
+                              (chat_id, since, end, end, *m.args, n))
     rank = int(above["n"]) + 1
     if fixed:                             # 고정 지정이 걸려 있으면 일반 사람은 그 수만큼 아래로 밀림
         rank += len([u for u in fixed if u != user_id])
