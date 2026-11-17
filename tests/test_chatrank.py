@@ -719,5 +719,23 @@ async def reset_does_not_wipe_past_months():
     assert B_.id not in [r["user_id"] for r in now_rows]                        # 이번 달은 초기화 그대로
 
 
+@test
+async def winners_toggle_button_says_what_it_turns_off():
+    """2026-11-17 프레스티지 짝궁 '자꾸 지난주 당첨자가 나와요 — 빼 주세요': 매주 시상식 방이라 칸 이름은 '지난주 당첨자'인데
+    버튼은 '어제 당첨자' 라 같은 건지 몰라 못 껐음. 버튼 글자 = 실제 칸 이름. 뮤테이션: 버튼을 '어제 당첨자' 고정으로 되돌리면 FAIL."""
+    import harness
+    e = await setup([(A, 4)])
+    e.svc.perms.owner_ids = {ADMIN.id}
+    cfg = await cr.get(e.db, ROOM)
+    cfg.award = cr.WEEKLY
+    await cr.save(e.db, ROOM, cfg, ADMIN.id)
+    q = await harness.press(e.svc, e.bot, ADMIN.id, f"m:crk:{ROOM}")
+    btns = [b.text for row in q.edits[-1][1].inline_keyboard for b in row]
+    assert "✅ 지난주 당첨자" in btns, btns
+    await harness.press(e.svc, e.bot, ADMIN.id, f"m:crky:{ROOM}")
+    assert (await cr.get(e.db, ROOM)).yday is False
+    assert "지난주 당첨자" not in await P.board(e.svc, e.bot, ROOM)
+
+
 if __name__ == "__main__":
     run_all()
