@@ -418,7 +418,7 @@ async def r_extra(c: PanelCtx) -> Screen:
 
 
 async def r_extra_toggle(c: PanelCtx) -> Screen:
-    p = c.arg(1)
+    p = c.arg(0)   # m:crkxt:<방>:<기간> — 방 번호는 menu 가 떼고 넘김 (예전 arg(1) 이라 늘 빈칸 → 눌러도 안 바뀜, 2026-11-17 프레스티지)
     cfg = await cr.get(c.svc.db, c.cid)
     if p not in cr.PERIOD_CHOICES or p == cfg.period:
         return await r_extra(c)

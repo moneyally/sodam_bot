@@ -580,5 +580,21 @@ async def top_over_ten_renders_without_icon_indexerror():
     assert "11." in out and "20." in out and "user19" in out, out
 
 
+@test
+async def extra_period_buttons_actually_toggle():
+    """2026-11-17 프레스티지 짝궁 '추가 기간 버튼이 안 눌려요': 진짜 버튼 길(menu.on_callback)로 눌러서 저장되는지.
+    r_extra_toggle 가 기간을 arg(1) 에서 읽어 늘 빈칸 → 화면만 다시 그리고 저장 안 됨. 뮤테이션: arg(1) 로 되돌리면 FAIL."""
+    import harness
+    e = await setup(counts=[(A, 5)])
+    e.svc.perms.owner_ids = {ADMIN.id}
+    await harness.press(e.svc, e.bot, ADMIN.id, f"m:crkxt:{ROOM}:thisweek")
+    assert (await cr.get(e.db, ROOM)).extra == ["thisweek"]
+    q = await harness.press(e.svc, e.bot, ADMIN.id, f"m:crkxt:{ROOM}:week")
+    assert (await cr.get(e.db, ROOM)).extra == ["thisweek", "week"]
+    assert "✅ 이번 주" in str(q.edits[-1][1].inline_keyboard), q.edits[-1]
+    await harness.press(e.svc, e.bot, ADMIN.id, f"m:crkxt:{ROOM}:thisweek")    # 다시 누르면 뺌
+    assert (await cr.get(e.db, ROOM)).extra == ["week"]
+
+
 if __name__ == "__main__":
     run_all()
