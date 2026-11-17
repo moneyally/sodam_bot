@@ -596,5 +596,25 @@ async def extra_period_buttons_actually_toggle():
     assert (await cr.get(e.db, ROOM)).extra == ["week"]
 
 
+@test
+async def this_month_counts_from_the_first():
+    """2026-11-17 프레스티지 '이번 주처럼 한 달도 (11월만)': 이번 달 = 그 달 1일 0시부터, 최근 30일과 다름.
+    뮤테이션: span 의 thismonth 를 빼면 FAIL."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Seoul")
+    now = datetime(2026, 11, 17, 16, 40, tzinfo=tz).timestamp()
+    since, until, date = cr.span("thismonth", tz, now)
+    assert since == int(datetime(2026, 11, 1, tzinfo=tz).timestamp()) and until is None and date == "11/1~11/17", (since, date)
+    assert "thismonth" in cr.PERIOD_CHOICES and cr.PERIODS["thismonth"][1] == "이번 달"
+    import harness
+    e = await setup(counts=[(A, 5)])
+    e.svc.perms.owner_ids = {ADMIN.id}
+    await harness.press(e.svc, e.bot, ADMIN.id, f"m:crkxt:{ROOM}:thismonth")       # 추가 기간 버튼으로도
+    assert (await cr.get(e.db, ROOM)).extra == ["thismonth"]
+    board = await P.board(e.svc, e.bot, ROOM)
+    assert "이번 달" in board, board
+
+
 if __name__ == "__main__":
     run_all()

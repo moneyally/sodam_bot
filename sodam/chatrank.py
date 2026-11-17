@@ -50,8 +50,9 @@ CREATE TABLE IF NOT EXISTS rank_user_reset (
 """, migrate={"rank_rooms": "plain", "rank_awards": "composite", "rank_user_reset": "composite"})   # 방 이관·슈퍼그룹 전환 때 🏆 순위 설정·시상·특정인 초기화 따라감
 
 PERIODS = {"today": ("오늘", "오늘"), "yesterday": ("어제", "어제"), "thisweek": ("이번주", "이번 주"), "week": ("주간", "최근 7일"),
-           "month": ("월간", "최근 30일"), "lastweek": ("지난주", "지난 주")}
-PERIOD_CHOICES = ("today", "yesterday", "thisweek", "week", "month")    # 방장이 고르는 것 (lastweek 는 시상식·.순위 지난주 용)
+           "month": ("월간", "최근 30일"), "thismonth": ("이번달", "이번 달"), "lastweek": ("지난주", "지난 주")}
+# thismonth = 이번 달 1일 0시부터 (매달 1일에 0부터 다시) — 2026-11-17 프레스티지 짝궁 '이번 주처럼 한 달도, 11월만'
+PERIOD_CHOICES = ("today", "yesterday", "thisweek", "week", "thismonth", "month")    # 방장이 고르는 것 (lastweek 는 시상식·.순위 지난주 용)
 WEEKLY = 100                                 # 시상식 '매주 월요일 0시' (지난 주 월~일 순위) — 고객 2026-10-12 '추첨은 월요일 자정'
 AWARD_LABEL = {-1: "끔", 0: "매일 0시", 9: "매일 9시", 12: "매일 12시", WEEKLY: "매주 월요일 0시"}
 NAME_MODES = {"user": "아이디 (없으면 이름)", "name": "이름", "both": "이름+아이디", "mask": "가리기 (sin***)"}
@@ -338,6 +339,10 @@ def span(key: str, tz, now: float | None = None) -> tuple[int, int | None, str]:
         start = datetime(m.year, m.month, m.day, tzinfo=tz)
         until = int((start + timedelta(days=7)).timestamp()) if key == "lastweek" else None
         return int(start.timestamp()), until, f"{short_date(m.isoformat())}~{short_date((m + timedelta(days=6)).isoformat())}"
+    if key == "thismonth":
+        d = datetime.fromtimestamp(now or time.time(), tz).date()
+        start = datetime(d.year, d.month, 1, tzinfo=tz)
+        return int(start.timestamp()), None, f"{d.month}/1~{short_date(d.isoformat())}"
     since, until, _ = period_range(PERIODS[key][0], tz)
     if key in ("week", "month"):
         date = f"{short_date(day_of(tz, 6 if key == 'week' else 29))}~{short_date(day_of(tz))}"
