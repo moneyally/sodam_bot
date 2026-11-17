@@ -20,11 +20,28 @@ def default_call_names(name: str) -> list[str]:
     return [name + "아", name + "야", name]          # 한글이 아니면 둘 다
 
 
+def name_variants(bot_name: str) -> list[str]:
+    """봇 이름에서 사람들이 실제로 부르는 말들: 그대로 · 띄어쓰기 뺀 것 · 끝의 '봇/bot' 뗀 것.
+    '뉴월드 봇' → ['뉴월드 봇', '뉴월드봇', '뉴월드'] — 손님은 '뉴월드야' 라고 부름 (2026-11-17 오너 비상: 뉴월드 클론이 안 답함).
+    한 글자로 줄어드는 건 안 씀 (아무 말에나 걸리게 됨)."""
+    import re
+    name = " ".join((bot_name or "").split())
+    out: list[str] = []
+    for v in (name, name.replace(" ", ""), re.sub(r"\s*(?:봇|bot|BOT|Bot)$", "", name).strip()):
+        if len(v) >= 2 and v not in out:
+            out.append(v)
+        if " " in v and len(v.replace(" ", "")) >= 2 and v.replace(" ", "") not in out:
+            out.append(v.replace(" ", ""))
+    return out or [bot_name]
+
+
 def call_names_for(bot_name: str) -> list[str]:
     """이 봇을 부르는 말 기본값. 화이트라벨 클론은 제 이름 + '소담아·소담이·소담' 도 받음 —
     소담 쓰던 방을 넘겨받으면 멤버들이 하던 대로 '소담아' 불러도 답하게 (2026-11-17 오너 '둘 다 먹히게').
     같은 방에 본체 소담이 아직 있으면 둘 다 답하니, 넘길 땐 본체를 빼는 게 순서."""
-    names = default_call_names(bot_name)
+    names: list[str] = []
+    for base in name_variants(bot_name):
+        names += [n for n in default_call_names(base) if n not in names]
     if bot_name != "소담":
         names += [n for n in default_call_names("소담") if n not in names]
     return names
