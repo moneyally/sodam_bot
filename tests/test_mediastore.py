@@ -229,5 +229,36 @@ async def saving_in_announce_wizard_and_greet_editor_keeps_original():
     assert "MediaLost" in src
 
 
+@test
+async def clone_bot_falls_back_to_main_store_for_migrated_media():
+    """2026-11-17 뉴월드 클론: 본체에서 이관해 온 예약공지 사진(본체 봇 file_id)이 클론 보관함엔 없어서 글만 나감.
+    클론 DB(data/clones/<slug>/sodam.db)면 load 가 본체 보관함(data/sodam.db·data/media)에서 원본을 가져와 다시 올림.
+    뮤테이션: load 의 본체 보관함 fallback 을 빼면 FAIL (MediaLost)."""
+    import tempfile
+    from sodam.db import DB
+    tmp = Path(tempfile.mkdtemp())
+    main = DB(str(tmp / "sodam.db"))
+    await main.open()
+    (tmp / "media").mkdir()
+    (tmp / "media" / "hh").write_bytes(b"MAIN-AD")
+    await main._write("INSERT INTO media_store(file_id, kind, path, size, ts) VALUES(?,?,?,?,?)",
+                      ("main_ad", "photo", "hh", 7, 1))
+    await main.close()
+    clone = DB(str(tmp / "clones" / "nwd" / "sodam.db"))
+    await clone.open()
+    saved = mediastore.MEDIA_DIR
+    mediastore.MEDIA_DIR = tmp / "clones" / "nwd" / "media"
+    try:
+        new = NewBot()
+        await mediastore.send(new, clone, "photo", CHAT, "main_ad", caption="제휴")
+        assert new.uploads == [("send_photo", b"MAIN-AD")], new.uploads
+        assert await mediastore.stored(clone, "main_ad")       # 다음부턴 내 보관함에서
+        # 본체가 아닌 일반 봇(클론 폴더 아님)은 남의 보관함을 안 봄
+        assert mediastore.main_db_of(str(tmp / "sodam.db")) is None
+    finally:
+        mediastore.MEDIA_DIR = saved
+        await clone.close()
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())

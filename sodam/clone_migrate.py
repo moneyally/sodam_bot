@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+import time
+from pathlib import Path
 
-from . import clone, db as dbmod
+from . import clone, db as dbmod, mediastore
 from .db import DB
 
 # chat_id 가 없는 사람 단위 전역표 — 그 방에 등장한 user 만 복사해야 이름·멘션·사칭추적이 안 깨짐.
@@ -99,6 +101,31 @@ async def wallet_sum(db: DB, chat_id: int) -> int:
     return (row["s"] if row else 0) or 0
 
 
+async def copy_media(src: DB, dst: DB) -> int:
+    """클론 DB 가 쓰는 미디어(예약·인사·자동답글·퇴장·수배)의 본체 보관 원본을 클론 보관함으로.
+    file_id 는 봇마다 달라서 원본 없으면 클론이 '사진 없이 글만' 보냄 (2026-11-17 뉴월드 제휴광고). 복사한 수."""
+    n = 0
+    dst_dir = Path(dst.path).resolve().parent / "media"
+    for kind, fid in dict.fromkeys(await mediastore.references(dst)):
+        if await dst._one("SELECT 1 FROM media_store WHERE file_id=?", (fid,)):
+            continue
+        row = await src._one("SELECT kind, path FROM media_store WHERE file_id=?", (fid,))
+        if not row:
+            continue
+        try:
+            data = (Path(src.path).resolve().parent / "media" / row["path"]).read_bytes()
+        except OSError:
+            continue
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        p = dst_dir / row["path"]
+        if not p.exists():
+            p.write_bytes(data)
+        await dst._write("INSERT OR REPLACE INTO media_store(file_id, kind, path, size, ts) VALUES(?,?,?,?,?)",
+                         (fid, row["kind"] or kind, row["path"], len(data), int(time.time())))
+        n += 1
+    return n
+
+
 async def transfer_room(svc, chat_id: int, slug: str) -> tuple[bool, str, dict]:
     """오케스트레이션: 열린 베팅 확인 → 클론 DB 스키마 보장 → 복사 → 포인트 합 검증.
     반환 (성공?, 안내, 복사수). 복사 전 그 방을 '이관중' 잠금해 두는 건 호출부(UI)."""
@@ -117,6 +144,7 @@ async def transfer_room(svc, chat_id: int, slug: str) -> tuple[bool, str, dict]:
     await chk.open()
     try:
         after = await wallet_sum(chk, chat_id)
+        counts["_media"] = await copy_media(svc.db, chk)
     finally:
         await chk.close()
     if before != after:
@@ -124,3 +152,61 @@ async def transfer_room(svc, chat_id: int, slug: str) -> tuple[bool, str, dict]:
     n_tables = len([k for k in counts if not k.startswith("_")])
     return True, (f"✅ 복사 끝 — 멤버 {counts.get('_members', 0)}명 · 포인트 {after:,} · 표 {n_tables}개.\n"
                   "이제 방에서 본체 소담 내보내고 클론 봇을 관리자로 넣으면 돼."), counts
+
+
+# ── 넘기기 마무리 (본체·클론 둘이 같은 방에서 겹쳐 답하지 않게) ─────────────────
+ADMIN = ("administrator", "creator")
+
+
+def clone_token(db_path: str, slug: str) -> str:
+    return clone._read_env(clone.env_path(db_path, slug)).get("TELEGRAM_BOT_TOKEN", "")
+
+
+async def _status(bot, chat, user_id: int) -> str:
+    """그 봇의 그 방/채널 상태 — administrator·creator·member·left·kicked, 못 물으면 'none'."""
+    try:
+        m = await bot.get_chat_member(chat, user_id)
+        return str(getattr(m, "status", "") or "none")
+    except Exception:   # 방에 없음·채널 비공개·네트워크 — 다 '안 됨'
+        return "none"
+
+
+async def room_channels(db: DB, chat_id: int) -> list:
+    """이 방에 걸린 채널: 📢 구독 필수(subgate_channel) + 채널 관리에 연결한 채널(channels.room_id)."""
+    out: list = []
+    s = await db.get_settings(chat_id)
+    ch = (s.get("subgate_channel") or "").strip() if s.get("subgate_mode") == "on" else ""
+    if ch:
+        out.append(ch)
+    try:
+        for r in await db._all("SELECT chat_id FROM channels WHERE room_id=? AND active=1", (chat_id,)):
+            if r["chat_id"] not in out:
+                out.append(r["chat_id"])
+    except Exception:   # 채널 표 없는 옛 DB
+        pass
+    return out
+
+
+async def handover_check(main_bot, clone_bot, db: DB, chat_id: int) -> dict:
+    """넘기기 점검: 클론이 방 관리자인지 · 채널마다 클론이 관리자인지 · 본체가 아직 방에 있는지.
+    ready = 클론이 방 관리자이고 채널도 전부 관리자 → 이제 본체를 빼도 끊김 없음."""
+    room = await _status(clone_bot, chat_id, clone_bot.id)
+    main = await _status(main_bot, chat_id, main_bot.id)
+    chans = [(ch, await _status(clone_bot, ch, clone_bot.id)) for ch in await room_channels(db, chat_id)]
+    ready = room in ADMIN and all(st in ADMIN for _, st in chans)
+    return {"clone_room": room, "main_room": main, "channels": chans, "ready": ready,
+            "main_in": main in ("administrator", "member", "restricted")}
+
+
+async def main_leave(main_bot, clone_bot, db: DB, chat_id: int) -> tuple[bool, str]:
+    """점검을 다시 해서 준비됐을 때만 본체가 방을 나감 (클론 없이 비는 시간 0)."""
+    chk = await handover_check(main_bot, clone_bot, db, chat_id)
+    if not chk["ready"]:
+        return False, "아직 클론 봇이 방(또는 채널) 관리자가 아니야 — 먼저 넣고 다시 눌러줘."
+    if not chk["main_in"]:
+        return True, "본체 소담은 이미 방에 없어."
+    try:
+        await main_bot.leave_chat(chat_id)
+    except Exception as e:
+        return False, f"본체가 못 나갔어 ({e}). 방에서 직접 내보내줘."
+    return True, "🚪 본체 소담이 방에서 나갔어. 이제 클론 봇만 답해."

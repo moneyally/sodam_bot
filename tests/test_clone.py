@@ -397,5 +397,54 @@ async def clone_name_with_bot_suffix_answers_to_core_name():
         assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
 
 
+@test
+async def handover_finish_screen_offers_leave_only_when_clone_ready():
+    """🔁 넘기기 마무리 화면: 클론이 방 관리자가 아니면 [🚪 본체 빼기] 없음, 관리자면 생김 → 누르면 본체가 나감."""
+    from fakes import FakeBot, make_svc
+    from sodam import clone_migrate, menu
+    from sodam.panels import clone as cp
+
+    class CBot(FakeBot):
+        id = 2
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    db = await make_db()
+    svc = await make_svc(db)
+    OWNER, A = 7, -1004286514552
+    svc.perms.owner_ids = {OWNER}
+    await db.ensure_chat(A, "New world")
+    await clone.register(db, slug="nwd26bot", info=clone.BotInfo(bot_id=2, username="NWD26_bot", name="뉴월드 봇"),
+                         name="뉴월드 봇", port=8801)
+    cbot = CBot()
+    cbot.can_moderate = False                               # 방에 들어왔는데 관리자 아님
+    saved = (cp.MAKE_BOT, clone_migrate.clone_token)
+    cp.MAKE_BOT = lambda tok: cbot
+    clone_migrate.clone_token = lambda path, slug: "2:x"
+    try:
+        main = FakeBot()
+        c = menu.PanelCtx(svc, main, OWNER, 0, ["nwd26bot", str(A)])
+        sc = await cp.s_tx_finish(c)
+        flat = [b.text for row in sc.kb.inline_keyboard for b in row]
+        assert "🚪 본체 빼기" not in flat and "관리자 아님" in sc.text, (flat, sc.text)
+        cbot.can_moderate = True
+        sc = await cp.s_tx_finish(c)
+        flat = [b.text for row in sc.kb.inline_keyboard for b in row]
+        assert "🚪 본체 빼기" in flat, flat
+        main.leave_chat = lambda chat: _left.append(chat) or _noop()
+        _left = []
+
+        async def _noop():
+            return True
+        sc = await cp.t_tx_leave(menu.PanelCtx(svc, main, OWNER, A, []), "nwd26bot")
+        assert _left == [A], (_left, sc.text)
+    finally:
+        cp.MAKE_BOT, clone_migrate.clone_token = saved
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
