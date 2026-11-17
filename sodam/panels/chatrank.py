@@ -379,7 +379,7 @@ async def s_crk(c: PanelCtx) -> Screen:
              f"줄 모양: <code>{esc(html_plain(cfg.line))}</code>",
              f"<code>.나</code> 모양: <code>{esc(html_plain(cfg.me))}</code>",
              f"등수 그림: {esc(' '.join(html_plain(cfg.icon(i)) for i in range(cfg.top)))}",
-             f"관리자 빼기: {'✅' if cfg.no_admin else '❌'} · 어제 당첨자 칸: {'✅' if cfg.yday else '❌'}",
+             f"관리자 빼기: {'✅' if cfg.no_admin else '❌'} · {cr.winners_label(cfg, None, c.svc.cfg.tz)} 칸: {'✅' if cfg.yday else '❌'}",
              f"🕛 시상식: <b>{_hour(cfg.award)}</b> (매일 = 어제 하루 순위, 매주 월요일 0시 = 지난 주 월~일 순위를 방에 올리고, 상품 있으면 관리자 1:1 에 [✅ 지급] 버튼)",
              f"📏 세는 기준: {rule} (📊 리포트 화면에서 바꿔요)"]
     if cfg.reset_at:
@@ -392,7 +392,7 @@ async def s_crk(c: PanelCtx) -> Screen:
             [B("📝 머리말", f"m:in:{cid}:crkhd"), B("📝 꼬리말", f"m:in:{cid}:crkft")],
             [B("🙋 .나 모양", f"m:in:{cid}:crkme")],
             [B(("✅" if cfg.no_admin else "❌") + " 관리자 빼기", f"m:crka:{cid}"),
-             B(("✅" if cfg.yday else "❌") + " 어제 당첨자", f"m:crky:{cid}")],
+             B(("✅" if cfg.yday else "❌") + " " + cr.winners_label(cfg, None, c.svc.cfg.tz), f"m:crky:{cid}")],   # '지난주 당첨자' 면 그대로 (2026-11-17 짝궁이 '어제' 버튼인 줄 몰라 못 끔)
             [B(f"🕛 시상식: {_hour(cfg.award)} ▸", f"m:crkw:{cid}"), B("📏 세는 기준", f"m:rp:{cid}")],
             [B("👀 미리보기 (내 1:1)", f"m:crkv:{cid}"), B("📣 방에 올리기", f"m:crkpost:{cid}")],
             [B("🔄 채팅 수 0부터 다시", f"m:crk0:{cid}")] + ([B("↩️ 초기화 취소", f"m:crk0x:{cid}")] if cfg.reset_at else []),
@@ -474,8 +474,9 @@ async def r_admin(c: PanelCtx) -> Screen:
 
 
 async def r_yday(c: PanelCtx) -> Screen:
-    v = not (await cr.get(c.svc.db, c.cid)).yday
-    return await _change(c, "어제 당첨자 칸 켬" if v else "어제 당첨자 칸 끔", yday=v)
+    cfg = await cr.get(c.svc.db, c.cid)
+    v, name = not cfg.yday, cr.winners_label(cfg, None, c.svc.cfg.tz)
+    return await _change(c, f"{name} 칸 켬" if v else f"{name} 칸 끔", yday=v)
 
 
 async def r_award(c: PanelCtx) -> Screen:
