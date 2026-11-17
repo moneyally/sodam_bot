@@ -7,6 +7,8 @@
   다음부터는 새 id 로 바로. 예약·설정에 저장된 원래 file_id 는 안 바꿈 (여러 표를 고칠 필요 없고, 또 바뀌어도 원본으로 다시).
 - 원본이 없으면 MediaLost (BadRequest 하위라 기존 '미디어 실패면 글만' 처리를 그대로 탐).
 - backfill: 아직 보관 안 된 미디어(지금 봇 것)를 하루 몇 번 받아 둠, 안 쓰는 보관 파일은 30일 뒤 정리.
+- 클론봇(2026-11-17 뉴월드 제휴광고 사진 사라짐): 이관해 온 file_id 는 본체 봇 것이라 클론에서 안 먹음 →
+  load 가 내 보관함에 없으면 본체 보관함(data/sodam.db·data/media)에서 가져와 내 것에도 둠. 이관(clone_migrate)도 미리 복사.
 테스트 tests/test_mediastore.py.
 """
 from __future__ import annotations
@@ -85,14 +87,53 @@ async def stored(db, file_id: str) -> bool:
     return bool(file_id) and await db._one("SELECT 1 FROM media_store WHERE file_id=?", (file_id,)) is not None
 
 
-async def load(db, file_id: str) -> bytes | None:
-    row = await db._one("SELECT path FROM media_store WHERE file_id=?", (file_id,))
-    if not row:
+def main_db_of(path: str) -> Path | None:
+    """클론봇 DB(data/clones/<slug>/sodam.db)면 본체 DB(data/sodam.db) 경로, 아니면 None."""
+    if not path or path == ":memory:":
+        return None
+    p = Path(path).resolve()
+    if p.parent.parent.name != "clones":
+        return None
+    main = p.parent.parent.parent / "sodam.db"
+    return main if main.exists() else None
+
+
+def _main_original(path: str, file_id: str) -> tuple[str, bytes] | None:
+    """본체 보관함에서 원본 (kind, bytes) — 클론으로 이관해 온 본체 file_id 용 (읽기 전용)."""
+    import sqlite3
+    main = main_db_of(path)
+    if main is None:
         return None
     try:
-        return (media_dir(db) / row["path"]).read_bytes()
-    except OSError:
+        con = sqlite3.connect(f"file:{main}?mode=ro", uri=True, timeout=10)
+        try:
+            row = con.execute("SELECT kind, path FROM media_store WHERE file_id=?", (file_id,)).fetchone()
+        finally:
+            con.close()
+        if not row:
+            return None
+        return row[0], (main.parent / "media" / row[1]).read_bytes()
+    except (sqlite3.Error, OSError):
         return None
+
+
+async def load(db, file_id: str) -> bytes | None:
+    row = await db._one("SELECT path FROM media_store WHERE file_id=?", (file_id,))
+    if row:
+        try:
+            return (media_dir(db) / row["path"]).read_bytes()
+        except OSError:
+            pass
+    # 클론봇: 이관해 온 예약·인사·자동답글의 file_id 는 본체 봇 것 → 본체 보관함 원본을 가져와 내 보관함에도 둠
+    got = _main_original(getattr(db, "path", "") or "", file_id)
+    if got is None:
+        return None
+    kind, data = got
+    try:
+        await _put(db, file_id, kind, data)
+    except Exception:   # 보관 실패해도 이번 보내기는 됨
+        log.exception("clone media copy failed")
+    return data
 
 
 async def _put(db, file_id: str, kind: str, data: bytes) -> None:
@@ -236,6 +277,26 @@ async def references(db) -> list[tuple[str, str]]:
         for r in await db._all("SELECT media_type, media_id FROM composer_drafts WHERE media_id IS NOT NULL AND media_id<>''"):
             out.append((r["media_type"], r["media_id"]))
     except Exception:   # 채널 기능 표가 없는 옛 DB
+        pass
+    # 자동 답글 사본·퇴장 인사·수배 원글 — 예전엔 빠져서 30일 뒤 정리(_gc)되고 클론 이관 때도 안 따라감
+    try:
+        for r in await db._all("SELECT snap FROM auto_replies WHERE snap LIKE '%file_id%'"):
+            snap = json.loads(r["snap"] or "{}")
+            if isinstance(snap, dict) and snap.get("file_id"):
+                out.append((snap.get("kind"), snap["file_id"]))
+    except Exception:
+        pass
+    for r in await db._all("SELECT settings FROM chats WHERE settings LIKE '%farewell_media_id%'"):
+        try:
+            s = json.loads(r["settings"] or "{}")
+        except ValueError:
+            continue
+        if s.get("farewell_media_id"):
+            out.append((s.get("farewell_media_type"), s["farewell_media_id"]))
+    try:
+        for r in await db._all("SELECT media_kind, media_id FROM fedban_reports WHERE media_id IS NOT NULL AND media_id<>''"):
+            out.append((r["media_kind"], r["media_id"]))
+    except Exception:
         pass
     return [(k, f) for k, f in out if k in KINDS and isinstance(f, str) and f]
 

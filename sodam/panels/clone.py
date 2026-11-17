@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 
 from telegram import Message
@@ -265,8 +266,13 @@ async def s_clone(c: PanelCtx) -> Screen:
              f"상태: {esc(r['status'])} · 포트 {r['port']} · 구매자 {r['buyer_id'] or '없음'}",
              f"이름(slug): <code>{esc(r['slug'])}</code>"]
     tok = menu.token(c.svc, c.uid, 0, "clremove", r["slug"])
-    kb = [[B("📦 이 봇으로 기존 방 넘기기", f"m:cltx:{r['slug']}")],
-          [B("🗑 클론 삭제", f"m:k:{tok}")], [B("⬅️ 목록", "m:cl")]]
+    kb = [[B("📦 이 봇으로 기존 방 넘기기", f"m:cltx:{r['slug']}")]]
+    moved = await c.svc.db._all(
+        "SELECT s.chat_id, COALESCE(c.title,'') AS title FROM chat_state s LEFT JOIN chats c ON c.chat_id=s.chat_id "
+        "WHERE s.key='migrated_to' AND s.value=? LIMIT 8", (json.dumps(r["slug"]),))
+    for m in moved:   # 넘긴 방마다 마무리 점검 (클론 관리자·채널·본체 빼기)
+        kb.append([B(f"🔁 {(m['title'] or str(m['chat_id']))[:20]} 마무리", f"m:cltxf:{r['slug']}:{m['chat_id']}")])
+    kb += [[B("🗑 클론 삭제", f"m:k:{tok}")], [B("⬅️ 목록", "m:cl")]]
     return Screen("\n".join(lines), menu._kb(kb))
 
 
@@ -373,7 +379,72 @@ async def t_transfer_go(c: PanelCtx, slug) -> Screen:
     if ok:
         await c.svc.db.set_state(cid, "migrated_to", str(slug))   # 본체: 이 방은 클론으로 넘어감(기록)
         await c.svc.db.set_state(0, f"{TX_KEY}:{c.uid}", None)
+        screen = await s_tx_finish(PanelCtx(c.svc, c.bot, c.uid, None, [str(slug), str(cid)]))
+        screen.text = note + "\n\n" + (screen.text or "")
+        return screen
     screen = await s_clone(PanelCtx(c.svc, c.bot, c.uid, None, [str(slug)]))
+    screen.text = note + "\n\n" + (screen.text or "")
+    return screen
+
+
+MAKE_BOT = None   # 시험이 가짜 봇으로 바꿈
+
+
+def _clone_bot(c: PanelCtx, slug: str):
+    from telegram import Bot
+    tok = clone_migrate.clone_token(c.svc.cfg.db_path, slug)
+    return (MAKE_BOT or Bot)(tok) if tok else None
+
+
+_ST = {"administrator": "✅ 관리자", "creator": "✅ 방장", "member": "⚠️ 들어왔는데 관리자 아님",
+       "restricted": "⚠️ 제한됨", "left": "❌ 없음", "kicked": "❌ 쫓겨남", "none": "❌ 없음(또는 못 물어봄)"}
+
+
+async def s_tx_finish(c: PanelCtx) -> Screen:
+    """🔁 넘기기 마무리 — 클론이 방·채널 관리자인지 실제로 물어보고, 준비되면 본체를 방에서 뺌 (둘이 겹쳐 답 X)."""
+    if not await _is_owner(c):
+        return NOT_OWNER
+    slug, cid = (c.args + ["", ""])[:2]
+    cid = to_int(cid)
+    r = await clone.get_clone(c.svc.db, slug)
+    if not r or not cid:
+        return await s_main(c)
+    cbot = _clone_bot(c, slug)
+    if cbot is None:
+        return Screen("클론 봇 토큰 파일이 없어 — 클론 설정을 확인해줘.", menu._kb([[B("🔙", f"m:cls:{slug}")]]))
+    async with cbot:
+        chk = await clone_migrate.handover_check(c.bot, cbot, c.svc.db, cid)
+    lines = ["🔁 <b>넘기기 마무리</b> — 본체·클론이 같은 방에서 겹쳐 답하지 않게", "",
+             f"1️⃣ @{esc(r['username'])} 방 상태: {_ST.get(chk['clone_room'], chk['clone_room'])}"]
+    for ch, st in chk["channels"]:
+        lines.append(f"2️⃣ 채널 {esc(str(ch))}: 클론 {_ST.get(st, st)}")
+    if not chk["channels"]:
+        lines.append("2️⃣ 연결된 채널 없음")
+    lines.append(f"3️⃣ 본체 소담: {'아직 방에 있음' if chk['main_in'] else '방에 없음 ✅'}")
+    lines.append("")
+    if not chk["ready"]:
+        lines.append("❌ 표시된 곳에 클론 봇을 <b>관리자</b>로 넣고 [🔄 다시 확인]. 그 전엔 본체가 계속 맡아.")
+    elif chk["main_in"]:
+        lines.append("준비 끝 — [🚪 본체 빼기] 누르면 본체 소담이 방에서 나가고 클론만 답해.")
+    else:
+        lines.append("✅ 넘기기 끝.")
+    kb = [[B("🔄 다시 확인", f"m:cltxf:{slug}:{cid}")]]
+    if chk["ready"] and chk["main_in"]:
+        kb.append([B("🚪 본체 빼기", f"m:k:{menu.token(c.svc, c.uid, cid, 'cltxleave', slug)}")])
+    kb.append([B("🔙 클론", f"m:cls:{slug}")])
+    return Screen("\n".join(lines), menu._kb(kb))
+
+
+async def t_tx_leave(c: PanelCtx, slug) -> Screen:
+    if not await _is_owner(c):
+        return NOT_OWNER
+    slug, cid = str(slug), c.cid
+    cbot = _clone_bot(c, slug)
+    if cbot is None:
+        return Screen("클론 봇 토큰 파일이 없어.", menu._kb([[B("🔙", f"m:cls:{slug}")]]))
+    async with cbot:
+        ok, note = await clone_migrate.main_leave(c.bot, cbot, c.svc.db, cid)
+    screen = await s_tx_finish(PanelCtx(c.svc, c.bot, c.uid, None, [slug, str(cid)]))
     screen.text = note + "\n\n" + (screen.text or "")
     return screen
 
@@ -393,7 +464,7 @@ async def t_remove(c: PanelCtx, slug) -> Screen:
 menu.register_main(97, "cl", "🏷 화이트라벨", need=OWNER)
 for _code, _fn in (("cl", s_main), ("clnew", r_new), ("cls", s_clone),
                    ("clcancel", r_cancel), ("clein", r_startinput),
-                   ("cltx", r_transfer_start), ("cltxp", s_tx_preview)):
+                   ("cltx", r_transfer_start), ("cltxp", s_tx_preview), ("cltxf", s_tx_finish)):
     menu.register_route(_code, Route(_fn, OWNER, scoped=False))
 menu.register_input("cltok", "", "cl", i_token, s_draft, need=OWNER)
 menu.register_input("clname", "", "cl", i_name, s_draft, need=OWNER)
@@ -403,3 +474,4 @@ menu.register_input("cltxroom", "", "cl", i_transfer_room, s_tx_preview, need=OW
 menu.register_token_action("clmake", t_make, fresh=True, need=OWNER)
 menu.register_token_action("clremove", t_remove, fresh=True, need=OWNER)
 menu.register_token_action("cltxgo", t_transfer_go, fresh=True, need=OWNER)
+menu.register_token_action("cltxleave", t_tx_leave, fresh=True, need=OWNER)

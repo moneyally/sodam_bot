@@ -137,6 +137,84 @@ async def transfer_room_blocks_on_open_bets():
     assert not ok and "게임" in msg, msg
 
 
+@test
+async def transfer_room_copies_media_originals_for_autoreply_and_schedule():
+    """2026-11-17 뉴월드: 이관한 자동답글(제휴)·예약공지 사진이 클론에서 'Wrong file identifier' — file_id 가
+    본체 봇 것이고 원본이 클론 보관함에 없었음. 이관이 본체 보관 원본을 클론 media/·media_store 로 같이 옮겨야.
+    뮤테이션: transfer_room 의 copy_media 호출을 빼면 FAIL."""
+    import json
+    import sodam.autoreply  # noqa: F401  (auto_replies 표)
+    from types import SimpleNamespace
+    from sodam import clone as cl
+    tmp = tempfile.mkdtemp()
+    srcp = os.path.join(tmp, "sodam.db")
+    src = await _open(srcp)
+    A, _ = await _seed_src(src)
+    os.makedirs(os.path.join(tmp, "media"))
+    for fid, name, data in [("AgAC_ad", "h1", b"AD-PHOTO"), ("BAAC_sch", "h2", b"SCH-VIDEO"), ("AgAC_x", "h3", b"X")]:
+        with open(os.path.join(tmp, "media", name), "wb") as f:
+            f.write(data)
+        await src._write("INSERT INTO media_store(file_id, kind, path, size, ts) VALUES(?,?,?,?,?)",
+                         (fid, "photo" if fid.startswith("Ag") else "video", name, len(data), 1))
+    await src._write("INSERT INTO auto_replies(chat_id, key, word, snap, created_by, created_at) VALUES(?,?,?,?,?,?)",
+                     (A, "제휴", "제휴", json.dumps({"html": "제휴", "kind": "photo", "file_id": "AgAC_ad"}), 7, 1))
+    await src.add_schedule(A, kind="interval", at_time=None, interval_min=40, title="공지", text="t",
+                           media_type="video", media_id="BAAC_sch", pin=False, created_by=7)
+    svc = SimpleNamespace(db=src, cfg=SimpleNamespace(db_path=srcp))
+    ok, note, counts = await clone_migrate.transfer_room(svc, A, "nwd")
+    await src.close()
+    assert ok, note
+    assert counts["_media"] == 2, counts                     # 딴 데서 안 쓰는 AgAC_x 는 안 옮김
+    cdir = cl.clones_dir(srcp) / "nwd"
+    dst = await _open(str(cdir / "sodam.db"))
+    try:
+        rows = {r["file_id"]: r["path"] for r in await dst._all("SELECT file_id, path FROM media_store")}
+        assert set(rows) == {"AgAC_ad", "BAAC_sch"}, rows
+        assert (cdir / "media" / rows["AgAC_ad"]).read_bytes() == b"AD-PHOTO"
+    finally:
+        await dst.close()
+
+
+class _Bot:
+    """get_chat_member 결과를 (방/채널 → 상태)로 흉내 내는 가짜 봇."""
+    def __init__(self, bid, where):
+        self.id, self.where, self.left = bid, dict(where), []
+
+    async def get_chat_member(self, chat, uid):
+        from types import SimpleNamespace
+        if chat not in self.where:
+            raise RuntimeError("chat not found")
+        return SimpleNamespace(status=self.where[chat])
+
+    async def leave_chat(self, chat):
+        self.left.append(chat)
+        self.where[chat] = "left"
+
+
+@test
+async def main_leaves_room_only_after_clone_is_admin_in_room_and_channel():
+    """넘기기 마무리 (2026-11-17 洪兴汇 본체·클론 둘이 같이 답함 → 오너가 손으로 뺌, '안 겹치게 마법사로').
+    클론이 방·채널(구독 필수) 관리자일 때만 본체가 나감 — 클론 없이 비는 시간 0.
+    뮤테이션: main_leave 의 ready 검사를 빼면 FAIL."""
+    tmp = tempfile.mkdtemp()
+    src = await _open(os.path.join(tmp, "s.db"))
+    A, _ = await _seed_src(src)
+    await src.set_setting(A, "subgate_mode", "on")
+    await src.set_setting(A, "subgate_channel", "@nwch")
+    main = _Bot(1, {A: "administrator", "@nwch": "administrator"})
+    cl = _Bot(2, {A: "administrator"})                      # 채널엔 아직 없음
+    chk = await clone_migrate.handover_check(main, cl, src, A)
+    assert chk["channels"] == [("@nwch", "none")] and not chk["ready"], chk
+    ok, _ = await clone_migrate.main_leave(main, cl, src, A)
+    assert not ok and main.left == []                       # 채널 준비 전엔 안 나감
+    cl.where["@nwch"] = "administrator"
+    ok, note = await clone_migrate.main_leave(main, cl, src, A)
+    assert ok and main.left == [A], note
+    chk = await clone_migrate.handover_check(main, cl, src, A)
+    assert chk["ready"] and not chk["main_in"]
+    await src.close()
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if asyncio.run(run_all()) else 0)
