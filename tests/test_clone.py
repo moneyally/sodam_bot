@@ -381,5 +381,21 @@ async def clone_backups_go_in_its_own_folder():
                 os.environ[k] = v
 
 
+@test
+async def clone_name_with_bot_suffix_answers_to_core_name():
+    """2026-11-17 비상: 클론 이름 '뉴월드 봇' → '뉴월드 봇아' 만 알아들어서 손님이 '뉴월드야' 하면 무시.
+    이름에서 띄어쓰기·끝 '봇' 뗀 말도 부르는 말. 뮤테이션: name_variants 가 이름 그대로만 주면 FAIL."""
+    from types import SimpleNamespace as S
+    from sodam import handlers
+    from sodam.config import call_names_for, name_variants
+    assert name_variants("뉴월드 봇") == ["뉴월드 봇", "뉴월드봇", "뉴월드"]
+    assert name_variants("소담") == ["소담"] and name_variants("로봇") == ["로봇"], "한 글자로 줄이진 않음"
+    names = tuple(sorted(call_names_for("뉴월드 봇"), key=len, reverse=True))
+    bot = S(username="NWD26_bot", id=5)
+    for text in ("뉴월드야 안녕", "뉴월드봇아 노래 틀어줘", "뉴월드 봇아 뭐해", "소담아 안녕"):
+        msg = S(reply_to_message=None, entities=[], chat=S(type="supergroup"), text=text, caption=None)
+        assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
