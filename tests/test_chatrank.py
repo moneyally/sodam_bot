@@ -616,5 +616,26 @@ async def this_month_counts_from_the_first():
     assert "이번 달" in board, board
 
 
+@test
+async def rank_command_this_month_from_the_first():
+    """2026-11-17 오너 '.순위 이번달도, 1일부터': 띄어 써도('이번 달') 이번 달 순위, 1일 전 글은 안 셈.
+    뮤테이션: _period_of 를 첫 낱말만 보게 되돌리면 '이번 달' 이 FAIL."""
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    assert P._period_of(["이번달"]) == "thismonth" and P._period_of(["이번", "달"]) == "thismonth"
+    assert P._period_of(["금월"]) == "thismonth" and P._period_of([]) is None
+    e = await setup([(A, 4)])
+    import time as _t
+    from datetime import datetime
+    first = datetime.fromtimestamp(_t.time(), e.svc.cfg.tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for i in range(3):   # 지난달 마지막 날 글 — 이번 달엔 안 셈
+        await e.db._write("INSERT INTO messages(chat_id, user_id, msg_id, text, ts, is_bot) VALUES(?,?,?,?,?,0)",
+                          (ROOM, B_.id, 9000 + i, f"지난달 글 {i}", int(first.timestamp()) - 3600))
+    msg = FakeMsg(ROOM, A, ".순위 이번 달", message_id=78)
+    await P.c_rank(CmdCtx(e.svc, e.bot, msg, ROOM, A, Role.MEMBER, ["이번", "달"], "이번 달"))
+    [(_, _, text, _)] = e.bot.named("send_message")
+    assert "이번 달" in text and "sin1n1" in text and "다라" not in text, text
+
+
 if __name__ == "__main__":
     run_all()
