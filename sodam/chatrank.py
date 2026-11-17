@@ -494,14 +494,35 @@ async def my_place(svc, chat_id: int, user_id: int, cfg: Cfg, period: str | None
     return rank, n
 
 
-def winners_label(cfg: Cfg) -> str:
+def _prev(key: str | None, tz, now: float | None = None) -> tuple[str, str] | None:
+    """보여 주는 기간의 '바로 앞 기간' (당첨자 칸) — 이번 달 → 지난달, 이번 주 → 지난주.
+    2026-11-17 오너 '.순위 이번달에 왜 지난주가 뜸 — 지난달이 떠야': 예전엔 방 설정(주 단위인지)만 봐서 기간과 안 맞았음."""
+    if key == "thismonth":
+        d = datetime.fromtimestamp(now or time.time(), tz).date()
+        return "지난달 당첨자", month_key(d.year - (d.month == 1), (d.month - 2) % 12 + 1)
+    if key == "thisweek":
+        return "지난주 당첨자", "lastweek"
+    return None          # 오늘 등은 예전대로 방 설정(매주 시상식이면 지난주 — 백악관 '추첨은 월요일 자정')
+
+
+def winners_label(cfg: Cfg, key: str | None = None, tz=None) -> str:
+    p = _prev(key or cfg.period, tz) if tz else None
+    if p:
+        return p[0]
     return "지난주 당첨자" if weekly(cfg) else "어제 당첨자"
 
 
-async def yday_winners(svc, chat_id: int, cfg: Cfg, bot=None) -> tuple[str, list]:
-    """어제(주 단위 방은 지난주) 당첨자: 시상식 기록이 있으면 그것, 없으면 그 기간 순위를 바로 셈 (상품은 지금 값)."""
-    key, period = award_key(svc.cfg.tz, cfg)
-    _, _, date = span(period, svc.cfg.tz)
+async def yday_winners(svc, chat_id: int, cfg: Cfg, bot=None, key: str | None = None) -> tuple[str, list]:
+    """바로 앞 기간 당첨자 (어제·지난주·지난달 — 보여 주는 기간 key 를 따름, 없으면 방 설정대로):
+    시상식 기록이 있으면 그것, 없으면 그 기간 순위를 바로 셈 (상품은 지금 값)."""
+    tz = svc.cfg.tz
+    p = _prev(key or cfg.period, tz)
+    rec, period = award_key(tz, cfg)
+    if p:
+        period = p[1]
+        rec = {"yesterday": day_of(tz, 1), "lastweek": "w" + monday(tz, 1).isoformat()}.get(period, "")   # 달은 시상식 기록 없음
+    _, _, date = span(period, tz)
+    key = rec
     rows = await svc.db._all("SELECT rank, name, n, prize FROM rank_awards WHERE chat_id=? AND day=? ORDER BY rank", (chat_id, key))
     if rows:
         # 기록엔 아이디로 남김(관리자 지급용) → 방에 보일 땐 지금 '가리기' 설정을 따름 (리뷰 2026-10-12)
