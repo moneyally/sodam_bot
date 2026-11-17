@@ -17,6 +17,8 @@ from telegram import Bot, InlineKeyboardMarkup, InputMedia
 SOURCE = "소담"
 _NAME: str | None = None        # 바꿀 이름 (None = 끔)
 _INSTALLED = False
+# 한 프로세스에 봇이 여럿일 때 봇마다 이름 (음성 담당이 클론 봇 이름으로도 노래 카드를 보냄 — voice/tenants.py)
+_BOT_NAMES: dict[int, str] = {}
 
 # '소담' 뒤에 붙는 말 (받침 있는 이름 기준으로 쓰여 있음). 긴 것부터.
 # '이'+조사 = 이름에 붙는 '이'(소담이가) → 받침 없는 이름이면 '이' 를 뺌.
@@ -61,54 +63,68 @@ def rename(text, name: str | None = None):
     return _TAIL.sub(sub, text)
 
 
-def _fix_markup(markup) -> None:
+def _fix_markup(markup, name: str | None = None) -> None:
     if not isinstance(markup, InlineKeyboardMarkup):
         return          # 답장 키보드는 누르면 그 글자가 되돌아와 버튼 매칭이 깨질 수 있어 안 건드림
     for row in markup.inline_keyboard:
         for btn in row:
-            new = rename(btn.text)
+            new = rename(btn.text, name)
             if new != btn.text:
                 with btn._unfrozen():
                     btn.text = new
 
 
-def _fix_media(media) -> None:
+def _fix_media(media, name: str | None = None) -> None:
     items = media if isinstance(media, (list, tuple)) else [media]
     for m in items:
         if isinstance(m, InputMedia) and m.caption and not m.caption_entities:
-            new = rename(m.caption)
+            new = rename(m.caption, name)
             if new != m.caption:
                 with m._unfrozen():
                     m.caption = new
 
 
-def fix_data(data: dict | None) -> None:
-    """보내기 직전 요청 값(_post 의 data)을 제자리에서 고침."""
-    if not data or not _NAME:
+def fix_data(data: dict | None, name: str | None = None) -> None:
+    """보내기 직전 요청 값(_post 의 data)을 제자리에서 고침. name 없으면 프로세스 이름(install)."""
+    name = name or _NAME
+    if not data or not name or name == SOURCE:
         return
     if not data.get("entities") and not data.get("caption_entities"):
         for key in ("text", "caption", "question", "explanation"):
             if isinstance(data.get(key), str):
-                data[key] = rename(data[key])
+                data[key] = rename(data[key], name)
     if data.get("reply_markup") is not None:
-        _fix_markup(data["reply_markup"])
+        _fix_markup(data["reply_markup"], name)
     if data.get("media") is not None:
-        _fix_media(data["media"])
+        _fix_media(data["media"], name)
 
 
-def install(name: str) -> None:
-    """봇 이름을 정하고(본체 '소담' 이면 끔) 보내기 길목을 한 번만 감싼다."""
-    global _NAME, _INSTALLED
-    _NAME = name if name and name != SOURCE else None
-    if _INSTALLED or not _NAME:
+def _patch() -> None:
+    global _INSTALLED
+    if _INSTALLED:
         return
     orig = Bot._post
 
     async def _post(self, endpoint, data=None, **kw):
         try:
-            fix_data(data)
+            fix_data(data, _BOT_NAMES.get(id(self)) or _NAME)
         except Exception:       # 이름 바꾸다 실패해도 글은 원래대로 보냄
             pass
         return await orig(self, endpoint, data, **kw)
     Bot._post = _post
     _INSTALLED = True
+
+
+def install(name: str) -> None:
+    """봇 이름을 정하고(본체 '소담' 이면 끔) 보내기 길목을 한 번만 감싼다."""
+    global _NAME
+    _NAME = name if name and name != SOURCE else None
+    if _NAME:
+        _patch()
+
+
+def set_bot_name(bot, name: str) -> None:
+    """이 봇 객체가 보내는 글만 이 이름으로 (한 프로세스에 봇 여럿 — 음성 담당이 클론 봇으로 노래 카드)."""
+    if name and name != SOURCE:
+        _BOT_NAMES[id(bot)] = name
+        _patch()
