@@ -391,6 +391,19 @@ async def make_db() -> DB:
     return db
 
 
+async def cancel_leftover_bg() -> None:
+    """테스트 하나가 끝나면 그 테스트가 persist.spawn 으로 남긴 뒷작업을 끊는다.
+    run_all 은 여러 모듈을 한 프로세스에서 돌려서, 앞 테스트의 긴 대기 작업(1시간 sleep 등)이 남으면 뒤 테스트의
+    persist.drain() 이 그걸 기다리며 멈춤 (2026-11-18 서버 시험: test_mediastore 가 46분 남은 남의 작업을 기다림)."""
+    from sodam import persist
+    left = [t for t in persist._BG if not t.done()]
+    for t in left:
+        t.cancel()
+    if left:
+        await asyncio.gather(*left, return_exceptions=True)
+    persist._BG.clear()
+
+
 async def close_open_dbs() -> None:
     # ② 테스트 하나가 끝날 때마다 그 임시폴더(DB·WAL·미디어·emoji_lab 등)를 바로 지운다 —
     # 끝까지 안 지우면 한 번 돌 때 수백 개 DB(2GB+)가 동시에 쌓여 디스크 꽉 차면 중간 테스트가 ENOSPC 로 '무작위' 실패.
@@ -444,6 +457,7 @@ def runner():
                 print(f"FAIL {fn.__name__}")
                 traceback.print_exc()
             finally:
+                await cancel_leftover_bg()
                 await close_open_dbs()
         print(f"\n{len(tests) - failed}/{len(tests)} passed")
         return failed

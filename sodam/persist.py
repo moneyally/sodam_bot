@@ -98,7 +98,12 @@ async def _quiet(coro) -> None:
 
 async def drain() -> None:
     """테스트·종료용: 뒤에서 도는 쓰기가 끝날 때까지."""
-    while _BG:
+    # 끝난 작업은 직접 뺀다 — 정리 콜백이 다음 차례에 돌기 전에 불리면 gather 가 쉬지 않고 돌아와 무한 반복
+    # (voice/worker.Worker.drain 과 같은 문제, 2026-11-18)
+    while True:
+        _BG.difference_update([t for t in _BG if t.done()])
+        if not _BG:
+            return
         await asyncio.gather(*list(_BG), return_exceptions=True)
 
 
