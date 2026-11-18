@@ -248,9 +248,10 @@ def mask(name: str) -> str:
 def show_name(row, mode: str) -> str:
     uname, first = (row["username"] or "").strip(), row["first_name"] or ""
     nm = display_name(first, None, None)
-    if mode == "both":                    # 이름 + @아이디 (아이디 없으면 이름만, 이름 없으면 @아이디만)
-        real = nm if first.strip() else ""    # 이름 없으면 display_name 이 '알 수 없음' → 대신 @아이디만
-        name = f"{real} (@{uname})" if real and uname else (f"@{uname}" if uname else nm)
+    if mode == "both":                    # 이름 + 아이디 (아이디 없으면 이름만, 이름 없으면 아이디만)
+        real = nm if first.strip() else ""    # 이름 없으면 display_name 이 '알 수 없음' → 대신 아이디만
+        # '@' 는 안 붙임 — 순위 글에 @아이디가 있으면 텔레그램이 그 사람을 태그해서 알림이 감 (2026-11-18 프레스티지)
+        name = f"{real} ({uname})" if real and uname else (uname or nm)
     elif mode == "name":
         name = nm or uname
     else:                                 # user / mask
