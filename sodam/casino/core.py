@@ -60,6 +60,9 @@ register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # �
 # !파산·!리필 (2026-10-15 벳띵 '0포인트 되면 500만 채워 주는 !리필'): 금액·하루 횟수(0 = 제한 없음)를 방마다
 register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
 register_setting("casino_join_points", 10_000, "!가입 선물 금액", range_=(100, 100_000_000))
+# 채굴 금액도 방마다 (2026-11-18 클린뱅크 '100만 포인트 방에 맞게 채굴도') — 예전엔 MINE_MIN/MAX 200~1,000 고정
+register_setting("casino_mine_min", 200, "!채굴 최소 금액", range_=(1, 100_000_000))
+register_setting("casino_mine_max", 1_000, "!채굴 최대 금액", range_=(1, 100_000_000))
 register_setting("casino_bet_gap", 2, "같은 사람 게임 간격(초)", range_=(1, 120))
 register_setting("casino_game_visual", "full", "게임 결과 연출",
                  choices={"full": "움짤·연출", "text": "글만 (몰릴 때)"})
@@ -539,6 +542,17 @@ async def mine_cooldown(db, chat_id: int) -> int:
     return min(max(m, 1), 60) * 60
 
 
+async def mine_range(db, chat_id: int) -> tuple[int, int]:
+    """방 설정 채굴 금액 (최소·최대, 뒤바뀌어 있으면 바로잡음)."""
+    try:
+        st = await db.get_settings(chat_id)
+        lo, hi = int(st.get("casino_mine_min") or MINE_MIN), int(st.get("casino_mine_max") or MINE_MAX)
+    except Exception:   # noqa: BLE001 — 설정을 못 읽어도 채굴은 기본값으로
+        lo, hi = MINE_MIN, MINE_MAX
+    lo, hi = max(1, lo), max(1, hi)
+    return (lo, hi) if lo <= hi else (hi, lo)
+
+
 async def c_mine(ctx: Ctx) -> None:
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
     acc = await account(db, cid, uid)
@@ -549,7 +563,8 @@ async def c_mine(ctx: Ctx) -> None:
         await ctx.reply(f"⛏ 곡괭이 식는 중… {left // 60}분 {left % 60}초 뒤에 다시 캘 수 있어요.")
         return
     streak = acc["mine_streak"] + 1 if t - acc["last_mine"] < 3600 else 1
-    base = MINE_MIN + rng(MINE_MAX - MINE_MIN + 1)
+    lo, hi = await mine_range(db, cid)
+    base = lo + rng(hi - lo + 1)
     jackpot = rng(MINE_JACKPOT_ODDS) == 0
     bonus_pct = min(streak - 1, MINE_STREAK_MAX) * 10
     amount = base * (10 if jackpot else 1)
