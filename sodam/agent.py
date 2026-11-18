@@ -659,7 +659,14 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     # GPT-6 캐시 ③ 이번 요청 끝: 도구를 여러 번 부를 일이 많은 큰 모델 일하는 길만 (작은 모델·받아치기·끼어들기는 한 번에 끝나는 게 대부분)
     tail = not light and not chime and ":banter" not in tag
 
+    last_id: list = [None]   # 🔎 캐시 진단: 이 실행 앞 라운드 응답 번호 (다음 라운드가 비교 — 같은 실행은 앞부분이 그대로라야 정상)
+
     async def call(tool_choice: str = "auto"):
+        r = await _call(tool_choice)
+        last_id[0] = getattr(r, "resp_id", None) or last_id[0]
+        return r
+
+    async def _call(tool_choice: str = "auto"):
         nonlocal think
         # 매 라운드 새로: find_tools 로 불러온 도구가 ts.schemas 에 더해짐
         schemas = [*ts.schemas, *([route.ESCALATE_SCHEMA] if extra else [])]   # 복사본 (불러오기가 지난 호출 목록을 안 바꾸게)
@@ -670,7 +677,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
                                            effort=svc.cfg.agent_think_effort, max_tokens=THINK_MAX_TOKENS,
                                            purpose=purpose + ":think" + tag, chat_id=ctx.chat_id, model=model,
                                            allowed=restrict, cache_key=ts.key(":think" + tag), cache_tail=tail,
-                                           parallel=True, on_think=getattr(ctx, "thinker", None))
+                                           parallel=True, on_think=getattr(ctx, "thinker", None),
+                                           compare_id=last_id[0])
             except BadRequestError as e:   # 모델·계정이 Responses 추론을 못 받으면 이번 실행은 예전 방식으로
                 if any(m["role"] == "assistant" for m in messages):
                     raise
@@ -680,7 +688,8 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
         return await svc.llm.chat(messages, tools=schemas or None, tool_choice=tool_choice,
                                   max_tokens=MAX_TOKENS if effort else THINK_MAX_TOKENS,   # 생각 토큰도 상한에 포함
                                   purpose=call_purpose, chat_id=ctx.chat_id, model=model, effort=effort,
-                                  allowed=restrict, cache_key=ts.key(tag), cache_tail=tail, parallel=True)
+                                  allowed=restrict, cache_key=ts.key(tag), cache_tail=tail, parallel=True,
+                                  compare_id=last_id[0])
 
     async def capped(tool_choice: str = "auto"):
         """모델 호출 하나에 벽시계 상한 (CALL_CAP). 넘으면 끊음 — 스트리밍 추론이 매달려 783초 가던 것 방지."""
