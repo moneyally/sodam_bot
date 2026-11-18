@@ -126,9 +126,10 @@ async def think_run_carries_reasoning_across_tool_rounds():
     old = fast_timers()
     try:
         call = tool_call("search_chat", {"keyword": "먹튀"}, "call_1")
-        llm = ThinkLLM([_thought(call, {"type": "function_call", "call_id": "call_1", "name": "search_chat",
-                                        "arguments": '{"keyword": "먹튀"}'}),
-                        _thought(reply("박준호 대표님이었어요."))])
+        first = _thought(call, {"type": "function_call", "call_id": "call_1", "name": "search_chat",
+                                "arguments": '{"keyword": "먹튀"}'})
+        first.resp_id = "resp_round1"
+        llm = ThinkLLM([first, _thought(reply("박준호 대표님이었어요."))])
         r = await _room(llm=llm)
         await r.say(BOSS, "소담아 방금 먹튀 얘기한 사람 찾아서 알려줘")
         assert not llm.of("chat", "agent:admin")                     # 예전 방식은 안 부름
@@ -136,6 +137,8 @@ async def think_run_carries_reasoning_across_tool_rounds():
         second = llm.think_calls[1]["input"]
         assert {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc"} in second
         assert second[-1]["type"] == "function_call_output" and second[-1]["call_id"] == "call_1"
+        # 🔎 캐시 진단: 둘째 라운드는 첫 라운드 응답 번호와 비교 (같은 실행은 앞부분이 그대로라야 정상)
+        assert llm.think_calls[0].get("compare_id") is None and llm.think_calls[1].get("compare_id") == "resp_round1"
         run = await r.db._one("SELECT purpose, status FROM agent_runs ORDER BY id DESC LIMIT 1")
         assert (run["purpose"], run["status"]) == ("agent:admin:think", "answered")
     finally:

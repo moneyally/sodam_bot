@@ -187,6 +187,34 @@ def breakpoints_shared_rules_then_room_then_request():
     assert marked(with_breakpoint(one)) == [0], "system 이 하나면 지점도 하나 (같은 자리에 두 번 안 찍음)"
 
 
+@test
+async def cache_diagnostics_compare_previous_round_and_count_reasons():
+    """2026-11-18 OpenAI 캐시 진단(prompt_cache_options.comparison_response_id): 같은 실행 앞 라운드 응답과 비교해
+    왜 캐시가 안 맞았는지(tools_changed 등) 하루 카운터 cdiag:<길>:<결과> 로. 거절되면 진단만 끔(답은 그대로)."""
+    llm, db = await llm_with()
+    diag = {"type": "cache_miss", "reason": "tools_changed", "cache_missed_tokens": 1500}
+    orig = llm.client.responses.create
+
+    async def with_diag(**kw):
+        r = await orig(**kw)
+        r.id, r.prompt_cache_diagnostics = "resp_2", diag
+        return r
+    llm.client.responses = SimpleNamespace(create=with_diag)
+    first = await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="k")
+    assert "comparison_response_id" not in llm.client.resp[0]["prompt_cache_options"], "첫 라운드는 비교 안 함"
+    assert first.resp_id == "resp_2"
+    second = await llm.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="k", compare_id=first.resp_id)
+    assert llm.client.resp[1]["prompt_cache_options"] == {"mode": "explicit", "comparison_response_id": "resp_2"}
+    assert second.cache_diag["reason"] == "tools_changed"
+    day = llm._today()
+    assert await db.counter(day, 0, "cdiag:agent:admin:miss:tools_changed") == 2
+    assert await db.counter(day, 0, "cdiagtok:agent:admin:miss:tools_changed") == 3000
+    # API 가 비교 칸을 거절 → 진단만 끄고 같은 요청 다시 (답은 나감)
+    llm2, _ = await llm_with(fail=[_err(BadRequestError, "Previous response not found", 400)])
+    msg = await llm2.chat(MSGS, tools=[SCHEMA], purpose="agent:admin", chat_id=-100, cache_key="k", compare_id="resp_1")
+    assert llm2.diag_off and msg.tool_calls and "comparison_response_id" not in llm2.client.resp[-1]["prompt_cache_options"]
+
+
 if __name__ == "__main__":
     import asyncio
     sys.exit(1 if asyncio.run(run_all()) else 0)

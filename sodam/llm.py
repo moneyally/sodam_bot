@@ -162,6 +162,18 @@ def _mark(item: dict) -> dict | None:
     return it
 
 
+def cache_diag(resp) -> dict | None:
+    """응답의 prompt_cache_diagnostics (OpenAI 캐시 진단, GPT-5.6+ Responses) → dict. SDK 가 모르는 칸이라 model_extra 도 봄."""
+    d = getattr(resp, "prompt_cache_diagnostics", None)
+    if d is None:
+        d = (getattr(resp, "model_extra", None) or {}).get("prompt_cache_diagnostics")
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        d = d.model_dump() if hasattr(d, "model_dump") else dict(getattr(d, "__dict__", {}))
+    return d or None
+
+
 def with_breakpoint(items: list[dict], tail: bool = False) -> list[dict]:
     """GPT-6 캐시 쓰기 지점 (한 요청 최대 4개, OpenAI 프롬프트 캐시 문서). 보관은 '마지막으로 쓴 뒤 30분'이라 자주 맞는 앞부분일수록 이득.
     ① 첫 system(고정 규칙 — 모든 방·말투·길 공용) 끝 → 도구 목록+고정 규칙은 모든 방이 캐시 하나를 같이 씀
@@ -207,7 +219,8 @@ class LLM:
         # 토큰 예산은 .env 에 DAILY_TOKEN_BUDGET 을 직접 적은 경우만 (예전 설정 그대로 지키기). 없으면 0 = 안 봄
         self.token_budget = cfg.daily_token_budget if os.getenv("DAILY_TOKEN_BUDGET", "").strip() else 0
         self.allowed_off = False   # allowed_tools 를 API 가 거절하면 True → 도구 목록 자체를 줄이는 예전 방식
-        self.cache_opts_off = False   # GPT-6 캐시 지점(prompt_cache_options)을 API 가 거절하면 True → 자동 캐시로
+        self.cache_opts_off = False
+        self.diag_off = False         # 캐시 진단(prompt_cache_options.comparison_response_id)을 API 가 거절하면 True   # GPT-6 캐시 지점(prompt_cache_options)을 API 가 거절하면 True → 자동 캐시로
         self.models_off: set[str] = set()   # 이 프로세스에서 거절된 모델 → fallback_model 로
         self.search_opts_off = False   # 검색 추가 옵션(include·user_location·context)을 API 가 거절하면 True → 예전 모양으로
         self.summary_off = False   # 생각 요약(reasoning.summary)을 API 가 거절하면(조직 미인증 등) True → 요약 없이
@@ -376,7 +389,7 @@ class LLM:
                    max_tokens: int = 2000, json_mode: bool = False, purpose: str = "misc",
                    chat_id: int | None = None, effort: str | None = None,
                    allowed: list[str] | None = None, cache_key: str | None = None, cache_tail: bool = False,
-                   parallel: bool = False):
+                   parallel: bool = False, compare_id: str | None = None):
         """chat.completions 호출. 응답 message 객체를 돌려준다.
         allowed: tools 중 이번에 부를 수 있는 이름만 (None = 전부) — 목록은 그대로 싣고 호출만 좁힘(캐시 유지).
         chat_id 를 주면 그 방의 하루 토큰 한도(ai_room_daily_tokens)를 검사하고 사용량을 방별로도 센다."""
@@ -387,7 +400,8 @@ class LLM:
                 e = "none"
             return await self.think(messages, tools=tools, tool_choice=tool_choice, effort=e, max_tokens=max_tokens,
                                     purpose=purpose, chat_id=chat_id, model=model, allowed=allowed, cache_key=cache_key,
-                                    json_mode=json_mode, cache_tail=cache_tail, parallel=parallel)
+                                    json_mode=json_mode, cache_tail=cache_tail, parallel=parallel,
+                                    compare_id=compare_id)
         await self._check_budget(chat_id)
         if allowed is not None and self.allowed_off and tools:   # allowed_tools 를 거절당한 뒤: 예전처럼 목록 자체를 줄임
             tools, allowed = _narrow(tools, allowed), None
@@ -454,7 +468,7 @@ class LLM:
                     effort: str = "low", max_tokens: int = 4000, purpose: str = "misc", chat_id: int | None = None,
                     model: str | None = None, allowed: list[str] | None = None, cache_key: str | None = None,
                     json_mode: bool = False, cache_tail: bool = False, parallel: bool = False,
-                    on_think=None):
+                    on_think=None, compare_id: str | None = None):
         """Responses API 로 추론 + 도구를 같이 (chat.completions 는 도구가 있으면 reasoning_effort=none 만 됨).
         on_think(생각요약, done): 주면 생각 요약(reasoning.summary=auto)을 스트리밍으로 흘려보낸다 — 조각마다 호출.
         조직 미인증 등으로 거절되면 self.summary_off 로 요약 없이 (= 예전처럼 한 번에).
@@ -470,6 +484,9 @@ class LLM:
         cache = self._cache(purpose, cache_key, model)
         if "prompt_cache_options" in cache:   # GPT-6: 고정 지시 끝에만 캐시 쓰기 (요청·대화는 일반 입력)
             items = with_breakpoint(items, tail=cache_tail)
+            if compare_id and not self.diag_off:   # 🔎 캐시 진단: 같은 실행 앞 라운드와 비교 → 왜 안 맞았는지 (공짜, 동작 영향 없음)
+                cache = {**cache, "prompt_cache_options": {**cache["prompt_cache_options"],
+                                                           "comparison_response_id": compare_id}}
         text: dict[str, Any] = {"verbosity": "low"}
         if json_mode:
             text["format"] = {"type": "json_object"}
@@ -508,6 +525,12 @@ class LLM:
                          on_think=on_think)
             if (fb := self._drop_model(model, e)) is not None:
                 return await self.think(messages, model=fb, **again)
+            if isinstance(e, BadRequestError) and "comparison_response_id" in str(kwargs.get("prompt_cache_options")):
+                # 진단 칸이 붙은 요청이 거절되면 이유가 뭐든 진단부터 끄고 한 번 더 (진단 때문에 답이 막히면 안 됨 —
+                # store=False 응답이라 비교 기록이 없다는 등. 진짜 다른 문제면 다시 보낸 요청에서 그대로 오류)
+                log.warning("캐시 진단(comparison_response_id) 거절 → 진단 없이 (재시작 전까지): %s", e)
+                self.diag_off = True
+                return await self.think(messages, model=model, **again)
             if isinstance(e, BadRequestError) and "prompt_cache_options" in kwargs and _cache_rejected(e):
                 log.warning("GPT-6 캐시 지점 거절 → 자동 캐시로 (재시작 전까지): %s", e)
                 self.cache_opts_off = True
@@ -521,7 +544,23 @@ class LLM:
             kwargs["tool_choice"] = "auto"
             resp = await self.client.responses.create(**kwargs)
         await self._record(resp.usage, chat_id, purpose, model)
+        await self._record_diag(resp, purpose)
         return self._think_result(resp)
+
+    async def _record_diag(self, resp, purpose: str) -> None:
+        """캐시 진단 결과를 하루 카운터로 (전체 chat_id=0): cdiag:<길>:<hit|miss:이유|…> 횟수 · cdiagtok:<길>:<이유> 놓친 토큰.
+        나중에 '어느 길에서 무엇 때문에 캐시가 깨지나' 를 숫자로 (tools/diag.py counters). 기록 실패는 무시."""
+        d = cache_diag(resp)
+        if not d:
+            return
+        typ = str(d.get("type") or "?")
+        label = f"miss:{d.get('reason') or '?'}" if typ == "cache_miss" else typ
+        try:
+            await self.db.bump(self._today(), 0, f"cdiag:{purpose}:{label}"[:120])
+            if typ == "cache_miss" and d.get("cache_missed_tokens"):
+                await self.db.bump(self._today(), 0, f"cdiagtok:{purpose}:{label}"[:120], int(d["cache_missed_tokens"]))
+        except Exception:   # noqa: BLE001
+            log.debug("캐시 진단 기록 실패")
 
     @staticmethod
     def _think_result(resp):
@@ -529,7 +568,8 @@ class LLM:
         calls = [SimpleNamespace(id=o.call_id, type="function", function=SimpleNamespace(name=o.name, arguments=o.arguments))
                  for o in resp.output if o.type == "function_call"]
         return SimpleNamespace(content=resp.output_text or "", tool_calls=calls or None,
-                               items=[o.model_dump(exclude_unset=True, by_alias=True) for o in resp.output])
+                               items=[o.model_dump(exclude_unset=True, by_alias=True) for o in resp.output],
+                               resp_id=getattr(resp, "id", None), cache_diag=cache_diag(resp))
 
     async def _create_think(self, kwargs: dict, on_think):
         """on_think 가 있으면 스트리밍으로 생각 요약을 흘려보내고, 없으면 예전처럼 한 번에. 둘 다 완성된 Response 반환."""
