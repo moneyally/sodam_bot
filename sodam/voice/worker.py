@@ -601,7 +601,12 @@ class Worker:
 
     async def drain(self) -> None:
         """돌고 있는 일감이 끝날 때까지 (테스트·종료용)."""
-        while self.jobs:
+        # 끝난 일감은 직접 뺀다: 일감 정리(done 콜백)는 '다음 차례'에 도는데, 이미 다 끝난 일감만 gather 하면
+        # 한 번도 쉬지 않고 바로 돌아와서 그 정리가 영영 못 돌고 여기서 무한 반복 (2026-11-18 서버 시험이 2시간 멈춤)
+        while True:
+            self.jobs.difference_update([t for t in self.jobs if t.done()])
+            if not self.jobs:
+                return
             await asyncio.gather(*list(self.jobs), return_exceptions=True)
 
     async def health(self) -> None:

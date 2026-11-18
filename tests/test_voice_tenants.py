@@ -100,5 +100,33 @@ async def assistant_gone_is_mirrored_to_clone():
     assert w.tenants.workers["prestige"].client is None
 
 
+@test
+async def drain_returns_when_job_finished_but_cleanup_not_run_yet():
+    """2026-11-18 서버 시험 2시간 멈춤: 일감이 끝났는데 목록 정리(done 콜백)가 아직 안 돈 순간 drain 을 부르면,
+    gather 가 쉬지 않고 바로 돌아와 정리가 영영 못 돌고 무한 반복 → 쉬지 않는 반복이라 wait_for 도 못 끊어서 알람으로 끊음."""
+    import signal
+    db, w, src, clock = await make_worker()
+
+    async def quick():
+        return None
+
+    t = asyncio.create_task(quick())
+    w.jobs.add(t)
+    t.add_done_callback(w.jobs.discard)
+    await asyncio.sleep(0)                  # 일감은 끝남, 정리 콜백은 아직 줄에서 대기
+    assert t.done() and t in w.jobs, "재현 조건: 끝났는데 아직 목록에 있음"
+
+    def boom(*_):
+        raise TimeoutError("drain 무한 반복")
+    old = signal.signal(signal.SIGALRM, boom)
+    signal.setitimer(signal.ITIMER_REAL, 3)
+    try:
+        await w.drain()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+    assert not w.jobs
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
