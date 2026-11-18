@@ -98,6 +98,28 @@ async def mine_interval_is_room_setting():
 
 
 @test
+async def mine_amount_is_room_setting():
+    """2026-11-18 클린뱅크 '100만 포인트 방에 맞게 채굴도': 채굴 금액 = 방 설정 casino_mine_min~max (대박·연속 보너스는 그 위에)."""
+    import re
+    from sodam.casino import core
+    db, svc, bot, ctx = await setup()
+    await db.set_setting(CHAT, "casino_mine_min", 50_000)
+    await db.set_setting(CHAT, "casino_mine_max", 50_000)
+    await say(ctx, A, "!가입")
+    saved = core.MINE_JACKPOT_ODDS
+    core.MINE_JACKPOT_ODDS = 10 ** 9            # 대박 안 나게 (금액만 확인)
+    try:
+        out = await say(ctx, A, "!채굴")
+    finally:
+        core.MINE_JACKPOT_ODDS = saved
+    got = int(re.search(r"\+([\d,]+)", out).group(1).replace(",", ""))
+    assert got == 50_000, out
+    await db.set_setting(CHAT, "casino_mine_min", 900)   # 최소>최대로 잘못 넣어도 바로잡음
+    await db.set_setting(CHAT, "casino_mine_max", 300)
+    assert await core.mine_range(db, CHAT) == (300, 900)
+
+
+@test
 async def daily_and_bailout_once_per_day():
     db, svc, bot, ctx = await setup()
     await say(ctx, A, "!가입")
