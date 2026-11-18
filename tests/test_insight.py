@@ -262,6 +262,11 @@ async def room_changes_counts_leaves_and_buckets():
     assert t.startswith("최근 24시간 방 변화: 입장 3명 (지금 남음 2 · 그중 나감 1) · 나감(기록) 3"), t[:90]
     assert "봇·관리자가 내보낸 기록 1" in t and "들어왔다 나감 1" in t and "급증" in t and "추정" in t
     assert t.index("가장 바쁜 시간: " + hot.label + " 40") > 0
+    # '누가 나갔어?' — 나간 사람 이름 (2026-11-18 클린뱅크 '이름은 확인되지 않아요')
+    assert [x[1] for x in rc.leavers] and {x[1] for x in rc.leavers} == {10, 12, 13}, rc.leavers
+    assert "나간 사람" in t and "[내보냄]" in t, t
+    names = {r["user_id"]: r["first_name"] for r in await db._all("SELECT user_id, first_name FROM users WHERE user_id IN (10,12,13)")}
+    assert all(n in t for n in names.values() if n), (names, t)
     week = await insight.room_changes(svc, bot, CHAT, "7d")
     assert week.leaves == 4 and all("(" in b.label for b in week.buckets)       # 7일 = 날짜(요일) 버킷
     assert (await insight.room_changes(svc, bot, CHAT, "이상한값")).period == "today"
