@@ -94,9 +94,9 @@ async def render_fills_room_template_with_counts_prizes_and_my_place():
     assert out.endswith("매일 자정 시상식")
     assert cr.show_name({"username": "sin1n1", "first_name": "가나"}, "mask") == "si***"
     # both = 이름 + @아이디 (2026-10-26 泰山 '아이디도 나오게')
-    assert cr.show_name({"username": "senjo", "first_name": "센조"}, "both") == "센조 (@senjo)"
+    assert cr.show_name({"username": "senjo", "first_name": "센조"}, "both") == "센조 (senjo)", "'@' 붙이면 태그돼서 알림이 감"
     assert cr.show_name({"username": None, "first_name": "센조"}, "both") == "센조"        # 아이디 없으면 이름만
-    assert cr.show_name({"username": "onlyid", "first_name": ""}, "both") == "@onlyid"       # 이름 없으면 @아이디만
+    assert cr.show_name({"username": "onlyid", "first_name": ""}, "both") == "onlyid"       # 이름 없으면 아이디만 ('@' 없이)
     assert "both" in cr.NAME_MODES
 
 
