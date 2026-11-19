@@ -624,6 +624,30 @@ class Source:
         self.trim()
         return got
 
+    def fetch_video(self, vid: str) -> str:
+        """🎬 뮤비용 영상 파일 경로 (480p 이하, 비디오+오디오 한 파일). 이미 받았으면 그대로.
+        우회 길(WARP)로 받아서 로컬에 둠 → ffmpeg 는 로컬 파일만 읽음 (googlevideo 주소는 IP 에 묶여 ffmpeg 가 직접 못 받음)."""
+        key = f"mv_{vid}"
+        with self._locks_guard:
+            lock = self._locks.setdefault(key, threading.Lock())
+        with lock:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            old = self._cached(key)
+            if old:
+                os.utime(old)
+                return old
+            url = WATCH.format(vid)
+            # 480p 이하 영상+소리 한 파일 (progressive 없으면 bv+ba 합침 — yt-dlp 가 ffmpeg 로 merge, mp4)
+            self._run(lambda y: y.download([url]), cookies=True, where="뮤비 영상",
+                      format="best[height<=480][vcodec!=none][acodec!=none]/bv*[height<=480]+ba/b[height<=480]/b",
+                      merge_output_format="mp4", outtmpl=str(self.dir / f"{key}.%(ext)s"),
+                      overwrites=False, max_filesize=220 * 1024 * 1024, match_filter=self._too_long)
+            got = self._cached(key)
+            if not got:
+                raise MusicError("download", "뮤비 영상을 못 받았어요.")
+            self.trim()
+            return got
+
     def _too_long(self, info, *, incomplete=False):
         dur = info.get("duration")
         return "too long" if dur and dur > self.max_sec else None
