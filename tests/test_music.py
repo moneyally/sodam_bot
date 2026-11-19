@@ -4,6 +4,7 @@
 'Sign in to confirm you're not a bot' (Hetzner IP) → 쿠키 넣는 길. 네트워크·py-tgcalls·yt-dlp 없이 가짜로 (ffmpeg 풀기만 진짜).
 """
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -1518,6 +1519,98 @@ async def video_done_leaves_and_clears():
     assert CHAT not in w.video_calls, "뮤비 끝나면 기록 비움"
     assert ("leave", CHAT) in w.calls.log, "뮤비 끝나면 음챗 나감"
     await stop_all(w)
+
+
+# ── 🧹 메모리 누수(새는 ffmpeg) ────────────────────────────────
+class _FakeProc:
+    def __init__(self):
+        self.returncode = None
+        self.killed = False
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        self.returncode = -9
+        return -9
+
+
+@test
+async def decoder_close_kills_ffmpeg_even_when_cleanup_is_cancelled():
+    """누수 핵심: close() 중 정리(_drop)가 취소돼도 ffmpeg 는 반드시 죽어야 함 (kill 을 먼저 하므로)."""
+    proc = _FakeProc()
+    dec = music.Decoder("x.mp3")
+    dec._proc = proc
+    dec._task = None
+    orig = music._drop
+    async def boom(*a, **k):                      # 정리가 취소된 것처럼
+        raise asyncio.CancelledError()
+    music._drop = boom
+    try:
+        with contextlib.suppress(asyncio.CancelledError):
+            await dec.close()
+    finally:
+        music._drop = orig
+    assert proc.killed, "close() 가 취소돼도 ffmpeg(kill) 는 먼저 불려야 함 — 안 그러면 누수"
+
+
+@test
+async def reaper_kills_only_my_old_ffmpeg_children():
+    """내 직속 ffmpeg 자식이 REAP_AGE 넘게 떠 있으면(누수) 거두고, 어린 것·남의 자식·ffmpeg 아닌 건 안 건드림."""
+    from sodam.voice import worker as W
+    d = tempfile.mkdtemp()
+    root = Path(d) / "proc"
+    root.mkdir()
+    (root / "uptime").write_text("100000.0 0.0")
+    me = os.getpid()
+    hz = os.sysconf("SC_CLK_TCK")
+
+    def stat(pid, comm, ppid, start_ticks):
+        fields = ["S", str(ppid)] + ["0"] * 17 + [str(int(start_ticks))]   # 필드3..22 (starttime=22)
+        (root / str(pid)).mkdir()
+        (root / str(pid) / "stat").write_text(f"{pid} ({comm}) " + " ".join(fields) + " 0 0 0\n")
+
+    old = 0                                        # age ≈ 100000s (아주 오래)
+    young = int((100000 - 10) * hz)                # age ≈ 10s
+    stat(111, "ffmpeg-linux-x8", me, old)          # 내 자식·오래됨 → 거둠
+    stat(222, "ffmpeg-linux-x8", me, young)        # 내 자식·어림 → 그대로
+    stat(333, "ffmpeg-linux-x8", me + 9999, old)   # 남의 자식 → 그대로
+    stat(444, "python3", me, old)                  # ffmpeg 아님 → 그대로
+
+    killed = []
+    real_kill = os.kill
+    os.kill = lambda pid, sig: killed.append(pid)   # 진짜 kill 대신 기록
+    me_self = SimpleNamespace(players={}, video_calls={})
+    try:
+        W.Worker._reap_ffmpeg(me_self, proc_root=str(root))   # old=100000s 라 기본 REAP_AGE(1800s)로도 충분
+    finally:
+        os.kill = real_kill
+    assert killed == [111], ("오래된 내 ffmpeg 자식만 거둬야 함", killed)
+
+
+@test
+async def reaper_spares_live_decoder_even_if_old():
+    """일시정지 등으로 오래된 곡이라도, 지금 쓰는 디코더 ffmpeg 는 안 거둠."""
+    from sodam.voice import worker as W
+    d = tempfile.mkdtemp()
+    root = Path(d) / "proc"
+    root.mkdir()
+    (root / "uptime").write_text("100000.0 0.0")
+    me = os.getpid()
+
+    def stat(pid):
+        (root / str(pid)).mkdir()
+        (root / str(pid) / "stat").write_text(f"{pid} (ffmpeg-linux-x8) S {me} " + " ".join(["0"] * 18) + " 0 0\n")
+    stat(555)                                         # 오래됨(age≈100000) 이지만 살아있는 디코더
+    live_pl = SimpleNamespace(ffmpeg_pids=lambda: {555})
+    killed = []
+    real_kill = os.kill
+    os.kill = lambda pid, sig: killed.append(pid)
+    try:
+        W.Worker._reap_ffmpeg(SimpleNamespace(players={1: live_pl}, video_calls={}), proc_root=str(root))
+    finally:
+        os.kill = real_kill
+    assert killed == [], ("살아있는 디코더는 나이와 무관하게 보호", killed)
 
 
 if __name__ == "__main__":

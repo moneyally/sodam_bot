@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import time
 from collections import deque
 from pathlib import Path
@@ -108,6 +109,9 @@ STUTTER_NAMES = {"jitter": "30ms 넘게 밀림", "late": "박자 다시 맞춤",
 STUTTER_KEY = "music_stutter_alert"
 REJOIN_EVERY = 15                # 🎵 음성채팅이 닫혀 멈춘 방: 다시 열렸는지 확인 간격
 WARP_HB_EVERY = 600              # 🌐 WARP 우회 길 능동 확인(하트비트) + 막히거나 오래된 IP 교체 간격 (10분)
+REAP_EVERY = 120                 # 🧹 새는 ffmpeg(풀기·뮤비) 거두기 간격
+# 한 곡·뮤비는 재생 속도로 최대 MUSIC_MAX_SEC(기본 20분) 사니, 이보다 한참 오래 떠 있는 우리 ffmpeg 자식은 누수 → 거둠.
+REAP_AGE = int(os.getenv("MUSIC_MAX_SEC", "1200")) + 600
 # 🎵 새벽에 인기곡 미리 받기: 한국시각 4시대, 노래 트는 방이 없을 때만, 하루 한 번, 곡 사이 쉬면서
 PREFETCH_HOUR = 4
 PREFETCH_MAX = 20
@@ -164,6 +168,7 @@ class Worker:
         self._watch_at = 0.0
         self._rejoin_at = 0.0
         self._warp_hb_at = 0.0
+        self._reap_at = 0.0
         self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
@@ -614,6 +619,12 @@ class Worker:
             except Exception as e:
                 log.warning("WARP 확인·교체 실패: %s", e)
         self._maybe_night_prefetch()
+        if time.monotonic() - self._reap_at >= REAP_EVERY:
+            self._reap_at = time.monotonic()
+            try:
+                self._reap_ffmpeg()
+            except Exception as e:
+                log.debug("ffmpeg 거두기 실패: %s", e)
         if time.monotonic() - self._health_at > HEALTH_EVERY:
             self._health_at = time.monotonic()
             try:
@@ -1419,6 +1430,42 @@ class Worker:
                     await self.client(LeaveGroupCallRequest(call=full.full_chat.call, source=0))
             except Exception as e:
                 log.debug("남은 통화 정리 %s: %s", chat_id, e)
+
+    def _reap_ffmpeg(self, proc_root: str = "/proc") -> None:
+        """🧹 새는 ffmpeg 거두기. 노래 디코더·뮤비 펌프 ffmpeg 는 재생 속도로 최대 MUSIC_MAX_SEC(기본 20분) 삶 →
+        내 직속 자식 ffmpeg 가 REAP_AGE(≈30분) 넘게 떠 있으면 정리가 안 된 누수(close() 가 취소돼 kill 을 건너뜀·엣지케이스) → 거둠.
+        원인 불문 안전망 (리눅스 전용, /proc). 들여다보기만 하다 오류면 조용히 넘어감."""
+        me = os.getpid()
+        try:
+            hz = os.sysconf("SC_CLK_TCK")
+            uptime = float(Path(f"{proc_root}/uptime").read_text().split()[0])
+        except (OSError, ValueError, AttributeError):
+            return
+        live: set[int] = set()                                  # 지금 쓰는 ffmpeg 은 나이와 무관하게 안 거둠 (일시정지로 오래 멈춘 곡 보호)
+        for pl in self.players.values():
+            with contextlib.suppress(Exception):
+                live |= pl.ffmpeg_pids()
+        for ent in self.video_calls.values():
+            for pr in ent.get("procs", []):
+                if getattr(pr, "pid", None):
+                    live.add(int(pr.pid))
+        for entry in os.listdir(proc_root):
+            if not entry.isdigit() or int(entry) in live:
+                continue
+            try:
+                stat = Path(f"{proc_root}/{entry}/stat").read_text()
+                rp = stat.rindex(")")
+                if "ffmpeg" not in stat[stat.index("(") + 1:rp]:   # comm (괄호 안) — imageio 바이너리는 'ffmpeg-linux-x8'
+                    continue
+                rest = stat[rp + 2:].split()                        # 필드 3부터: ppid=필드4=rest[1], starttime=필드22=rest[19]
+                if int(rest[1]) != me:
+                    continue
+                age = uptime - int(rest[19]) / hz
+                if age > REAP_AGE:
+                    os.kill(int(entry), signal.SIGKILL)
+                    log.warning("🧹 새는 ffmpeg 거둠 pid=%s %.0f분째(>%.0f분) = 누수", entry, age / 60, REAP_AGE / 60)
+            except (OSError, ValueError, IndexError, ProcessLookupError):
+                continue
 
     async def _sweep_orphans(self) -> None:
         """실제 재생(players)·통화(bridges)가 없는데 in_call 에만 남은 좀비 방을 청소 (ORPHAN_GRACE 초 지나면).
