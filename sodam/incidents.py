@@ -43,7 +43,7 @@ NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 STATES = {"new": "🚨 감지", "ongoing": "🔴 지속", "calm": "🟢 잠잠해짐"}
 KINDS = {"captcha": "캡차 실패", "flood": "도배 뮤트", "imperson": "사칭 의심", "autoban": "경고 누적 밴",
          "cas": "스팸 명단 차단", "raid": "대량 입장", "anomaly": "방 이상징후", "scam": "사기·스팸 의심",
-         "fedban": "공동 차단 명단"}
+         "fedban": "공동 차단 명단", "report": "📢 멤버 신고"}
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS incidents (
