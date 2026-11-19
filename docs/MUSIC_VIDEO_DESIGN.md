@@ -39,5 +39,29 @@
 - 실제 480p 송출 CPU·화질·끊김, `ytdlp_parameters` WARP/쿠키로 음원 받아지는지, 참가자 화면에 뜨는지, stream_end 정상, 노래와 번갈아 충돌 없는지.
 - 자이 세션이 worker 전용 → 독립 실측 불가(AUTH_KEY_DUPLICATED). **배포 후 worker 통해서만** 실측.
 
+## ⚠️ 2단계 실측에서 뒤집힘 — ntgcalls 가 그룹콜 SHELL 을 안 돌림 (2026-11-19)
+- 위 1차(MediaStream(url, VideoQuality))로 짰더니 **연결만 되고 소리·영상 둘 다 안 나옴** (오너 '영상이안나온대 소리도안나온다함').
+- 서버 깊은 실측: ntgcalls 는 "Connection established / Stream started" 까지 가는데, **SHELL(자동 ffmpeg) 미디어 소스를 그룹콜에서 실제로 안 돌림**
+  → ffmpeg 프로세스가 아예 안 뜸, 참가자 상태 `video_camera=false`, 소리도 0. MediaDescription(media_source=SHELL, ffmpeg 명령)은 멀쩡하고
+  그 ffmpeg 명령을 손으로 돌리면 잘 됨(영상 1.3GB raw·소리 정상) → ntgcalls 레벨 한계 (그룹콜 SHELL 미실행).
+- 추가 함정: `MediaStream(url, ...).check_stream()` 이 만드는 camera/mic.path 는 ffmpeg 가 **googlevideo 주소를 직접** 받게 하는데,
+  그 주소는 IP 에 묶여 있고 socks5 는 ffmpeg 가 못 씀 → 프록시 있어도 ffmpeg 가 못 받음 (yt-dlp 만 socks5 됨). 이것도 SHELL 방식의 벽.
+
+## ✅ 바뀐 설계 — AI 통화처럼 ExternalMedia + 우리가 프레임 직접 송출
+- 근거: **AI 음성통화가 이미** `ExternalMedia.AUDIO|VIDEO` + `send_frame(MICROPHONE/CAMERA)` 로 소리·프사영상을 보내고 **잘 됨**.
+  즉 send_frame 경로는 증명됨 → 뮤비도 같은 길로, ntgcalls SHELL 을 **우회**.
+- 흐름(`worker._music_video`):
+  1. `Source.fetch_video(vid)` = yt-dlp 로 480p 이하 **비디오+오디오 한 파일**을 WARP 우회 길로 **로컬에 받음**(data/music/mv_<vid>.mp4).
+     → ffmpeg 는 googlevideo 가 아니라 **로컬 파일**만 읽음 (IP 잠김·socks5 문제 사라짐). (fetcher.py METHODS 에 fetch_video 추가 — 받기는 자식 프로세스에서.)
+  2. `calls.play(chat, MediaStream(ExternalMedia.AUDIO|VIDEO, AudioParameters(48000,1), VideoParameters(854,480,30)), auto_start=True)`.
+  3. ffmpeg **2개를 우리가** 돌림(로컬 파일):
+     - 소리: `-vn -f s16le -ac 1 -ar 48000 pipe:1` → 10ms(960B) 조각 → `send_frame(MICROPHONE)` (소리 끝 = 곡 끝 → `_video_done`).
+     - 영상: `-an -vf scale/pad=854x480,format=yuv420p -r 30 -f rawvideo -pix_fmt yuv420p pipe:1` → 614880B 프레임 → `send_frame(CAMERA, Frame.Info(854,480))`.
+     - 실시간 페이싱(monotonic 시계로 조각/프레임 간격), `asyncio.create_subprocess_exec(limit=...)` 로 큰 프레임 버퍼 (기본 64KB 면 614KB 프레임에 churn).
+  4. 끝·음챗닫힘·내보내짐 → `_video_done` 이 두 ffmpeg kill + 펌프 취소 + leave(노래·통화 없을 때만).
+- **서버 실측(2026-11-19) 통과**: fetch_video 로 8.6MB mp4(640x360 h264 + aac) 받음, 소리 ffmpeg 300조각(960B)/0.05초·영상 ffmpeg 90프레임(614880B)/0.33초
+  = 둘 다 정확한 크기·실시간보다 빠름. send_frame 은 AI통화와 같은 경로(증명됨). **단, 자이 세션이 worker 전용(한 계정 한 통화)이라 실제 음챗 end-to-end 는 배포 후 worker 로 테스트방에서.**
+
 ## 미착수(2차, MVP 뒤)
 - 뮤비 대기열·전환, 노래↔뮤비 전환, 화질 선택(360/720), 자막, "지금 노래 영상으로".
+- 배포 후 테스트방 실제 음챗 송출 확인(참가자 화면에 영상·소리), 30fps CPU 실측(한 방 전용이라 여유), 긴 영상 파일 LRU 정리 확인.

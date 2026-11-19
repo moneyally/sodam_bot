@@ -140,7 +140,7 @@ class Clock:
 
 class FakeSource:
     def __init__(self, d):
-        self.d, self.fetched, self.resolved = Path(d), [], []
+        self.d, self.fetched, self.resolved, self.fetched_video = Path(d), [], [], []
 
     def resolve(self, query):
         self.resolved.append(query)
@@ -163,6 +163,13 @@ class FakeSource:
     def fetch(self, vid):
         self.fetched.append(vid)
         p = self.d / "music" / f"{vid}.webm"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return str(p)
+
+    def fetch_video(self, vid):                          # 🎬 뮤비 영상 파일
+        self.fetched_video.append(vid)
+        p = self.d / "music" / f"mv_{vid}.mp4"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"x")
         return str(p)
@@ -231,6 +238,19 @@ async def stop_all(w):
     for chat_id, pl in list(w.players.items()):
         pl.stop("end")
     await asyncio.gather(*list(w.ptasks.values()), return_exceptions=True)
+    for chat_id in list(w.video_calls):                  # 🎬 뮤비 펌프도 끊음
+        await w._video_done(chat_id, "stop")
+
+
+def fake_pumps(w):
+    """🎬 뮤비 소리·영상 펌프를 가짜로 (진짜 ffmpeg 안 돌게). 취소될 때까지 떠 있음."""
+    async def _pump(chat_id, path):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+    w._aud_pump = _pump
+    w._vid_pump = _pump
 
 
 async def play(db, w, query, by=5, status=None):
@@ -1438,23 +1458,28 @@ async def video(db, w, query, by=5, status=None):
 @test
 async def video_plays_480p_and_tracks():
     db, w, src, _ = await make_worker()
+    fake_pumps(w)
     res = await video(db, w, "아이유 밤편지", status=90)
     assert res["result"] == "video", res
+    assert src.fetched_video, "영상 파일을 먼저 받아야 함 (ffmpeg 는 로컬 파일만)"
     p = next((x for x in w.calls.log if x[0] == "play"), None)
     assert p is not None, w.calls.log
-    stream = p[2]                                   # ("media", url, "aq_high", "vq_480", {kw})
-    assert "vq_480" in stream, ("480p 여야 함", stream)
-    assert "youtube.com" in stream[1], ("비디오 URL", stream)
+    stream = p[2]                                   # ("media", 외부플래그, (48000,1), ("video",854,480,30))
+    assert stream[1] == (MEDIA.ExternalMedia.AUDIO | MEDIA.ExternalMedia.VIDEO), ("외부 오디오+비디오로 열기", stream)
+    assert ("video", 854, 480, 30) in stream, ("480p 30fps", stream)
     assert CHAT in w.video_calls
+    assert len(w.video_calls[CHAT]["tasks"]) == 2, "소리·영상 펌프 두 개"
     await stop_all(w)
 
 
 @test
 async def video_not_found_does_not_join():
     db, w, src, _ = await make_worker()
+    fake_pumps(w)
     res = await video(db, w, "없는노래", status=1)
     assert res["result"].startswith("music:"), res
     assert not any(x[0] == "play" for x in w.calls.log), "못 찾으면 음챗 안 들어감"
+    assert not src.fetched_video, "못 찾으면 영상도 안 받음"
     assert CHAT not in w.video_calls
     await stop_all(w)
 
@@ -1462,16 +1487,19 @@ async def video_not_found_does_not_join():
 @test
 async def video_rejected_while_music_playing():
     db, w, src, _ = await make_worker()
+    fake_pumps(w)
     await play(db, w, "노래곡", status=1)
     assert CHAT in w.players, "노래 재생 중"
     res = await video(db, w, "뮤비곡", status=2)
     assert res["result"] == "music_busy", res
+    assert not src.fetched_video, "노래 중이면 영상도 안 받음(거절 먼저)"
     await stop_all(w)
 
 
 @test
 async def music_rejected_while_video_playing():
     db, w, src, _ = await make_worker()
+    fake_pumps(w)
     await video(db, w, "뮤비곡", status=1)
     assert CHAT in w.video_calls
     res = await play(db, w, "노래곡", status=2)
@@ -1483,6 +1511,7 @@ async def music_rejected_while_video_playing():
 @test
 async def video_done_leaves_and_clears():
     db, w, src, _ = await make_worker()
+    fake_pumps(w)
     await video(db, w, "뮤비곡")
     assert CHAT in w.video_calls
     await w._video_done(CHAT, "end")

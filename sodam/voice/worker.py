@@ -17,6 +17,7 @@ import contextlib
 import logging
 import os
 import re
+import shlex
 import time
 from collections import deque
 from pathlib import Path
@@ -51,6 +52,13 @@ ERR_CODE = {"ChatAdminRequiredError": "no_voice_right", "GroupcallForbiddenError
 FATAL = {"ChatAdminRequiredError", "GroupcallForbiddenError", "UserBannedInChannelError", "ChannelPrivateError",
          "ChatForbiddenError", "FloodWaitError", "ValueError", "TimeoutError"}   # 영상 빼고 다시 해도 소용없는 것
 PLAY_TIMEOUT = 30          # play() 가 연결을 무한정 기다리지 않게
+# 🎬 뮤비(영상 재생): ntgcalls 가 그룹콜에서 SHELL(자동 ffmpeg) 미디어를 안 돌림(연결만 되고 ffmpeg 안 뜸) →
+# AI 통화처럼 ExternalMedia 로 열고 우리가 ffmpeg 2개 돌려서 프레임을 직접 보냄(send_frame). 854x480 30fps.
+MVIDEO_W = 854
+MVIDEO_H = 480
+MVIDEO_FPS = 30
+MVIDEO_ASR = 48000         # 오디오 48k 모노 s16le, 10ms = 480샘플×2 = 960바이트
+MVIDEO_ACH = 1
 HEALTH_EVERY = 300         # 도우미 세션 살아 있는지 (세션 폐기·연결 끊김 알아채기)
 REVOKED = ("AuthKeyUnregisteredError", "SessionRevokedError", "UserDeactivatedError", "UserDeactivatedBanError",
            "SessionExpiredError", "AuthKeyDuplicatedError")   # 도우미 로그인이 풀린 오류 (다시 연결해야 함)
@@ -830,12 +838,6 @@ class Worker:
         pl.wake()
         return True, "queued" if pos else "playing"
 
-    def _video_params(self) -> tuple[str | None, str | None]:
-        """🎬 뮤비 yt-dlp 파라미터: WARP 우회 길(MUSIC_PROXY)을 yt-dlp 에 (음원 차단 우회). 쿠키는 2차.
-        MUSIC_PROXY 는 쉼표로 여러 길(warp·warp2)이라 yt-dlp 엔 첫 길만 (통째 넘기면 '40000,socks5:' 포트 파싱 에러)."""
-        proxy = os.getenv("MUSIC_PROXY", "").split(",")[0].strip()
-        return (f"--proxy {proxy}" if proxy else None), None
-
     async def _music_video(self, chat_id: int, p: dict) -> tuple[bool, str]:
         """🎬 뮤비: py-tgcalls MediaStream(480p)로 비디오+오디오 통째 재생. 노래(Player)·AI통화와 한 음챗에서 배타."""
         if not self.client or not self.calls:
@@ -872,30 +874,126 @@ class Worker:
         if not url:
             await self._music_edit(chat_id, status, "⚠️ 뮤비 주소를 못 찾았어요.")
             return False, "not_found"
-        # 음챗 열기 + 뮤비 재생
+        # 🎬 뮤비 영상 파일을 먼저 받아 둠 — ntgcalls 는 그룹콜에서 SHELL(자동 ffmpeg) 을 안 돌리고(연결만),
+        # ffmpeg 는 googlevideo 주소를 직접 못 받음(IP 에 묶임·socks5 안 됨) → 우회 길로 로컬에 받아 그 파일로 ffmpeg.
+        await self._music_edit(chat_id, status, f"🎬 뮤비 준비 중: {musicq._esc(info['title'])[:70]}…")
+        try:
+            path = await asyncio.to_thread(self.music_source.fetch_video, str(vid or ""))
+        except music.MusicError as e:
+            await self._music_edit(chat_id, status, str(e) if str(e).startswith("🎧") else "⚠️ 뮤비 영상을 못 받았어요.")
+            return False, f"music:{e.code}"
+        except Exception as e:
+            log.warning("뮤비 영상 받기 실패 %s: %r", chat_id, e)
+            await self._music_edit(chat_id, status, "⚠️ 뮤비 영상을 못 받았어요.")
+            return False, "video_fetch"
+        # 음챗 열기 + AI 통화처럼 ExternalMedia 로 열기 (우리가 프레임을 직접 보냄)
         if p.get("link") or p.get("username"):
             await self._join(p)
         md = self.media
-        yt_params, ff_params = self._video_params()
+        params = md.AudioParameters(MVIDEO_ASR, MVIDEO_ACH)
+        log.info("🎬 뮤비 play(ExternalMedia) chat=%s file=%s", chat_id, os.path.basename(path))
         try:
-            stream = md.MediaStream(url, md.AudioQuality.HIGH, md.VideoQuality.SD_480p,
-                                    ytdlp_parameters=yt_params, ffmpeg_parameters=ff_params)
-            await asyncio.wait_for(self.calls.play(chat_id, stream, md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
+            await asyncio.wait_for(self.calls.play(
+                chat_id, md.MediaStream(md.ExternalMedia.AUDIO | md.ExternalMedia.VIDEO, params,
+                                        md.VideoParameters(MVIDEO_W, MVIDEO_H, MVIDEO_FPS)),
+                md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
         except Exception as e:
-            if chat_id not in self.in_call and chat_id not in self.bridges:
+            if chat_id not in self.in_call and chat_id not in self.bridges and chat_id not in self.players:
                 await self._leave(chat_id)
             log.warning("뮤비 재생 실패 %s: %r", chat_id, e)
             await self._music_edit(chat_id, status, f"⚠️ 뮤비를 못 틀었어요 ({err_code(e)}).")
             return False, err_code(e)
-        self.video_calls[chat_id] = {"title": info["title"], "by": by, "status": status}
+        ent = self.video_calls[chat_id] = {"title": info["title"], "by": by, "status": status, "path": path,
+                                           "procs": [], "started": time.monotonic()}
+        ent["tasks"] = [asyncio.create_task(self._aud_pump(chat_id, path)),
+                        asyncio.create_task(self._vid_pump(chat_id, path))]
         await self._music_edit(chat_id, status, f"🎬 뮤비 재생 중: {musicq._esc(info['title'])[:80]}\n화면을 켜서 보세요 (480p)")
         return True, "video"
 
+    def _vproc_add(self, chat_id: int, proc) -> None:
+        ent = self.video_calls.get(chat_id)
+        if ent is not None:
+            ent.setdefault("procs", []).append(proc)
+
+    async def _aud_pump(self, chat_id: int, path: str) -> None:
+        """🎬 뮤비 소리: 로컬 영상 파일 → ffmpeg(48k 모노 s16le) → 10ms 조각을 send_frame(MIC). 소리 끝 = 곡 끝."""
+        CHUNK = int(MVIDEO_ASR * MVIDEO_ACH * 2 // 100)   # 10ms = 960바이트
+        cmd = [music.ffmpeg_bin(), "-nostdin", "-hide_banner", "-loglevel", "error", "-i", path,
+               "-vn", "-f", "s16le", "-ac", str(MVIDEO_ACH), "-ar", str(MVIDEO_ASR), "pipe:1"]
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.DEVNULL, limit=CHUNK * 64)
+            self._vproc_add(chat_id, proc)
+            t = time.monotonic()
+            while chat_id in self.video_calls:
+                data = await proc.stdout.readexactly(CHUNK)
+                await self._mic(chat_id, data, "video")
+                t += 0.01
+                d = t - time.monotonic()
+                if d > 0:
+                    await asyncio.sleep(d)
+        except asyncio.IncompleteReadError as e:
+            if e.partial and chat_id in self.video_calls:
+                with contextlib.suppress(Exception):
+                    await self._mic(chat_id, e.partial + b"\x00" * (CHUNK - len(e.partial)), "video")
+            await self._video_done(chat_id, "end")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("뮤비 소리 끊김 %s: %r", chat_id, e)
+            await self._video_done(chat_id, "error")
+        finally:
+            if proc:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+
+    async def _vid_pump(self, chat_id: int, path: str) -> None:
+        """🎬 뮤비 영상: 로컬 파일 → ffmpeg(854x480 yuv420p 30fps) → 프레임을 send_frame(CAMERA). 영상 칸은 실패해도 소리는 계속."""
+        FRAME = MVIDEO_W * MVIDEO_H * 3 // 2   # yuv420p = W*H*1.5
+        vf = (f"scale={MVIDEO_W}:{MVIDEO_H}:force_original_aspect_ratio=decrease,"
+              f"pad={MVIDEO_W}:{MVIDEO_H}:(ow-iw)/2:(oh-ih)/2,format=yuv420p")
+        cmd = [music.ffmpeg_bin(), "-nostdin", "-hide_banner", "-loglevel", "error", "-i", path,
+               "-an", "-vf", vf, "-r", str(MVIDEO_FPS), "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"]
+        md = self.media
+        info = md.Frame.Info(width=MVIDEO_W, height=MVIDEO_H)
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.DEVNULL, limit=FRAME * 3)
+            self._vproc_add(chat_id, proc)
+            t = time.monotonic()
+            while chat_id in self.video_calls:
+                data = await proc.stdout.readexactly(FRAME)
+                with contextlib.suppress(Exception):
+                    await self.calls.send_frame(chat_id, md.Device.CAMERA, data, info)
+                t += 1 / MVIDEO_FPS
+                d = t - time.monotonic()
+                if d > 0:
+                    await asyncio.sleep(d)
+        except asyncio.IncompleteReadError:
+            pass                                  # 영상이 소리보다 먼저 끝남 → 끝 처리는 _aud_pump 가
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.debug("뮤비 영상 끊김 %s: %r", chat_id, e)
+        finally:
+            if proc:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+
     async def _video_done(self, chat_id: int, reason: str) -> None:
-        """🎬 뮤비 끝(재생 완료·음챗 닫힘·내보내짐) → 나가고 정리. 노래·통화가 그 방에 있으면 소리 줄은 안 끊음."""
+        """🎬 뮤비 끝(재생 완료·음챗 닫힘·내보내짐) → ffmpeg·펌프 끊고 나가 정리. 노래·통화가 그 방에 있으면 소리 줄은 안 끊음."""
         info = self.video_calls.pop(chat_id, None)
         if info is None:
             return
+        cur = asyncio.current_task()
+        for t in info.get("tasks", []):
+            if t is not cur:
+                t.cancel()
+        for pr in info.get("procs", []):
+            with contextlib.suppress(Exception):
+                pr.kill()
         if chat_id not in self.in_call and chat_id not in self.bridges and chat_id not in self.players:
             with contextlib.suppress(Exception):
                 await self._leave(chat_id)
@@ -1393,6 +1491,9 @@ async def main() -> None:
     from ..db import DB
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)   # 요청 줄에 봇 토큰이 든 URL 이 찍힘 (본체와 같게)
+    if os.getenv("VIDEO_DEBUG"):   # 🎬 뮤비 디버깅: pytgcalls/ntgcalls 상세 로그 (ffmpeg 명령·연결 과정)
+        logging.getLogger("pytgcalls").setLevel(logging.DEBUG)
+        logging.getLogger("ntgcalls").setLevel(logging.DEBUG)
     cfg = load_config()
     db = DB(cfg.db_path)
     await db.open()

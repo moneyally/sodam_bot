@@ -32,7 +32,8 @@ TIMEOUT = 300.0              # 한 번 일의 상한 (분위기 신청 mix_for �
 START_TIMEOUT = 60.0         # 자식이 켜져 '준비됨' 을 보낼 때까지 — 일 시간(TIMEOUT)과 따로 셈
                              # (2026-10-10 서버 시험: 힘 60% 일 때 켜지기만 1초↑ → 1초짜리 일 제한에 켜지는 시간까지 들어가 실패)
 READY = ("ready",)
-METHODS = ("resolve", "pick", "playlist", "mix_for", "related", "lyrics", "fetch", "fallback", "alt_for", "loudness")
+METHODS = ("resolve", "pick", "playlist", "mix_for", "related", "lyrics", "fetch", "fetch_video", "fallback",
+           "alt_for", "loudness")
 FACTORY = "sodam.voice.music:Source"
 
 
