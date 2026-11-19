@@ -227,7 +227,9 @@ class FakeCalls:
 
 
 MEDIA = SimpleNamespace(Device=SimpleNamespace(MICROPHONE="mic", CAMERA="cam"), AudioParameters=lambda r, c: (r, c),
-                        MediaStream=lambda src, p, v=None: ("media", src, p) + ((v,) if v else ()),
+                        MediaStream=lambda src, p=None, v=None, **kw: ("media", src, p) + ((v,) if v else ()) + ((kw,) if kw else ()),
+                        AudioQuality=SimpleNamespace(HIGH="aq_high"),           # 🎬 뮤비
+                        VideoQuality=SimpleNamespace(SD_480p="vq_480", SD_360p="vq_360", HD_720p="vq_720"),
                         ExternalMedia=SimpleNamespace(AUDIO=1, VIDEO=2),
                         VideoParameters=lambda w, h, f: ("video", w, h, f),
                         Frame=SimpleNamespace(Info=lambda width, height: ("info", width, height)),

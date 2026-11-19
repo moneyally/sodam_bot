@@ -1430,6 +1430,67 @@ def search_zero_results_retries_reordered_order():
     with_fake_ydl(run)
 
 
+# ── 🎬 뮤비 (음챗 비디오 재생) ────────────────────────────────
+async def video(db, w, query, by=5, status=None):
+    return await run_job(db, w, "music_video", {"query": query, "by_name": "멤버", "status_msg": status, "by": by}, CHAT)
+
+
+@test
+async def video_plays_480p_and_tracks():
+    db, w, src, _ = await make_worker()
+    res = await video(db, w, "아이유 밤편지", status=90)
+    assert res["result"] == "video", res
+    p = next((x for x in w.calls.log if x[0] == "play"), None)
+    assert p is not None, w.calls.log
+    stream = p[2]                                   # ("media", url, "aq_high", "vq_480", {kw})
+    assert "vq_480" in stream, ("480p 여야 함", stream)
+    assert "youtube.com" in stream[1], ("비디오 URL", stream)
+    assert CHAT in w.video_calls
+    await stop_all(w)
+
+
+@test
+async def video_not_found_does_not_join():
+    db, w, src, _ = await make_worker()
+    res = await video(db, w, "없는노래", status=1)
+    assert res["result"].startswith("music:"), res
+    assert not any(x[0] == "play" for x in w.calls.log), "못 찾으면 음챗 안 들어감"
+    assert CHAT not in w.video_calls
+    await stop_all(w)
+
+
+@test
+async def video_rejected_while_music_playing():
+    db, w, src, _ = await make_worker()
+    await play(db, w, "노래곡", status=1)
+    assert CHAT in w.players, "노래 재생 중"
+    res = await video(db, w, "뮤비곡", status=2)
+    assert res["result"] == "music_busy", res
+    await stop_all(w)
+
+
+@test
+async def music_rejected_while_video_playing():
+    db, w, src, _ = await make_worker()
+    await video(db, w, "뮤비곡", status=1)
+    assert CHAT in w.video_calls
+    res = await play(db, w, "노래곡", status=2)
+    assert res["result"] == "video_busy", res
+    assert len([x for x in w.calls.log if x[0] == "play"]) == 1, "뮤비 스트림을 노래가 안 덮음"
+    await stop_all(w)
+
+
+@test
+async def video_done_leaves_and_clears():
+    db, w, src, _ = await make_worker()
+    await video(db, w, "뮤비곡")
+    assert CHAT in w.video_calls
+    await w._video_done(CHAT, "end")
+    assert CHAT not in w.video_calls, "뮤비 끝나면 기록 비움"
+    assert ("leave", CHAT) in w.calls.log, "뮤비 끝나면 음챗 나감"
+    await stop_all(w)
+
+
 if __name__ == "__main__":
     run_all()
 

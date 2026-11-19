@@ -131,7 +131,7 @@ async def _helper_ready(svc, bot, chat_id: int, uid: int) -> str | None:
 async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | None = None, title: str = "",
                   duration: int = 0, status_msg: int | None = None, pick: dict | None = None,
                   by_id: int | None = None, by_name: str | None = None, mix: bool = False,
-                  count: int | None = None) -> None:
+                  count: int | None = None, video: bool = False) -> None:
     """뒤에서: 도우미 준비 → 음성 담당에 신청 → 결과(대기열 추가·재생 시작·고르기 버튼)는 음성 담당이 '찾는 중' 글을 고쳐서.
     pick = 고르기 버튼으로 고른 곡 (신청한 사람 by_id·by_name 그대로)."""
     db = svc.db
@@ -158,7 +158,7 @@ async def request(svc, bot, chat_id: int, user, *, query: str = "", path: str | 
         payload["count"] = int(count)
     if pick:
         payload["pick"] = {k: pick.get(k) for k in ("vid", "title", "duration", "kind")}
-    jid = await store.add_job(db, chat_id, "music_play", payload, uid, dedupe=False)
+    jid = await store.add_job(db, chat_id, "music_video" if video else "music_play", payload, uid, dedupe=False)
     st, res = await voice._wait(db, jid, timeout=voice.WAIT_JOB)
     await store.mark_notified(db, "voice_jobs", jid)
     if res == "slow":                                       # 아직 처리 중 (앞 신청이 밀림) → 결과는 음성 담당이 그 글을 고침
@@ -197,8 +197,9 @@ async def _tg_audio(svc, bot, msg) -> tuple[str, str, int] | str | None:
 
 
 async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, mix: bool = False,
-               count: int | None = None) -> str | None:
-    """신청 접수. 방에 보일 거절 이유를 돌려주거나, 접수했으면 None ('찾는 중' 글은 여기서 올림)."""
+               count: int | None = None, video: bool = False) -> str | None:
+    """신청 접수. 방에 보일 거절 이유를 돌려주거나, 접수했으면 None ('찾는 중' 글은 여기서 올림).
+    video=True = 🎬 뮤비 (음챗에 480p 영상+소리, py-tgcalls 가 직접 재생 — 노래·통화와 한 음챗에서 배타)."""
     why = await precheck(svc, chat_id, role)
     if why:
         return why
@@ -221,12 +222,13 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, m
     if len(last) > 5000:
         last.clear()
         noted.clear()
-    tg = await _tg_audio(svc, bot, msg)
+    tg = None if video else await _tg_audio(svc, bot, msg)     # 🎬 뮤비는 음악 파일 답장 X (제목으로 검색)
     if isinstance(tg, str):
         return tg
     if not tg and not query:
-        return "🎵 노래 제목이나 링크를 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>"
-    head = f"🔎 <b>{esc(tg[1] if tg else query)[:80]}</b> 찾는 중…"
+        return ("🎬 뮤비 제목을 같이 써 줘. 예: <code>.뮤비 아이유 밤편지</code>" if video
+                else "🎵 노래 제목이나 링크를 같이 써 주세요. 예: <code>.노래 아이유 밤편지</code>")
+    head = f"🔎 <b>{esc(tg[1] if tg else query)[:80]}</b> {'뮤비 ' if video else ''}찾는 중…"
     try:
         sent = await (msg.reply_text(head, parse_mode="HTML") if msg is not None
                       else bot.send_message(chat_id, head, parse_mode="HTML"))
@@ -236,7 +238,7 @@ async def play(svc, bot, chat_id: int, user, role: Role, query: str, msg=None, m
     if tg:
         persist.spawn(request(svc, bot, chat_id, user, path=tg[0], title=tg[1], duration=tg[2], status_msg=status))
     else:
-        persist.spawn(request(svc, bot, chat_id, user, query=query, status_msg=status, mix=mix, count=count))
+        persist.spawn(request(svc, bot, chat_id, user, query=query, status_msg=status, mix=mix, count=count, video=video))
     return None
 
 
@@ -374,6 +376,16 @@ async def c_play(ctx) -> None:
     if await _skip_bare(ctx):
         return
     why = await play(ctx.svc, ctx.bot, ctx.chat_id, ctx.user, ctx.role, ctx.argstr, ctx.msg)
+    if why:
+        await ctx.reply(why)
+
+
+async def c_video(ctx) -> None:
+    """🎬 .뮤비 <제목> — 음챗에 480p 뮤직비디오 (영상+소리)."""
+    if ctx.chat_id > 0:
+        await ctx.reply("🎬 뮤비는 그룹방 음성채팅에서 틀어요. 방에서 <code>.뮤비 제목</code>")
+        return
+    why = await play(ctx.svc, ctx.bot, ctx.chat_id, ctx.user, ctx.role, ctx.argstr, ctx.msg, video=True)
     if why:
         await ctx.reply(why)
 
@@ -645,6 +657,15 @@ async def t_music(ctx: tools.ToolCtx, a: dict) -> str:
             return f"거절 안내를 방에 그대로 보냄 ({re.sub(r'<[^>]+>', '', why)[:60]}). 따로 답하지 않음."
         ctx.quiet = True
         return "노래 신청 접수 — '찾는 중' 글이 방에 올라갔고 결과(재생 시작·대기열 추가)는 그 글이 바뀜. 답은 보내지 않음."
+    if action == "video":                                  # 🎬 뮤비 (480p 영상+소리)
+        why = await play(ctx.svc, ctx.bot, ctx.chat_id, ctx.caller, ctx.role, str(a.get("query") or ""),
+                         getattr(ctx, "request_msg", None), video=True)
+        if why:
+            await ctx.bot.send_message(ctx.chat_id, why, parse_mode="HTML")
+            ctx.quiet = True
+            return f"뮤비 거절 안내를 방에 그대로 보냄 ({re.sub(r'<[^>]+>', '', why)[:60]}). 따로 답하지 않음."
+        ctx.quiet = True
+        return "뮤비 신청 접수 — '찾는 중' 글이 방에 올라갔고 결과는 그 글이 바뀜. 답은 보내지 않음."
     if action == "queue":
         return re.sub(r"<[^>]+>", "", await queue_text(ctx.svc, ctx.chat_id))
     if action == "now":
@@ -714,8 +735,10 @@ tools.register_tool(tools.Tool(
     "아무거나'·'운동할 때 듣는 노래'·'드라이브 음악'·'섹스할 때 듣는 노래'·'잔잔한 거'·'카페 음악' 처럼. query 엔 그 분위기 말을 "
     "그대로 넣음(소담이 어울리는 플레이리스트로 여러 곡 틀어 줌). 특정 제목·가수가 하나라도 있으면 mix 는 비움. "
     "'팝송 5곡'·'발라드 10개'처럼 개수를 말하면 count 에 그 숫자(최대 15, 안 주면 15곡). "
+    "'뮤비로 틀어'·'뮤직비디오'·'영상으로 틀어'·'화면으로 틀어' → video(query=제목) — 음챗에 480p 뮤직비디오(영상+소리). "
+    "노래(소리만)와 다르고, 그 방이 노래·통화 중이면 '끝나고'로 거절됨. "
     "AI 목소리 대화(voice_call)와 다름. 노래를 어디서 가져오는지(음원 출처)는 말하지 말 것.",
-    {"action": {"type": "string", "enum": ["play", "skip", "pause", "resume", "stop", "queue", "now", "volume", "seek",
+    {"action": {"type": "string", "enum": ["play", "video", "skip", "pause", "resume", "stop", "queue", "now", "volume", "seek",
                                             "remove", "clear", "shuffle", "loop", "loop_queue", "autoplay", "lyrics", "top"]},
      "query": {"type": "string", "description": "노래 제목·가수 또는 링크 (요청 글 그대로). mix=true 면 분위기·상황 말 · remove 땐 뺄 가수·제목(일괄)"},
      "value": {"type": "integer", "description": "volume 0~200 · seek 초 · remove 대기열 번호 · top 일수 · loop 반복 횟수(0=끔, 안 주면 계속)"},
