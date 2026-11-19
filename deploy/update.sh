@@ -245,6 +245,21 @@ warp_setup() {
     if [ "$ok" = 1 ]; then report warp_setup.status "warp_ok$WARP_ST"; else report warp_setup.status "warp_fail$WARP_ST"; fi
 }
 
+mediatools_setup() {
+    # 🎬 뮤비(py-tgcalls)는 시스템 ffmpeg/ffprobe + PATH 의 yt-dlp 가 필요 (음악용 imageio-ffmpeg 와 별개 — 없으면 뮤비가
+    # FFmpegError/'--proxy not installed' 로 실패했음, 2026-11-20). apt·심볼릭 둘 다 idempotent.
+    [ -n "$RUN_AS" ] || return 0
+    if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+        log "mediatools: ffmpeg 설치"; apt-get install -y ffmpeg >/dev/null 2>&1
+    fi
+    [ -x "$APP_DIR/.venv/bin/yt-dlp" ] && ln -sf "$APP_DIR/.venv/bin/yt-dlp" /usr/local/bin/yt-dlp
+    if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1 && command -v yt-dlp >/dev/null 2>&1; then
+        report mediatools_setup.status "mediatools_ok"
+    else
+        report mediatools_setup.status "mediatools_fail ffmpeg·ffprobe·yt-dlp 중 없음"
+    fi
+}
+
 sshws_setup() {
     [ -n "$RUN_AS" ] && [ -f "$APP_DIR/deploy/sodam-sshws.service" ] && [ -f "$APP_DIR/deploy/claude_ssh.pub" ] || return 0
     local pub line mark_b="# >>> sodam-sshws" mark_e="# <<< sodam-sshws" tmp
@@ -587,6 +602,7 @@ if restart_and_verify "$VER"; then
     diag_setup
     sshws_setup
     warp_setup
+    mediatools_setup
     netwatch_setup
     imagemagick_setup
     workshop_setup
