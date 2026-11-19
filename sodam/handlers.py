@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, emojilab, leavelock, mediastore, medialog, modactions, ownerlock
+from . import autoreply, cleanservice, emojilab, leavelock, mediastore, medialog, modactions, ownerlock
 from .panels import motionbanner
 from .panels import repost as _repost
 
@@ -333,7 +333,8 @@ async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = _svc(context)
     for u in msg.new_chat_members:
         await handle_new_member(context, msg.chat_id, msg.chat.title, u, msg.from_user)
-    if (await svc.db.get_settings(msg.chat_id))["delete_join_message"]:
+    settings = await svc.db.get_settings(msg.chat_id)
+    if settings["delete_join_message"] or cleanservice.wants(settings, "join"):   # 🧹 입장 서비스 메시지 청소
         try:
             await msg.delete()
         except TelegramError:
@@ -463,7 +464,7 @@ async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # 🧹 멤버 정리가 낸 퇴장: '~님을 내보냄' 서비스 메시지는 지우고 작별 인사는 건너뜀 (봇 계정을 내보낸 것도)
     by_job = await cleanup.job_leave(svc, msg.chat_id, msg.left_chat_member.id,
                                      getattr(msg.from_user, "id", None), context.bot.id)
-    if by_job:
+    if by_job or cleanservice.wants(await svc.db.get_settings(msg.chat_id), "leave"):   # 🧹 퇴장 서비스 메시지 청소
         try:
             await msg.delete()
         except TelegramError:
@@ -474,6 +475,19 @@ async def on_left(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not by_job:
             await farewell.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)   # 👋 스스로 나간 사람만
             await leavelock.on_leave(context, msg.chat_id, msg.left_chat_member, msg.from_user)  # 🚪 재입장 막기 (켠 방만)
+
+
+async def on_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🧹 기타 서비스 메시지(핀·제목·사진·영상채팅 등) 청소 — clean_service='all' 인 방만. 입장·퇴장·방이사는 각자 핸들러가 함."""
+    msg = update.message
+    if msg is None:
+        return
+    svc = _svc(context)
+    if cleanservice.wants(await svc.db.get_settings(msg.chat_id), "other"):
+        try:
+            await msg.delete()
+        except TelegramError:
+            pass
 
 
 async def on_migrate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1715,6 +1729,7 @@ def register(app: Application, tz, backup_time: str = "05:00", role: str = "all"
     app.add_handler(MessageHandler(groups & filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
     app.add_handler(MessageHandler(groups & filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left))
+    app.add_handler(MessageHandler(groups & cleanservice.OTHER, on_service))   # 🧹 핀·제목·사진·영상채팅 등 서비스 메시지 청소
     app.add_handler(MessageHandler(groups & filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL, on_group_message))
     app.add_handler(MessageHandler(groups & filters.UpdateType.EDITED_MESSAGE, on_group_edit))  # 고쳐서 광고 넣기 막기
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE, on_private))
