@@ -85,7 +85,9 @@ async def setup(names, *, src=None, on_send=None):
     async def send(f):
         sent.append(np.frombuffer(f, dtype="<i2").copy())
         if on_send:
-            on_send(holder["pl"], sent)
+            r = on_send(holder["pl"], sent)
+            if r is not None and asyncio.iscoroutine(r):   # async on_send 는 끝까지 기다림 (CPU 느려도 결정적)
+                await r
     pl = music.Player(db, CHAT, send, source=src or Src(), decoder=XDec, clock=lambda: t[0], sleep=sleep,
                       poll=0.02, idle_sec=0.3)
     holder["pl"] = pl
@@ -153,10 +155,10 @@ async def skip_during_overlap_continues_the_incoming_song():
 async def queue_change_before_the_end_is_respected():
     state = {"done": False}
 
-    def on_send(pl, sent):
+    async def on_send(pl, sent):
         if pl._next is not None and not state["done"]:
             state["done"] = True
-            asyncio.get_running_loop().create_task(musicq.remove_nth(pl.db, CHAT, 1, 1, True))   # 미리 풀어 둔 b 를 뺌
+            await musicq.remove_nth(pl.db, CHAT, 1, 1, True)   # 미리 풀어 둔 b 를 뺌 (재생 전 확실히 반영)
     db, pl, sent = await setup("abc", on_send=on_send)
     await asyncio.wait_for(pl.run(), 10)
     rows = await db._all("SELECT title, state FROM music_queue ORDER BY id")
