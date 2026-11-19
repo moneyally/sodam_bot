@@ -92,6 +92,28 @@ async def banter_fake_claim_still_checked():
         restore_timers(old)
 
 
+@test
+async def banter_and_light_skip_thinking_bubble():
+    """바쁜 방 버그(블리비 라운지 2026-11-19): light·banter(빠른 잡담·말싸움)에선 💭 '생각 중…'을 안 띄운다.
+    생각할 것도·도구도 없이 2~4초면 답이 나오는데 매번 💭 를 띄웠다 지우면, 바쁜 방에서 deleteMessage 가
+    조용히 429 로 묻혀 💭 가 쌓임 (영상 폭주로 slow 였음). 예전엔 role>=ADMIN 이면 길과 무관하게 띄웠음."""
+    old = fast_timers()
+    try:
+        # 관리자 말싸움(banter) — ai_thinking 켜져 있어도 💭 안 띄움
+        r = await room(["ㅋㅋ 니가 더 병신"], {**MIRROR, "ai_thinking": True})
+        assert route.decide(route.Req("소담아 병신아 뭐하냐", settings=MIRROR), light_model=LIGHT).lane == "banter"
+        await r.say(BOSS, "소담아 병신아 뭐하냐")
+        assert not any("생각 중" in str(c) for c in r.bot.calls), r.bot.named("send_message")
+
+        # 관리자 가벼운 잡담(light) — 도구 없이 바로 답
+        r2 = await room(["ㅇㅇ 안녕"], {"ai_thinking": True})
+        assert route.decide(route.Req("안녕", settings={}), light_model=LIGHT).lane == "light"
+        await r2.say(BOSS, "안녕")
+        assert not any("생각 중" in str(c) for c in r2.bot.calls), r2.bot.named("send_message")
+    finally:
+        restore_timers(old)
+
+
 # ── 끝 도구: 결과를 방에 직접 올린 라운드 뒤엔 AI 를 또 부르지 않음 ─────────────────────
 class Quiet:
     """agent.execute 대신: TERMINAL 도구면 ctx.quiet (실제 도구처럼)."""
