@@ -706,8 +706,10 @@ async def _attempt(ctx: ToolCtx, run: agentlog.Run, messages: list, lane: str, p
     done: list[str] = []                     # light 가 실행한 쓰기 도구 (올려 보낼 때 heavy 에 알림)
     usd0 = run.usd_micro - run.media_micro   # 이 길에서 쓴 요금만 상한에 셈 (올려 보낸 heavy 가 light 몫 때문에 바로 끝나지 않게)
     rounds = min(LIGHT_MAX_STEPS, MAX_STEPS) if light else MAX_STEPS
-    th = getattr(ctx, "thinker", None)       # 💭 생각 중: 생각 길이거나 오너·관리자 요청이면 길과 무관하게 띄움 (오너는 다 보고 싶어 함)
-    if th is not None and (think or ctx.role >= Role.ADMIN):
+    th = getattr(ctx, "thinker", None)       # 💭 생각 중: 생각(heavy) 길이거나 heavy 관리자·오너 요청이면 띄움 (오너는 다 보고 싶어 함)
+    # light·banter(빠른 잡담·말싸움)는 2~4초면 답이 나오고 생각·도구가 없음 → 💭 를 띄웠다 지우는 게 순전히 노이즈 +
+    # 바쁜 방(블리비 라운지 2026-11-19, 영상 폭주)에선 deleteMessage 429 가 로그에도 안 남고 묻혀 💭 가 쌓임 → 이 두 길엔 안 띄움
+    if th is not None and (think or ctx.role >= Role.ADMIN) and not (light or banter):
         await th.begin()
     for step in range(rounds):
         if step and run.usd_micro - run.media_micro - usd0 >= RUN_USD_CAP * costs.MICRO:   # 요금 상한: 더 찾지 않고 지금까지로 답

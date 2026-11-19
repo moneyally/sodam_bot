@@ -1618,6 +1618,7 @@ CORE_TOOLS = frozenset({
     "feature_request",    # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
     "attendance",         # 📅 출석·🎟 복권 '소담아 출석' (2026-10-11 FOX 고객, panels/lottery.py)
     "music",              # 🎵 소담 뮤직봇 '○○ 틀어줘' (2026-10-08 — 음성채팅 DJ, panels/music.py)
+    "find_photo",         # 🖼 '이채영 사진 줘' 웹에서 사진 찾아 올리기 (2026-11-19 블리비 라운지, panels/findphoto.py)
     # 오너 1:1 에서만 보임 (다른 목록엔 영향 없음). '업데이트 보고' 때 불러오다 캐시가 깨져 실행 상한($0.05)에 걸림 (#2634, 2026-10-06)
     "owner_server_status"})
 # 나머지(관리 세부·오너 운영·드문 조회)는 find_tools 목록에서. 목록 크기: 핵심 ~2.7만 자(캐시로 10분의 1 값) vs 전체 ~5.3만 자.
