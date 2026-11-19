@@ -47,6 +47,12 @@ def hard_line(text: str, real_photo: bool) -> str | None:
     return None
 
 
+def sexual_query(text: str) -> bool:
+    """이 질의가 성적인가 — 웹 사진 검색(find_photo)은 성적 질의 자체를 거절한다 (OpenAI 가 원래 야한 이미지를 안 주지만 이중 안전,
+    생성과 달리 출처를 우리가 통제 못 하는 외부 사진이라 더 보수적). 미성년·사람 사진 생성은 hard_line 이 따로 본다."""
+    return bool(_SEXUAL.search(text or ""))
+
+
 # ── 원문 보존 ──────────────────────────────────────────────
 _STYLE = re.compile(r"\b(non[- ]?photo[- ]?realistic|stylized|stylised|cartoon\w*|anime|manga|illustrat\w*|"
                     r"fictional|animated|3d[- ]?render\w*|cgi|chibi|comic\w*|drawing|painted|painting)\b", re.I)
