@@ -816,11 +816,13 @@ class Decoder:
         return self.eof and not self.buf
 
     async def close(self) -> None:
-        await _drop(self._task)
-        if self._proc and self._proc.returncode is None:
+        p = self._proc
+        if p is not None and p.returncode is None:
             with contextlib.suppress(ProcessLookupError):
-                self._proc.kill()
-            await _drop(asyncio.ensure_future(self._proc.wait()), finish_first=True)   # 죽인 ffmpeg 를 기다리다 붙잡히지 않게
+                p.kill()                                   # ⚠️ await 보다 먼저 죽임 — close() 가 취소돼도(정리 중 _drop 이 끊어도) ffmpeg 는 확실히 죽음.
+        await _drop(self._task)                            #   (예전엔 _drop(self._task) 가 먼저라, 거기서 취소되면 kill 을 못 하고 ffmpeg 가 몇 시간째 남았음)
+        if p is not None and p.returncode is None:
+            await _drop(asyncio.ensure_future(p.wait()), finish_first=True)   # 죽인 ffmpeg 를 기다리다 붙잡히지 않게
 
 
 LIMIT = 0.85 * 32767                                       # 이보다 큰 소리는 부드럽게 눌러 줌 (딱딱 잘리면 '지직·튐')
@@ -944,6 +946,17 @@ class Player:
     @property
     def done(self) -> bool:
         return self._done.is_set()
+
+    def ffmpeg_pids(self) -> set[int]:
+        """지금 살아 있는 풀기 ffmpeg 들의 pid (현재 곡·미리받기·겹치기·앞 곡). 누수 reaper 가 이건 안 거두게.
+        (일시정지로 오래 멈춘 곡의 ffmpeg 가 나이만 보고 엉뚱하게 거둬지지 않도록)."""
+        pids: set[int] = set()
+        for d in (self.dec, self._prev_dec, (self._next or {}).get("dec"), (self._carry or {}).get("dec")):
+            p = getattr(d, "_proc", None)
+            pid = getattr(p, "pid", None)
+            if pid:
+                pids.add(int(pid))
+        return pids
 
     def wake(self) -> None:
         self._wake.set()
