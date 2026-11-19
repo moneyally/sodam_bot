@@ -24,7 +24,7 @@ from telegram import InlineKeyboardMarkup
 from telegram.error import BadRequest, TelegramError
 
 from . import mediastore, persist, raid
-from .greet import _render_buttons, button_rows as _greet_rows
+from .greet import _render_buttons, button_rows as _greet_rows, norm_placeholders
 from .settings import max_text, register_setting
 from .util import esc, send_retry, user_name
 
@@ -76,6 +76,7 @@ def button_rows(s: dict):
 def render(template: str, people: list[tuple[int, str, str | None]], count: int | None = None, extra: int = 0,
            when: str = "") -> str:
     """people = [(ID, 이름, @아이디)]. 문구는 이스케이프하고 자리표시자에만 코드가 만든 값을 넣는다."""
+    template = norm_placeholders(template)   # {ID}·{Count} 대문자로 적어도 채워지게 (입장인사와 동일)
     tpl = template if "{name}" in template else "{name} " + template
     if "{id}" not in tpl:
         tpl += "\n" + ID_LINE
