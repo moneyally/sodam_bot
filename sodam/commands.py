@@ -1771,6 +1771,8 @@ COMMANDS: list[Cmd] = [
         help="경기 일정·스코어·순위·자동 알림", group="스포츠"),
     Cmd(("노래", "재생", "play", "음악"), _music("c_play"), usage="<제목|링크> (음악 파일 답장도)",
         help="음성채팅에 노래 틀기·대기열 추가", group="🎵 뮤직봇"),
+    Cmd(("뮤비", "mv", "영상", "뮤직비디오"), _music("c_video"), usage="<제목>",
+        help="음성채팅에 뮤직비디오(480p 영상+소리) 틀기", group="🎵 뮤직봇"),
     Cmd(("스킵", "다음곡", "skip", "next"), _music("c_skip"), help="다음 곡으로", group="🎵 뮤직봇"),
     Cmd(("일시정지", "pause"), _music("c_pause"), help="일시정지", group="🎵 뮤직봇"),
     Cmd(("다시재생", "resume"), _music("c_resume"), help="다시 재생", group="🎵 뮤직봇"),

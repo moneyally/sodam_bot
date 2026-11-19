@@ -159,6 +159,7 @@ class Worker:
         self._prefetch_task: asyncio.Task | None = None
         self.psessions: dict[int, int] = {}
         self.in_call: set[int] = set()
+        self.video_calls: dict[int, dict] = {}      # 🎬 뮤비 재생 중인 방 → {title, by, status_msg} (py-tgcalls MediaStream 직접 재생, 노래·통화와 별개·배타)
         self._orphan_since: dict[int, float] = {}   # in_call 에 있지만 재생·통화 없는 방 → 처음 그렇게 된 시각(monotonic)
         self.tenants: Any = None                # 🏷 클론 봇 노래도 같이 (voice/tenants.py Tenants) — main 이 붙임
 
@@ -283,9 +284,11 @@ class Worker:
     async def _start(self, chat_id: int, p: dict) -> tuple[bool, str]:
         if not self.client or not self.calls:
             return False, "no_assistant"
+        if chat_id in self.video_calls:          # 🎬 뮤비 트는 중 → AI 통화도 스트림 안 덮게 거절
+            return False, "video_busy"
         if chat_id in self.bridges:
             return True, "already"
-        if chat_id not in self.in_call and len(self.in_call | set(self.bridges)) >= MAX_CALLS:
+        if chat_id not in self.in_call and len(self.in_call | set(self.bridges) | set(self.video_calls)) >= MAX_CALLS:
             return False, "busy"
         if p.get("link"):
             await self._join(p)
@@ -492,6 +495,12 @@ class Worker:
             if b:
                 b.feed([(f.ssrc, f.frame) for f in update.frames])   # ssrc = 누가 말했나 (말한 사람 확인)
 
+        if hasattr(md.filters, "stream_end"):          # 🎬 뮤비(MediaStream 파일) 끝까지 재생됨 → 나가고 정리
+            @self.calls.on_update(md.filters.stream_end())
+            async def _stream_end(_, update):
+                if update.chat_id in self.video_calls:
+                    await self._video_done(update.chat_id, "end")
+
         @self.calls.on_update(md.filters.chat_update(md.ChatUpdate.Status.LEFT_CALL))   # 음성채팅 닫힘·방에서 내보내짐
         async def _gone(_, update):
             b = self.bridges.get(update.chat_id)
@@ -501,6 +510,8 @@ class Worker:
             if pl:
                 pl.stop("chat_closed")
             self.in_call.discard(update.chat_id)
+            if update.chat_id in self.video_calls:     # 🎬 뮤비 중 음성채팅 닫힘
+                await self._video_done(update.chat_id, "chat_closed")
 
         if hasattr(md.filters, "call_participant"):   # 새로 들어온·바뀐 참가자의 소리 번호 → 계정
             @self.calls.on_update(md.filters.call_participant(md.Action.JOINED | md.Action.UPDATED))
@@ -519,6 +530,8 @@ class Worker:
                 if pl:
                     pl.stop("kicked")
                 self.in_call.discard(update.chat_id)
+                if update.chat_id in self.video_calls:   # 🎬 뮤비 중 통화에서 내보내짐
+                    await self._video_done(update.chat_id, "kicked")
 
     # ── 일 처리 ────────────────────────────────────────
     async def handle(self, job: dict) -> None:
@@ -541,6 +554,8 @@ class Worker:
                 ok, res = await self._stop(chat_id)
             elif kind == "music_play":
                 ok, res = await self._music_play(chat_id, p)
+            elif kind == "music_video":          # 🎬 뮤비 (startswith("music_") 보다 먼저 — 안 그러면 _music_ctl 로 샘)
+                ok, res = await self._music_video(chat_id, p)
             elif kind.startswith("music_"):
                 ok, res = await self._music_ctl(chat_id, kind[6:], p)
             else:
@@ -557,6 +572,8 @@ class Worker:
         key = 0 if kind.startswith(("login", "logout")) else job["chat_id"]   # 로그인끼리·같은 방끼리만 차례로
         if kind == "music_play":            # 노래 찾기·받기는 느림 → 신청끼리만 차례로 (넘기기·일시정지를 안 막게)
             key = ("mplay", job["chat_id"])
+        elif kind == "music_video":         # 🎬 뮤비도 검색이 느림 → 뮤비 신청끼리만 차례로
+            key = ("mvideo", job["chat_id"])
         elif kind.startswith("music_"):
             key = ("mctl", job["chat_id"])
         async with self.locks.setdefault(key, asyncio.Lock()):
@@ -652,11 +669,13 @@ class Worker:
     async def _ensure_call(self, chat_id: int, p: dict) -> tuple[bool, str]:
         """노래용 소리 줄 (AI 대화가 이미 열었으면 그대로). 같은 방 AI 시작과 겹치지 않게 방 잠금 안에서."""
         async with self.locks.setdefault(chat_id, asyncio.Lock()):
+            if chat_id in self.video_calls:          # 🎬 뮤비 트는 중 → 노래는 스트림 안 덮게 거절
+                return False, "video_busy"
             if chat_id in self.in_call:
                 return True, "already"
             if not self.client or not self.calls:
                 return False, "no_assistant"
-            if len(self.in_call | set(self.bridges)) >= MAX_CALLS:
+            if len(self.in_call | set(self.bridges) | set(self.video_calls)) >= MAX_CALLS:
                 return False, "busy"
             if p.get("link") or p.get("username"):
                 await self._join(p)
@@ -811,6 +830,78 @@ class Worker:
         pl.wake()
         return True, "queued" if pos else "playing"
 
+    def _video_params(self) -> tuple[str | None, str | None]:
+        """🎬 뮤비 yt-dlp/ffmpeg 파라미터: WARP 우회 길(MUSIC_PROXY)을 yt-dlp 에 (음원 차단 우회). 쿠키는 2차."""
+        proxy = os.getenv("MUSIC_PROXY", "").strip()
+        return (f"--proxy {proxy}" if proxy else None), None
+
+    async def _music_video(self, chat_id: int, p: dict) -> tuple[bool, str]:
+        """🎬 뮤비: py-tgcalls MediaStream(480p)로 비디오+오디오 통째 재생. 노래(Player)·AI통화와 한 음챗에서 배타."""
+        if not self.client or not self.calls:
+            return False, "no_assistant"
+        status = p.get("status_msg")
+        by, name = p.get("by"), str(p.get("by_name") or "")[:60]
+        # 충돌 가드 — 한 음챗에 스트림 하나 (노래·통화 끊김 방지)
+        pl = self.players.get(chat_id)
+        if pl is not None and not pl.done:
+            await self._music_edit(chat_id, status, "🎬 지금 노래 트는 중이라, 노래 끝나고 뮤비 틀어줘.")
+            return False, "music_busy"
+        if chat_id in self.bridges:
+            await self._music_edit(chat_id, status, "🎬 지금 음성 대화 중이라, 끝나고 뮤비 틀어줘.")
+            return False, "call_busy"
+        if chat_id in self.video_calls:
+            await self._music_edit(chat_id, status, "🎬 이미 뮤비 트는 중이야. 끝나고 다음 거 틀어줘.")
+            return False, "video_busy"
+        if len(self.in_call | set(self.bridges) | set(self.video_calls)) >= MAX_CALLS:
+            return False, "busy"
+        # 곡 검색 — 기존 음악 검색(resolve) 그대로 재사용
+        try:
+            info = await asyncio.to_thread(self.music_source.resolve, str(p.get("query") or "")[:300])
+            await self._music_health(None)
+        except music.MusicChoice:
+            await self._music_edit(chat_id, status, "🎬 어느 곡인지 가수·제목을 정확히 말해줘.")
+            return False, "music:choice"
+        except music.MusicError as e:
+            if e.code in ("blocked", "not_found") and hasattr(self.music_source, "primary_ok") and not self.music_source.primary_ok():
+                await self._music_health(str(e))
+            await self._music_edit(chat_id, status, str(e) if str(e).startswith("🎧") else f"⚠️ {e}")
+            return False, f"music:{e.code}"
+        vid = info.get("vid")
+        url = f"https://www.youtube.com/watch?v={vid}" if vid else info.get("url")
+        if not url:
+            await self._music_edit(chat_id, status, "⚠️ 뮤비 주소를 못 찾았어요.")
+            return False, "not_found"
+        # 음챗 열기 + 뮤비 재생
+        if p.get("link") or p.get("username"):
+            await self._join(p)
+        md = self.media
+        yt_params, ff_params = self._video_params()
+        try:
+            stream = md.MediaStream(url, md.AudioQuality.HIGH, md.VideoQuality.SD_480p,
+                                    ytdlp_parameters=yt_params, ffmpeg_parameters=ff_params)
+            await asyncio.wait_for(self.calls.play(chat_id, stream, md.GroupCallConfig(auto_start=True)), PLAY_TIMEOUT)
+        except Exception as e:
+            if chat_id not in self.in_call and chat_id not in self.bridges:
+                await self._leave(chat_id)
+            log.warning("뮤비 재생 실패 %s: %r", chat_id, e)
+            await self._music_edit(chat_id, status, f"⚠️ 뮤비를 못 틀었어요 ({err_code(e)}).")
+            return False, err_code(e)
+        self.video_calls[chat_id] = {"title": info["title"], "by": by, "status": status}
+        await self._music_edit(chat_id, status, f"🎬 뮤비 재생 중: {musicq._esc(info['title'])[:80]}\n화면을 켜서 보세요 (480p)")
+        return True, "video"
+
+    async def _video_done(self, chat_id: int, reason: str) -> None:
+        """🎬 뮤비 끝(재생 완료·음챗 닫힘·내보내짐) → 나가고 정리. 노래·통화가 그 방에 있으면 소리 줄은 안 끊음."""
+        info = self.video_calls.pop(chat_id, None)
+        if info is None:
+            return
+        if chat_id not in self.in_call and chat_id not in self.bridges and chat_id not in self.players:
+            with contextlib.suppress(Exception):
+                await self._leave(chat_id)
+        if reason == "end":
+            with contextlib.suppress(Exception):
+                await self._music_say(chat_id, f"🎬 뮤비 끝: {musicq._esc(str(info.get('title') or ''))[:80]}")
+
     async def _music_mix(self, chat_id: int, p: dict, by, name: str, status) -> tuple[bool, str]:
         """분위기·상황 신청 ('자장가'·'잠잘 때 듣는 노래'·'신나는 노래') → 어울리는 플레이리스트에서 여러 곡.
         소담이 mix=true 로 판단했거나 resolve 가 '분위기'(MusicError mix)로 본 경우 둘 다 여기로."""
@@ -943,6 +1034,8 @@ class Worker:
             t = self.ptasks.get(chat_id)
             if t:
                 await asyncio.wait({t}, timeout=10)
+        for chat_id in list(self.video_calls):          # 🎬 뮤비는 이어틀기 없음 (단건) → 끊고 나감
+            await self._video_done(chat_id, reason)
 
     async def music_resume(self, chats: list[int]) -> None:
         """재시작으로 끊긴 방(세션이 열려 있던 방)은 남은 곡을 이어서, 나머지 방의 묵은 대기열은 정리.
