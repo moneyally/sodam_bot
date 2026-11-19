@@ -58,6 +58,8 @@ from .panels import summon as _summon  # noqa: E402
 _summon.register_commands()     # .집합 (선택형 소집)
 from .panels import rankboost as _rankboost  # noqa: E402
 _rankboost.register_commands()  # .채팅부스트 (집계 부스트 구간)
+from . import away as _away  # noqa: E402  (훅·표 등록)
+_away.register_commands()       # .자리비움 · .복귀
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다
