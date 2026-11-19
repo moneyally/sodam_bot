@@ -1373,15 +1373,15 @@ def _media():
     from types import SimpleNamespace
 
     from pytgcalls import filters
-    from pytgcalls.types import (ChatUpdate, Device, Direction, ExternalMedia, GroupCallConfig, MediaStream,
-                                 RecordStream)
+    from pytgcalls.types import (AudioQuality, ChatUpdate, Device, Direction, ExternalMedia, GroupCallConfig,
+                                 MediaStream, RecordStream, VideoQuality)
     from pytgcalls.types import Frame, GroupCallParticipant
     from pytgcalls.types.raw import AudioParameters, VideoParameters
     return SimpleNamespace(filters=filters, ChatUpdate=ChatUpdate, Device=Device, Direction=Direction,
                            Action=GroupCallParticipant.Action,
                            ExternalMedia=ExternalMedia, GroupCallConfig=GroupCallConfig, MediaStream=MediaStream,
                            RecordStream=RecordStream, AudioParameters=AudioParameters, VideoParameters=VideoParameters,
-                           Frame=Frame)
+                           AudioQuality=AudioQuality, VideoQuality=VideoQuality, Frame=Frame)
 
 
 async def main() -> None:
