@@ -831,8 +831,9 @@ class Worker:
         return True, "queued" if pos else "playing"
 
     def _video_params(self) -> tuple[str | None, str | None]:
-        """🎬 뮤비 yt-dlp/ffmpeg 파라미터: WARP 우회 길(MUSIC_PROXY)을 yt-dlp 에 (음원 차단 우회). 쿠키는 2차."""
-        proxy = os.getenv("MUSIC_PROXY", "").strip()
+        """🎬 뮤비 yt-dlp 파라미터: WARP 우회 길(MUSIC_PROXY)을 yt-dlp 에 (음원 차단 우회). 쿠키는 2차.
+        MUSIC_PROXY 는 쉼표로 여러 길(warp·warp2)이라 yt-dlp 엔 첫 길만 (통째 넘기면 '40000,socks5:' 포트 파싱 에러)."""
+        proxy = os.getenv("MUSIC_PROXY", "").split(",")[0].strip()
         return (f"--proxy {proxy}" if proxy else None), None
 
     async def _music_video(self, chat_id: int, p: dict) -> tuple[bool, str]:
