@@ -94,6 +94,14 @@ register_setting("greet_html", {}, "입장 인사말 서식",
                  render_fn=lambda v: "있음" if isinstance(v, dict) and v.get("html") else "(없음)")
 _EMOJI_TAG = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
 _CODE_IN_CODE = re.compile(r"<code>((?:<code>[^<]*</code>(?:, )?)+)</code>")
+# 자리표시자 대소문자 아무렇게나 적어도 채워지게 (실수 방지): {ID}·{Username}·{Name} → {id}·{username}·{name}
+# 2026-11-19 뉴월드 클론 입장인사에 {ID}·{USERNAME} 대문자로 적어서 글자 그대로 떴음 (코드는 소문자만 치환).
+_PLACEHOLDER = re.compile(r"\{(names|name|id|username|time|count)\}", re.I)
+
+
+def norm_placeholders(s: str) -> str:
+    """인사말 틀의 알려진 자리표시자를 소문자로 맞춤 ({ID}→{id}). 다른 중괄호 글자는 안 건드림."""
+    return _PLACEHOLDER.sub(lambda m: "{" + m.group(1).lower() + "}", s or "")
 
 
 # ── 검사 ──────────────────────────────────────────────────
@@ -271,7 +279,8 @@ def with_names(template: str, tag: bool = True) -> str:
     """{names}/{name} 가 없는 인사말: 태그 켜짐 → 앞에 이름을 붙임, 꺼짐 → 인사말 그대로 (이름 없이).
     이미 {name}·{names} 로 이름을 쓴 인사말(사용자명 칸 등)엔 앞에 또 안 붙임 — '{name' 둘 다 잡음
     (2026-10-26 泰山: '• 사용자명 : {name}' 인데 맨 앞에 이름이 또 나옴)."""
-    return template if "{name" in template or not tag else "{names} " + template
+    low = norm_placeholders(template)   # {NAME}·{Names} 대문자로 적어도 '이름 있음'으로 봄 (앞에 중복 안 붙게)
+    return template if "{name" in low or not tag else "{names} " + template
 
 
 def rich_template(s: dict) -> str | None:
@@ -293,11 +302,11 @@ def fill(template: str, names_html: str, extra: dict[str, str] | None = None, ht
     {names}·{name} 이름(멘션) · {id} 고유번호 · {username} @아이디 · {time} 들어온 시각 (extra 로 받은 값, 2026-10-07 백악관 요청).
     html_tpl = 편집기에서 서식 있게 넣은 틀 (텔레그램이 만든 HTML 이라 이스케이프 없이 칸만 바꿈)."""
     if html_tpl is not None:
-        out = html_tpl.replace("{names}", names_html).replace("{name}", names_html)
+        out = norm_placeholders(html_tpl).replace("{names}", names_html).replace("{name}", names_html)
         for key, value in (extra or {}).items():
             out = out.replace(key, value)
         return _CODE_IN_CODE.sub(r"\1", out)    # 고정폭으로 감싼 {id} 안에 또 고정폭 → 텔레그램이 거절함
-    out = esc(template).replace(esc("{names}"), names_html).replace(esc("{name}"), names_html)
+    out = esc(norm_placeholders(template)).replace(esc("{names}"), names_html).replace(esc("{name}"), names_html)
     for key, value in (extra or {}).items():
         out = out.replace(esc(key), value)
     return out

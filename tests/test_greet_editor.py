@@ -638,5 +638,35 @@ async def plain_text_input_clears_old_format():
     assert (await db.get_settings(CHAT))["greet_html"] == {}
 
 
+@test
+async def uppercase_placeholders_also_filled():
+    """{ID}·{USERNAME}·{TIME} 대문자로 적어도 채워진다 (2026-11-19 뉴월드 클론 입장인사)."""
+    from sodam.greet import fill, fill_values
+    extra = fill_values([(123456, "홍길동", "hong")], "2026-11-19 19:22:32")
+    out = fill("번호:{ID} 아이디:{USERNAME} 시각:{TIME}", "<a>홍길동</a>", extra)
+    assert "123456" in out and "@hong" in out and "19:22:32" in out, out
+    assert "{ID}" not in out and "{USERNAME}" not in out and "{TIME}" not in out, out
+    # html_tpl 경로도 (서식 인사)
+    out2 = fill("", "<a>홍</a>", extra, html_tpl="<b>번호</b> {Id}")
+    assert "123456" in out2 and "{Id}" not in out2, out2
+
+
+@test
+async def uppercase_name_no_duplicate_prefix():
+    """{NAME} 대문자로 이미 쓴 인사말엔 앞에 이름을 또 안 붙인다."""
+    assert with_names("닉네임:{NAME}", tag=True) == "닉네임:{NAME}"
+    # 이름 칸이 아예 없으면 예전처럼 앞에 붙음
+    assert with_names("어서와", tag=True) == "{names} 어서와"
+
+
+@test
+async def farewell_uppercase_placeholders():
+    """퇴장인사도 {ID}·{COUNT} 대문자 채워짐."""
+    from sodam.farewell import render as frender
+    out = frender("{NAME} 나감 · 번호 {ID} · 인원 {COUNT}명", [(5, "철수", "cs")], count=10)
+    assert "철수" in out and "5" in out and "10" in out, out
+    assert "{ID}" not in out and "{COUNT}" not in out, out
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
