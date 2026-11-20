@@ -3,6 +3,7 @@ import html
 import re
 import time
 from collections import deque
+from collections.abc import Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -29,10 +30,12 @@ def rich_html(msg) -> str | None:
 def rich_of(msg) -> dict | None:
     """네이티브 리치 메시지(표·수식 등, Bot API 10.1 sendRichMessage)의 원본 dict({blocks, is_rtl, …}).
     PTB 22.8 은 rich_message 를 몰라 api_kwargs 에 원본 dict 가 그대로 남는다 (실측). blocks 없으면 None.
-    자동답글·예약공지가 '표 그대로 다시 보내기'(sendRichMessage)에 쓰는 단일 출처 — 다른 기능도 이걸 씀."""
+    ⚠️ PTB 는 api_kwargs 를 dict 가 아니라 MappingProxyType(읽기전용)으로 줌 → isinstance(dict) 는 False 라 놓침
+       (2026-11-21 실측: 오너가 표 보냈는데 '글이나 사진 보내주세요' 폴백만 떴음). Mapping 으로 봐야 잡힘.
+    돌려줄 땐 평범한 dict 로(쓰는 쪽이 json.dumps·수정하니까). 단일 출처 — 자동답글·예약공지 다 이걸 씀."""
     ak = getattr(msg, "api_kwargs", None)
-    rm = ak.get("rich_message") if isinstance(ak, dict) else None
-    return rm if (isinstance(rm, dict) and rm.get("blocks")) else None
+    rm = ak.get("rich_message") if isinstance(ak, Mapping) else None
+    return dict(rm) if (isinstance(rm, Mapping) and rm.get("blocks")) else None
 
 
 def html_balanced(s: str) -> bool:
