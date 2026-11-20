@@ -39,7 +39,7 @@ LIVE = os.getenv("VOICE_LIVE_MODEL", LIVE_MODEL)
 BACKEND = os.getenv("VOICE_BACKEND_MODEL", BACKEND_MODEL)
 POLL = 1.0
 VIDEO = os.getenv("VOICE_VIDEO", "0") == "1"             # 기본 소리만 (오너 결정 2026-09-29). 영상 칸에 프사: VOICE_VIDEO=1
-MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "3"))      # 동시에 여는 통화 (2 vCPU 서버)
+MAX_CALLS = int(os.getenv("VOICE_MAX_CALLS", "6"))      # 동시에 여는 통화·노래 (전체 합계, 클론 포함). 코어당 ~1.5 — 2코어 땐 3, 4코어로 증설돼 6 (2026-11-20 오너 '다른 방 통화 많아 못 들어감'). 부하 보며 VOICE_MAX_CALLS 로 조절
 ORPHAN_GRACE = int(os.getenv("VOICE_ORPHAN_GRACE", "90"))  # 실제 재생·통화 없이 in_call 에만 남은 좀비를 이 초 넘으면 청소
 INVITE = re.compile(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)")
 
