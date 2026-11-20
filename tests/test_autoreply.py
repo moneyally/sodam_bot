@@ -73,7 +73,7 @@ def photo_msg(mid=50):
 def promo_msg(mid=60):
     """URL 버튼(색·콜백 섞임) 달린 제휴 글 — URL 버튼만 유지되어야 한다."""
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("앙벳", url="https://t.me/a", style="success"),
+        [InlineKeyboardButton("앙벳", url="https://t.me/a", style="success", icon_custom_emoji_id="5431"),
          InlineKeyboardButton("띵벳", url="https://t.me/b")],
         [InlineKeyboardButton("코드 받기", callback_data="x")],   # 콜백은 버려야 (다른 방에서 안 먹힘)
     ])
@@ -96,6 +96,7 @@ async def url_buttons_are_kept_on_copy_and_fallback():
     mk = copies(bot)[0][4]["reply_markup"]
     assert [b.url for r in mk.inline_keyboard for b in r] == ["https://t.me/a", "https://t.me/b"]
     assert mk.inline_keyboard[0][0].style == "success"               # 색 유지
+    assert mk.inline_keyboard[0][0].icon_custom_emoji_id == "5431"   # 색아이콘(다이소 제휴리스트 꼴) 유지
 
     # 사본 경로(원본 복사 실패)에서도 버튼 유지
     await db._write("UPDATE auto_replies SET last_used=0")
@@ -103,7 +104,9 @@ async def url_buttons_are_kept_on_copy_and_fallback():
     await say(ctx, OTHER, "제휴")
     kw = bot.named("send_message")[-1][3]
     assert kw.get("reply_markup") is not None
-    assert [b.url for r in kw["reply_markup"].inline_keyboard for b in r] == ["https://t.me/a", "https://t.me/b"]
+    fb = kw["reply_markup"].inline_keyboard
+    assert [b.url for r in fb for b in r] == ["https://t.me/a", "https://t.me/b"]
+    assert fb[0][0].style == "success" and fb[0][0].icon_custom_emoji_id == "5431"   # 사본에서도 색·아이콘 유지
 
 
 @test
@@ -259,6 +262,32 @@ async def ai_tool_saves_the_replied_message():
 @test
 def animated_emoji_fallback_keeps_the_plain_emoji():
     assert AR._no_emoji('안녕 <tg-emoji emoji-id="5">🔥</tg-emoji>!') == "안녕 🔥!"
+
+
+def _tiles(n):
+    """커스텀 이모지 조각 n 개짜리 배너(표·텔레모션) HTML."""
+    return "".join(f'<tg-emoji emoji-id="{500 + i}">🟦</tg-emoji>' for i in range(n))
+
+
+@test
+async def banner_in_fallback_gets_a_full_width_spacer():
+    # 표(분할 커스텀 이모지)를 사본(텍스트)으로 보낼 때 전체폭 스페이서가 붙어 계단으로 안 깨진다 (예약공지와 같은 방식)
+    from sodam.util import BANNER_SPACER
+    db, svc, bot, ctx = await setup()
+    await AR.send_snap(bot, db, CHAT, {"html": _tiles(4)})         # 미디어 없는 글 = 사본 텍스트 경로
+    body = bot.named("send_message")[-1][2]
+    assert body.rstrip().endswith(BANNER_SPACER), (              # 뮤테이션: send_snap 의 banner_spacer 줄 제거하면 실패
+        "표면 스페이서가 붙어야 함", body[-50:])
+
+
+@test
+async def ordinary_text_is_left_alone():
+    # 이모지 한두 개짜리 보통 글은 스페이서를 안 붙인다 (조각 4개 이상 '배너'만)
+    from sodam.util import BANNER_SPACER
+    db, svc, bot, ctx = await setup()
+    await AR.send_snap(bot, db, CHAT, {"html": "안녕 " + _tiles(1)})
+    body = bot.named("send_message")[-1][2]
+    assert BANNER_SPACER not in body, body
 
 
 if __name__ == "__main__":
