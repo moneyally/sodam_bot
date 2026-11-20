@@ -115,6 +115,30 @@ async def autoplay_adds_a_similar_song_when_the_queue_runs_out():
 
 
 @test
+async def autoplay_prefers_room_history_over_youtube():
+    # 기록 많은 방: SEED 다음에 TARGET 이 온 적 있고(그 사이 16곡), 마지막이 SEED → autodj 가 유튜브 대신 TARGET 을 고름
+    db = await make_db()
+    ts0 = int(time.time()) - 1000
+
+    async def played(title, i):
+        await db._write("INSERT INTO music_queue(chat_id,title,url,vid,duration,state,ts,started_ts,auto) "
+                        "VALUES(?,?,?,?,?,?,?,?,0)", (CHAT, title, "u", "v%010d" % i, 100, "done", ts0 + i, ts0 + i))
+    SEED, TARGET = "세븐틴 - 손오공", "에스파 - Next Level"
+    await played(SEED, 0)
+    await played(TARGET, 1)                                  # SEED→TARGET (SR 신호)
+    for i in range(2, 18):
+        await played("딴곡%d - x" % i, i)                    # 16곡 (최근 15 창을 채워 TARGET 이 '최근'에 안 걸리게)
+    await played(SEED, 18)                                   # 마지막 = SEED → 여기서 자동 재생
+    await musicq.set_mode(db, CHAT, "autoplay", True)
+    src = AutoSource(tempfile.mkdtemp(), [pick(99, "유튜브가 준 생판 다른 곡")])
+    pl, _ = await fast_player(db, src=src)
+    assert await pl._autoplay(), "자동 재생 성공"
+    last = dict((await db._all("SELECT title, by_name, auto FROM music_queue ORDER BY id DESC LIMIT 1"))[0])
+    assert "Next Level" in last["title"], ("방 기록(SEED→TARGET)으로 TARGET 을 골라야 함", last["title"])
+    assert last["auto"] == 1 and not src.seeds, "방 기록으로 됐으니 유튜브(related)는 안 부름"
+
+
+@test
 async def autoplay_stops_after_max_songs_without_a_person_and_uses_original_id():
     db = await make_db()
     await add(db, 0, vid="humanAAAAAA")

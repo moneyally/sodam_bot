@@ -29,7 +29,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import audio, musicmatch as mm, musicq, warprotate
+from . import audio, autodj, musicmatch as mm, musicq, warprotate
 
 log = logging.getLogger("sodam.voice.music")
 
@@ -1097,13 +1097,25 @@ class Player:
                 log.info("자동 재생 %s: 연속 %s곡 → 멈춤", self.chat_id, musicq.AUTO_MAX)
                 return False
             recent = [dict(r) for r in await musicq.recent_tracks(self.db, self.chat_id)]
-            ids = [r.get("orig_vid") or r.get("vid") or "" for r in recent if r.get("state") != "removed"]
-            seed = next((v for v in ids if re.fullmatch(r"[A-Za-z0-9_-]{11}", v)), None)
-            if not seed:
+            played = [r for r in recent if r.get("state") != "removed"]
+            seed_row = next((r for r in played
+                             if re.fullmatch(r"[A-Za-z0-9_-]{11}", r.get("orig_vid") or r.get("vid") or "")), None)
+            if seed_row is None:
                 return False
+            seed = seed_row.get("orig_vid") or seed_row.get("vid")
+            seed_title = seed_row.get("title") or ""
+            seed_key = mm.song_key(seed_title)
             seen_v = {v for r in recent for v in (r.get("vid"), r.get("orig_vid")) if v}
             seen_t = {mm.song_key(r.get("title") or "") for r in recent}
-            got = await asyncio.to_thread(self.source.related, seed, seen_v, seen_t)
+            # ① 이 방 재생 기록 기반 자동선곡 (외부 호출 0, 즉시) — 최근 15곡은 반복 방지로 제외
+            recent_keys = {mm.song_key(r.get("title") or "") for r in played[:15]}
+            got = None
+            if seed_key:
+                # 최근 15곡(recent_keys)만 반복 방지 — seen_v(최근 50 vid)까지 빼면 되살릴 과거 곡도 사라짐
+                got = await autodj.pick(self.db, self.chat_id, seed_key, seed_title, recent_keys)
+            # ② 폴백: 유튜브 믹스 (기록이 얕거나 방 후보가 다 소진됐을 때)
+            if not got:
+                got = await asyncio.to_thread(self.source.related, seed, seen_v, seen_t)
             if not got or self.done:
                 return False
             rid, _, why = await musicq.add(self.db, self.chat_id, title=got["title"], url=got["url"], vid=got["vid"],
