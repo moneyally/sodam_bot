@@ -137,14 +137,24 @@ def snapshot(msg) -> dict:
         body = rich_html(msg) or esc(plain)
     except (AttributeError, TypeError):
         body = esc(plain)
-    return {"html": body, "kind": kind, "file_id": fid, "markup": _url_markup(getattr(msg, "reply_markup", None))}
+    return {"html": body, "kind": kind, "file_id": fid,
+            "markup": _url_markup(getattr(msg, "reply_markup", None)), "rich": _rich_of(msg)}
+
+
+def _rich_of(msg) -> dict | None:
+    """네이티브 리치 메시지(표·수식 등, Bot API 10.1 sendRichMessage)의 blocks 를 챙긴다.
+    PTB 22.8 은 rich_message 를 모르니 api_kwargs 에 원본 dict 가 남는다 (실측). 없으면 None."""
+    ak = getattr(msg, "api_kwargs", None)
+    rm = ak.get("rich_message") if isinstance(ak, dict) else None
+    return rm if (isinstance(rm, dict) and rm.get("blocks")) else None
 
 
 def describe(snap: dict) -> str:
     kind = snap.get("kind")
     text = html_plain(snap.get("html") or "").strip().replace("\n", " ")
-    head = f"[{KIND_NAMES.get(kind, kind)}] " if kind else ""
-    return head + (text[:40] + ("…" if len(text) > 40 else "") if text else ("" if kind else "(빈 글)"))
+    head = f"[{KIND_NAMES.get(kind, kind)}] " if kind else ("[📊 표] " if snap.get("rich") else "")
+    return head + (text[:40] + ("…" if len(text) > 40 else "")
+                   if text else ("" if (kind or snap.get("rich")) else "(빈 글)"))
 
 
 async def rows(db, chat_id: int) -> list:
@@ -161,7 +171,7 @@ async def save(db, chat_id: int, word: str, *, by: int, src: tuple[int, int] | N
     why = check_word(word)
     if why:
         return False, why
-    if not snap.get("html") and not snap.get("kind"):
+    if not snap.get("html") and not snap.get("kind") and not snap.get("rich"):
         return False, "저장할 글이 비어 있어요."
     if len(html_plain(snap.get("html") or "")) > TEXT_LIMIT:
         return False, "글이 너무 길어요 (4096자까지)."
@@ -235,12 +245,35 @@ async def _send_text(bot, chat_id: int, html_text: str, rp, markup=None):
         return await bot.send_message(chat_id, plain, parse_mode="HTML", reply_parameters=rp, reply_markup=markup)
 
 
+async def _send_rich(bot, chat_id: int, rich: dict, rp, markup):
+    """네이티브 표 등 리치 메시지(blocks)를 sendRichMessage 로 재전송 (PTB 22.8 미지원 → raw _post).
+    받을 때 챙긴 output blocks 를 그대로 input blocks 로 다시 보냄 (왕복 실측 ok)."""
+    blocks = (rich or {}).get("blocks")
+    if not blocks:
+        return None
+    rm = {"blocks": blocks}
+    if rich.get("is_rtl"):
+        rm["is_rtl"] = True
+    data = {"chat_id": chat_id, "rich_message": rm}
+    if rp is not None:
+        data["reply_parameters"] = rp.to_dict()
+    if markup is not None:
+        data["reply_markup"] = json.loads(markup.to_json())
+    return await bot._post("sendRichMessage", data)
+
+
 async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = None, markup=None):
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     kind, fid, body = snap.get("kind"), snap.get("file_id"), snap.get("html") or ""
     body = banner_spacer(body)   # 표(분할 커스텀 이모지)면 전체폭 스페이서 붙여 계단으로 안 깨지게 (예약공지와 같은 방식)
     if markup is None:
         markup = _markup(snap.get("markup"), bot)
+    rich = snap.get("rich")
+    if rich and not (kind and fid):          # 네이티브 표(blocks) — 미디어 없으면 sendRichMessage 로
+        try:
+            return await _send_rich(bot, chat_id, rich, rp, markup)
+        except Exception as e:               # API 거절 등은 글자로 폴백 (답글은 뜨게)
+            log.info("자동답글 표(리치) 전송 실패 %s: %s — 글자로", chat_id, e)
     if not kind or not fid:
         return await _send_text(bot, chat_id, body, rp, markup)
     fits = body and kind not in ("sticker", "video_note") and len(html_plain(body)) <= CAPTION_LIMIT

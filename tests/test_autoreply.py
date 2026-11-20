@@ -29,6 +29,10 @@ class Bot(FakeBot):
     async def send_voice(self, chat_id, voice, caption=None, **kw):
         return await self._send_media("send_voice", chat_id, voice, caption, **kw)
 
+    async def _post(self, endpoint, data=None, **kw):       # 네이티브 표(sendRichMessage) raw 호출 기록
+        self.calls.append((endpoint, data))
+        return SimpleNamespace(message_id=90000)
+
 
 async def setup():
     db = await make_db()
@@ -278,6 +282,38 @@ async def banner_in_fallback_gets_a_full_width_spacer():
     body = bot.named("send_message")[-1][2]
     assert body.rstrip().endswith(BANNER_SPACER), (              # 뮤테이션: send_snap 의 banner_spacer 줄 제거하면 실패
         "표면 스페이서가 붙어야 함", body[-50:])
+
+
+def _table_blocks():
+    return [{"type": "table", "cells": [
+        [{"text": "제휴", "is_header": True}, {"text": "바로가기", "is_header": True}],
+        [{"text": "토지노"}, {"text": {"type": "url", "text": "열기", "url": "https://t.me/a"}}]]}]
+
+
+@test
+def snapshot_captures_a_native_table():
+    # 전달된 네이티브 표(Bot API 10.1 리치 메시지)는 PTB 가 모르니 api_kwargs 에서 blocks 를 챙긴다
+    m = FakeMsg(CHAT, fake_user(ADMIN, "관리"), "")
+    m.api_kwargs = {"rich_message": {"blocks": _table_blocks()}}
+    snap = AR.snapshot(m)
+    assert snap["rich"] and snap["rich"]["blocks"][0]["type"] == "table"
+    assert "표" in AR.describe(snap)                                  # 목록에 [📊 표]
+
+
+@test
+async def table_message_is_saved_and_resent_as_rich():
+    # 표(글·미디어 없음)도 자동답글로 저장되고(빈 글 거절 X), 사본은 sendRichMessage(blocks)로 재현
+    db, svc, bot, ctx = await setup()
+    blocks = _table_blocks()
+    snap = {"html": "", "kind": None, "file_id": None, "markup": None, "rich": {"blocks": blocks}}
+    ok, _ = await AR.save(db, CHAT, "제휴표", by=ADMIN, src=(CHAT, 777), snap=snap)
+    assert ok, "표도 저장돼야 함 (빈 글로 거절되면 안 됨)"
+    await AR.send_snap(bot, db, CHAT, snap, reply_to=5)
+    posts = bot.named("sendRichMessage")
+    assert posts, "표는 sendRichMessage 로 보내야 함 (뮤테이션: send_snap 의 rich 분기 제거하면 실패)"
+    sent = posts[-1][1]
+    assert sent["rich_message"]["blocks"] == blocks                  # 받은 표 그대로 재전송
+    assert sent["reply_parameters"]["message_id"] == 5              # 친 사람 글에 답장
 
 
 @test
