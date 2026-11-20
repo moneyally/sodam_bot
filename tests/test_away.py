@@ -117,5 +117,46 @@ async def tool_sets_and_clears_and_strips_injection():
     assert await away.get_away(db, AWAY) is None and ("풀었" in out or "환영" in out)
 
 
+# ── check_away 도구: 남이 'X 언제 와?' 물으면 X 자리비움 노트 조회 ──────────────
+# 2026-11-20 태산 루디 '몽키 언제 와?'에 소담이 못 답함 → 자리비움이 AI 랑 연결 안 돼 있었음 (set_away 는 본인만).
+async def _mk_member(db, uid, name, un=None):
+    await db.upsert_user(fake_user(uid, name, un))
+    await db.touch_member(CHAT, uid)
+
+
+def _ctx(svc, bot, caller_id=CALLER):
+    from sodam.permissions import Role
+    from sodam.tools import ToolCtx
+    return ToolCtx(svc, bot, CHAT, fake_user(caller_id, "부른이"), Role.MEMBER, {})
+
+
+@test
+async def check_away_returns_note_when_set():
+    from sodam.panels.away import t_check_away
+    db, svc, bot = await world()
+    await _mk_member(db, AWAY, "몽키", "monkey")
+    await away.set_away(db, AWAY, "몽키", "새벽에 옴")
+    out = await t_check_away(_ctx(svc, bot), {"name": "몽키"})
+    assert "자리비움 중" in out and "새벽에 옴" in out, out   # 노트 그대로 전함 (뮤테이션: info None 분기만 두면 실패)
+
+
+@test
+async def check_away_says_unknown_when_not_set():
+    """자리비움 안 걸었으면 '모른다 + 지어내지 말 것' — 소담은 알 길이 없음 (지어내기 금지 규칙)."""
+    from sodam.panels.away import t_check_away
+    db, svc, bot = await world()
+    await _mk_member(db, AWAY, "몽키", "monkey")
+    out = await t_check_away(_ctx(svc, bot), {"name": "몽키"})
+    assert "모른" in out and "지어내" in out, out
+    assert "자리비움 중" not in out
+
+
+@test
+async def check_away_is_read_only_and_mapped():
+    from sodam import prompt, tools
+    assert "check_away" in tools.READ_ONLY, "조회 전용이어야 (제재·설정 못 함)"
+    assert "check_away" in prompt.SYSTEM   # 지도에 'X 언제 와? → check_away'
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
