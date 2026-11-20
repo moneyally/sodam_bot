@@ -7,7 +7,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -239,7 +239,9 @@ class FakeMsg:
         self.message_id = message_id
         self.reply_to_message = reply_to
         self.entities, self.caption_entities = tuple(entities or ()), ()  # PTB 는 튜플
-        self.api_kwargs = api_kwargs or {}   # PTB 가 모르는 필드(rich_message 등)는 여기에 원본 dict 로 (util.rich_of)
+        # PTB 가 모르는 필드(rich_message 등)는 여기에 — ⚠️ PTB 는 dict 가 아니라 MappingProxyType(읽기전용)으로 줌.
+        # 가짜도 똑같이 MappingProxyType 로 싸야 'isinstance(dict)' 같은 실수를 테스트가 잡는다 (2026-11-21 실측 함정).
+        self.api_kwargs = MappingProxyType(dict(api_kwargs or {}))
         self.deleted = False
         self.replies: list[str] = []
         self.reply_kws: list[dict] = []

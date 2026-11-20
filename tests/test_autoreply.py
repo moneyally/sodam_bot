@@ -293,8 +293,8 @@ def _table_blocks():
 @test
 def snapshot_captures_a_native_table():
     # 전달된 네이티브 표(Bot API 10.1 리치 메시지)는 PTB 가 모르니 api_kwargs 에서 blocks 를 챙긴다
-    m = FakeMsg(CHAT, fake_user(ADMIN, "관리"), "")
-    m.api_kwargs = {"rich_message": {"blocks": _table_blocks()}}
+    # ⚠️ PTB 는 api_kwargs 를 MappingProxyType 로 주므로 생성자로 넘겨 진짜 경로를 타게 (2026-11-21 실측 함정: dict 로 덮어쓰면 뮤테이션 못 잡음)
+    m = FakeMsg(CHAT, fake_user(ADMIN, "관리"), "", api_kwargs={"rich_message": {"blocks": _table_blocks()}})
     snap = AR.snapshot(m)
     assert snap["rich"] and snap["rich"]["blocks"][0]["type"] == "table"
     assert "표" in AR.describe(snap)                                  # 목록에 [📊 표]
