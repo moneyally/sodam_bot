@@ -884,5 +884,142 @@ async def publish_album_puts_buttons_in_followup_message():
     await db.close()
 
 
+# ── 📊 네이티브 표(리치 메시지) ───────────────────────────────
+def _tbl():
+    """다이소 제휴리스트 같은 네이티브 표 blocks (Bot API 10.1 sendRichMessage)."""
+    return [{"type": "table", "cells": [
+        [{"text": "제휴", "is_header": True}, {"text": "바로가기", "is_header": True}],
+        [{"text": "토지노"}, {"text": {"type": "url", "text": "열기", "url": "https://t.me/a"}}]]}]
+
+
+def _tbl_msg(uid=ADMIN, **kw):
+    return dict(api_kwargs={"rich_message": {"blocks": _tbl()}}, **kw)
+
+
+def rich_posts(bot):
+    return [c for c in bot.calls if c[0] == "sendRichMessage"]
+
+
+@test
+async def wizard_captures_table_skips_media_and_publishes_rich():
+    """2/7 내용에서 네이티브 표를 보내면 draft.rich 에 담고 사진 단계를 건너뛴다(표는 사진과 못 섞음).
+    저장·발송은 sendRichMessage 로 표 그대로 (뮤테이션: body 의 rich 분기·publish 의 rich 분기 제거하면 실패)."""
+    db, svc, bot, _ = await setup()
+    dm = dm_ctx(svc, bot)
+    await press(svc, bot, f"m:scn:{CHAT}")
+    await dm("제휴 안내")                                    # 1/7 제목
+    await dm("", **_tbl_msg())                              # 2/7 표 → 미디어 건너뛰고 바로 시각
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert draft.step == "when", draft.step                # 사진 단계(media) 안 거침
+    assert draft.rich and draft.text == "" and draft.media == []
+    await dm("매일 21:30")
+    q = FakeQuery(ADMIN, fake_user(ADMIN))
+    await svc.announcer.on_callback(bot, q, [draft.token, "pin0"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "keep1"])
+    await svc.announcer.on_callback(bot, q, [draft.token, "nolimit"])
+    await dm("없음")                                        # 🔗 버튼 없이 → confirm (표 미리보기)
+    assert draft.step == "confirm"
+    assert rich_posts(bot) and rich_posts(bot)[-1][1]["chat_id"] == ADMIN  # 미리보기는 1:1 로 표 그대로
+    await svc.announcer.on_callback(bot, q, [draft.token, "save"])
+    row = (await db.schedules(CHAT))[0]
+    assert announce.row_rich(row)["blocks"][0]["type"] == "table"          # DB 에 표 저장 (뮤테이션: rich 필드 안 넘기면 실패)
+    assert row["title"] == "" and not row["media_type"]
+    bot.calls.clear()
+    await svc.announcer.publish(bot, row)
+    posts = rich_posts(bot)
+    assert posts, "표 공지는 sendRichMessage 로 발송 (뮤테이션: publish 의 rich 분기 제거하면 실패)"
+    assert posts[-1][1]["chat_id"] == CHAT
+    assert posts[-1][1]["rich_message"]["blocks"] == _tbl()               # 받은 표 그대로 재전송
+    assert not [c for c in bot.calls if c[0] == "send_message"]           # 표만, 빈 글 따로 안 나감
+    await db.close()
+
+
+@test
+async def publish_table_attaches_url_buttons_and_pins():
+    """표 공지에 URL 버튼을 달면 sendRichMessage reply_markup 으로 붙고, 📌 고정이면 pin_chat_message.
+    del_prev(기본)면 지난 회차 표 글을 지운다."""
+    import json
+    db, svc, bot, _ = await setup()
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="10:00", interval_min=None, title="",
+                                text="", media_type=None, media_id=None, pin=True, created_by=ADMIN,
+                                rich=json.dumps({"blocks": _tbl()}),
+                                buttons=json.dumps([["열기", "https://t.me/june0247", None, "success"]]))
+    await db.mark_schedule_sent(sid, 1, 55555, None)        # 지난 회차 글 id (del_prev 로 지워질)
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)
+    assert ("delete", CHAT, 55555) in bot.calls             # 지난 회차 표 글 삭제 (del_prev 기본)
+    post = rich_posts(bot)[-1][1]
+    markup = post["reply_markup"]
+    assert markup["inline_keyboard"][0][0]["url"] == "https://t.me/june0247"  # 버튼 붙음
+    assert markup["inline_keyboard"][0][0]["style"] == "success"             # 색 반영
+    assert [c for c in bot.calls if c[0] == "pin"]                           # 📌 고정 (뮤테이션: pin 분기 제거하면 실패)
+    await db.close()
+
+
+@test
+async def publish_table_failure_still_marks_sent():
+    """표 발송이 거절돼도 mark_schedule_sent 로 기록 — 안 그러면 매 틱 재시도로 에러 폭탄 (글 공지와 같은 안전)."""
+    import json
+    db, svc, bot, _ = await setup()
+    bot.post_fail = ("sendRichMessage",)                    # 텔레그램이 표를 거절하는 상황
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="10:00", interval_min=None, title="",
+                                text="", media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                rich=json.dumps({"blocks": _tbl()}))
+    assert (await db.get_schedule(CHAT, sid))["last_sent"] is None   # daily 는 발송 전 last_sent 없음
+    row = await db.get_schedule(CHAT, sid)
+    await svc.announcer.publish(bot, row)                   # 터지지 않아야
+    after = await db.get_schedule(CHAT, sid)
+    assert after["last_sent"]                               # 실패해도 발송 시각 기록 (재시도 폭탄 방지 — 뮤테이션: mark_schedule_sent 빼면 None)
+    await db.close()
+
+
+@test
+async def edit_table_keeps_rich_and_switch_to_text_clears_it():
+    """표 공지 수정: '그대로' 면 표 유지하고 사진 단계 건너뜀. 2/7 에서 글을 보내면 표를 버리고 글 공지로 (draft.rich=None).
+    (뮤테이션: body else 의 draft.rich=None 제거하면 글로 바꿔도 표가 남아 실패)"""
+    import json
+    db, svc, bot, _ = await setup()
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="",
+                                text="", media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                rich=json.dumps({"blocks": _tbl()}))
+    row = await db.get_schedule(CHAT, sid)
+    # ① '그대로' → 표 유지, 사진 단계 건너뜀
+    await svc.announcer.start_dm(bot, ADMIN, CHAT, edit_row=row)
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    assert draft.rich and draft.step == "title"
+    dm = dm_ctx(svc, bot)
+    await dm("그대로")                                       # 제목 그대로 → body
+    await dm("그대로")                                       # 내용 그대로 → (표라) 미디어 건너뛰고 시각
+    assert draft.step == "when" and draft.rich               # 표 유지
+    # ② 다시 수정하며 2/7 에 글을 보내면 표를 버림
+    await svc.announcer.start_dm(bot, ADMIN, CHAT, edit_row=row)
+    draft = svc.announcer.drafts[(ADMIN, ADMIN)]
+    await dm("그대로")                                       # 제목
+    await dm("이제 그냥 글 공지")                             # 내용 = 글 → 표 버림
+    assert draft.rich is None and draft.step == "media", draft.step  # 글 공지로 전환 (미디어 단계)
+    assert draft.text == "이제 그냥 글 공지"
+    await db.close()
+
+
+@test
+async def table_item_and_preview_show_rich():
+    """항목 화면에 '📊 표' 표시, 미리보기는 1:1 로 sendRichMessage (글·사진 아님)."""
+    import json
+    db, svc, bot, _ = await setup()
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="",
+                                text="", media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                rich=json.dumps({"blocks": _tbl()}))
+    ql = await press(svc, bot, f"m:sc:{CHAT}")             # 목록 (라벨은 버튼에)
+    labels = [b.text for b in buttons(ql.kb)]
+    assert any("📊 표" in t for t in labels), labels        # 목록 버튼 라벨 (제목·글 없어도 '(내용 없음)' 아님)
+    q = await press(svc, bot, f"m:sci:{CHAT}:{sid}")
+    assert "📊 표" in q.edits[-1], q.edits[-1]               # 항목 화면 표시
+    await press(svc, bot, f"m:scp:{CHAT}:{sid}")            # 👀 미리보기
+    posts = rich_posts(bot)
+    assert posts and posts[-1][1]["chat_id"] == ADMIN       # 1:1 로 표 미리보기
+    assert not sent_to(bot, CHAT)                           # 방엔 안 올라감
+    await db.close()
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
