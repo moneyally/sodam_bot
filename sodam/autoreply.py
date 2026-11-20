@@ -27,7 +27,7 @@ from . import mediastore
 from .announce import extract_media
 from .db import register_schema
 from .settings import register_setting
-from .util import banner_spacer, esc, html_plain, rich_html
+from .util import banner_spacer, esc, html_plain, rich_html, rich_of
 
 log = logging.getLogger(__name__)
 
@@ -141,12 +141,7 @@ def snapshot(msg) -> dict:
             "markup": _url_markup(getattr(msg, "reply_markup", None)), "rich": _rich_of(msg)}
 
 
-def _rich_of(msg) -> dict | None:
-    """네이티브 리치 메시지(표·수식 등, Bot API 10.1 sendRichMessage)의 blocks 를 챙긴다.
-    PTB 22.8 은 rich_message 를 모르니 api_kwargs 에 원본 dict 가 남는다 (실측). 없으면 None."""
-    ak = getattr(msg, "api_kwargs", None)
-    rm = ak.get("rich_message") if isinstance(ak, dict) else None
-    return rm if (isinstance(rm, dict) and rm.get("blocks")) else None
+_rich_of = rich_of   # 네이티브 표(blocks) 챙기기 — 단일 출처는 util.rich_of (예약공지도 같은 걸 씀)
 
 
 def describe(snap: dict) -> str:

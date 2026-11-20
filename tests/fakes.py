@@ -62,6 +62,16 @@ class FakeBot:
         self.calls.append(("send_message", chat_id, text, kw))
         return self._msg(chat_id, text=text)
 
+    async def _post(self, endpoint, data=None, **kw):
+        # PTB 22.8 이 모르는 엔드포인트(sendRichMessage 등)는 raw _post 로 — 실봇은 결과 dict 를 돌려준다.
+        # named(endpoint) 로 찾을 수 있게 엔드포인트를 c[0] 로 기록.
+        if endpoint in getattr(self, "post_fail", ()):
+            from telegram.error import BadRequest
+            raise BadRequest(f"Bad Request: {endpoint}")
+        self.calls.append((endpoint, data))
+        self._next_id += 1
+        return {"message_id": self._next_id}
+
     async def _send_media(self, kind, chat_id, media, caption=None, **kw):
         self.calls.append((kind, chat_id, media, caption, kw))
         return self._msg(chat_id)
@@ -220,7 +230,8 @@ class FakeBot:
 
 class FakeMsg:
     def __init__(self, chat_id, user, text="", *, caption=None, photo=None, video=None, animation=None,
-                 document=None, sticker=None, audio=None, voice=None, message_id=1, reply_to=None, entities=None):
+                 document=None, sticker=None, audio=None, voice=None, message_id=1, reply_to=None, entities=None,
+                 api_kwargs=None):
         self.chat_id, self.from_user, self.text, self.caption = chat_id, user, text, caption
         self.photo = photo or ()
         self.video, self.animation, self.document = video, animation, document
@@ -228,6 +239,7 @@ class FakeMsg:
         self.message_id = message_id
         self.reply_to_message = reply_to
         self.entities, self.caption_entities = tuple(entities or ()), ()  # PTB 는 튜플
+        self.api_kwargs = api_kwargs or {}   # PTB 가 모르는 필드(rich_message 등)는 여기에 원본 dict 로 (util.rich_of)
         self.deleted = False
         self.replies: list[str] = []
         self.reply_kws: list[dict] = []

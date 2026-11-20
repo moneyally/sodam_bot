@@ -32,7 +32,7 @@ from .settings import parse_hhmm, register_setting
 # 남아 다음 틱에 → 위상이 자동으로 벌어진다(de-phase). (2026-11-03 뉴월드: 18개가 150분마다 우르르)
 register_setting("announce_gap_sec", 120, "예약공지 한 방 최소 간격(초)", range_=(0, 1800),
                  render_fn=lambda v: "제한 없음" if not v else (f"{int(v) // 60}분" if int(v) % 60 == 0 else f"{int(v)}초"))
-from .util import banner_spacer, esc, html_plain, rich_html
+from .util import banner_spacer, esc, html_plain, rich_html, rich_of
 
 if TYPE_CHECKING:
     from .services import Services
@@ -438,6 +438,7 @@ class Draft:
     media: list = field(default_factory=list)   # 여러 장(앨범): [{"t":종류,"id":file_id}, …] 사진·영상만, 최대 MAX_MEDIA
     media_prompt_id: int | None = None          # "N장 담겼어요" 안내 메시지 (앨범 여러 장 올 때 새 글 대신 그걸 고침)
     fmt: str = ""                 # 'html' = 제목·내용이 텔레그램 HTML (움직이는 이모지·서식 보관)
+    rich: str | None = None       # 네이티브 표(리치 메시지) JSON {blocks, is_rtl} — 있으면 표 그대로 올림 (제목·미디어 없음)
     kind: str | None = None
     at_time: str | None = None
     interval_min: int | None = None
@@ -495,6 +496,42 @@ def row_buttons(row) -> list:
     except (ValueError, TypeError):
         return []
     return got if isinstance(got, list) else []
+
+
+def row_rich(row) -> dict | None:
+    """저장된 예약공지의 네이티브 표(리치 메시지) — rich 칸 JSON → {blocks, is_rtl} 또는 None.
+    blocks 가 있어야 유효 (없으면 표 아님 → 보통 글·미디어 경로로)."""
+    raw = _col(row, "rich", None)
+    if not raw:
+        return None
+    try:
+        got = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return got if (isinstance(got, dict) and got.get("blocks")) else None
+
+
+def _msg_id(res) -> int | None:
+    """sendRichMessage(raw _post) 응답에서 message_id. 실봇은 dict, 테스트 FakeBot 도 dict."""
+    if isinstance(res, dict):
+        return res.get("message_id")
+    return getattr(res, "message_id", None)
+
+
+async def send_rich_message(bot: Bot, chat_id: int, rich: dict, *, reply_markup=None):
+    """네이티브 리치 메시지(표 등, Bot API 10.1 sendRichMessage) 전송. PTB 22.8 미지원 → raw _post.
+    받을 때 챙긴 output blocks 를 그대로 input blocks 로 다시 보냄 (자동답글과 같은 방식, 왕복 실측 ok).
+    표 보내기는 PTB 래퍼가 없어 raw _post — 다른 기능도 표 보내려면 이 패턴 (util.rich_of 로 받아 이걸로 보냄)."""
+    blocks = (rich or {}).get("blocks")
+    if not blocks:
+        raise BadRequest("리치 메시지에 blocks 가 없어요")
+    rm = {"blocks": blocks}
+    if rich.get("is_rtl"):
+        rm["is_rtl"] = True
+    data = {"chat_id": chat_id, "rich_message": rm}
+    if reply_markup is not None:
+        data["reply_markup"] = json.loads(reply_markup.to_json())
+    return await bot._post("sendRichMessage", data)
 
 
 def row_variants(row) -> list[str]:
@@ -660,9 +697,48 @@ class Announcer:
                     continue
                 raise
 
+    async def _send_rich_buttons(self, bot: Bot, chat_id: int, rich: dict, buttons: list, extra: list | None = None):
+        """📊 표(리치 메시지) + URL 버튼(+ extra 줄, 미리보기 저장/취소 등). 프리미엄 이모지를 텔레그램이 거절하면
+        이모지 빼고 한 번 다시 (send_buttons 와 같은 폴백 — 공지가 안 올라가는 것보단 낫다)."""
+        from . import greet   # 늦게 import (순환 방지)
+        icons = not greet._icons_off[0]
+        while True:
+            markup = button_markup(buttons, icons=icons, extra=extra)
+            try:
+                return await send_rich_message(bot, chat_id, rich, reply_markup=markup)
+            except BadRequest as e:
+                if buttons and icons and greet._ICON_REFUSED.search(str(e)):
+                    log.info("announce rich button emoji refused (%s) — 이모지 빼고 다시", e)
+                    greet._icons_off[0] = True
+                    icons = False
+                    continue
+                raise
+
+    async def _publish_rich(self, bot: Bot, row, rich: dict, now_ts: int) -> None:
+        """📊 표 공지 올리기 (지난 회차 삭제는 publish 가 이미 함): 발송 → (옵션) 고정 → 기록.
+        표는 미디어·제목과 못 섞어 앨범·mediastore 경로 없음 — URL 버튼만 붙는다."""
+        btns = row_buttons(row)
+        msg_id = None
+        try:
+            res = await self._send_rich_buttons(bot, row["chat_id"], rich, btns)
+            msg_id = _msg_id(res)
+            await self.svc.db.bump(datetime.now(self.svc.cfg.tz).strftime("%Y-%m-%d"), row["chat_id"], "rep_announce")
+            if row["pin"] and msg_id:
+                try:
+                    await bot.pin_chat_message(row["chat_id"], msg_id, disable_notification=True)
+                except TelegramError as e:
+                    log.warning("announce rich pin failed: %s", e)
+        except TelegramError as e:
+            log.warning("announce #%s rich send failed: %s", row["id"], e)
+            from . import opsdesk   # 📥 운영 인박스용 기록 (늦게 import — 순환 방지)
+            await opsdesk.schedule_failed(self.svc, row, "send", e.message)
+        # 실패해도 기록: 안 그러면 다음 틱마다 계속 재시도 (표는 앨범 아님 → msg_ids 는 None)
+        await self.svc.db.mark_schedule_sent(row["id"], now_ts, msg_id, None)
+
     async def publish(self, bot: Bot, row) -> None:
         """예약 공지 1건 올리기: 지난 회차 삭제 → 발송 → (옵션) 고정 → 기록. 알람·AI 작업은 cron.fire.
-        🌅 인사멘트(variants 여러 개)면 그 풀에서 무반복 순환으로 하나 골라 text 대신 쓴다."""
+        🌅 인사멘트(variants 여러 개)면 그 풀에서 무반복 순환으로 하나 골라 text 대신 쓴다.
+        📊 표 공지(rich)면 sendRichMessage 로 그대로 올린다 (미디어·제목 없이, URL 버튼은 붙임)."""
         now_ts = int(time.time())
         variants = row_variants(row)
         if variants and _col(row, "action", "post") == "post":   # 멘트 풀 돌리기 (무반복 순환)
@@ -684,6 +760,10 @@ class Announcer:
                     await bot.delete_message(row["chat_id"], mid)
                 except TelegramError:
                     pass
+        rich = row_rich(row)
+        if rich:   # 📊 네이티브 표 공지 — sendRichMessage 로 그대로 (미디어·앨범 경로 안 탐)
+            await self._publish_rich(bot, row, rich, now_ts)
+            return
         items = media_items(row)
         btns = row_buttons(row)                      # URL 버튼 (색·여러 개·프리미엄 이모지)
         msg_id, msg_ids = None, None
@@ -865,6 +945,7 @@ class Announcer:
             for k in ("start_ts", "end_ts", "active_from", "active_to"):
                 setattr(draft, k, _col(edit_row, k, None))
             draft.fmt = edit_row["fmt"] or ""
+            draft.rich = _col(edit_row, "rich", None)   # 📊 표 공지 수정: 표 그대로 불러옴 ('그대로' 로 유지)
             draft.buttons = row_buttons(edit_row)
         if trigger_msg_id is not None:
             draft.cleanup.append(trigger_msg_id)
@@ -960,6 +1041,7 @@ class Announcer:
             await self._say(bot, draft,
                             "<b>2/7 내용</b>을 보내주세요.\n"
                             "• 글만 보내면 다음 단계에서 사진·영상을 따로 받아요 (사진에 설명을 붙여 한 번에 보내도 돼요)\n"
+                            "• 📊 <b>텔레그램 표</b>(리치 메시지)를 보내면 그 표 그대로 올라가요 (제목·사진은 생략)\n"
                             "• <code>{규칙}</code> 을 쓰면 방 규칙이, <code>{날짜}</code> 를 쓰면 오늘 날짜가 들어가요"
                             + keep)
             return True
@@ -985,12 +1067,18 @@ class Announcer:
             return True
 
         if draft.step == "body":
-            if editing and text in KEEP:
-                pass
-            else:
+            if not (editing and text in KEEP):
+                rich = rich_of(msg)
+                if rich is not None:   # 📊 네이티브 표 — 표가 곧 내용 (제목·미디어·{규칙} 치환과 못 섞음, 블록 그대로)
+                    draft.rich = json.dumps(rich, ensure_ascii=False)
+                    draft.title, draft.text, draft.fmt = "", "", ""   # 표는 제목·사진 없이 그대로 (안 쓰는 값 남기지 않게)
+                    draft.set_media([])
+                    await self._ask_when(bot, draft)   # 사진 단계 건너뜀 (표는 사진·앨범과 함께 못 올림)
+                    return True
+                draft.rich = None   # 글·사진이면 표 아님 (수정 중 표→글 전환도 깨끗이)
                 media_type, media_id = extract_media(msg)
                 if not text and not media_id:
-                    await self._say(bot, draft, "글이나 사진·영상·GIF·파일을 보내주세요.")
+                    await self._say(bot, draft, "글이나 사진·영상·GIF·파일을 보내주세요. 📊 텔레그램 표(리치 메시지)도 돼요.")
                     return True
                 limit = CAPTION_LIMIT - 150 if media_id else TEXT_LIMIT - 150
                 if len(text) > limit:   # 보이는 글자 수 (서식 태그는 안 셈)
@@ -1009,6 +1097,9 @@ class Announcer:
                         draft.set_media([{"t": media_type, "id": media_id}])
                         await self._ask_when(bot, draft)
                     return True
+            if draft.rich:   # 표 공지 수정 중 '그대로' → 미디어 없이 바로 시각 (표는 사진 단계 없음)
+                await self._ask_when(bot, draft)
+                return True
             await self._ask_media(bot, draft)
             return True
 
@@ -1149,18 +1240,25 @@ class Announcer:
         keep = "" if draft.del_prev else " · 📚 이전 글 쌓기"
         lim = describe_limits(draft.start_ts, draft.end_ts, draft.active_from, draft.active_to, self.svc.cfg.tz)
         btn_note = f" · 🔗 버튼 {len(draft.buttons)}개" if draft.buttons else ""
+        rich_note = " · 📊 표" if draft.rich else ""
         greet_note = (f" · 🌅 멘트 {len(draft.variants)}개 돌아가며"
                       if draft.category == "greet" and draft.variants else "")
         await self._say(bot, draft, "👀 <b>미리보기</b> — "
                                     f"{describe_when(draft.kind, draft.at_time, draft.interval_min)}"
                                     f"{' · 📌 고정' if draft.pin else ''}{keep}"
-                                    f"{' · ' + lim if lim else ''}{btn_note}{greet_note}")
+                                    f"{' · ' + lim if lim else ''}{rich_note}{btn_note}{greet_note}")
         save_cancel = [[
             InlineKeyboardButton("✅ 저장", callback_data=f"an:{draft.token}:save"),
             InlineKeyboardButton("❌ 취소", callback_data=f"an:{draft.token}:cancel"),
         ]]
         try:
-            if len(draft.media) >= 2:   # 앨범은 인라인 버튼을 못 달아 → 앨범 미리보기 + (버튼·저장/취소)는 바로 다음 메시지
+            if draft.rich:   # 📊 표 미리보기 — sendRichMessage 로 표 그대로 (URL 버튼·저장/취소 같이)
+                res = await self._send_rich_buttons(bot, draft.ui_chat_id, json.loads(draft.rich),
+                                                    draft.buttons, extra=save_cancel)
+                mid = _msg_id(res)
+                if mid:
+                    draft.cleanup.append(mid)
+            elif len(draft.media) >= 2:   # 앨범은 인라인 버튼을 못 달아 → 앨범 미리보기 + (버튼·저장/취소)는 바로 다음 메시지
                 album = await self.send_album(bot, draft.ui_chat_id, draft.media, title=draft.title,
                                               text=draft.text, rules_chat=draft.chat_id, fmt=draft.fmt)
                 for m in album:
@@ -1342,7 +1440,7 @@ class Announcer:
                       start_ts=draft.start_ts, end_ts=draft.end_ts,
                       active_from=draft.active_from, active_to=draft.active_to, fmt=draft.fmt,
                       buttons=json.dumps(draft.buttons, ensure_ascii=False) if draft.buttons else None,
-                      category=draft.category,
+                      category=draft.category, rich=draft.rich,
                       variants=json.dumps(draft.variants, ensure_ascii=False) if draft.variants else None)
         if draft.edit_id:
             if not await db.update_schedule(draft.chat_id, draft.edit_id, **fields):
@@ -1362,7 +1460,7 @@ class Announcer:
                                            f"{when} · 멘트 <b>{len(draft.variants)}개</b> (그 시각마다 돌려가며 하나씩)")
             return
         await self._finish(bot, draft, f"✅ 예약공지 <code>#{sid}</code> {'수정' if draft.edit_id else '저장'}: "
-                                       f"{when}{' · 📌' if draft.pin else ''} "
+                                       f"{when}{' · 📌' if draft.pin else ''}{' · 📊 표' if draft.rich else ''} "
                                        f"{draft.title if draft.fmt == 'html' else esc(draft.title)}")
 
     async def _cleanup(self, bot: Bot, draft: Draft) -> None:

@@ -26,6 +26,15 @@ def rich_html(msg) -> str | None:
     return msg.text_html if msg.text else msg.caption_html
 
 
+def rich_of(msg) -> dict | None:
+    """네이티브 리치 메시지(표·수식 등, Bot API 10.1 sendRichMessage)의 원본 dict({blocks, is_rtl, …}).
+    PTB 22.8 은 rich_message 를 몰라 api_kwargs 에 원본 dict 가 그대로 남는다 (실측). blocks 없으면 None.
+    자동답글·예약공지가 '표 그대로 다시 보내기'(sendRichMessage)에 쓰는 단일 출처 — 다른 기능도 이걸 씀."""
+    ak = getattr(msg, "api_kwargs", None)
+    rm = ak.get("rich_message") if isinstance(ak, dict) else None
+    return rm if (isinstance(rm, dict) and rm.get("blocks")) else None
+
+
 def html_balanced(s: str) -> bool:
     """여는·닫는 태그 짝이 맞는지 (잘린 HTML 을 그대로 저장하지 않게)."""
     stack = []

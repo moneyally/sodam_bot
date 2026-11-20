@@ -19,7 +19,7 @@ from telegram.error import TelegramError
 
 from .. import cards, cron, menu, persist
 from ..announce import (CLOSE_KB, MAX_PER_CHAT, MEDIA_LABEL, _col, describe_limits, describe_when, parse_time,
-                        row_buttons, row_variants)
+                        row_buttons, row_rich, row_variants)
 from ..menu import CID_RE, B, HubItem, PanelCtx, Route, Screen
 from ..util import esc, html_balanced, html_plain, html_truncate, rich_html
 
@@ -46,6 +46,8 @@ def _shown(row, key: str, limit: int) -> str:
 def _name(row) -> str:
     if row["title"]:
         return _plain(row, "title")
+    if row_rich(row):   # 📊 표 공지는 제목·글이 없으니 표라고 (목록이 '(내용 없음)' 로 안 뜨게)
+        return "📊 표"
     text = _plain(row, "text").replace("\n", " ")
     return (text[:20] + ("…" if len(text) > 20 else "")) or "(내용 없음)"
 
@@ -102,7 +104,8 @@ async def s_item(c: PanelCtx) -> Screen:
         screen.toast = GONE
         return screen
     tz = c.svc.cfg.tz
-    body = _shown(r, "text", PREVIEW_CHARS)
+    is_rich = row_rich(r) is not None
+    body = "📊 표 (리치 메시지)" if is_rich else _shown(r, "text", PREVIEW_CHARS)
     media = f"[{MEDIA_LABEL.get(r['media_type'], '파일')}] " if r["media_type"] else ""
     last = datetime.fromtimestamp(r["last_sent"], tz).strftime("%m/%d %H:%M") if r["last_sent"] and r["last_msg_id"] else "아직 없음"
     lim = describe_limits(_col(r, "start_ts", None), _col(r, "end_ts", None),
@@ -114,6 +117,7 @@ async def s_item(c: PanelCtx) -> Screen:
              f"언제: {_when(r)}" + (" · 📌 고정" if r["pin"] else "")
              + (" · 📚 이전 글 쌓기" if r["kind"] != "once" and not r["del_prev"] else "")
              + (f" · 🔗 버튼 {len(row_buttons(r))}개" if row_buttons(r) else "")
+             + (" · 📊 표" if is_rich else "")
              + (f" · 🌅 멘트 {len(vs)}개 돌아가며" if greet and vs else "")
              + (" · " + lim if lim else ""),
              f"제목: {_shown(r, 'title', 100) if r['title'] else '(없음)'}",
@@ -164,9 +168,14 @@ async def r_preview(c: PanelCtx) -> Screen:
         persist.spawn(run())
         return Screen(None, toast="👀 만드는 중… 곧 아래에 보내요.")
     try:  # 패널은 그대로 두고 1:1 에 새 메시지로 (닫기 버튼으로 지움). URL 버튼이 있으면 같이 보여 줌
-        await c.svc.announcer.send_buttons(c.bot, c.uid, title=r["title"], text=r["text"], media_type=r["media_type"],
-                                           media_id=r["media_id"], buttons=row_buttons(r),
-                                           extra=list(CLOSE_KB.inline_keyboard), rules_chat=c.cid, fmt=r["fmt"] or "")
+        rich = row_rich(r)
+        if rich:   # 📊 표 공지 미리보기 — sendRichMessage 로 표 그대로 (URL 버튼·닫기 같이)
+            await c.svc.announcer._send_rich_buttons(c.bot, c.uid, rich, row_buttons(r),
+                                                     extra=list(CLOSE_KB.inline_keyboard))
+        else:
+            await c.svc.announcer.send_buttons(c.bot, c.uid, title=r["title"], text=r["text"], media_type=r["media_type"],
+                                               media_id=r["media_id"], buttons=row_buttons(r),
+                                               extra=list(CLOSE_KB.inline_keyboard), rules_chat=c.cid, fmt=r["fmt"] or "")
     except TelegramError as e:
         return Screen(None, toast=f"미리보기를 보내지 못했어요: {e.message[:80]}", alert=True)
     return Screen(None, toast="👀 아래에 미리보기를 보냈어요.")
