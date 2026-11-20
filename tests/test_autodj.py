@@ -20,7 +20,7 @@ def vid_of(title):
     return "v" + str(abs(hash(title)) % 10**9).rjust(10, "0")[:10]
 
 
-async def seed_room(db, titles):
+async def seed_room(db, titles, chat=CHAT):
     """titles 순서대로 '튼' 기록을 music_queue 에 넣음 (오래된→최신)."""
     ts = 1000
     for t in titles:
@@ -28,7 +28,7 @@ async def seed_room(db, titles):
         await db._write(
             "INSERT INTO music_queue(chat_id,title,url,vid,duration,state,ts,started_ts,auto) "
             "VALUES(?,?,?,?,?,?,?,?,0)",
-            (CHAT, t, f"https://y/{vid_of(t)}", vid_of(t), 180, "done", ts, ts))
+            (chat, t, f"https://y/{vid_of(t)}", vid_of(t), 180, "done", ts, ts))
 
 
 async def pick(db, seed_title=A, recent=()):
@@ -72,6 +72,24 @@ async def two_same_artist_in_a_row_turns_off_the_boost():
     await seed_room(db, [A, C, A, B, A, B, A, C])
     got = await pick(db, A)
     assert got is not None and mm.song_key(got["title"]) == mm.song_key(B), ("2연속이라 보너스 꺼지고 B", got and got["title"])
+
+
+@test
+async def other_rooms_help_a_thin_room():
+    db = await make_db()
+    await seed_room(db, [Y, Y], chat=CHAT)                 # 이 방은 얇음 (Y 만)
+    await seed_room(db, [Y, X, Y, X, Y, X], chat=-7777)    # 다른 방: Y 다음에 X
+    got = await pick(db, Y)                                # 씨드 Y
+    assert got is not None and mm.song_key(got["title"]) == mm.song_key(X), ("다른 방 기록(Y→X)으로 X 골라야 함", got and got["title"])
+
+
+@test
+async def this_rooms_taste_beats_other_rooms():
+    db = await make_db()
+    await seed_room(db, [A, B, A, B, A, B], chat=CHAT)     # 이 방: A→B
+    await seed_room(db, [A, X, A, X, A, X], chat=-7777)    # 다른 방: A→X
+    got = await pick(db, A)                                # 씨드 A
+    assert got is not None and mm.song_key(got["title"]) == mm.song_key(B), ("이 방 취향(B)이 다른 방(X)보다 우선", got and got["title"])
 
 
 @test
