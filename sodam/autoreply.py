@@ -27,7 +27,7 @@ from . import mediastore
 from .announce import extract_media
 from .db import register_schema
 from .settings import register_setting
-from .util import esc, html_plain, rich_html
+from .util import banner_spacer, esc, html_plain, rich_html
 
 log = logging.getLogger(__name__)
 
@@ -238,6 +238,7 @@ async def _send_text(bot, chat_id: int, html_text: str, rp, markup=None):
 async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = None, markup=None):
     rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
     kind, fid, body = snap.get("kind"), snap.get("file_id"), snap.get("html") or ""
+    body = banner_spacer(body)   # 표(분할 커스텀 이모지)면 전체폭 스페이서 붙여 계단으로 안 깨지게 (예약공지와 같은 방식)
     if markup is None:
         markup = _markup(snap.get("markup"), bot)
     if not kind or not fid:
