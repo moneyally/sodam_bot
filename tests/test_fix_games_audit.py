@@ -166,6 +166,26 @@ async def refill_amount_and_daily_limit_are_room_settings():
 
 
 @test
+async def refill_always_lets_player_with_balance_topup():
+    """casino_refill_always 켜면 잔액이 남아도 리필 (하루 횟수는 유지) — 난이도 높아 포인트 못 쌓는 방, 2026-11-21 수리남 목사 봇."""
+    svc, bot, (u,) = await K.setup()
+    await svc.db.set_setting(K.CHAT, "casino_refill_points", 50_000)
+    await svc.db.set_setting(K.CHAT, "casino_refill_per_day", 3)
+    await core.credit(svc.db, K.CHAT, u.id, 1_000_000, "test")      # 보유금 넉넉 (바닥 아님)
+    base = await core.balance(svc.db, K.CHAT, u.id)
+    msg = await K.cmd(svc, bot, u, "!리필")                          # 꺼져 있으면(기본) 잔액 있어 거절
+    assert "미만일 때만" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == base, msg.replies
+    await svc.db.set_setting(K.CHAT, "casino_refill_always", True)   # 켜면 잔액 있어도 리필 (뮤테이션: always 분기 지우면 거절 → FAIL)
+    msg = await K.cmd(svc, bot, u, "!리필")
+    assert "리필" in msg.replies[-1] and await core.balance(svc.db, K.CHAT, u.id) == base + 50_000, msg.replies
+    for _ in range(2):                                              # 하루 횟수(3)는 그대로
+        await K.cmd(svc, bot, u, "!리필")
+    assert await core.balance(svc.db, K.CHAT, u.id) == base + 150_000
+    msg = await K.cmd(svc, bot, u, "!리필")                          # 4번째는 막힘
+    assert "하루 3번" in msg.replies[-1], msg.replies
+
+
+@test
 async def refill_old_day_value_counts_as_one():
     """예전 기록 last_bailout='날짜' 는 오늘 1번 받은 것으로 (하루 1번 방은 그대로 막힘)."""
     svc, bot, (u,) = await K.setup()
