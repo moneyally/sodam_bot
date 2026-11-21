@@ -383,6 +383,24 @@ async def clone_also_answers_to_sodam():
 
 
 @test
+async def bot_call_names_setting_expands_vocatives():
+    """BOT_CALL_NAMES 로 호출어를 직접 넣어도 호격(목사→목사야)이 자동으로 생겨야 — 2026-11-21 수리남 목사 봇
+    '목사야·소담아 호출 안 됨'(소담 단독만 먹힘). 뮤테이션: default_call_names 확장 빼면 '목사야' 없어서 FAIL."""
+    from types import SimpleNamespace as S
+    from sodam import handlers
+    from sodam.config import resolve_call_names
+    got = resolve_call_names("목사,소담", "수리남 목사 봇")
+    for want in ("목사야", "목사", "소담아", "소담이", "소담"):
+        assert want in got, (want, got)
+    assert resolve_call_names("", "프레스티지")[:1] == ["프레스티지야"]      # 비면 봇 이름 기준 기본
+    names = tuple(sorted(got, key=len, reverse=True))                      # 실제 호출 판정까지
+    bot = S(username="yesu_22_bot", id=9)
+    for text in ("목사야 와봐", "소담아 뭐해", "소담이 왜그래", "목사 뭐해"):
+        msg = S(reply_to_message=None, entities=[], chat=S(type="supergroup"), text=text, caption=None)
+        assert handlers.addressed_to_bot(msg, text, names, bot)[0], text
+
+
+@test
 async def clone_backups_go_in_its_own_folder():
     """클론 백업이 본체와 같은 data/backups 에 같은 이름으로 써서 05:00 에 본체 백업이 실패하고 그날 백업이 날아감 (2026-11-17).
     BACKUP_DIR 이 없으면 DB 폴더 안 backups. 본체는 예전 그대로 data/backups. 뮤테이션: 기본값을 'data/backups' 로 되돌리면 FAIL."""
