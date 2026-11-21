@@ -53,7 +53,8 @@
   - `billing.py`/`subscription.py`/`tron.py` 구독 결제 · `captcha.py` `cas.py` `moderation.py` 방 관리
   - `agent.py`/`tools.py`/`prompt.py`/`llm.py` AI 에이전트 · `costs.py` 요금·예산·방 한도 · `agentlog.py` AI 작업 기록 · `knowledge.py` 자료 학습(RAG) · `announce.py` 예약공지 마법사
   - `memory.py` 멤버 기억·방 흐름 요약·대화 기록 · `social.py` 이어 말하기·먼저 끼어들기 · `ai_settings.py` AI 설정 키
-  - `casino/` 포인트 게임(! 명령, 설계 docs/GAMES.md): core 지갑·가입·채굴 · basic 주사위·슬롯·룰렛·사다리 · cards 바카라·블랙잭·하이로우 · multi 그래프·경마 · dealer 딜러 소담 대사
+  - `casino/` 포인트 게임(! 명령, 설계 docs/GAMES.md): core 지갑·가입·채굴 · basic 주사위·슬롯·룰렛·사다리 · cards 바카라·블랙잭·하이로우 · multi 그래프·경마 · rps 가위바위보 · dealer 딜러 소담 대사
+    - **✊✋✌ 가위바위보** (`casino/rps.py`, tests/test_casino_rps.py · 뮤테이션 3개, 2026-11-21 오너 — 전목사 독립 봇 코드 → 소담 틀에 한 게임으로): `!가위바위보`(별칭 가바보·묵찌빠·rps) 승 ×1.95·무 환불·패 꽝. 봇 손은 `core.tilt` 로 뽑아 **방 난이도(casino_lose_pct)가 지는 확률**(공정 1/3·80방 80% 패, 이길 확률은 안 올림). 금액만 치면 가위·바위·보 버튼 베팅판(룰렛 board 구조, 판 주인만·`cs:rp:`). GIF 연출 `anim.rps`(손 VS 흔들다 공개, PIL 도형·한글 캡션만). 전목사 원본의 지갑·무료충전·'하루 5판 안 하면 잔액 초기화'·보상신청은 안 넣음(소담이 이미 다 가짐: `!파산`·`!출석`·`!이벤트`). register(help=)라 `!도움`에 자동.
   - `tagnotify.py` 태그·답장 알림 · `hooks.py` 확장 지점 · `panels/*.py` 버튼 화면(greet·tagnotify·owner·announce·ai·log·room·agentlog)
 
 ## 중요한 결정 (바꾸지 말 것, 바꾸려면 사용자에게 확인)

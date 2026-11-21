@@ -80,6 +80,75 @@ def roulette(result: int, size: int = 360) -> bytes:
     return _gif(frames)
 
 
+# ── ✊✋✌ 가위바위보 ──────────────────────────────────────
+# 두 손(왼=나, 오른=봇)이 주먹을 쥐고 세 번 흔든 뒤(안 내면 진다…) 각자 모양을 낸다.
+# 결과는 이미 정해진 뒤라 그 모양으로 끝난다. 손은 도형(둥근 사각)으로만 (서버 한글 폰트 문제 없음).
+RPS_SHAKES = 3                   # 흔드는 횟수
+RPS_PER_SHAKE = 3                # 한 번 흔드는 데 쓰는 프레임
+RPS_REVEAL = 4                   # 모양을 낸 뒤 결과 프레임
+SKIN, SKIN_LINE = (240, 198, 164), (120, 82, 54)
+RPS_BG = (248, 244, 236)
+WIN_C, LOSE_C, DRAW_C = (40, 170, 90), (210, 60, 60), (150, 150, 150)
+RPS_SHAPES = ("rock", "scissors", "paper")
+
+
+def _rps_finger(d, x: float, bottom: float, h: float, w: float = 14) -> None:
+    d.rounded_rectangle([x - w / 2, bottom - h, x + w / 2, bottom], radius=w / 2, fill=SKIN, outline=SKIN_LINE, width=2)
+
+
+def _rps_hand(d, cx: float, cy: float, shape: str, mirror: bool) -> None:
+    """손 하나. cy = 손바닥 중심. mirror = 오른손(봇)이면 좌우 뒤집어 마주 보게 (가위 V 방향)."""
+    s = -1 if mirror else 1
+    d.rounded_rectangle([cx - 34, cy - 12, cx + 34, cy + 52], radius=16, fill=SKIN, outline=SKIN_LINE, width=3)
+    bottom = cy - 8
+    if shape == "rock":                                  # 주먹: 접힌 손가락 마디만
+        for i in range(4):
+            fx = cx - 24 + i * 16
+            d.rounded_rectangle([fx - 7, cy - 20, fx + 7, cy - 4], radius=5, fill=SKIN, outline=SKIN_LINE, width=2)
+    elif shape == "scissors":                            # 가위: 접힌 2 + 세운 2 (V)
+        for i in range(2):
+            fx = cx - 20 + i * 16
+            d.rounded_rectangle([fx - 7, cy - 18, fx + 7, cy - 4], radius=5, fill=SKIN, outline=SKIN_LINE, width=2)
+        _rps_finger(d, cx - 6 * s, bottom, 62)
+        _rps_finger(d, cx + 20 * s, bottom, 58)
+    else:                                                # 보: 세운 손가락 4개
+        for i, x in enumerate((-21, -7, 7, 21)):
+            _rps_finger(d, cx + x, bottom, 56 - abs(i - 1.5) * 4)
+
+
+def rps(mine: str, bot: str, w: int = 360, h: int = 250) -> bytes:
+    """왼손=나(mine), 오른손=봇(bot). 흔들다 각자 모양. 결과 테두리: 승=초록·패=빨강·무=회색."""
+    beats = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
+    res = "draw" if mine == bot else "win" if beats[mine] == bot else "lose"
+    ring = {"win": WIN_C, "lose": LOSE_C, "draw": DRAW_C}[res]
+    lx, rx, cy = w * 0.27, w * 0.73, h * 0.52
+    big = _font(30)
+    frames = []
+    total_shake = RPS_SHAKES * RPS_PER_SHAKE
+    for k in range(total_shake):                         # 흔들기: 양손 주먹이 같이 위아래
+        amp = 26 * math.sin(k / RPS_PER_SHAKE * math.pi)
+        im = Image.new("RGB", (w, h), RPS_BG)
+        d = ImageDraw.Draw(im)
+        d.text((w / 2, h * 0.16), "VS", fill=(150, 150, 150), font=big, anchor="mm")
+        _rps_hand(d, lx, cy - amp, "rock", False)
+        _rps_hand(d, rx, cy - amp, "rock", True)
+        frames.append(im)
+    for _ in range(RPS_REVEAL):                          # 모양 공개 + 결과 테두리
+        im = Image.new("RGB", (w, h), RPS_BG)
+        d = ImageDraw.Draw(im)
+        d.rectangle([4, 4, w - 5, h - 5], outline=ring, width=8)
+        _rps_hand(d, lx, cy, mine, False)
+        _rps_hand(d, rx, cy, bot, True)
+        label = {"win": "WIN", "lose": "LOSE", "draw": "DRAW"}[res]
+        d.text((w / 2, h * 0.16), label, fill=ring, font=_font(34), anchor="mm")
+        frames.append(im)
+    return _gif(frames)
+
+
+def rps_frame_count() -> int:
+    return RPS_SHAKES * RPS_PER_SHAKE + RPS_REVEAL
+
+
 # ── 🏇 경마 ──────────────────────────────────────────────
 RACE_STEPS = 8                   # 위치 프레임 사이 보간
 
