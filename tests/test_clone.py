@@ -125,7 +125,8 @@ async def apply_branding_sets_name_desc_photo():
 @test
 async def apply_branding_video_uses_animated():
     bot = FakeBotMe()
-    errs = await clone.apply_branding("123:tok", video=b"\x00mp4", main_frame=1.0, make_bot=_factory(bot))
+    errs = await clone.apply_branding("123:tok", video=b"\x00mp4", main_frame=1.0,
+                                      make_bot=_factory(bot), convert=None)   # convert=None: ffmpeg 건너뜀
     assert errs == []
     assert ("photo", "InputProfilePhotoAnimated") in bot.calls
 
@@ -134,9 +135,34 @@ async def apply_branding_video_uses_animated():
 async def apply_branding_video_wins_over_photo():
     # 영상이 있으면 정적 사진은 안 보냄 (영상프사 우선)
     bot = FakeBotMe()
-    await clone.apply_branding("123:tok", photo=b"jpg", video=b"mp4", make_bot=_factory(bot))
+    await clone.apply_branding("123:tok", photo=b"jpg", video=b"mp4", make_bot=_factory(bot), convert=None)
     assert ("photo", "InputProfilePhotoAnimated") in bot.calls
     assert ("photo", "InputProfilePhotoStatic") not in bot.calls
+
+
+@test
+async def apply_branding_converts_video_before_send():
+    # 영상은 convert(정사각·무음 다듬기)를 거친 뒤에만 텔레그램으로 — 그래야 움짤·세로영상도 먹힘
+    bot = FakeBotMe()
+    got = []
+    async def fake_convert(data):
+        got.append(data)
+        return b"SQUARED-MP4"
+    errs = await clone.apply_branding("123:tok", video=b"raw-input", make_bot=_factory(bot), convert=fake_convert)
+    assert errs == []
+    assert got == [b"raw-input"]                                    # 원본이 convert 로 감 (뮤테이션: 변환 분기 지우면 안 불림)
+    assert ("photo", "InputProfilePhotoAnimated") in bot.calls
+
+
+@test
+async def apply_branding_convert_failure_skips_send():
+    # 다듬기가 터지면 사유만 남기고 영상은 안 보냄 (날것으로 보내 Video_file_invalid 나는 것 방지)
+    bot = FakeBotMe()
+    async def boom(data):
+        raise RuntimeError("ffmpeg 터짐")
+    errs = await clone.apply_branding("123:tok", video=b"raw", make_bot=_factory(bot), convert=boom)
+    assert len(errs) == 1 and "다듬기" in errs[0]
+    assert ("photo", "InputProfilePhotoAnimated") not in bot.calls   # 뮤테이션: clip=None·가드 지우면 보냄 → FAIL
 
 
 @test
