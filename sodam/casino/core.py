@@ -68,6 +68,7 @@ register_setting("casino_bet_gap", 2, "같은 사람 게임 간격(초)", range_
 register_setting("casino_game_visual", "full", "게임 결과 연출",
                  choices={"full": "움짤·연출", "text": "글만 (몰릴 때)"})
 register_setting("casino_refill_per_day", 1, "파산 구제(!리필) 하루 횟수 (0=제한 없음)", range_=(0, 1000))
+register_setting("casino_refill_always", False, "리필(!리필)을 잔액 안 바닥나도 받게 (하루 횟수는 그대로)")
 
 START_POINTS = 10_000
 
@@ -614,7 +615,10 @@ async def c_bailout(ctx: Ctx) -> None:
     s = await db.get_settings(cid)
     amount = int(s.get("casino_refill_points") or BAILOUT_POINTS)
     per_day = int(s.get("casino_refill_per_day") or 0)
-    if await balance(db, cid, uid) >= MIN_BET:
+    # casino_refill_always 켜면 잔액이 남아 있어도 리필 (하루 횟수 per_day 는 그대로) — 난이도 높은 방이
+    # '꼭 바닥나야 리필' 때문에 포인트를 못 쌓는 문제 (2026-11-21 수리남 목사 봇 소유자 요청)
+    limit = 10**18 if bool(s.get("casino_refill_always")) else MIN_BET
+    if await balance(db, cid, uid) >= limit:
         await ctx.reply(f"리필은 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. <code>!채굴</code> 해보세요!")
         return
     for sweep in SWEEPS:                   # 시간 지난 판은 먼저 정산 (자리 비운 판이 구제를 영영 막지 않게)
@@ -629,14 +633,14 @@ async def c_bailout(ctx: Ctx) -> None:
         f"AND (? = 0 OR {cnt} < ?) "                                                                     # (위 확인과 지급 사이에
         "AND (SELECT COALESCE(MAX(points), 0) FROM members WHERE chat_id=? AND user_id=?) < ? "          #  당첨금이 들어오면 거절)
         "AND NOT EXISTS (SELECT 1 FROM casino_open WHERE chat_id=? AND user_id=? AND amount>0)",
-        (day, *cnt_args, cid, uid, per_day, *cnt_args, per_day, cid, uid, MIN_BET, cid, uid)))
+        (day, *cnt_args, cid, uid, per_day, *cnt_args, per_day, cid, uid, limit, cid, uid)))
     if bal is None:
         used = (await db._one(f"SELECT {cnt} AS n FROM casino_accounts WHERE chat_id=? AND user_id=?",
                               (*cnt_args, cid, uid)) or {"n": 0})["n"]
         if per_day and used >= per_day:
             times = "한 번" if per_day == 1 else f"{per_day}번"
             await ctx.reply(f"🆘 리필은 하루 {times}이에요. <code>!채굴</code> 로 다시 일어서요!")
-        elif await balance(db, cid, uid) >= MIN_BET:
+        elif await balance(db, cid, uid) >= limit:
             await ctx.reply(f"리필은 잔액이 {fmt(MIN_BET)} 미만일 때만 돼요. 방금 포인트가 들어왔어요!")
         else:
             await ctx.reply("🆘 진행 중인 판이 끝난 뒤에 해주세요.")
