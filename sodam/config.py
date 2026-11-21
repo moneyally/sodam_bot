@@ -47,6 +47,21 @@ def call_names_for(bot_name: str) -> list[str]:
     return names
 
 
+def resolve_call_names(raw: str, bot_name: str) -> list[str]:
+    """BOT_CALL_NAMES 설정(쉼표)을 각 이름의 **호격형까지 펼친다** — '목사,소담' → 목사야·목사·소담아·소담이·소담.
+    예전엔 적은 글자 그대로만 호출어라, '소담' 만 넣으면 '소담아·소담이' 가 안 먹혔음 (2026-11-21 수리남 목사 봇 '목사야·소담아 호출 안 됨').
+    비우면 봇 이름 기준 기본값(call_names_for)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return call_names_for(bot_name)
+    out: list[str] = []
+    for n in raw.split(","):
+        n = n.strip()
+        if n:
+            out += [v for v in default_call_names(n) if v not in out]   # 호격(~야/~아/~이) 자동 + 원형
+    return out
+
+
 def default_backup_dir(db_path: str) -> str:
     """백업 폴더 기본값 = DB 가 있는 폴더 안 backups. 본체(data/sodam.db)는 예전과 같은 data/backups,
     클론(data/clones/<slug>/sodam.db)은 제 폴더 안 — 예전엔 둘 다 'data/backups' 라 05:00 에 같은 이름으로 동시에 쓰다
@@ -122,8 +137,7 @@ def load_config() -> Config:
     # OPENAI_API_KEY 가 없으면 AI 기능만 꺼진 채로 실행 (관리·캡차·예약공지 등은 동작)
 
     bot_name = os.getenv("BOT_NAME", "").strip() or "소담"
-    raw_names = os.getenv("BOT_CALL_NAMES", "").strip() or ",".join(call_names_for(bot_name))
-    names = [n.strip() for n in raw_names.split(",") if n.strip()]
+    names = resolve_call_names(os.getenv("BOT_CALL_NAMES", ""), bot_name)   # 설정 이름도 호격 자동 (목사 → 목사야·목사)
     # 외국인(번역기)이 영어로 'Sodam help me …' 처럼 부르면 호출로 인식 (대소문자 무시).
     # 클론봇도 소담 방에서 넘어온 멤버가 'Sodam' 으로 부를 수 있어 같이 받음 (2026-11-17 오너)
     raw_en = os.getenv("BOT_CALL_NAMES_EN", "").strip() or "sodam"
