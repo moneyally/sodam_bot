@@ -101,12 +101,24 @@ async def fetch_bot_info(token: str, *, make_bot=None) -> BotInfo:
     return BotInfo(bot_id=me.id, username=me.username or "", name=me.first_name or "")
 
 
+async def square_profile_video(data: bytes) -> bytes:
+    """영상·GIF → 정사각·무음·2MB MP4. 봇 영상프사는 **정사각 MPEG4(h264)만** 받는다
+    (실측 2026-11-21: GIF·세로/가로 영상은 Video_file_invalid 로 거부됨).
+    `.봇프사` 와 똑같은 botpic.square_video 를 재사용(단일 출처)."""
+    import asyncio
+
+    from . import botpic
+    return await asyncio.to_thread(botpic.square_video, data)
+
+
 async def apply_branding(token: str, *, name: str | None = None, description: str | None = None,
                          short_desc: str | None = None, photo: bytes | None = None,
                          video: bytes | None = None, main_frame: float = 0.0,
-                         make_bot=None) -> list[str]:
+                         make_bot=None, convert=square_profile_video) -> list[str]:
     """봇 API 로 이름·설명·프사·영상프사 적용. 각 항목은 따로 try — 하나 실패해도 나머지는 적용.
-    실패한 항목의 한국어 사유 목록을 돌려준다(빈 리스트 = 전부 성공)."""
+    실패한 항목의 한국어 사유 목록을 돌려준다(빈 리스트 = 전부 성공).
+    영상은 convert(기본 square_profile_video)로 정사각·무음 다듬은 뒤 보낸다 — 그래야 움짤·세로영상도 먹힘.
+    테스트는 convert=None 으로 ffmpeg 를 건너뛴다."""
     from telegram import Bot, InputProfilePhotoAnimated, InputProfilePhotoStatic
     from telegram.error import TelegramError
 
@@ -129,11 +141,19 @@ async def apply_branding(token: str, *, name: str | None = None, description: st
             except TelegramError as e:
                 errs.append(f"짧은 설명: {e}")
         if video is not None:
-            try:
-                await bot.set_my_profile_photo(
-                    InputProfilePhotoAnimated(animation=video, main_frame_timestamp=main_frame))
-            except TelegramError as e:
-                errs.append(f"영상프사: {e}")
+            clip: bytes | None = video
+            if convert is not None:
+                try:
+                    clip = await convert(video)   # 정사각·무음·2MB (안 하면 움짤·세로영상 거부됨)
+                except Exception as e:
+                    errs.append(f"영상프사: 영상 다듬기 실패 ({e})")
+                    clip = None
+            if clip is not None:
+                try:
+                    await bot.set_my_profile_photo(
+                        InputProfilePhotoAnimated(animation=clip, main_frame_timestamp=main_frame))
+                except TelegramError as e:
+                    errs.append(f"영상프사: {e}")
         elif photo is not None:
             try:
                 await bot.set_my_profile_photo(InputProfilePhotoStatic(photo=photo))
