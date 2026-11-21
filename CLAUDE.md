@@ -720,6 +720,7 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **밀린 방은 새 판 안 받음** (`core._overloaded`, 2026-10-17 블랙컴퍼니 이벤트): 서버 CPU 0.2인데 텔레그램이 방에 1분 20개만 받음 → 보낼 글이 OVERLOAD_AT 6개↑ 밀리면 포인트 안 빼고 🙈 반응 + 방마다 1분 1번 안내 · 같은 사람 간격 방 설정 casino_bet_gap(기본 2초). 카프카·레디스는 이 한도를 못 바꿈.
 - **가입 선물** 방 설정 casino_join_points(기본 1만 = core.START_POINTS, `core.join_points`) — 2026-10-17 블랙컴퍼니 이벤트 500만.
 - **!리필 = !파산** (2026-10-15 벳띵): 금액 casino_refill_points(기본 3,000)·하루 횟수 casino_refill_per_day(기본 1, 0=제한 없음) 방 설정. last_bailout = '날짜#횟수'(예전 '날짜' = 1번), 지급 UPDATE 한 문장에서 횟수·잔액·열린 베팅 다시 확인.
+- **💰 보유금 목표 달성 알림** (`casino/goal.py`, tests/test_casino_goal.py · 뮤테이션 2개, 2026-11-21 오너 — 전목사 목사봇(클론)용 일반 기능 '게임 집계 + 목표 알림'): 방 설정 `casino_goal`(0=끔) 넘으면 **그 방 운영자(subscriptions.added_by, 또는 casino_goal_contact @아이디·ID 지정)·오너 1:1 에 게임 집계와 함께 알림** + 방 축하 카드(정확 보유금은 방에 공개 X, 운영자 1:1 만). **특정인 하드코딩 0 — 방마다 그 방 운영자가 받음**(화이트라벨 클론도 그대로, 오너 '전목사 박으면 안 됨'). 흐름: `core.credit`(지급) 끝 `core._AFTER_CREDIT` 훅 `_on_credit` 이 보유금≥목표면 `casino_goal_hit`(PRIMARY KEY 방·사람, 한 번만) 에 1회 표시(bot 없음) → `hooks.add_tick_hook(tick)` 30초 틱이 new 조회 → 집계(`tally`: casino_accounts wagered/won·순익·casino_ledger bet: 판수)·알림·new→notified. 운영자 [✅ 확인](cs:goal:ok) → done. **포인트는 안 건드림**(정산은 운영자 수동). 목표 0 방은 훅이 설정 한 번 읽고 바로 끝(회귀 0).
 
 ## 🧩 이모지 공방 = 타일 이모지 견본 받기 → 클로드가 제작 (`emojilab.py`, `tools/emoji_pack.py`, tests/test_emojilab.py · 뮤테이션 5개, 2026-10-10 오너)
 - 오너가 소담 1:1 에 프리미엄 커스텀 이모지(긴 배너를 100×100 조각으로 나눠 이어 치는 '제휴업체' 같은 것)를 보내면 — 2개↑(이모지 뺀 글 40자 안) 또는

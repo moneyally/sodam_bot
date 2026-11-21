@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS casino_open (
 register_setting("casino_enabled", True, "포인트 게임(! 명령)")
 register_setting("casino_max_bet", 100_000, "포인트 게임 최대 베팅", range_=(100, 100_000_000))
 register_setting("mine_minutes", 10, "채굴 간격(분)", range_=(1, 60))   # 방마다 (얼라이드 '3분' 요청 2026-10-06)
+register_setting("casino_mine", True, "채굴(!채굴) 켜기")   # 방마다 끄기 (2026-11-21 수리남 소통방 '채굴만 꺼 줘')
 # !파산·!리필 (2026-10-15 벳띵 '0포인트 되면 500만 채워 주는 !리필'): 금액·하루 횟수(0 = 제한 없음)를 방마다
 register_setting("casino_refill_points", 3_000, "파산 구제(!리필) 금액", range_=(100, 100_000_000))
 register_setting("casino_join_points", 10_000, "!가입 선물 금액", range_=(100, 100_000_000))
@@ -122,6 +123,9 @@ def _open(c, chat_id: int, user_id: int, delta: int, ts: int) -> None:
     c.execute("DELETE FROM casino_open WHERE chat_id=? AND user_id=? AND amount<=0", (chat_id, user_id))
 
 
+_AFTER_CREDIT: list = []   # async fn(db, chat_id, user_id, after_balance, reason) — 지급 뒤 1회 (보유금 목표 달성 감지 등)
+
+
 async def credit(db, chat_id: int, user_id: int, amount: int, reason: str,
                  cond: tuple[str, tuple] | None = None, close: int = 0) -> int | None:
     """포인트 지급. 새 잔액. cond=(UPDATE 문, 인자) 를 주면 그 문장이 한 줄을 바꿀 때만 같이 지급 (쿨타임 표시와 지급을
@@ -147,7 +151,13 @@ async def credit(db, chat_id: int, user_id: int, amount: int, reason: str,
         return True
     if not await db.atomic(run):
         return None
-    return await balance(db, chat_id, user_id)
+    bal = await balance(db, chat_id, user_id)
+    for fn in _AFTER_CREDIT:                        # 보유금 목표 달성 감지 등 — 실패해도 지급은 그대로
+        try:
+            await fn(db, chat_id, user_id, bal, reason)
+        except Exception:
+            log.exception("after-credit hook failed")
+    return bal
 
 
 async def debit(db, chat_id: int, user_id: int, amount: int, reason: str) -> bool:
@@ -555,6 +565,9 @@ async def mine_range(db, chat_id: int) -> tuple[int, int]:
 
 async def c_mine(ctx: Ctx) -> None:
     db, cid, uid = ctx.svc.db, ctx.chat_id, ctx.user.id
+    if not (await db.get_settings(cid)).get("casino_mine", True):   # 이 방만 채굴 끔 (다른 게임은 그대로)
+        await ctx.reply("⛏ 이 방은 채굴이 꺼져 있어요. (다른 게임·출석은 그대로예요)")
+        return
     acc = await account(db, cid, uid)
     t = now()
     cool = await mine_cooldown(db, cid)
