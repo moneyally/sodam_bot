@@ -89,5 +89,25 @@ async def not_forwarded_or_outsider_declined():
     assert await R.maybe_offer(svc, bot, fwd_photo(out), out) is False   # 관리 방 없음·오너 아님
 
 
+@test
+async def go_claims_draft_before_copying():
+    # 방 버튼 2연타 중복 발행 방지 (#307): 초안을 복사 '전에' 원자적으로 삭제(claim) → 두 번째 콜백은 초안이 없어 아무 것도 안 올림.
+    db, svc, bot = await setup()
+    u = fake_user(ADMIN, "관리")
+    await R.maybe_offer(svc, bot, fwd_photo(u), u)
+    did = (await db._one("SELECT id FROM repost_drafts", ()))["id"]
+    seen = {}
+    orig = bot.copy_message
+
+    async def spy(*a, **k):
+        seen["gone"] = (await db._one("SELECT id FROM repost_drafts WHERE id=?", (did,))) is None
+        return await orig(*a, **k)
+    bot.copy_message = spy
+    q = FakeQuery(ADMIN, fake_user(ADMIN), f"fwd:go:{did}:{CHAT}")
+    await R.on_cb(svc, bot, q, ["go", str(did), str(CHAT)])
+    assert seen.get("gone") is True, "초안은 복사 전에 삭제(claim)돼야 2연타 중복이 막힘"
+    assert len([c for c in bot.calls if c[0] == "copy"]) == 1
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

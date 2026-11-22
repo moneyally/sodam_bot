@@ -103,6 +103,10 @@ async def on_cb(svc, bot, q, parts) -> None:
         cid = int(parts[2]) if len(parts) > 2 and parts[2].lstrip("-").isdigit() else 0
         if not await svc.perms.is_admin(bot, cid, q.from_user.id):
             return await q.answer("그 방 관리자만 올릴 수 있어요.", show_alert=True)
+        # 2연타 중복 발행 방지: 올리기 전에 초안을 원자적으로 차지(삭제) — 두 번째 콜백은 rowcount 0 이라 아무 것도 안 올림
+        claimed = await svc.db.atomic(lambda c: c.execute("DELETE FROM repost_drafts WHERE id=?", (did,)).rowcount)
+        if not claimed:
+            return await q.answer("이미 올렸어요.")
         markup = None
         if row["markup"]:
             try:
@@ -121,7 +125,6 @@ async def on_cb(svc, bot, q, parts) -> None:
                 pinned = " · 📌 고정"
             except TelegramError:
                 pass
-        await svc.db._write("DELETE FROM repost_drafts WHERE id=?", (did,))
         return await q.answer(f"✅ 올렸어요{pinned}")
 
 

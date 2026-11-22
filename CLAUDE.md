@@ -1070,6 +1070,17 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - **조각2 자기 점검** (`moderation.Moderator._ensure`, tests/test_selfcheck.py · 뮤테이션 2개): 뮤트·밴 한 뒤 `get_chat_member` 로 진짜 걸렸나 **딱 1번** 확인(mute→restricted/kicked/left·ban→kicked/left), 아니면 그 동작 한 번 더 (텔레그램이 드물게 씹음·경쟁). AI 비용 0. 확인 자체가 터지면 조용히 넘어감(원래 동작 유지, 무한 재시도 없음). FakeBot 이 restrict/ban/unban 결과를 member_status 에 반영(가짜 정확도↑), `drop_sanction=True` 로 '씹힘' 흉내.
 - **조각3(계획 카드: 여러 단계 한 장 승인 → ✅/⏳)은 아직 — 다음 작업.**
 
+## 🔧 Codex 리뷰 미해결 지적 일괄 수정 (2026-11-22, 오너 'PR 1~357 재조사해서 진짜 버그 전부 고쳐')
+Codex(chatgpt-codex-connector)가 PR 리뷰로 남긴 **미해결(is_resolved=false) finding** 을 에이전트로 전수조사(#1~357 + 358·360) → 현재 코드로 재검증 → 실제 버그만 수정. 발견: #227·304~311·355~360 에 집중, 그 밖 전부 findings 0.
+- **🔴 P1 자리비움 완전 먹통** (`away.py`, tests/test_away.py notice_uses_reply_parameters_*·4개, #355): `send_message(reply_to=)` 는 **PTB 22.x 에 없는 인자** → 자리비운 사람 @태그 때마다 TypeError, 안내가 안 나가고 `_pinged` 때문에 10분 재시도도 막힘. → `reply_parameters`. 같이: ① `.자리비움`/`.복귀` 명령은 훅이 건너뜀(`_is_away_cmd` — 훅이 create_task 로 명령과 동시에 돌아 방금 켠 걸 끄거나 중복 복귀하던 레이스) ② 핑은 **순수 이름**으로 저장하고 복귀 때 `mention(caller_id, name)` 로 만듦(예전엔 HTML 앵커를 80자로 잘라 `</a>` 가 날아가 복귀 안내가 깨짐) ③ 한 메시지가 여러 명 부르면 안내 `MAX_NOTIFY`(3)개까지 ④ 핑 중복 저장 안 함(INSERT ... WHERE NOT EXISTS).
+- **🟡 배포 중단 방지** (`deploy/update.sh` mediatools_setup, #360): `apt-get install ffmpeg` 에 `|| log` 없어 apt 일시 실패 시 `set -e` 로 배포 전체 중단 + 주기(변화 없음) 경로에 mediatools 재시도가 빠져 한 번 실패하면 새 커밋까지 안 고쳐짐 → `|| log` + 주기 경로에 ffmpeg/ffprobe/yt-dlp 없으면 재시도 블록 추가(RUN_AS 전용이라 테스트 회귀 0).
+- **🟡 소집 중복/유령** (`summon.py`·`panels/summon.py`, tests/test_summon.py candidates_exclude_left_members·double_fire_sends_only_once, #227): recent_members·recent_count·search_members 가 `member_left` 를 안 걸러 나간 사람이 소집 대상으로 떴음 → 세 쿼리에 `NOT IN (SELECT ... member_left)`. r_fire 2연타 시 최대 200명 중복 @태그 → `persist.claim(f"summon_fire:{cid}:{uid}", 5)` 로 5초 1회.
+- **🟡 repost 중복 발행** (`panels/repost.py` on_cb 'go', tests/test_repost.py go_claims_draft_before_copying, #307): 복사 '뒤' 삭제라 버튼 2연타 시 중복 발행 → 복사 '전에' `db.atomic` 로 초안 삭제(claim)·rowcount 1 일 때만 복사.
+- **🟡 자동답글 아이콘 거절 시 통째 유실** (`autoreply.py` `_strip_icons`·`_icons_off`, tests/test_autoreply.py premium_icon_rejected_*, #309/310/311): 봇 주인 비프리미엄이면 버튼 앞 커스텀 이모지 아이콘 발송이 BadRequest → 예전엔 같은 마크업으로 재시도해 자동답글이 아예 안 나감 → greet 처럼 **아이콘만 떼고(글자·URL·색 유지) 재시도** + 한 번 겪으면 프로세스 동안 미리 뗌. `_send_text`·`send_snap`(미디어/비미디어)·`send`(copy) 전부. (비미디어 send_<kind> 는 try/except 도 없었음.)
+- **🟡 예약공지 복사 시 데이터 손실** (`panels/announce.py` r_copy, tests/test_announce_panel.py copy_preserves_greet_*, #304~307): '다른 방에도' 복사가 add_schedule 에 category·variants·buttons·rich·del_prev·media_list·기간 을 안 넘겨 **인사멘트(category='greet')가 멘트 풀 없는 빈 공지**로 복사됐음 → 충실 복사(전부 전달). `announce._take` 가 fmt 를 html 로 플립할 때 앞서 쌓은 평문 variants 를 esc 안 해 'A & B'·'<3' 가 깨지던 것도 `draft.variants[:] = [esc(v) ...]` 로 수정.
+- **오너 확인 대기(코드 안 건드림)**: ① 구독가격 — 서버 `.env` 가 `SUB_PRICE_USDT=50` 명시(의도), config 기본값 50 도 맞음, **CLAUDE.md '30 USDT' 가 옛 문서** → 50 맞으면 문서만 갱신. ② 인사멘트 del_prev 기본값(쌓기 vs 지우기)은 **의도 문제**라 안 바꿈. ③ repost 방 고르기 12개 제한(페이지네이션 없음)·AI manage_schedule 목록에 greet 섞임 = 경미.
+- **🟡 2차(voice 프로세스, 별도 배포)**: 뮤비(`voice/worker.py` #358) — `.뮤비` 가 chat_id 락 없이 시작해 `.노래`/AI통화와 스트림 충돌 + 크래시(SIGKILL) 후 video_calls 가 메모리뿐이라 도우미가 통화에 잔류(orphan 정리 누락). → 별도 PR.
+
 ## DB 안전 규칙
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).

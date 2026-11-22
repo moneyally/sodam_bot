@@ -1021,5 +1021,29 @@ async def table_item_and_preview_show_rich():
     await db.close()
 
 
+@test
+async def copy_preserves_greet_category_variants_and_buttons():
+    # 복사('다른 방에도')가 category·variants·buttons·쌓기 를 안 넘겨 인사멘트가 빈 공지로 복사되던 것 (#305/306/307)
+    import json
+    from sodam.panels import announce as AP
+    db, svc, bot, state = await setup()
+    svc.perms.candidate_chats = lambda uid: _async([CHAT, OTHER])
+    svc.perms.is_admin = lambda bot, cid, uid: _async(uid in state.admins)   # 두 방 다 관리
+    svc.perms.is_tg_admin = svc.perms.is_admin
+    sid = await db.add_schedule(CHAT, kind="daily", at_time="09:00", interval_min=None, title="", text="",
+                                media_type=None, media_id=None, pin=False, created_by=ADMIN,
+                                category="greet", variants=json.dumps(["좋은 아침", "상쾌한 아침"]),
+                                buttons=json.dumps([["눌러", "https://t.me/x"]]), del_prev=False)
+    await AP.r_copy(menu.PanelCtx(svc, bot, ADMIN, CHAT, [str(sid), str(OTHER)]))
+    rows = await db.schedules(OTHER)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    assert r["category"] == "greet", r["category"]
+    assert json.loads(r["variants"]) == ["좋은 아침", "상쾌한 아침"], r["variants"]
+    assert r["buttons"] and "https://t.me/x" in r["buttons"], r["buttons"]
+    assert not r["del_prev"], "쌓기(del_prev=False) 설정도 유지"
+    await db.close()
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)

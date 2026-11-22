@@ -1009,6 +1009,7 @@ class Announcer:
         if rich is not None and draft.fmt != "html":
             other = "text" if field_name == "title" else "title"
             setattr(draft, other, esc(getattr(draft, other)))
+            draft.variants[:] = [esc(v) for v in draft.variants]   # 앞서 쌓은 평문 멘트도 esc (안 하면 'A & B'·'<3' 가 HTML 로 깨짐)
             draft.fmt = "html"
         if draft.fmt == "html":
             if rich is not None and field_name == "title" and len(html_plain(rich)) > 100:

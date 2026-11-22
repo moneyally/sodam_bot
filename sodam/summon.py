@@ -198,14 +198,17 @@ async def recent_members(db, chat_id: int, offset: int, limit: int) -> list[dict
     rows = await db._all(
         "SELECT u.user_id, u.first_name, u.last_name, u.username, m.last_seen "
         "FROM members m JOIN users u ON u.user_id=m.user_id "
-        "WHERE m.chat_id=? AND u.is_bot=0 ORDER BY m.last_seen DESC, u.user_id "
-        "LIMIT ? OFFSET ?", (chat_id, limit, offset))
+        "WHERE m.chat_id=? AND u.is_bot=0 "
+        "AND m.user_id NOT IN (SELECT user_id FROM member_left WHERE chat_id=?) "   # 나간 사람 제외 (소집 대상 아님)
+        "ORDER BY m.last_seen DESC, u.user_id LIMIT ? OFFSET ?", (chat_id, chat_id, limit, offset))
     return [dict(r) for r in rows]
 
 
 async def recent_count(db, chat_id: int) -> int:
     row = await db._one("SELECT COUNT(*) n FROM members m JOIN users u ON u.user_id=m.user_id "
-                        "WHERE m.chat_id=? AND u.is_bot=0", (chat_id,))
+                        "WHERE m.chat_id=? AND u.is_bot=0 "
+                        "AND m.user_id NOT IN (SELECT user_id FROM member_left WHERE chat_id=?)",
+                        (chat_id, chat_id))
     return row["n"] if row else 0
 
 
@@ -217,9 +220,10 @@ async def search_members(db, chat_id: int, query: str, limit: int = 20) -> list[
     like = f"%{q}%"
     rows = await db._all(
         "SELECT u.user_id, u.first_name, u.last_name, u.username FROM members m "
-        "JOIN users u ON u.user_id=m.user_id WHERE m.chat_id=? AND u.is_bot=0 AND ("
+        "JOIN users u ON u.user_id=m.user_id WHERE m.chat_id=? AND u.is_bot=0 "
+        "AND m.user_id NOT IN (SELECT user_id FROM member_left WHERE chat_id=?) AND ("   # 나간 사람 제외
         "u.first_name LIKE ? OR u.last_name LIKE ? OR u.username LIKE ?) "
-        "ORDER BY u.first_name LIMIT ?", (chat_id, like, like, like, limit))
+        "ORDER BY u.first_name LIMIT ?", (chat_id, chat_id, like, like, like, limit))
     return [dict(r) for r in rows]
 
 

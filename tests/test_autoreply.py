@@ -42,6 +42,7 @@ async def setup():
     AR._cache.clear()
     AR._user_hits.clear()
     AR._daily.clear()
+    AR._icons_off[0] = False          # 프로세스 전역 플래그 — 테스트 간 오염 방지
     bot = Bot()
     ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(),
                           bot_data={"svc": svc, "chats": set(), "cas_seen": set(), "tasks": set(), "joins": {}})
@@ -111,6 +112,31 @@ async def url_buttons_are_kept_on_copy_and_fallback():
     fb = kw["reply_markup"].inline_keyboard
     assert [b.url for r in fb for b in r] == ["https://t.me/a", "https://t.me/b"]
     assert fb[0][0].style == "success" and fb[0][0].icon_custom_emoji_id == "5431"   # 사본에서도 색·아이콘 유지
+
+
+@test
+async def premium_icon_rejected_retries_without_icon_not_dropped():
+    # 봇 주인이 프리미엄 아니면 버튼 앞 커스텀 이모지 아이콘 발송이 거절됨 (#309/310/311).
+    # 예전엔 같은 아이콘 마크업으로 재시도해서 자동답글이 통째로 사라졌음 → 이제 아이콘만 떼고 다시 보내 답글은 뜬다.
+    db, svc, bot, ctx = await setup()
+    bot.copy_fails = True                       # 원본 복사 실패 → 사본(send_snap→_send_text) 경로
+    orig_send = bot.send_message
+
+    async def picky(chat_id, text, **kw):       # 아이콘 달린 마크업이면 텔레그램이 거절
+        mk = kw.get("reply_markup")
+        if mk and any(getattr(b, "icon_custom_emoji_id", None) for r in mk.inline_keyboard for b in r):
+            raise BadRequest("Bad Request: PREMIUM_ACCOUNT_REQUIRED custom_emoji")
+        return await orig_send(chat_id, text, **kw)
+    bot.send_message = picky
+
+    await say(ctx, ADMIN, ".reply 제휴", reply_to=promo_msg())
+    await say(ctx, MEMBER, "제휴")
+    replies = [c for c in bot.named("send_message") if c[3].get("reply_markup")]
+    assert replies, "자동답글이 떠야 함 (아이콘 거절돼도 안 버려짐)"
+    final = replies[-1][3]["reply_markup"]
+    icons = [getattr(b, "icon_custom_emoji_id", None) for r in final.inline_keyboard for b in r]
+    assert not any(icons), f"아이콘은 떼고 재전송: {icons}"
+    assert [b.url for r in final.inline_keyboard for b in r] == ["https://t.me/a", "https://t.me/b"], "URL·색은 유지"
 
 
 @test

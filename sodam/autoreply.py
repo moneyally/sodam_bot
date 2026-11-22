@@ -20,7 +20,7 @@ import time
 import unicodedata
 from datetime import datetime
 
-from telegram import InlineKeyboardMarkup, ReplyParameters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 from telegram.error import BadRequest, TelegramError
 
 from . import mediastore
@@ -230,14 +230,50 @@ def _no_emoji(html_text: str) -> str:
     return _EMOJI_TAG.sub(r"\1", html_text)
 
 
+# 봇 주인이 프리미엄이 아니면 버튼 앞 프리미엄 이모지 아이콘(icon_custom_emoji_id) 발송이 거절됨 → 한 번 겪으면
+# 이후 아이콘 빼고 보냄 (greet 와 같은 방식). 예전엔 거절돼도 같은 아이콘 마크업으로 재시도해서 자동답글이 통째로 사라졌음.
+_icons_off = [False]
+_ICON_REFUSED = re.compile(r"emoji|icon|premium|document_invalid", re.I)
+
+
+def _strip_icons(markup):
+    """URL 버튼에서 프리미엄 커스텀 이모지 아이콘만 떼고 글자·주소·색(style)은 유지. 아이콘이 없으면 원본 그대로 반환."""
+    if markup is None or not getattr(markup, "inline_keyboard", None):
+        return markup
+    rows, changed = [], False
+    for row in markup.inline_keyboard:
+        new = []
+        for b in row:
+            icon = getattr(b, "icon_custom_emoji_id", None) or (getattr(b, "api_kwargs", None) or {}).get("icon_custom_emoji_id")
+            if icon and getattr(b, "url", None):
+                kw = {"url": b.url}
+                if getattr(b, "style", None):
+                    kw["style"] = b.style
+                new.append(InlineKeyboardButton(b.text, **kw))
+                changed = True
+            else:
+                new.append(b)
+        rows.append(new)
+    return InlineKeyboardMarkup(rows) if changed else markup
+
+
+def _icon_refused(e) -> bool:
+    return bool(_ICON_REFUSED.search(str(getattr(e, "message", None) or e)))
+
+
 async def _send_text(bot, chat_id: int, html_text: str, rp, markup=None):
+    if _icons_off[0]:
+        markup = _strip_icons(markup)
     try:
         return await bot.send_message(chat_id, html_text, parse_mode="HTML", reply_parameters=rp, reply_markup=markup)
     except BadRequest:
         plain = _no_emoji(html_text)
-        if plain == html_text:
+        mk = _strip_icons(markup)
+        if plain == html_text and mk is markup:          # 글·버튼 둘 다 바꿀 게 없으면 포기 (다른 BadRequest)
             raise
-        return await bot.send_message(chat_id, plain, parse_mode="HTML", reply_parameters=rp, reply_markup=markup)
+        if mk is not markup:
+            _icons_off[0] = True                          # 아이콘이 문제였음 → 이후 빼고 보냄
+        return await bot.send_message(chat_id, plain, parse_mode="HTML", reply_parameters=rp, reply_markup=mk)
 
 
 async def _send_rich(bot, chat_id: int, rich: dict, rp, markup):
@@ -263,6 +299,8 @@ async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = No
     body = banner_spacer(body)   # 표(분할 커스텀 이모지)면 전체폭 스페이서 붙여 계단으로 안 깨지게 (예약공지와 같은 방식)
     if markup is None:
         markup = _markup(snap.get("markup"), bot)
+    if _icons_off[0]:
+        markup = _strip_icons(markup)
     rich = snap.get("rich")
     if rich and not (kind and fid):          # 네이티브 표(blocks) — 미디어 없으면 sendRichMessage 로
         try:
@@ -277,13 +315,23 @@ async def send_snap(bot, db, chat_id: int, snap: dict, reply_to: int | None = No
         try:
             sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, reply_markup=markup, **cap)
         except BadRequest:
-            if not cap or _no_emoji(body) == body:
+            mk = _strip_icons(markup)
+            if mk is markup and (not cap or _no_emoji(body) == body):   # 아이콘·이모지 둘 다 바꿀 게 없으면 포기
                 raise
-            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, reply_markup=markup,
-                                         caption=_no_emoji(body), parse_mode="HTML")
+            if mk is not markup:
+                _icons_off[0] = True
+            cap2 = {"caption": _no_emoji(body), "parse_mode": "HTML"} if cap else {}
+            sent = await mediastore.send(bot, db, kind, chat_id, fid, reply_parameters=rp, reply_markup=mk, **cap2)
     else:
         fn = getattr(bot, "send_" + kind)          # send_sticker · send_voice · send_audio · send_video_note
-        sent = await fn(chat_id, fid, reply_parameters=rp, reply_markup=markup, **cap)
+        try:
+            sent = await fn(chat_id, fid, reply_parameters=rp, reply_markup=markup, **cap)
+        except BadRequest:
+            mk = _strip_icons(markup)
+            if mk is markup:                        # 아이콘 문제가 아니면 그대로 올림
+                raise
+            _icons_off[0] = True
+            sent = await fn(chat_id, fid, reply_parameters=rp, reply_markup=mk, **cap)
     if body and not fits:                          # 캡션에 안 들어간 긴 글은 따로 (버튼은 위 미디어에 이미 붙음)
         sent = await _send_text(bot, chat_id, body, None)
     return sent
@@ -293,12 +341,23 @@ async def send(bot, db, chat_id: int, row, reply_to: int | None = None):
     """원본 복사 → 안 되면 사본. 저장해 둔 URL 버튼(색·이모지)은 둘 다에 붙여 유지."""
     snap = json.loads(row["snap"] or "{}")
     markup = _markup(snap.get("markup"), bot)
+    if _icons_off[0]:
+        markup = _strip_icons(markup)
     if row["src_chat"] and row["src_msg"]:
+        rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
         try:   # copy_message 는 원본 인라인 버튼을 안 옮기므로 저장해 둔 markup 을 다시 붙인다
-            rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if reply_to else None
             return await bot.copy_message(chat_id, row["src_chat"], row["src_msg"], reply_parameters=rp,
                                           reply_markup=markup)
         except TelegramError as e:
+            if isinstance(e, BadRequest) and _icon_refused(e):          # 아이콘 거절이면 떼고 한 번 더
+                mk = _strip_icons(markup)
+                if mk is not markup:
+                    _icons_off[0] = True
+                    try:
+                        return await bot.copy_message(chat_id, row["src_chat"], row["src_msg"],
+                                                      reply_parameters=rp, reply_markup=mk)
+                    except TelegramError:
+                        pass
             log.info("자동 답글 원본 복사 안 됨 %s #%s: %s — 사본으로", chat_id, row["id"], e)
     return await send_snap(bot, db, chat_id, snap, reply_to, markup)
 
