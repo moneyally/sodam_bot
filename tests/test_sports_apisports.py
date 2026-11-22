@@ -330,7 +330,9 @@ async def test_sports_never_uses_server_env_key():
     try:
         db = await make_db()
         sp = Sports("123", db, KST, fetch=ApsFetch(), clock=Clock(ts(2026, 10, 1, 12)))
-        assert not sp.feed.available(LEAGUES["kbo"]), "가짜 fetch 를 준 Sports 는 환경변수 키를 안 씀"
+        # kbl = API-Sports 전용(sdb 없음) → 가짜 fetch 는 환경변수 키를 안 써 소스 0
+        # (kbo 는 이제 TheSportsDB 무료로도 되므로 '환경변수 안 씀' 확인용으로 못 씀)
+        assert not sp.feed.available(LEAGUES["kbl"]), "가짜 fetch 를 준 Sports 는 환경변수 키를 안 씀"
     finally:
         os.environ.pop("APISPORTS_KEY", None)
 
@@ -341,7 +343,8 @@ async def overseas_leagues_still_prefer_espn():
     f = ApsFetch()
     sp = Sports("123", db, KST, fetch=f, clock=Clock(ts(2026, 10, 1, 12)), aps_key=KEY)
     assert [p.name for p in sp.feed.sources(LEAGUES["epl"])][0] == "espn"
-    assert [p.name for p in sp.feed.sources(LEAGUES["kbo"])] == ["apisports"]
+    # 국내 리그 = API-Sports(유료) 먼저 + TheSportsDB(무료) 폴백 (2026-11-22)
+    assert [p.name for p in sp.feed.sources(LEAGUES["kbo"])] == ["apisports", "thesportsdb"]
     await sp.feed.day(LEAGUES["epl"], datetime(2026, 10, 1).date())
     assert f.calls == [], "ESPN 이 되면 API-Sports 한도를 안 씀"
 

@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 MAX_PER_ROOM = 50
 WORD_MAX = 30
-USER_MAX, USER_WINDOW = 5, 60   # 한 사람: 1분에 5번까지 (다른 낱말을 연달아 치는 건 됨)
+USER_MAX, USER_WINDOW = 10, 60   # 한 사람: 1분에 10번까지 (2026-11-22 오너 '바로바로' — 그 이상은 한 명 도배)
 DAILY_MAX = 200          # 방 하루
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
@@ -43,7 +43,7 @@ KIND_NAMES = {"photo": "사진", "video": "영상", "animation": "GIF", "documen
 CANCEL_WORDS = ("취소", "삭제", "지우기", "해제", "끄기", "del", "delete", "remove", "off")
 LIST_WORDS = ("목록", "list", "보기")
 
-register_setting("autoreply_gap", 30, "자동 답글 같은 낱말 간격(초)", range_=(5, 600))
+register_setting("autoreply_gap", 3, "자동 답글 같은 낱말 간격(초)", range_=(1, 600))   # 2026-11-22 오너 '전체 3초로 바로바로' (예전 30)
 
 register_schema("""
 CREATE TABLE IF NOT EXISTS auto_replies (

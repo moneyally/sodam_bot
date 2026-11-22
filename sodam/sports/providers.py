@@ -393,10 +393,14 @@ class SportsDB(Provider):
         self.key = (key or "").strip()
 
     def enabled(self) -> bool:
-        return bool(self.key) and self.key != "123"
+        return bool(self.key)          # 무료 공개키('123')도 eventsday(일정·스코어)는 됨 — 서버 실측 2026-11-22
 
     def supports(self, lg: League) -> bool:
-        return bool(lg.sdb)
+        if not lg.sdb:
+            return False
+        if self.key == "123":          # 무료 키: ESPN 이 없는 국내·하부 리그만 (eventsday 는 다 주지만 team/순위·rate limit 은 보수적으로 제외)
+            return not lg.espn
+        return True                    # 유료 키: 모든 sdb 리그
 
     def _url(self, path: str) -> str:
         return f"https://www.thesportsdb.com/api/v1/json/{self.key}/{path}"

@@ -74,6 +74,19 @@ class FakeFetch:
             return load("naver_kbo_standings.json")
         if "sports.naver.com/statistics/categories/kleague" in url:
             return load("naver_kleague_standings.json")
+        if "thesportsdb.com" in url and url.endswith("eventsday.php"):
+            # 무료 123 eventsday — K리그2(4822)·J2(4824) 11/22 한국 경기 (서버 실측 2026-11-22). UTC 05:00 = KST 14:00
+            if params.get("d") == "2026-11-22" and params.get("l") == "4822":
+                return {"events": [
+                    {"idEvent": "sk1", "strEvent": "Daegu FC vs Gimhae FC", "strHomeTeam": "Daegu FC",
+                     "strAwayTeam": "Gimhae FC", "strTimestamp": "2026-11-22T05:00:00", "strStatus": "NS"},
+                    {"idEvent": "sk2", "strEvent": "Jeonnam Dragons vs Ansan Greeners", "strHomeTeam": "Jeonnam Dragons",
+                     "strAwayTeam": "Ansan Greeners", "strTimestamp": "2026-11-22T07:30:00", "strStatus": "NS"}]}
+            if params.get("d") == "2026-11-22" and params.get("l") == "4824":
+                return {"events": [
+                    {"idEvent": "j2a", "strEvent": "Roasso Kumamoto vs Giravanz Kitakyushu", "strHomeTeam": "Roasso Kumamoto",
+                     "strAwayTeam": "Giravanz Kitakyushu", "strTimestamp": "2026-11-22T04:00:00", "strStatus": "NS"}]}
+            return {"events": []}
         return {}
 
 
@@ -229,12 +242,46 @@ async def naver_parses_korean_games_and_status_codes():
 
 
 @test
-async def sportsdb_only_with_paid_key():
-    assert not SportsDB(None, "123").enabled() and not SportsDB(None, "").enabled() and SportsDB(None, "abc").enabled()
+async def sportsdb_free_key_does_domestic_and_lower_leagues():
+    # 무료 공개키 '123' 도 켜짐 (eventsday 는 완전히 됨 — 서버 실측 2026-11-22). 빈 키만 꺼짐
+    assert SportsDB(None, "123").enabled() and SportsDB(None, "abc").enabled() and not SportsDB(None, "").enabled()
+    free = SportsDB(None, "123")
+    # 무료: ESPN 이 없는 국내·하부 리그만 (eventsday 는 다 주지만 rate limit·team/순위는 보수적으로)
+    assert free.supports(LEAGUES["kleague"]) and free.supports(LEAGUES["kleague2"])
+    assert free.supports(LEAGUES["jleague2"]) and free.supports(LEAGUES["jleague3"])
+    assert not free.supports(LEAGUES["epl"]) and not free.supports(LEAGUES["jleague"]), "ESPN 있으면 무료는 제외"
+    # 유료 키: 모든 sdb 리그
+    paid = SportsDB(None, "abc")
+    assert paid.supports(LEAGUES["epl"]) and paid.supports(LEAGUES["kleague"]) and paid.supports(LEAGUES["jleague"])
     g = SportsDB(None, "k").parse_event(LEAGUES["epl"], {"idEvent": "1", "strTimestamp": "2026-09-20T13:00:00",
                                                         "strHomeTeam": "Liverpool", "strAwayTeam": "Arsenal",
                                                         "intHomeScore": "2", "intAwayScore": "1", "strStatus": "FT"})
     assert (g.state, g.home_score) == ("post", 2)
+
+
+@test
+async def korean_and_japan_lower_leagues_show_via_free_sportsdb():
+    # 2026-11-22 오너: '.스포츠 축구' 에 한국축구(K리그)·일본 2·3부가 안 나옴 — ESPN 에 그 경로가 없고
+    # API-Sports 키는 죽고 네이버는 해외 IP timeout → TheSportsDB 무료 eventsday 로 복구
+    svc, db, fetch, clock = await setup(ts(2026, 11, 22, 15, 0))
+    out = await cmd(svc, ".스포츠 K리그2")
+    assert "Daegu FC" in out and "Gimhae FC" in out and "Ansan Greeners" in out, out
+    out = await cmd(svc, ".스포츠 J2리그")
+    assert "Roasso Kumamoto" in out and "Giravanz Kitakyushu" in out, out
+    # 종목 전체 '.스포츠 축구' 에도 포함
+    out = await cmd(svc, ".스포츠 축구")
+    assert "Daegu FC" in out and "Roasso Kumamoto" in out, out
+
+
+@test
+def lower_leagues_registered_in_soccer_sport_and_aliases():
+    from sodam.sports.leagues import leagues_of_sport
+    codes = {lg.code for lg in leagues_of_sport("soccer")}
+    assert {"jleague", "jleague2", "jleague3", "kleague", "kleague2"} <= codes, codes
+    assert LEAGUES["kleague2"].sdb == "4822", "K리그2 TheSportsDB ID (예전엔 None 이라 소스 없었음)"
+    assert LEAGUES["jleague2"].sdb == "4824" and LEAGUES["jleague3"].sdb == "4967"
+    assert find_league("j2").code == "jleague2" and find_league("일본2부").code == "jleague2"
+    assert find_league("j3리그").code == "jleague3" and find_league("일본3부").code == "jleague3"
 
 
 # ── 별칭 ────────────────────────────────────────────────
@@ -290,11 +337,13 @@ async def standings_and_team_commands():
 
 
 @test
-async def korean_leagues_need_naver_switch():
+async def korean_leagues_via_sportsdb_or_naver():
+    # 2026-11-22: 국내 리그는 예전엔 네이버 켜야만 됐지만, 이제 TheSportsDB 무료 eventsday 로도 조회됨
+    # (API-Sports 키 죽음·네이버 해외 IP timeout 대비 — sdb 있는 리그는 '준비 중' 아님)
     svc, *_ = await setup(ts(2026, 9, 27, 21, 0))
     out = await cmd(svc, ".스포츠 오늘 KBO")
-    assert "준비 중" in out, out
-    assert "준비 중" in await cmd(svc, ".스포츠 구독 KBO")
+    assert "준비 중" not in out, out                    # SportsDB 무료 소스가 생김 → 조회함
+    # 네이버를 켜면 점수·순위까지 더 정확 (SportsDB 보다 먼저 성공)
     svc, _, fetch, _ = await setup(ts(2026, 9, 27, 21, 0), naver=True)
     out = await cmd(svc, ".스포츠 오늘 KBO")
     assert "롯데 2-6 한화" not in out and "한화 6-2 롯데" in out and "(취소)" in out, out  # 야구는 원정 먼저
@@ -703,16 +752,18 @@ async def panel_adds_league_team_changes_settings_and_deletes():
     q = await press(svc, bot, MEMBER, f"m:spt:{CHAT}")
     assert not q.edits and q.answers[-1][1], "멤버는 못 엶"
     q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}")
-    assert any(t.startswith("⚽ 축구") for t, _ in buttons(q)) and "준비 중" in q.edits[-1] and "KBO" in q.edits[-1]
+    # sdb 없는 국내 농구·배구(KBL 등)는 아직 '준비 중', KBO·K리그는 TheSportsDB 무료로 구독 가능해짐
+    assert any(t.startswith("⚽ 축구") for t, _ in buttons(q)) and "준비 중" in q.edits[-1] and "KBL" in q.edits[-1]
     assert len(buttons(q)) <= 14, "리그가 80개 넘어도 첫 화면은 종목만"
     q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}:soccer")
     labels = [t for t, _ in buttons(q)]
-    assert "EPL" in labels and "북중미 네이션스리그" in labels and "FA컵" in labels and "KBO" not in labels, labels
+    assert "EPL" in labels and "북중미 네이션스리그" in labels and "FA컵" in labels, labels
+    assert "K리그1" in labels and "J2리그" in labels and "KBO" not in labels, labels  # 축구 목록에 K리그·J2 생김
     q = await press(svc, bot, ADMIN, f"m:sptl:{CHAT}:baseball")
-    assert "KBO" not in [t for t, _ in buttons(q)], "네이버 꺼짐 → 국내 리그 버튼 없음"
+    assert "KBO" in [t for t, _ in buttons(q)], "TheSportsDB 무료 eventsday 로 국내 야구도 구독 가능"
     q = await press(svc, bot, ADMIN, f"m:spta:{CHAT}:epl")
     assert ("✅ EPL", f"m:spta:{CHAT}:epl") in buttons(q)
-    q = await press(svc, bot, ADMIN, f"m:spta:{CHAT}:kbo")
+    q = await press(svc, bot, ADMIN, f"m:spta:{CHAT}:kbl")   # sdb·espn 없는 리그 = 아직 준비 중
     assert "고를 수 없는" in q.answers[-1][0]
     q = await press(svc, bot, ADMIN, f"m:in:{CHAT}:sptt")
     msg = FakeMsg(ADMIN.id, ADMIN, "다저스")
