@@ -18,6 +18,7 @@ from telegram import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, Forbidden, TelegramError
 
 from . import free, hooks, persist
+from .db import register_schema
 from .settings import register_setting
 from .util import mention, user_name
 
@@ -44,6 +45,17 @@ register_setting("subgate_mode", "off", "채널 구독 필수",
                  choices={"off": "off", "끔": "off", "끄기": "off", "on": "on", "켬": "on", "켜기": "on"},
                  choice_labels={"off": "끔", "on": "켬"})
 register_setting("subgate_channel", "", "구독할 채널", validator=_channel)
+
+# 구독 전 채팅 금지한 사람 기록 → 채널 구독 필수를 끄면(mode off) 틱이 자동으로 풀어 줌
+# (예전엔 끄면 '새로 안 막음'만 하고 이미 막은 사람은 그대로라 "off 인데 막힘" 상태로 남았음 — 2026-11-22 오너)
+register_schema("""
+CREATE TABLE IF NOT EXISTS subgate_blocked (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    ts      INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+);
+""")
 
 OK_TTL = 30 * 60      # 구독 확인된 사람 캐시
 NAG_GAP = 60          # 같은 사람 안내 간격
@@ -124,6 +136,8 @@ async def _block(svc: Services, bot, chat_id: int, user, channel: str, after_gre
     try:
         await bot.restrict_chat_member(chat_id, user.id, ChatPermissions.no_permissions())
         await svc.db.log_mod(chat_id, None, user.id, "subgate", f"채널 {channel} 구독 전 채팅 금지")
+        await svc.db._write("INSERT OR REPLACE INTO subgate_blocked(chat_id, user_id, ts) VALUES(?, ?, ?)",
+                            (chat_id, user.id, int(time.time())))   # 끄면 자동으로 풀어 주려고 기록
     except TelegramError as e:
         log.warning("subgate restrict failed %s/%s: %s", chat_id, user.id, e)
     greeter = getattr(svc, "greeter", None)
@@ -196,6 +210,7 @@ async def on_button(svc, bot, q, parts) -> None:
         await bot.restrict_chat_member(chat_id, uid, ChatPermissions.all_permissions())
     except TelegramError as e:
         log.warning("subgate unrestrict failed %s/%s: %s", chat_id, uid, e)
+    await svc.db._write("DELETE FROM subgate_blocked WHERE chat_id=? AND user_id=?", (chat_id, uid))
     await svc.db.log_mod(chat_id, uid, uid, "subgate_ok", "구독 확인")
     await q.answer("✅ 확인됐어요! 이제 채팅할 수 있어요.")
     try:
@@ -204,4 +219,32 @@ async def on_button(svc, bot, q, parts) -> None:
         pass
 
 
+async def release_tick(svc: Services, bot) -> None:
+    """채널 구독 필수를 끈(mode off) 방은, 그걸로 막았던 사람을 자동으로 풀어 준다 (30초 틱).
+    예전엔 끄면 '새로 안 막음'만 하고 이미 막은 사람은 그대로 남았다 (2026-11-22 오너 '수리남 소통방')."""
+    chats = await svc.db._all("SELECT DISTINCT chat_id FROM subgate_blocked")
+    for r in chats:
+        chat_id = r["chat_id"]
+        if active(await svc.db.get_settings(chat_id)):
+            continue   # 아직 켜져 있음 — 구독으로 풀어야 함
+        users = await svc.db._all("SELECT user_id FROM subgate_blocked WHERE chat_id=?", (chat_id,))
+        for u in users:
+            uid = u["user_id"]
+            try:
+                await bot.restrict_chat_member(chat_id, uid, ChatPermissions.all_permissions())
+            except TelegramError as e:
+                log.warning("subgate release failed %s/%s: %s", chat_id, uid, e)
+            mid = await svc.db.get_state(chat_id, f"subgate_msg:{uid}")
+            if mid:
+                try:
+                    await bot.delete_message(chat_id, int(mid))
+                except TelegramError:
+                    pass
+        await svc.db._write("DELETE FROM subgate_blocked WHERE chat_id=?", (chat_id,))
+        if users:
+            await svc.db.log_mod(chat_id, None, None, "subgate_off",
+                                 f"채널 구독 필수 꺼짐 → {len(users)}명 채팅 금지 자동 해제")
+
+
 hooks.add_callback_handler("sg", on_button)
+hooks.add_tick_hook(release_tick)
