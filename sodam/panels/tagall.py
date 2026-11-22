@@ -29,8 +29,12 @@ from ..util import esc, mention, user_name
 
 log = logging.getLogger(__name__)
 
-PER_MSG = 5                 # 텔레그램: 한 메시지에서 알림이 가는 멘션은 앞 5명까지
-SEND_GAP = 3.5              # 그룹 분당 20개 제한 → 17개/분
+PER_MSG = 5                 # 텔레그램: 한 메시지에서 알림(핑)이 가는 멘션은 앞 5명까지 (여러 출처 확인 2026-11-22)
+                            # → 한 메시지에 더 넣어도 6번째부턴 이름만 보이고 핑은 안 감. 그래서 5명씩 끊어 '전원 진짜 알림'.
+BURST = 3                   # 처음 이만큼 메시지는 거의 몰아서 (방 버스트 한도 ratelimit.GROUP_BURST 와 같음 → 앞 15명은 '확' 뜸)
+PACE_SEC = 5.0              # 버스트 뒤 메시지 사이 — 방 안전속도(분당 12, ratelimit.py)에 맞춤.
+                            # 이보다 빠르면 텔레그램이 방을 막아(벳띵 212초 실측) 오히려 더 느려짐 → 이게 안전 상한.
+BURST_GAP = 0.3            # 버스트 안에서도 아주 살짝만 띄움 (완전 동시 전송 방지)
 COOLDOWN = 6 * 3600         # 방마다 6시간에 한 번
 CLEANUP = 600               # 태그 메시지 10분 뒤 지움
 MAX_TEXT = 300
@@ -97,7 +101,9 @@ def batches(people: list[tuple[int, str]]) -> list[list[tuple[int, str]]]:
 
 
 def eta_text(n_msgs: int) -> str:
-    sec = int(n_msgs * SEND_GAP)
+    sec = int(max(0, n_msgs - BURST) * PACE_SEC)   # 앞 BURST 개는 거의 바로, 나머지만 안전속도로
+    if sec < 3:
+        return "거의 바로"
     return f"약 {sec // 60}분 {sec % 60}초" if sec >= 60 else f"약 {sec}초"
 
 
@@ -159,7 +165,7 @@ async def run(svc, bot, chat_id: int, by: int, text: str, sleep=asyncio.sleep) -
             if state["stop"]:
                 break
             if i:
-                await sleep(SEND_GAP)
+                await sleep(BURST_GAP if i < BURST else PACE_SEC)   # 앞 BURST 개는 거의 몰아서, 그 뒤는 방 안전속도
                 if state["stop"]:
                     break
             try:

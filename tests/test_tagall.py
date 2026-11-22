@@ -19,7 +19,8 @@ BOSS = fake_user(1, "방장", "boss")
 PEOPLE = [fake_user(100 + i, f"멤버{i}") for i in range(12)]
 GONE = fake_user(99, "나간사람")
 BOT = fake_user(50, "다른봇", "otherbot", is_bot=True)
-tagall.SEND_GAP = 0
+tagall.PACE_SEC = 0
+tagall.BURST_GAP = 0
 
 
 async def world(llm=None):
@@ -205,6 +206,32 @@ async def dot_command_for_admins():
     c, _ = card(r)
     assert "모여주세요" in c[2]
     assert cmd.role == Role.ADMIN
+
+
+@test
+async def bursts_first_then_paces_at_safe_rate():
+    # 2026-11-22 오너(GroupHelp 비교): '처음 몰아 쏘고 그 뒤 아끼기'.
+    # 앞 BURST 개 메시지(=15명)는 거의 바로, 나머지는 방 안전속도(분당 12, ratelimit)에 맞춰 띄움.
+    r = await world()
+    for u in [fake_user(400 + i, f"추가{i}") for i in range(13)]:   # 기존 12 + 13 = 25명(=5 메시지)
+        await r.join(u)
+    gaps = []
+
+    async def rec(sec):
+        gaps.append(sec)
+
+    old = (tagall.BURST, tagall.BURST_GAP, tagall.PACE_SEC)
+    tagall.BURST, tagall.BURST_GAP, tagall.PACE_SEC = 3, 0.3, 5.0
+    try:
+        tagall._running[Room.CHAT] = {"stop": False, "sent": 0, "total": 0}
+        await tagall.run(r.svc, r.bot, Room.CHAT, BOSS.id, "", sleep=rec)
+        # 안내 예상 시각: 앞 BURST 개는 거의 바로, 나머지만 안전속도
+        assert tagall.eta_text(3) == "거의 바로" and tagall.eta_text(5) == "약 10초", tagall.eta_text(5)
+    finally:
+        tagall.BURST, tagall.BURST_GAP, tagall.PACE_SEC = old
+    assert len(tag_msgs(r)) == 5, len(tag_msgs(r))
+    # 메시지 사이 간격 4개: 앞 2개(i=1,2 < BURST)는 짧게 몰아서, 뒤 2개(i>=BURST)는 안전속도
+    assert gaps == [0.3, 0.3, 5.0, 5.0], gaps
 
 
 if __name__ == "__main__":
