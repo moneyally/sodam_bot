@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 
+from telegram import ReplyParameters
+
 from . import tagnotify
 from .db import register_schema
 from .hooks import add_group_message_hook
@@ -35,8 +37,20 @@ register_schema("CREATE INDEX IF NOT EXISTS away_pings_user ON away_pings(user_i
 DEFAULT_MSG = "지금 자리 비움이에요. 돌아오면 확인할게요."
 COOLDOWN = 600        # 부른 사람 1명당 자리비움 안내 간격(초)
 MAX_PINGS = 10        # 복귀 때 보여줄 '찾은 사람' 최대 수
+MAX_NOTIFY = 3        # 한 메시지가 자리비운 여러 명을 부를 때 안내 메시지 최대 수 (도배·레이트리밋 방지)
 MAX_MSG = 200
 CACHE_TTL = 30.0      # 자리비움 사용자 집합 캐시 (메시지마다 DB 안 치게 — 보통 비어 있어 훅이 바로 끝남)
+
+# `.자리비움`/`.복귀` 명령은 명령 핸들러(c_away/c_back)가 처리 — 훅이 동시에(create_task) 끼어들어
+# 방금 켠 걸 바로 끄거나(.자리비움) 중복 복귀(.복귀)하지 않게, 훅은 이 명령들을 건너뛴다.
+_CMD_WORDS = {"자리비움", "잠수", "자러감", "away", "afk", "복귀", "돌아옴", "back"}
+
+
+def _is_away_cmd(text: str) -> bool:
+    t = (text or "").lstrip()
+    if len(t) < 2 or t[0] not in "./":
+        return False
+    return t[1:].split()[0].split("@")[0].lower() in _CMD_WORDS
 
 _away: set[int] = set()
 _away_at = 0.0
@@ -70,8 +84,9 @@ async def get_away(db, uid: int):
 
 async def clear_away(db, uid: int) -> list[str]:
     """자리비움 해제 + 그 사이 부른 사람(중복 제거) 표시명 목록을 돌려준다."""
-    pings = [r["caller"] for r in await db._all(
-        "SELECT caller, MIN(ts) t FROM away_pings WHERE user_id=? GROUP BY caller_id ORDER BY t", (uid,))]
+    # caller 는 '순수 이름'으로 저장 → 멘션은 여기서 caller_id 로 만든다 (HTML 앵커를 통째로 저장/자르지 않음)
+    pings = [mention(r["caller_id"], r["caller"]) for r in await db._all(
+        "SELECT caller_id, caller, MIN(ts) t FROM away_pings WHERE user_id=? GROUP BY caller_id ORDER BY t", (uid,))]
     await db._write("DELETE FROM away WHERE user_id=?", (uid,))
     await db._write("DELETE FROM away_pings WHERE user_id=?", (uid,))
     _invalidate()
@@ -79,8 +94,12 @@ async def clear_away(db, uid: int) -> list[str]:
 
 
 async def _record_ping(db, uid: int, caller_id: int, caller: str) -> None:
-    await db._write("INSERT INTO away_pings(user_id, caller_id, caller, ts) VALUES(?,?,?,?)",
-                    (uid, caller_id, caller[:80], int(time.time())))
+    # caller = 순수 이름(멘션은 복귀 때 caller_id 로 만듦). 같은 (자리비운 사람, 부른 사람)은 한 줄만 →
+    # 긴 자리비움 + 재시작으로 _pinged 가 비어도 DB 가 안 불어남 (복귀 때 caller_id 로 묶어 보여줌).
+    await db._write(
+        "INSERT INTO away_pings(user_id, caller_id, caller, ts) SELECT ?,?,?,? "
+        "WHERE NOT EXISTS (SELECT 1 FROM away_pings WHERE user_id=? AND caller_id=?)",
+        (uid, caller_id, (caller or "")[:40], int(time.time()), uid, caller_id))
 
 
 async def on_group_message(svc, bot, msg, role) -> None:
@@ -89,6 +108,8 @@ async def on_group_message(svc, bot, msg, role) -> None:
     away = await _ensure(db)
     if not away:
         return
+    if _is_away_cmd(getattr(msg, "text", "")):
+        return                            # .자리비움/.복귀 는 명령 핸들러(c_away/c_back)가 처리 — 훅 레이스 방지
     uid = getattr(getattr(msg, "from_user", None), "id", None)
     if uid in away:                       # 자리비운 본인이 말함 → 자동 복귀
         pings = await clear_away(db, uid)
@@ -100,7 +121,12 @@ async def on_group_message(svc, bot, msg, role) -> None:
         return
     targets = await tagnotify.targets(svc, msg)   # @태그·답장 대상 (user_id, 종류)
     now = time.monotonic()
+    mid = getattr(msg, "message_id", None)
+    rp = ReplyParameters(mid, allow_sending_without_reply=True) if mid else None   # PTB 22.x: reply_to 는 없음
+    sent = 0
     for tid, _kind in targets:
+        if sent >= MAX_NOTIFY:            # 한 메시지가 여러 명 부르면 안내 수를 막음 (도배·레이트리밋)
+            break
         if tid not in away or tid == uid:
             continue
         key = (uid or 0, tid)
@@ -110,12 +136,13 @@ async def on_group_message(svc, bot, msg, role) -> None:
         if row is None:
             continue
         _pinged[key] = now
+        sent += 1
         note = esc(row["message"] or DEFAULT_MSG)
-        await send_retry(lambda: bot.send_message(
-            msg.chat_id, f"💤 {mention(tid, row['name'] or '이 분')}님 지금 자리비움이에요: <i>{note}</i>",
-            parse_mode="HTML", reply_to=getattr(msg, "message_id", None)))
+        await send_retry(lambda t=tid, r=row, n=note: bot.send_message(
+            msg.chat_id, f"💤 {mention(t, r['name'] or '이 분')}님 지금 자리비움이에요: <i>{n}</i>",
+            parse_mode="HTML", reply_parameters=rp))
         if uid:
-            await _record_ping(db, tid, uid, mention(uid, user_name(msg.from_user)))
+            await _record_ping(db, tid, uid, user_name(msg.from_user))
 
 
 add_group_message_hook(on_group_message)

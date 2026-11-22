@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from telegram import Message
 
-from .. import commands, menu, summon, tools
+from .. import commands, menu, persist, summon, tools
 from ..menu import TG_ADMIN, B, HubItem, PanelCtx, Route, Screen, _back, _kb
 from ..permissions import Role
 from ..settings import register_setting
@@ -184,6 +184,11 @@ async def r_fire(c: PanelCtx) -> Screen:
     if not sel:
         s = await s_smn(c)
         s.toast = "고른 사람이 없어요."
+        return s
+    # 2연타 중복 발송 방지: 이 (방,관리자)는 5초에 한 번만 보냄 (두 번째 콜백은 원자적으로 막힘 — 최대 200명 중복 @태그 방지)
+    if not await persist.claim(c.svc.db, f"summon_fire:{c.cid}:{c.uid}", 5):
+        s = await s_smn(c)
+        s.toast = "방금 보냈어요 (잠깐 기다렸다 다시)."
         return s
     s_ = await c.svc.db.get_settings(c.cid)
     header = s_.get("summon_text") or "📣 집합! 다들 모여라 📣"

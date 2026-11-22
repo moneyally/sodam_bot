@@ -250,7 +250,7 @@ mediatools_setup() {
     # FFmpegError/'--proxy not installed' 로 실패했음, 2026-11-20). apt·심볼릭 둘 다 idempotent.
     [ -n "$RUN_AS" ] || return 0
     if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-        log "mediatools: ffmpeg 설치"; apt-get install -y ffmpeg >/dev/null 2>&1
+        log "mediatools: ffmpeg 설치"; apt-get install -y ffmpeg >/dev/null 2>&1 || log "mediatools: ffmpeg 설치 실패 (set -e 중단 방지 — 다음 타이머 재시도)"
     fi
     [ -x "$APP_DIR/.venv/bin/yt-dlp" ] && ln -sf "$APP_DIR/.venv/bin/yt-dlp" /usr/local/bin/yt-dlp
     if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1 && command -v yt-dlp >/dev/null 2>&1; then
@@ -516,6 +516,10 @@ if [ "$PREV" = "$NEW" ] && [ "$FORCE" -eq 0 ]; then
     # ImageMagick 이 없으면 다시 설치 시도 (첫 설치는 새 update.sh 가 도는 다음 타이머부터)
     if [ -n "$RUN_AS" ] && ! command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
         imagemagick_setup
+    fi
+    # 뮤비용 ffmpeg/ffprobe/yt-dlp 가 없으면 다시 설치 시도 (apt 일시 실패 회복 — Codex 지적 2026-11-22)
+    if [ -n "$RUN_AS" ] && { ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1 || ! command -v yt-dlp >/dev/null 2>&1; }; then
+        mediatools_setup
     fi
     exit 0
 fi

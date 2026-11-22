@@ -275,6 +275,36 @@ async def ai_tool_summons_and_blocks_member():
     assert "그룹방" in out, out
 
 
+# ── Codex 지적 수정 (2026-11-22) ───────────────────────────────
+@test
+async def candidates_exclude_left_members():
+    # 소집 후보(최근활동·검색)가 member_left 를 안 걸러서 나간 사람이 소집 대상으로 떴음 (#227)
+    db, svc, bot = await setup()
+    await db._write("INSERT INTO member_left(chat_id, user_id, ts) VALUES(?,?,?)", (CHAT, A, 1))  # A(철수) 나감
+    rec = [r["user_id"] for r in await summon.recent_members(db, CHAT, 0, 50)]
+    assert A not in rec and B in rec, rec
+    found = [r["user_id"] for r in await summon.search_members(db, CHAT, "철수")]
+    assert A not in found, found
+    # 수(count)도 나간 사람 빼고
+    before = await summon.recent_count(db, CHAT)
+    await db._write("INSERT INTO member_left(chat_id, user_id, ts) VALUES(?,?,?)", (CHAT, B, 1))
+    assert await summon.recent_count(db, CHAT) == before - 1
+
+
+@test
+async def double_fire_sends_only_once():
+    # 집합 보내기 버튼 2연타 → 최대 200명에게 중복 @태그가 가던 것 (#227). claim 으로 한 번만.
+    db, svc, bot = await setup()
+    await summon._set(db, CHAT, ADMIN, [A, B])
+    bot.calls.clear()
+    await P.r_fire(ctx(svc, bot, ADMIN, CHAT, []))
+    first = len(bot.named("send_message"))
+    assert first >= 1, "첫 집합은 나감"
+    s2 = await P.r_fire(ctx(svc, bot, ADMIN, CHAT, []))      # 바로 또
+    assert len(bot.named("send_message")) == first, "두 번째는 막혀 추가 발송 없음"
+    assert "방금" in (s2.toast or ""), s2.toast
+
+
 if __name__ == "__main__":
     import asyncio
     import sys

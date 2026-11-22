@@ -158,5 +158,65 @@ async def check_away_is_read_only_and_mapped():
     assert "check_away" in prompt.SYSTEM   # 지도에 'X 언제 와? → check_away'
 
 
+# ── Codex 지적 수정 (2026-11-22) ───────────────────────────────
+@test
+async def notice_uses_reply_parameters_not_reply_to():
+    # PTB 22.x 는 send_message(reply_to=) 가 없음 → reply_parameters 써야 함.
+    # 예전 reply_to 는 실서버에서 매번 TypeError → 안내가 안 나가고 _pinged 때문에 10분 재시도도 막힘.
+    db, svc, bot = await world()
+    await away.set_away(db, AWAY, "자리비운님", "자러 가요")
+    await away.on_group_message(svc, bot, call_by_reply(CALLER, AWAY), 0)
+    c = next(x for x in bot.named("send_message") if "자리비움" in x[2])
+    assert "reply_to" not in c[3], "reply_to 는 PTB 22.x 에 없는 인자"
+    assert c[3].get("reply_parameters") is not None, "reply_parameters 로 답장해야 함"
+
+
+@test
+async def hook_skips_away_and_back_commands():
+    # .복귀/.자리비움 은 명령 핸들러(c_back/c_away)가 처리 — 훅이 동시에(create_task) 끼어들어
+    # 방금 켠 걸 바로 끄거나(.자리비움) 중복 복귀(.복귀)하지 않게 훅은 이 명령을 건너뛴다.
+    db, svc, bot = await world()
+    await away.set_away(db, AWAY, "자리비운님", "")
+    back = FakeMsg(CHAT, fake_user(AWAY, "자리비운님", "away"), ".복귀", message_id=201)
+    await away.on_group_message(svc, bot, back, 0)
+    assert await away.get_away(db, AWAY) is not None, "훅이 .복귀 를 자동복귀로 처리하면 안 됨 (c_back 몫)"
+    assert not posts(bot), "훅은 조용히 넘어가야"
+    reset = FakeMsg(CHAT, fake_user(AWAY, "자리비운님", "away"), ".자리비움 또", message_id=202)
+    await away.on_group_message(svc, bot, reset, 0)
+    assert await away.get_away(db, AWAY) is not None and not posts(bot)
+    # 평범한 글이면 자동 복귀는 그대로 됨
+    await away.on_group_message(svc, bot, speak(AWAY), 0)
+    assert await away.get_away(db, AWAY) is None, "명령 아닌 글엔 자동 복귀"
+
+
+@test
+async def pings_stored_plain_and_rendered_as_valid_html():
+    # 예전엔 mention HTML('<a ...>이름</a>')을 통째 저장하고 80자로 잘라 </a> 가 날아가 복귀 안내가 깨졌음.
+    db, svc, bot = await world()
+    await away.set_away(db, AWAY, "자리비운님", "")
+    longname = "엄청나게긴이름" * 10   # 70자
+    caller = FakeMsg(CHAT, fake_user(CALLER, longname, "caller"), "자리비운님?", message_id=301,
+                     reply_to=FakeMsg(CHAT, fake_user(AWAY, "자리비운님", "away"), "x", message_id=10))
+    await away.on_group_message(svc, bot, caller, 0)
+    stored = (await db._one("SELECT caller FROM away_pings WHERE user_id=? AND caller_id=?", (AWAY, CALLER)))["caller"]
+    assert "<a" not in stored and len(stored) <= 40, f"순수 이름으로 저장(HTML 앵커 아님): {stored!r}"
+    pings = await away.clear_away(db, AWAY)
+    assert pings and pings[0].startswith('<a href=') and pings[0].endswith("</a>"), f"복귀 때 온전한 멘션: {pings}"
+
+
+@test
+async def caps_notices_when_many_away_users_mentioned():
+    db, svc, bot = await world()
+    ids = [50, 51, 52, 53]                 # 4명 자리비움 (MAX_NOTIFY=3)
+    for i in ids:
+        await away.set_away(db, i, f"자리{i}", "")
+    m = FakeMsg(CHAT, fake_user(CALLER, "부른이", "caller"), "다들 보세요", message_id=401)
+    m.entities = tuple(SimpleNamespace(type="text_mention", user=fake_user(i, f"자리{i}", "away"),
+                                       offset=0, length=1) for i in ids)
+    await away.on_group_message(svc, bot, m, 0)
+    notices = [x for x in posts(bot) if "자리비움" in x]
+    assert len(notices) == away.MAX_NOTIFY, f"한 메시지 안내는 최대 {away.MAX_NOTIFY}개: {len(notices)}"
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())

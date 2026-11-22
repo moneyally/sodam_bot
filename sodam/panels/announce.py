@@ -327,7 +327,13 @@ async def r_copy(c: PanelCtx) -> Screen:
                                           title=r["title"], text=r["text"], media_type=r["media_type"],
                                           media_id=r["media_id"], pin=bool(r["pin"]), created_by=c.uid,
                                           action=r["action"], skill=r["skill"], at_ts=r["at_ts"], deliver=r["deliver"],
-                                          fmt=r["fmt"] or "")
+                                          fmt=r["fmt"] or "",
+                                          # 충실 복사: 인사멘트(category·variants)·버튼·표·쌓기·앨범·기간까지 그대로 (안 넘기면 멘트 풀 없는 빈 공지가 됐음)
+                                          category=_col(r, "category", "announce"), variants=_col(r, "variants", None),
+                                          buttons=_col(r, "buttons", None), rich=_col(r, "rich", None),
+                                          del_prev=bool(_col(r, "del_prev", 1)), media_list=_col(r, "media_list", None),
+                                          start_ts=_col(r, "start_ts", None), end_ts=_col(r, "end_ts", None),
+                                          active_from=_col(r, "active_from", None), active_to=_col(r, "active_to", None))
         await c.svc.db.log_mod(g, c.uid, None, "schedule", f"#{sid} ← {c.cid}#{r['id']} 복사")
     screen = await s_item(c)
     screen.toast = f"📤 {len(ids)}개 방에 만들었어요"
