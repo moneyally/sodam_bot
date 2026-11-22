@@ -32,7 +32,7 @@
 
 ## 사용자
 - 한국어로 짧게 반말로 대화함 ("ㄱㄱ", "해줘"). 답도 한국어 반말(친구 톤)로, 짧고 실행 위주로.
-- 텔레그램 업자 소통방 운영자. 봇을 여러 방 관리자(대표님들)에게 **방당 월 30 USDT(TRC20) 구독**으로 판매하려 함.
+- 텔레그램 업자 소통방 운영자. 봇을 여러 방 관리자(대표님들)에게 **방당 월 50 USDT(TRC20) 구독**으로 판매하려 함.
 - GroupHelp / SangMata 같은 **버튼식 UX**를 원함. 결제 정보는 방에 절대 노출하지 말고 관리자 1:1에서만.
 - PC방에서 작업하는 경우가 많음 → 로컬 파일은 사라진다고 가정하고, 중요한 건 GitHub 에 푸시.
 - **영어를 모름 — 설명·보고는 전부 한국어.** 확인 안 한 걸 "했다/배포됐다"고 하지 말 것 (서버 버전을 직접 확인한 것만 완료, 아니면 "미확인").
@@ -62,7 +62,7 @@
   `.env.backup-template` = 실제 .env 에서 `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `TRONGRID_API_KEY` 만 비운 것.
 - 결제: 서버엔 받는 주소만(`PAY_ADDRESS`), 개인키·시드 금지. 입금은 TronGrid 로 공식 USDT 컨트랙트
   `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`·받는 주소·정확한 금액(청구서마다 끝자리 다름)·확정거래·유효시간·tx 1회만 검사.
-  `check_pending` 은 asyncio.Lock, 연장은 SQL 한 문장(`db.extend_paid`). 설정: 월 30 USDT / 30일 / 체험 3일.
+  `check_pending` 은 asyncio.Lock, 연장은 SQL 한 문장(`db.extend_paid`). 설정: 월 50 USDT / 30일 / 체험 3일 (서버 `.env` `SUB_PRICE_USDT=50`, config 기본값도 50 — 2026-11-22 오너 확인).
   **끝난 방은 AI 답 없음, 안내만**(방마다 1시간 1번, 오너 결정 2026-09-28 — 예전 '하루 10회 무료' 없앰). 1:1 은 FREE_AI_PER_DAY 그대로.
   **🎵 노래(뮤직봇)는 구독과 무관하게 모든 방 무료** (오너 결정 2026-11-01 '노래는 걍 나오게, AI 만 막으면 됨') — `music.precheck` 에서 paid_features 체크를 뺌. 구독으로 막는 건 AI·그 외 기능뿐.
   끝난 그 시각에 방 안내 + 초대한 관리자 1:1 (`handlers._notify_ended`, 30초 틱, (방,끝난 시각) claim). 10시 작업은 '곧 끝나요'만.
@@ -221,7 +221,7 @@
   벳블리 '결제하면 얼마야?'에 '가격 자료 없음'): index.md = 목차. 문서마다 front-matter title·summary·tags·related·audience (한 줄 `키: 값`, 목록은 쉼표).
   쓰는 법: 한 질문 = 한 문서, 맨 위 `## 한 줄 답`(해요체), 버튼은 코드의 화면 글자 그대로 `[💳 구독하기]`(테스트가 코드에 있는지 검사),
   `## 소담이 하지 말 것`, 끝에 `## 관련 문서`(사람용 링크 — AI 에겐 빼고 related 로 줌). 본문 1,500자 안. 태그는 문서끼리 겹치지 않게.
-  숫자는 {price}{days}{trial}{free_ai}{invoice_min}{voice_min}{call_min} → 설정값(문서에 '30 USDT' 직접 쓰면 테스트 실패). 입금 주소·링크 금지.
+  숫자는 {price}{days}{trial}{free_ai}{invoice_min}{voice_min}{call_min} → 설정값(문서에 '50 USDT' 직접 쓰면 테스트 실패). 입금 주소·링크 금지.
   기능이 바뀌면 해당 문서도 같이 고치고 EVAL(질문→문서 평가표)에 실제 질문 추가. pricing·payment·invite 면 방에 버튼 카드(방마다 10분 1번).
   소담 자신에 대한 새 사실은 이 문서에 추가(`.지식` 아님).
 - **🗣️ 멤버가 말로** (`panels/membertools.py`, tests/test_member_nl.py · 뮤테이션 32개, 2026-09-30 멤버 말하기 감사):
