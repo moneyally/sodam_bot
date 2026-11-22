@@ -29,9 +29,17 @@ async def s_sgt(c: PanelCtx) -> Screen:
                      "⚠️ 소담이 그 채널 <b>관리자</b>가 아니라 구독 여부를 못 봐요 — 채널에 소담을 관리자로 넣어 주세요. "
                      "(그 전엔 아무도 막지 않아요)")
     rows = [menu._preset_row(s, c.cid, "subgate_mode"),
-            [B("📢 채널 바꾸기" if ch else "📢 채널 정하기", f"m:in:{c.cid}:sgc")],
-            menu._back(c.cid)]
+            [B("📢 채널 바꾸기" if ch else "📢 채널 정하기", f"m:in:{c.cid}:sgc")]]
+    if ch:
+        rows.append([B("🗑 채널 지우기 (구독 필수 끔)", f"m:sgcx:{c.cid}")])
+    rows.append(menu._back(c.cid))
     return Screen("\n".join(lines), menu._kb(rows))
+
+
+async def s_sgcx(c: PanelCtx) -> Screen:
+    """채널값만 지움 (잘못 넣었을 때) — 구독 필수도 같이 꺼서 막던 사람은 release_tick 이 자동 복구."""
+    await _save(c, "subgate_channel 지움", subgate_channel="", subgate_mode="off")
+    return await s_sgt(c)
 
 
 async def in_channel(c: PanelCtx, msg: Message) -> tuple[bool, str]:
@@ -49,6 +57,7 @@ async def in_channel(c: PanelCtx, msg: Message) -> tuple[bool, str]:
 menu.register_hub(HubItem(23, "sgt", "📢 채널 가입 필수"))
 menu.register_screen("sgt", s_sgt)
 menu.register_screen("sgc", s_sgt)
+menu.register_screen("sgcx", s_sgcx)
 menu.register_input("sgc", (
     "📢 구독해야 하는 <b>채널</b>을 보내 주세요.\n"
     "<code>@채널아이디</code> · <code>https://t.me/채널아이디</code> · 비공개 채널은 <code>-100…</code> 숫자 ID\n"

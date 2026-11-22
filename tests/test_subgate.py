@@ -10,7 +10,8 @@ from fake_llm import Room  # noqa: E402
 from fakes import FakeQuery, fake_user, runner  # noqa: E402
 from telegram.error import BadRequest  # noqa: E402
 
-from sodam import handlers, hooks, subgate  # noqa: E402
+from sodam import handlers, hooks, menu, subgate  # noqa: E402
+from sodam.panels import subgate as subgate_panel  # noqa: E402
 
 test, run_all = runner()
 BOSS = fake_user(10, "대표", "boss")
@@ -188,6 +189,26 @@ async def subscribing_removes_from_blocked_list():
     SUBS["@wh_channel"].add(NEW.id)
     await press(r, NEW, NEW.id)   # 구독 확인
     assert not await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,)), "구독하면 목록에서 빠짐"
+
+
+@test
+async def clear_channel_button_removes_channel_and_releases_blocked():
+    # 2026-11-22 오너(클린뱅크방): 채널값을 잘못 넣었는데 지우는 버튼이 없었음 → 🗑 채널 지우기 추가.
+    SUBS["@wh_channel"] = set()
+    r = await room()
+    await join(r, NEW)                                        # 켜진 상태라 막힘
+    assert await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,))
+    c = menu.PanelCtx(r.svc, r.bot, BOSS.id, r.CHAT, [])
+    sc = await subgate_panel.s_sgt(c)                         # 채널 있으면 지우기 버튼이 보임
+    data = [b.callback_data for row in sc.kb.inline_keyboard for b in row]
+    assert f"m:sgcx:{r.CHAT}" in data, data
+    await subgate_panel.s_sgcx(c)                             # 🗑 채널 지우기
+    s = await r.db.get_settings(r.CHAT)
+    assert not s["subgate_channel"] and s["subgate_mode"] == "off", s
+    sc2 = await subgate_panel.s_sgt(c)                        # 지운 뒤엔 버튼 사라짐
+    assert f"m:sgcx:{r.CHAT}" not in [b.callback_data for row in sc2.kb.inline_keyboard for b in row]
+    await subgate.release_tick(r.svc, r.bot)                  # 끄면 막던 사람 자동 복구
+    assert any(x[0] == "restrict" and x[2] == NEW.id and x[3].can_send_messages for x in r.bot.calls), r.bot.calls
 
 
 if __name__ == "__main__":
