@@ -296,6 +296,34 @@ async def worker_start_stop_records_call():
 
 
 @test
+async def music_video_persists_crash_marker_and_video_done_clears_it():
+    # 🎬 뮤비(video_calls)는 메모리뿐이라 SIGKILL 로 죽으면 도우미가 통화에 잔류했음 (#358).
+    # → 시작 때 DB 마커(chat_state video_live) 저장, 끝/크래시 정리 때 해제.
+    import os
+    db, w, _, _ = await make_worker()
+    await run_job(db, w, "login_phone", {"phone": "+821000000000"})
+    await run_job(db, w, "login_code", {"code": "12345"})
+    vf = tempfile.mkstemp(suffix=".mp4")[1]
+    w.music_source = SimpleNamespace(resolve=lambda q: {"vid": "VID", "title": "노래제목", "url": "http://x"},
+                                     fetch_video=lambda v: vf, primary_ok=lambda: True)
+
+    async def _noop_pump(chat_id, path):
+        return
+    w._aud_pump = _noop_pump
+    w._vid_pump = _noop_pump
+    ok, res = await w._music_video(CHAT, {"query": "노래제목"})
+    try:
+        assert ok and res == "video", (ok, res)
+        assert await db.get_state(CHAT, "video_live") == "1", "크래시 대비 DB 마커 저장"
+        assert CHAT in w.video_calls
+    finally:
+        await w._video_done(CHAT, "chat_closed")
+    assert await db.get_state(CHAT, "video_live") is None, "끝나면 마커 해제"
+    assert CHAT not in w.video_calls
+    os.unlink(vf)
+
+
+@test
 async def worker_no_voice_chat_is_reported():
     db, w, _, _ = await make_worker()
     await run_job(db, w, "login_phone", {"phone": "+821000000000"})
