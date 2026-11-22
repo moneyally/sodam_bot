@@ -131,6 +131,8 @@ async def passed(svc: Services, chat_id: int, user_id: int) -> bool:
 
 async def _decline(svc: Services, bot, chat_id: int, user_id: int, reason: str) -> None:
     await svc.db._write("DELETE FROM join_requests WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    from . import joinpending   # 대기 명단에서도 뺌 (순환 방지 지연 import)
+    await joinpending.forget(svc, chat_id, user_id)
     try:
         await bot.decline_chat_join_request(chat_id, user_id)
     except TelegramError as e:   # 이미 처리됨(관리자가 직접)·신청 취소

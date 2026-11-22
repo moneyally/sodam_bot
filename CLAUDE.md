@@ -151,6 +151,14 @@
   2026-10-16 뉴월드 '입요 넣기 전에 로봇이 아닙니다 인증'): 1:1 에 비뚤게 그린 숫자 그림(PIL) + 숫자 버튼 판(jr:<방>:k:<0-9|b|n>) — 1:1 을 /start 안 해도 버튼으로 됨,
   채팅으로 숫자만 보내도 됨(hooks.DM_TEXT_HOOKS, 전각·띄어쓰기 OK). 틀리면 새 숫자·3번 거절, 🔄 새 숫자는 기회 그대로. 기본 방식은 puzzle(예전 방 그대로).
   **'사용자 초대' 권한이 없으면 텔레그램이 가입 신청을 봇에 안 보냄** → 🤖 화면이 권한·승인제 여부를 바로 점검. 안내서 guide/robot-check.md.
+- **📥 입장요청(입요) 쌓기 → 전원 승인·가라 거절** (`joinpending.py`·`panels/joinpending.py`, tests/test_joinpending.py · 뮤테이션 3개, 2026-11-22 오너 '슈퍼배드 입요 전부 받아줘'):
+  텔레그램은 **가입 신청 명단 보기를 관리자인 유저 계정에만** 허용한다 — 봇 API 엔 목록 메서드가 없고(approve/decline 만), 봇 토큰 MTProto 는 `BotMethodInvalidError`,
+  일반 멤버 계정은 `ChatAdminRequiredError` (셋 다 슈퍼배드에서 실측). 예전엔 join_verify 켠 방만 join_requests 에 저장해서, 꺼진 방은 명단을 아예 못 봤다.
+  → **들어오는 모든 입요를 설정 무관하게 `join_pending` 표에 쌓는다**(`record`, handlers.on_join_request 맨 앞 — 방·채널 공통). 비우기: 실제 입장(handle_new_member)·
+  소담 거절(joinreq._decline·channel.decide)·bulk 때 `forget`. 그 명단으로 봇이 `approveChatJoinRequest`/`declineChatJoinRequest` 를 돌림(관리자 승격·MTProto 필요 없음, 봇만).
+  AI 도구 `join_requests(action=count|approve|decline, scope=all|korean|foreign)`(ADMIN·room·확인 카드 jreq_ok/jreq_no, approve·decline 은 요청자만 누름, persist.spawn 으로 뒤에서 BATCH 6·GAP 0.4·429 백오프) ·
+  명령 `.입요`(수)·`.입요승인`·`.입요거절`(기본 가라=비한글만, '전체' 붙이면 전원 — 한글 이름 `_HANGUL` 보존). 60일 지난 줄은 tick 이 정리. **⚠️ 이 기능 배포 이후 들어온 신청만 쌓임** —
+  배포 전에 이미 밀린 입요(슈퍼배드처럼)는 **관리자인 유저 계정으로 1회 MTProto 조회**(자이 @Ban_1599 를 그 방 관리자로 올리면 jr 스크립트로 긁어 승인)해야 함. 지도(prompt)·도움말 예시에 있음.
 - 자유 멤버(`free.py`, `.free @user` / `.free해제` / `.free목록`, '사용자 차단' 권한 관리자만): 지정 시 채팅 금지·캡차 대기·경고 해제,
   이후 자동 통제(도배·링크·금지어·잠금·사칭·입장 캡차·CAS·공동 차단·사기 의심·봇 조작 경고) 제외. 관리자 권한은 아님.
   **방 전체 한 번에**(2026-10-26 햄찌방 '모든 사람 프리 한 번에', tests/test_admin_nl.py free_all_* · 뮤테이션 3개): `.전체프리`(별칭 모두프리·전원프리)·`.전체프리해제`·AI 도구 `free_all(on)` ('이 방 모든 사람/전부 프리 해줘'=on true, '전체 프리 해제'=false) → 방에 확인 카드(cards.card freeall_ok/freeall_no, 요청자만, '사용자 차단' 권한 누를 때 재확인). `free.add_many`(INSERT OR IGNORE·db.atomic)/`clear_all`. 대상 = `admintools.free_all_targets`(members 테이블 non-bot − telegram_admins, 이미 자유인 사람 제외). **관리자·봇은 제외, 새로 들어올 사람은 포함 안 됨**(그 사람은 따로). 한 명만은 member_action(free/unfree).

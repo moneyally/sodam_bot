@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, cleanservice, disable, emojilab, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
+from . import autoreply, cleanservice, disable, emojilab, joinpending, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
 from .panels import motionbanner
 from .panels import repost as _repost
 
@@ -63,6 +63,8 @@ from .panels import rankboost as _rankboost  # noqa: E402
 _rankboost.register_commands()  # .채팅부스트 (집계 부스트 구간)
 from . import away as _away  # noqa: E402  (훅·표 등록)
 _away.register_commands()       # .자리비움 · .복귀
+from .panels import joinpending as _joinpending  # noqa: E402
+_joinpending.register_commands()  # .입요 · .입요승인 · .입요거절 (쌓인 가입 신청 전원 처리)
 HISTORY_HOURS = 6
 HISTORY_LIMIT = 30
 JOIN_DEDUPE_SECONDS = 20  # 입장 메시지와 상태 변경은 몇 초 안에 둘 다 온다
@@ -219,6 +221,7 @@ async def handle_new_member(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ti
     if user.is_bot or not _first_join(context, chat_id, user.id):
         return
     svc, bot = _svc(context), context.bot
+    await joinpending.forget(svc, chat_id, user.id)   # 실제로 들어왔으면 입요 대기 명단에서 뺌
     # 입장 기록: 누가·언제·어떻게 (2026-10-07 백악관 — 강제 추가·구독 확인을 나중에 DB 로 추적)
     parts = [how] if how else []
     if by is not None and by.id != user.id:
@@ -324,9 +327,11 @@ async def on_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """가입 신청 → 1:1 그림 버튼 확인 (sodam/joinreq.py)."""
     try:
         req = update.chat_join_request
+        svc = _svc(context)
+        await joinpending.record(svc, req)   # 설정 무관 — 나중에 전원 승인·가라 거절용 명단 (sodam/joinpending.py)
         if req.chat.type == ChatType.CHANNEL:   # 채널 가입 신청 (sodam/channel.py)
-            return await channel.on_join_request(_svc(context), context.bot, req)
-        await joinreq.on_request(_svc(context), context.bot, req)
+            return await channel.on_join_request(svc, context.bot, req)
+        await joinreq.on_request(svc, context.bot, req)
     except Exception:
         log.exception("join request failed")
 
