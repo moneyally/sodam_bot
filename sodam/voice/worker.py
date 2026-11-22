@@ -916,6 +916,8 @@ class Worker:
             return False, err_code(e)
         ent = self.video_calls[chat_id] = {"title": info["title"], "by": by, "status": status, "path": path,
                                            "procs": [], "started": time.monotonic()}
+        with contextlib.suppress(Exception):   # DB 마커 — SIGKILL 로 죽어도 다음 시작 때 run() 이 이 방을 나가 정리 (video_calls 는 메모리뿐이라)
+            await self.db.set_state(chat_id, "video_live", "1")
         ent["tasks"] = [asyncio.create_task(self._aud_pump(chat_id, path)),
                         asyncio.create_task(self._vid_pump(chat_id, path))]
         await self._music_edit(chat_id, status, f"🎬 뮤비 재생 중: {musicq._esc(info['title'])[:80]}\n화면을 켜서 보세요 (480p)")
@@ -995,6 +997,8 @@ class Worker:
 
     async def _video_done(self, chat_id: int, reason: str) -> None:
         """🎬 뮤비 끝(재생 완료·음챗 닫힘·내보내짐) → ffmpeg·펌프 끊고 나가 정리. 노래·통화가 그 방에 있으면 소리 줄은 안 끊음."""
+        with contextlib.suppress(Exception):   # DB 마커 해제 (남은 마커는 다음 시작 때 빈 방을 한 번 나가는 것뿐이라 무해)
+            await self.db.set_state(chat_id, "video_live", None)
         info = self.video_calls.pop(chat_id, None)
         if info is None:
             return
@@ -1489,10 +1493,14 @@ class Worker:
 
     async def run(self) -> None:
         orphans = [r["chat_id"] for r in await self.db._all("SELECT DISTINCT chat_id FROM voice_calls WHERE end_ts IS NULL")]
+        video_orphans = [r["chat_id"] for r in await self.db._all("SELECT chat_id FROM chat_state WHERE key=?", ("video_live",))]
+        for cid in video_orphans:               # 크래시(SIGKILL)로 남은 뮤비 방 → 나가고 마커 정리 (뮤비는 재개 없음)
+            with contextlib.suppress(Exception):
+                await self.db.set_state(cid, "video_live", None)
         await store.close_orphans(self.db)
         orphan_music = await musicq.close_orphans(self.db)      # kill -9 등으로 끝 표시 없이 남은 노래 세션
         music_chats = await musicq.restart_chats(self.db, int(time.time()) - 1800)   # 재시작으로 끊긴 방 (30분 안)
-        orphans = sorted(set(orphans) | set(orphan_music))
+        orphans = sorted(set(orphans) | set(orphan_music) | set(video_orphans))
         try:
             await self.resume()
             await self.leave_orphans(orphans)
