@@ -539,3 +539,44 @@ async def album_room_post_not_editable_and_autodeletes_all():
 
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(run_all()) else 0)
+
+
+# ── 🎨 채널 공지 커스텀(프리미엄) 이모지 (2026-11-22 비상: 채널 공지 이모지 다 깨짐) ──
+@test
+def clean_html_keeps_custom_emoji():
+    body, dropped = clean_html('<tg-emoji emoji-id="5368324170671202286">😀</tg-emoji> 안녕')
+    assert 'tg-emoji emoji-id="5368324170671202286"' in body, body   # 태그·번호 보존
+    assert "😀" in body and "tg-emoji" not in dropped
+
+
+@test
+def clean_html_drops_custom_emoji_without_id():
+    body, _ = clean_html('<tg-emoji>😀</tg-emoji> 하이')                 # emoji-id 없으면 일반 이모지 글자만
+    assert "tg-emoji" not in body and "😀" in body
+
+
+@test
+def strip_custom_emoji_fallback():
+    from sodam.util import strip_custom_emoji
+    assert strip_custom_emoji('<tg-emoji emoji-id="123">🔥</tg-emoji>불') == "🔥불"
+    assert strip_custom_emoji("그냥 글자") == "그냥 글자"
+
+
+@test
+async def non_premium_bot_falls_back_to_plain_emoji():
+    """봇 주인이 프리미엄이 아니라 커스텀 이모지 발송이 거절되면 → 일반 이모지 글자로라도 보낸다 (발송 실패 X)."""
+    from telegram.error import BadRequest
+    sent = []
+
+    class EmojiRejectBot:
+        async def send_message(self, chat_id, text, **kw):
+            if "tg-emoji" in (text or ""):
+                raise BadRequest("Message contains an invalid custom emoji")
+            sent.append(text)
+            return type("M", (), {"message_id": 1})()
+
+    composer._icons_off = False
+    d = {"body": '<tg-emoji emoji-id="123">🔥</tg-emoji> 공지', "silent": False, "media_type": None,
+         "media_id": None, "preview": False, "buttons": "[]", "theme": "", "pin": 0}
+    await composer.send_group(EmojiRejectBot(), -100123, d)
+    assert sent and "tg-emoji" not in sent[-1] and "🔥" in sent[-1], sent   # 커스텀 거절 → 글자 폴백으로 발송됨
