@@ -19,7 +19,7 @@ from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Inp
                       LinkPreviewOptions)
 from telegram.error import BadRequest
 
-from . import btnstyle, mediastore, persist
+from . import btnstyle, mediastore, persist, util
 from .db import register_columns, register_schema
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class HtmlError(ValueError):
 
 
 # ── HTML 허용 목록 ────────────────────────────────────────
-ALLOWED = {"b", "i", "u", "s", "code", "pre", "a", "blockquote", "tg-spoiler"}
+ALLOWED = {"b", "i", "u", "s", "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji"}
 ALIAS = {"strong": "b", "em": "i", "ins": "u", "strike": "s", "del": "s"}
 _TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s[^<>]*)?)>")
 _ATTR = re.compile(r"""([a-zA-Z-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
@@ -168,6 +168,8 @@ def clean_html(src: str, limit: int = TEXT_LIMIT) -> tuple[str, list[str]]:
             canon = "tg-spoiler" if "tg-spoiler" in attrs.get("class", "") else None
         elif canon not in ALLOWED:
             canon = None
+        if canon == "tg-emoji" and not attrs.get("emoji-id", "").strip().isdigit():
+            canon = None                # 커스텀 이모지 번호(emoji-id)가 없으면 일반 이모지(글자)로
         if canon is None:               # 모르는 태그: 글자만 남김
             dropped.append(name)
             if not raw.rstrip().endswith("/"):
@@ -188,6 +190,8 @@ def clean_html(src: str, limit: int = TEXT_LIMIT) -> tuple[str, list[str]]:
             tag = f'code class="language-{lang.group(1)}"'
         elif canon == "blockquote" and "expandable" in attrs:
             tag = "blockquote expandable"
+        elif canon == "tg-emoji":       # 커스텀(프리미엄) 이모지 — emoji-id 는 위에서 숫자 확인됨
+            tag = f'tg-emoji emoji-id="{html.escape(attrs["emoji-id"].strip())}"'
         stack.append((name, canon, m.start()))
         out.append(f"<{tag}>")
     out.append(_text(src[pos:]))
@@ -333,16 +337,25 @@ def markup(rows: list[list[dict]], theme: str = "signal") -> InlineKeyboardMarku
 
 
 async def _icon_retry(call):
-    """프리미엄 이모지 아이콘이 거절되면(봇 주인 비프리미엄) 아이콘을 끄고 한 번 더 — markup 이 다시 그려짐."""
+    """프리미엄 이모지가 거절되면(봇 주인 비프리미엄) 폴백: ① 버튼 아이콘 끄기 ② 본문 커스텀 이모지(tg-emoji)를
+    일반 이모지 글자로. call(strip=True) 를 받으면 본문 폴백까지 한다 (안 받으면 아이콘 폴백만)."""
     global _icons_off
     try:
         return await call()
     except BadRequest as e:
         s = str(e).lower()
-        if not _icons_off and any(w in s for w in ("emoji", "icon", "premium")):
+        if not any(w in s for w in ("emoji", "icon", "premium", "custom", "document")):
+            raise
+        if not _icons_off:
             _icons_off = True
-            return await call()
-        raise
+            try:
+                return await call()          # 버튼 아이콘 뺀 markup 으로 다시
+            except BadRequest:
+                pass
+        try:
+            return await call(strip=True)    # 본문 커스텀 이모지 → 글자 (call 이 지원하면)
+        except TypeError:
+            raise e
 
 
 # ── 반응 버튼 집계 ([👍 12]) ──────────────────────────────
@@ -501,12 +514,13 @@ async def send_group(bot, chat_id: int, d, *, silent: bool | None = None) -> lis
     if is_album(d):
         return await _send_album(bot, persist.db_of(bot), chat_id, media_items(d), caption=body, silent=disable)
 
-    async def go():
+    async def go(strip=False):
+        b = util.strip_custom_emoji(body) if (strip and body) else body
         kw = dict(parse_mode="HTML", reply_markup=markup(buttons(d), theme_of(d)), disable_notification=disable)
         if d["media_type"] in MEDIA and d["media_id"]:
             # 봇이 바뀌어 file_id 가 안 먹으면 보관 원본으로 다시 올림 (sodam/mediastore.py)
-            return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=body, **kw)
-        return await bot.send_message(chat_id, body, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
+            return await mediastore.send(bot, persist.db_of(bot), d["media_type"], chat_id, d["media_id"], caption=b, **kw)
+        return await bot.send_message(chat_id, b, link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]), **kw)
     return [await _icon_retry(go)]
 
 
@@ -566,14 +580,15 @@ def arm_auto_delete(bot, db, chat_id: int, msg_ids, d) -> int:
 
 
 async def edit(bot, chat_id: int, msg_id: int, d) -> None:
-    async def go():
+    async def go(strip=False):
+        body = util.strip_custom_emoji(d["body"]) if (strip and d["body"]) else d["body"]
         kb = markup(buttons(d), theme_of(d))
         try:
             if d["media_type"]:
-                await bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=d["body"] or None,
+                await bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=body or None,
                                                parse_mode="HTML", reply_markup=kb)
             else:
-                await bot.edit_message_text(d["body"], chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=kb,
+                await bot.edit_message_text(body, chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=kb,
                                             link_preview_options=LinkPreviewOptions(is_disabled=not d["preview"]))
         except BadRequest as e:
             if "not modified" not in str(e).lower():

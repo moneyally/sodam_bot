@@ -101,6 +101,13 @@ def html_truncate(s: str, limit: int) -> str:
 # 안 보이는 점자 공백(U+2800) 한 줄을 끝에 붙여 꽉 찬 폭으로 → 정렬 유지. 모션배너 재전송·예약공지 둘 다 이걸 쓴다.
 BANNER_SPACER = "⠀" * 30
 _CUSTOM_EMOJI_TAG = re.compile(r"<tg-emoji\b")
+_CUSTOM_EMOJI_FULL = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
+
+
+def strip_custom_emoji(s: str) -> str:
+    """<tg-emoji emoji-id=…>😀</tg-emoji> → 😀 (안의 일반 이모지만). 봇 주인이 프리미엄이 아니라
+    커스텀 이모지 발송이 거절될 때 글자 폴백용 (예약공지·인사의 글자 폴백과 같은 취지)."""
+    return _CUSTOM_EMOJI_FULL.sub(r"\1", s or "")
 
 
 def banner_spacer(html: str, min_tiles: int = 4) -> str:

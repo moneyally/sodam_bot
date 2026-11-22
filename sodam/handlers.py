@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, cleanservice, emojilab, leavelock, mediastore, medialog, modactions, ownerlock, report
+from . import autoreply, cleanservice, disable, emojilab, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
 from .panels import motionbanner
 from .panels import repost as _repost
 
@@ -44,6 +44,9 @@ from .util import RateLimiter, day_start, send_retry, surely_unsent, esc, human_
 
 log = logging.getLogger(__name__)
 autoreply.register_commands()   # .reply 명령 (commands → menu → panels 순환이라 여기서 등록)
+notes.register_commands()       # .저장 명령 (#이름 노트)
+disable.register_commands()     # .명령끄기 · .명령켜기 · .꺼진명령
+karma.register_commands()       # .평판 · .평판순위 (+1 추천)
 from .panels import sportsdm as _sportsdm  # noqa: E402
 _sportsdm.register_commands()   # .맞히기 · .맞히기순위 · .분석
 from .panels import lottery as _lottery  # noqa: E402
@@ -675,6 +678,8 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     parsed = commands.parse(text, bot.username)
     if parsed:
         cmd, args, argstr = parsed
+        if chat_id < 0 and await disable.is_off(svc.db, chat_id, cmd):   # 🚫 이 방에서 꺼진 명령 → 조용히 무시
+            return
         if cmd.fn is commands.c_style and await _style_for_ai(svc, msg, chat_id, args):
             # '.말투 여친 @누구 한테…' 처럼 대상·설명이 붙으면 누구 말투인지 AI 가 판단
             await ai_reply(context, msg, role, f"말투 변경 부탁: {argstr}", scan)
@@ -682,6 +687,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await commands.dispatch(CmdCtx(svc, bot, msg, chat_id, user, role, args, argstr), cmd)
         return
     if await autoreply.maybe_reply(svc, bot, msg, text):   # 💬 등록한 낱말만 친 글 → 저장한 글로 답장 (게임·AI 안 탐)
+        return
+    if await notes.handle(svc, bot, msg, text):   # 📝 #이름 → 저장한 노트 재전송 (게임·AI 안 탐)
+        return
+    if await karma.handle(svc, bot, msg):   # 👍 +1 답장 → 평판 (게임·AI 안 탐)
         return
     if await _prefix_hint(context, chat_id, text):
         return
@@ -1173,8 +1182,12 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
         except TelegramError:  # 이미 버튼이 없거나 메시지가 지워진 경우
             pass
         return
-    allowed = (presser in await svc.perms.owners() if action.from_dm   # 1:1 카드는 오너만
-               else await svc.perms.is_admin(bot, action.chat_id, presser))
+    if action.quiet:                           # 🔕 조용한 제재: 요청 관리자 본인 또는 그 방 관리자만
+        allowed = presser == action.requested_by or await svc.perms.is_admin(bot, action.chat_id, presser)
+    elif action.from_dm:                        # 오너 1:1 카드는 오너만
+        allowed = presser in await svc.perms.owners()
+    else:
+        allowed = await svc.perms.is_admin(bot, action.chat_id, presser)
     pressed = lambda what: svc.db.audit(action.chat_id, presser, action.target_id, f"press_{action.kind}",  # noqa: E731
                                         f"{what} ({len(action.targets)}명)")
     if not allowed:
@@ -1200,7 +1213,7 @@ async def _confirm_action(svc: Services, bot: Bot, q, parts: list[str]) -> None:
     kind = modactions.KINDS[action.kind]
     label = modactions.record_label(action.kind, action.minutes)
     names = ", ".join(name for _, name in action.targets)[:60]
-    card_chat = action.requested_by if action.from_dm else action.chat_id
+    card_chat = action.requested_by if (action.from_dm or action.quiet) else action.chat_id
     if yn not in ("y", "p"):
         await pressed("취소")
         await cards.record(svc, card_chat, action.requested_by, action.kind,

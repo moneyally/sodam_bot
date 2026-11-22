@@ -973,25 +973,41 @@ async def _ask_sanction(ctx: ToolCtx, kind: str, a: dict, minutes: int = 0, *, c
         return SANCTION_ONCE
     reason = str(a.get("reason", "관리자 판단"))[:100]
     targets = [(r["user_id"], _row_name(r)) for r in rows]
+    # 🔕 조용한 제재(⑥): 방에 카드·안내 없이 요청 관리자 1:1 로. card_chat 을 요청자 1:1 로 돌려 카드 경로를 탐
+    quiet = bool(a.get("quiet")) and card_chat is None and ctx.chat_id < 0 and kind in ("warn", "mute", "ban")
+    if quiet:
+        card_chat = ctx.caller.id
+        if not room_title:
+            r = await ctx.svc.db._one("SELECT title FROM chats WHERE chat_id=?", (ctx.chat_id,))
+            room_title = (r["title"] if r else "") or "이 방"
     if kind in DIRECT_KINDS and card_chat is None and ctx.settings.get("ai_sanction_card", "risky") != "all" \
             and not (ctx.tainted or ctx.bot_tainted or ctx.room_read or getattr(ctx, "via_voice", False)):
         return await _do_sanction(ctx, kind, targets, reason, minutes, attempt)
-    await attempt("확인 카드" + (f"({minutes}분)" if minutes else ""))
+    await attempt(("조용한 " if quiet else "") + "확인 카드" + (f"({minutes}분)" if minutes else ""))
     key = ctx.svc.add_pending(PendingAction(ctx.chat_id, kind, *targets[0], reason, ctx.caller.id, minutes=minutes,
-                                            extra=tuple(targets[1:]), from_dm=card_chat is not None))
+                                            extra=tuple(targets[1:]), from_dm=card_chat is not None and not quiet, quiet=quiet))
     label = modactions.label(kind, minutes)
     who = ", ".join(f"{mention(uid, name)}(<code>{uid}</code>)" for uid, name in targets)
     count = f"{len(targets)}명 " if len(targets) > 1 else ""
+    # 조용한 제재는 '방에 안내' 버튼 없이 '실행만' 하나 (방엔 아무것도 안 뜸)
     buttons = ([InlineKeyboardButton(f"✅ {count}{spec.label} + 방에 안내", callback_data=f"act:{key}:p"),
                 InlineKeyboardButton(f"✅ {spec.label}만", callback_data=f"act:{key}:y")]
-               if card_chat else [InlineKeyboardButton(f"✅ {count}{spec.label}", callback_data=f"act:{key}:y")])
-    where = f"방: <b>{esc(room_title)}</b>\n" if card_chat else ""
-    await ctx.bot.send_message(
-        card_chat or ctx.chat_id,
-        f"⚠️ {where}{who}님 <b>{label}</b> 할까요?\n사유: {esc(reason)}\n(관리자만 누를 수 있고 2분 뒤 만료돼요)",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([buttons, [
-            InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n")]]))
-    return (f"확인 버튼을 보냈음 (대상 {len(targets)}명: {', '.join(n for _, n in targets)}). "
+               if card_chat and not quiet else [InlineKeyboardButton(f"✅ {count}{spec.label}", callback_data=f"act:{key}:y")])
+    where = (f"🔕 조용한 제재 · 방: <b>{esc(room_title)}</b>\n" if quiet
+             else f"방: <b>{esc(room_title)}</b>\n" if card_chat else "")
+    try:
+        await ctx.bot.send_message(
+            card_chat or ctx.chat_id,
+            f"⚠️ {where}{who}님 <b>{label}</b> 할까요?\n사유: {esc(reason)}\n(관리자만 누를 수 있고 2분 뒤 만료돼요)",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([buttons, [
+                InlineKeyboardButton("❌ 취소", callback_data=f"act:{key}:n")]]))
+    except TelegramError:
+        if quiet:   # 요청 관리자가 소담 1:1 을 안 열었음 → 조용히 보낼 데가 없음
+            ctx.svc.pending.pop(key, None)
+            return "조용한 제재 카드를 1:1 로 보내려 했는데 네가 소담 1:1 을 아직 안 열었어. 소담한테 /start 한 번 보내고 다시 시켜줘. (아직 제재 안 함)"
+        raise
+    return ((f"🔕 조용한 제재 확인 버튼을 네 1:1 로 보냈음 (방엔 안 뜸). " if quiet else "확인 버튼을 보냈음 ")
+            + f"(대상 {len(targets)}명: {', '.join(n for _, n in targets)}). "
             "관리자가 눌러야 실행된다고 짧게 안내할 것. 아직 실행된 게 아니니 '했다'고 말하지 말 것.")
 
 
@@ -1400,6 +1416,7 @@ async def t_reset_member_styles(ctx: ToolCtx, a: dict) -> str:
 
 
 NAMES_PARAM = {"names": {"type": "array", "items": {"type": "string"}, "description": f"대상 1~{MAX_TARGETS}명 (@username·이름·ID)"}}
+QUIET_PARAM = {"quiet": {"type": "boolean", "description": "'조용히·몰래·방에 안 띄우고·티 안 나게' 면 true — 방엔 카드·안내 아무것도, 요청 관리자 1:1 로만 확인·실행"}}
 WHO_HINT = ("누구인지 이름이 없으면('싸운 두 명') read_chat 으로 최근 대화를 읽고 해당하는 사람을 모두 특정해 names 에 넣는다 "
             "(확인 카드에 이름이 나와 관리자가 확인함).")
 
@@ -1495,15 +1512,15 @@ TOOLS: list[Tool] = [
          {"message": {"type": "string", "description": "전달할 내용 요약 (500자 이내)"}}, ["message"], t_report_to_admin),
     # 관리자 전용
     Tool("warn_member", "[관리자] 멤버에게 경고를 준다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
-         {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_warn, Role.ADMIN, where="room"),
+         {**NAMES_PARAM, "reason": {"type": "string"}, **QUIET_PARAM}, ["names", "reason"], t_warn, Role.ADMIN, where="room"),
     Tool("mute_member", "[관리자] 멤버를 일정 시간 채팅 금지한다 (관리자가 직접 시키면 바로 실행, 방 설정·상황에 따라 확인 버튼 — 결과 문장대로 말할 것). 여러 명이면 names 에 한 번에. " + WHO_HINT,
          {**NAMES_PARAM, "minutes": {"type": "integer", "description": "1~10080"},
-          "reason": {"type": "string"}}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
+          "reason": {"type": "string"}, **QUIET_PARAM}, ["names", "minutes"], t_mute, Role.ADMIN, where="room"),
     Tool("unmute_member", "[관리자] 채팅 금지를 해제한다.", {"name": {"type": "string"}}, ["name"], t_unmute, Role.ADMIN,
          where="room"),
     Tool("ban_member", "[관리자] 멤버를 밴(영구 추방)한다 — 밴을 풀기 전엔 다시 못 들어옴 (확인 버튼 한 장). '밴·영구 차단·다시 못 오게' 일 때만. "
          "그냥 '내보내·강퇴·킥'(다시 들어올 수 있음)은 kick_member. 여러 명이면 names 에 한 번에. " + WHO_HINT,
-         {**NAMES_PARAM, "reason": {"type": "string"}}, ["names", "reason"], t_ban, Role.ADMIN, where="room"),
+         {**NAMES_PARAM, "reason": {"type": "string"}, **QUIET_PARAM}, ["names", "reason"], t_ban, Role.ADMIN, where="room"),
     Tool("fedban_member", "[관리자] 공동 차단 명단(소담 쓰는 모든 방이 같이 보는 사기·스팸 명단)에 올리고 이 방에서 밴한다 (확인 버튼 한 장). "
          "'공동 차단·공동차단 목록·블랙리스트 등재' 일 때. 이 방에 없는 사람도 숫자 ID·@아이디면 됨. " + WHO_HINT,
          {**NAMES_PARAM, "reason": {"type": "string", "description": "사유 (다른 방 관리자에게도 보임)"}},

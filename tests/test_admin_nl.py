@@ -529,3 +529,58 @@ async def all_mute_maps_to_room_lock():
         assert commands.parse("." + w, "sodambot")[0].fn is commands.c_lock, w
     for w in ("전체뮤트해제", "전원뮤트해제"):
         assert commands.parse("." + w, "sodambot")[0].fn is commands.c_unlock, w
+
+
+# ── ⑥ 조용한 제재 (sban/swarn, 2026-11-22 경쟁조사) ──────────
+@test
+async def quiet_sanction_goes_to_requester_dm_not_room():
+    db, svc, bot = await setup()
+    r = await run(ctx(svc, bot, uid=STRONG), "ban_member", names=[f"@user{T1}"], reason="조용히", quiet=True)
+    assert "조용한 제재" in r, r
+    room = [x for x in bot.named("send_message") if x[1] == A and x[3].get("reply_markup")]
+    dm = [x for x in bot.named("send_message") if x[1] == STRONG and x[3].get("reply_markup")]
+    assert not room and dm, (room, dm)                          # 방엔 카드 없음, 요청자 1:1 로만
+    assert not any("방에 안내" in b.text for b in buttons(dm[-1]))   # '방에 안내' 버튼 없음
+    act = next(iter(svc.pending.values()))
+    assert act.quiet and not act.from_dm
+    before = len([x for x in bot.named("send_message") if x[1] == A])
+    key = next(iter(svc.pending))
+    await handlers._confirm_action(svc, bot, FakeQuery(STRONG, fake_user(STRONG, "s"), f"act:{key}:y"), [key, "y"])
+    assert len([x for x in bot.named("send_message") if x[1] == A]) == before, "방엔 아무것도 안 떠야"
+
+
+@test
+async def quiet_card_pressable_by_requester_admin_not_owner_only():
+    db, svc, bot = await setup()
+    await run(ctx(svc, bot, uid=STRONG), "mute_member", names=[f"@user{T1}"], minutes=10, reason="x", quiet=True)
+    act = next(iter(svc.pending.values()))
+    assert act.quiet                                            # mute(DIRECT)도 quiet 면 바로실행 대신 카드
+    key = next(iter(svc.pending))
+    await handlers._confirm_action(svc, bot, FakeQuery(STRONG, fake_user(STRONG, "s"), f"act:{key}:y"), [key, "y"])
+    assert not svc.pending, "요청 관리자(오너 아님)가 눌러서 처리됨"
+
+
+@test
+async def normal_sanction_still_shows_card_in_room():
+    db, svc, bot = await setup()
+    await run(ctx(svc, bot, uid=STRONG), "ban_member", names=[f"@user{T1}"], reason="공개")   # quiet 없음
+    room = [x for x in bot.named("send_message") if x[1] == A and x[3].get("reply_markup")]
+    assert room, "기존처럼 방에 카드 (회귀 0)"
+
+
+@test
+async def quiet_result_recorded_in_dm_not_room():
+    import sodam.cards as cards
+    db, svc, bot = await setup()
+    recs, orig = [], cards.record
+    async def spy(svc_, chat, *a, **k):
+        recs.append(chat)
+        return await orig(svc_, chat, *a, **k)
+    cards.record = spy
+    try:
+        await run(ctx(svc, bot, uid=STRONG), "ban_member", names=[f"@user{T1}"], reason="조용", quiet=True)
+        key = next(iter(svc.pending))
+        await handlers._confirm_action(svc, bot, FakeQuery(STRONG, fake_user(STRONG, "s"), f"act:{key}:y"), [key, "y"])
+    finally:
+        cards.record = orig
+    assert A not in recs and STRONG in recs, recs   # 결과 기록도 방 아니라 요청자 1:1 로 (방 AI 가 못 보게)

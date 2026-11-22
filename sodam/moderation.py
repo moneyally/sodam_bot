@@ -34,6 +34,22 @@ def _has(msg, *attrs: str) -> bool:
     return any(getattr(msg, a, None) for a in attrs)
 
 
+# 🔤 글자/언어 패턴 잠금 (외국어 스팸·코인 홍보 차단, 2026-11-22 경쟁조사 ⑨).
+# 한국인 多·외국인 少 라 보수적으로: 외국 문자는 N자 이상일 때만, 한자는 한글이 하나도 없을 때만
+# (한국인이 한자·외국어 낱말 섞어 쓰는 것을 오탐하지 않게).
+_CYRILLIC = re.compile(r"[Ѐ-ӿ]")                       # 러시아 등 키릴
+_ARABIC_HEB = re.compile(r"[֐-׿؀-ۿݐ-ݿ]")   # 아랍·히브리(RTL)
+_HAN = re.compile(r"[一-鿿]")                            # CJK 한자(중국어)
+_HANGUL = re.compile(r"[가-힣]")
+_ZALGO = re.compile(r"[̀-ͯ҃-҉᪰-᫿⃐-⃿]")  # 결합기호 떡칠(z̴a̵l̶g̷o̸)
+_CASHTAG = re.compile(r"\$[A-Za-z]{2,}\b")                       # $BTC $USDT 코인 캐시태그
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[A-Za-z]{2,}")
+
+
+def _lock_text(msg) -> str:
+    return getattr(msg, "text", None) or getattr(msg, "caption", None) or ""
+
+
 # 종류별 잠금: (설정 키, 이름, 그 종류인지). 기본은 전부 허용. 🔒 종류별 잠금 화면(panels/locks.py)에서 켠다
 LOCK_KINDS: list[tuple[str, str, Callable[[Message], bool]]] = [
     ("lock_photo", "사진", lambda m: _has(m, "photo")),
@@ -46,6 +62,13 @@ LOCK_KINDS: list[tuple[str, str, Callable[[Message], bool]]] = [
     ("lock_contact", "연락처", lambda m: _has(m, "contact")),
     ("lock_location", "위치", lambda m: _has(m, "location", "venue")),
     ("lock_inline", "인라인 봇 메시지", lambda m: _has(m, "via_bot")),
+    # 🔤 글자/언어 패턴 (위 주석의 보수적 기준)
+    ("lock_cyrillic", "키릴(러시아) 글자", lambda m: len(_CYRILLIC.findall(_lock_text(m))) >= 3),
+    ("lock_arabic", "아랍·히브리 글자", lambda m: len(_ARABIC_HEB.findall(_lock_text(m))) >= 3),
+    ("lock_cjk", "중국어(한자)", lambda m: len(_HAN.findall(_lock_text(m))) >= 3 and not _HANGUL.search(_lock_text(m))),
+    ("lock_zalgo", "깨진 글자(zalgo)", lambda m: len(_ZALGO.findall(_lock_text(m))) >= 5),
+    ("lock_cashtag", "코인 캐시태그($BTC)", lambda m: bool(_CASHTAG.search(_lock_text(m)))),
+    ("lock_email", "이메일 주소", lambda m: bool(_EMAIL.search(_lock_text(m)))),
 ]
 for _key, _label, _ in LOCK_KINDS:
     register_setting(_key, False, f"{_label} 막기")
