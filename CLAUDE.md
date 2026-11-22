@@ -122,6 +122,7 @@
   subgate_channel(@아이디·t.me·-100ID) → 구독 안 한 사람은 입장 때(캡차 없을 때)·말할 때(글 지움) 채팅 금지 + [📢 채널 들어가기][✅ 구독 확인](sg:, 본인만,
   getChatMember 로 실제 확인 후 풂). 구독자 30분 캐시, 안내 60초 1번. 소담이 채널 관리자가 아니면 막지 않고 관리자 알림 하루 1번.
   입장 때 안내는 **입장 인사가 나간 뒤**(Greeter.wait_sent — 인사는 5초 모아서 나가 순서가 거꾸로였음, 2026-10-10 뉴월드), 채팅 금지는 바로.
+  **🔓 끄면 막은 사람 자동 복구** (`subgate_blocked` 표·`_block` 기록·`on_button` 구독 확인 시 제거·`release_tick` 30초 틱 = hooks.add_tick_hook, tests/test_subgate.py turning_off_releases_*·subscribing_removes_* · 뮤테이션 4개, 2026-11-22 오너 '수리남 소통방 — 채널구독 꺼짐인데 막힘·.free해도 안먹힘'): 예전엔 subgate_mode 를 off 로 꺼도 **이미 막은 사람은 그대로** 남아 "off 인데 막힘" 상태였음(subgate 는 '새로 안 막음'만 함). → `_block` 이 막은 사람을 subgate_blocked 에 기록 → `release_tick` 이 그 방 `active(s)` False(mode off)면 전원 `restrict_chat_member(all_permissions)` + 안내 메시지 삭제 + 표 비움(중복 복구 안 함). 구독 확인(on_button)·`.free`(c_free 가 unmute) 로 풀린 사람은 표에서 빠짐. **참고**: `.free` 는 unmute 도 호출(free.add 가 캐시 즉시 비움)해 **켜진 채로도** 그 사람은 면제+풀림 — 실측 수리남 free 11명 전원 정상. '안먹힘'은 free 안 준 과거 막힘 잔존이 원인이었음.
 - **🚪 나간 사람 재입장 막기**(`leavelock.py`, `panels/leavelock.py` 허브 m:llk, tests/test_leavelock.py · 뮤테이션 6개, 2026-10-09 뉴월드 요청, 기본 꺼짐):
   leave_lock on + leave_lock_hours(기본 168, 0=영구, 프리셋 1시간·1일·7일·30일·영구 + ✏️ '3일·12시간·영구' 입력) → **스스로 나간 사람만**
   (by == 본인, kicked 아님) 나간 순간 ban_chat_member(until_date) — 기간 끝나면 텔레그램이 풂, 중간엔 `.밴해제`. 자유 멤버·오너 제외,

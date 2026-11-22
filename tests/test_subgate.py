@@ -153,5 +153,42 @@ def channel_value_validated():
         pass
 
 
+@test
+async def turning_off_releases_everyone_blocked():
+    # 2026-11-22 오너(수리남 소통방): 채널 구독 필수를 끄면 그걸로 막은 사람을 자동 복구.
+    # 예전엔 끄면 '새로 안 막음'만 하고 이미 막은 사람은 그대로 남아 "off 인데 막힘" 상태였음.
+    SUBS["@wh_channel"] = set()
+    r = await room()
+    await join(r, NEW)
+    assert any(c[0] == "restrict" and c[2] == NEW.id and not c[3].can_send_messages for c in r.bot.calls)
+    assert await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE chat_id=? AND user_id=?", (r.CHAT, NEW.id)), "막은 사람 기록"
+    # 켜져 있는 동안 틱 → 안 풂 (구독으로 풀어야)
+    await subgate.release_tick(r.svc, r.bot)
+    assert await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,)), "켜진 방은 그대로"
+    # 끄고 틱 → 자동 복구
+    await r.db.set_setting(r.CHAT, "subgate_mode", "off")
+    before = sum(1 for c in r.bot.calls if c[0] == "restrict" and c[2] == NEW.id and c[3].can_send_messages)
+    await subgate.release_tick(r.svc, r.bot)
+    after = sum(1 for c in r.bot.calls if c[0] == "restrict" and c[2] == NEW.id and c[3].can_send_messages)
+    assert after > before, "꺼지면 채팅 금지 풀림(all_permissions)"
+    assert not await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,)), "테이블 비움"
+    # 다시 틱 해도 또 안 건드림 (한 번만)
+    n = sum(1 for c in r.bot.calls if c[0] == "restrict" and c[2] == NEW.id)
+    await subgate.release_tick(r.svc, r.bot)
+    assert sum(1 for c in r.bot.calls if c[0] == "restrict" and c[2] == NEW.id) == n, "한 번만 복구"
+
+
+@test
+async def subscribing_removes_from_blocked_list():
+    # 구독 확인으로 풀면 subgate_blocked 에서도 빠져서, 나중에 꺼도 틱이 또 안 건드림
+    SUBS["@wh_channel"] = set()
+    r = await room()
+    await join(r, NEW)
+    assert await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,))
+    SUBS["@wh_channel"].add(NEW.id)
+    await press(r, NEW, NEW.id)   # 구독 확인
+    assert not await r.db._one("SELECT 1 AS x FROM subgate_blocked WHERE user_id=?", (NEW.id,)), "구독하면 목록에서 빠짐"
+
+
 if __name__ == "__main__":
     run_all()
