@@ -820,8 +820,9 @@ openai/codex 소스(turn.rs 루프·gpt_5_2_prompt.md·memories)와 서버 7일 
 - agent._run 이 ctx.media_intent 에 넣고, AI 영상 도구가 없는 방은 ambiguous → ump. make_video / make_profile_video 가 판정과 다르면 실행 안 하고
   `redirect` 결과로 돌려보냄, ambiguous + make_video = ask_choice 버튼([🎞️ 움프][🎬 AI 영상]) — 추측으로 주 한도를 쓰지 않게. 선택 뒤 '(선택: …)' 도 classify.
 
-## 📓 소담이 일기 (`diary.py`, `panels/diary.py`, tests/test_diary.py · 뮤테이션 2개)
+## 📓 소담이 일기 (`diary.py`, `panels/diary.py`, tests/test_diary.py · 뮤테이션 5개)
 - 매일 밤(diary_time 21:00/22:00/23:00/23:30, 기본 23:30) 오너 채널에 '📓 소담이의 메모장 #N' (#1 은 사람이 직접). 30초 틱 + 날짜 claim → 하루 한 번.
+- **🏷 클론봇은 일기 안 올림** (`cfg.is_clone`, tests/test_diary.py clone_bot_* · 뮤테이션 3개, 2026-11-22 오너 '클론들이 자꾸 등록 채널에 일기 올림'): diary_mode 기본 auto + diary_channel 안 골라도 **글 쓸 수 있는 등록 채널이 하나면 자동으로 거기** 올려서, 클론들이 제 채널에 소담 일기를 뿌렸음. `Config.is_clone`(db_path 가 `data/clones/<slug>/` 안이면 클론, 본체는 `data/sodam.db`)로 판별 → `tick`(자동, write 전에 멈춰 AI 비용 0)·`post`(수동 '지금 써보기' 포함, 공통 관문 RuntimeError) 둘 다 클론이면 안 올림. 켜져 있던 클론 10개는 chat_state diary_mode=off 로도 즉시 꺼 둠(배포 전 오늘 밤 차단). 본체 소담만 올림.
 - 사실 = 오늘 숫자만(대화·말한 사람·방 수·입장·AI 답·스티커·움프·그림·게임·캡차 통과·치운 링크·바쁜 시간 + 오늘 git 커밋 제목). **방·사람 이름·대화 글은 AI 에 안 감.**
   guard 모델이 #1 말투(STYLE_EXAMPLE, 사람 같은 일기·AI 티 나는 말 금지 목록)로, 지난 일기 2개 반복 금지. 보내기 전 `clean`: 링크·지갑·@ 제거, 방·채널 이름 → '어떤 방', 1200자.
 - 오너 메인 📓(m:dy): 채널(글쓰기 권한 있는 등록 채널, 하나뿐이면 자동)·방식 off/auto(기본)/preview(1:1 초안 + [올리기][다시 쓰기][안 올림])·시각·✍️ 지금 써보기.
