@@ -472,6 +472,17 @@
   다시 신청할지 물을 것'(CHECK_RESULT) — 실제 #2740 음악봇이 Inst. 버전을 잡았는데 소담은 '신청했어요'로 끝냄.
 - 켜는 법: 운영자가 BotFather 에서 @sodam_ai_bot Bot-to-Bot 켜기(1번) → 방마다 ⚙️ 🤝 에서 모드 → 게임봇이 말하면 ✅ 믿는 봇.
 
+## 🧩 경쟁조사 갭 기능 (Rose·Combot·오픈소스 봇 전수조사 → 소담에 없던 '고전 관리 기본기', 2026-11-22)
+다른 봇 쓰던 대표님들이 아쉬워할 것들. 전부 소담 확장규칙(panels/<이름>.py + register_setting/register_schema/hooks)으로 독립 추가. 조사 원문은 세션 기록(Rose/Combot/오픈소스 각 12k자).
+- **🔤 ⑨ 글자/언어 잠금 세분화** (`moderation.LOCK_KINDS` 텍스트 패턴, tests/test_lock_text.py · 뮤테이션 4개): 미디어만 막던 LOCK_KINDS 에 **중국어(한자)·키릴(러시아)·아랍/히브리·zalgo(깨진 글자)·$캐시태그·이메일** 추가. **한국인 多·외국인 少 감안 보수적** — 외국 문자 3자↑·zalgo 5개↑만, 한자는 **한글이 하나도 없을 때만**(한국인 한자 섞어쓰기 오탐 방지). 설정·토글·🔒 화면 자동(locks.py 가 LOCK_KINDS 돎).
+- **📝 ② 멤버 노트** (`notes.py`·`panels/notes.py`, tests/test_notes.py · 뮤테이션 5개): `.저장 이름`(글에 답장) → `#이름` 치면 그 글 재전송. autoreply(관리자 공지) 와 달리 **멤버 누구나·# 접두어·방 공용 key**(이미 있으면 만든 사람·관리자만 덮기/삭제). 재전송은 `autoreply.snapshot/send_snap` 재사용(서식·미디어·표 보존). 사람당 30·방 200·호출 8초 쿨다운. handlers 에서 autoreply 다음·게임/AI 앞.
+- **🚫 ③ 방별 명령 끄기** (`disable.py`·`panels/disable.py`, tests/test_disable.py · 뮤테이션 4개): `.명령끄기 시세`·`.명령켜기`·`.꺼진명령`(관리자). disabled_cmds 표 + 30초 방별 캐시(대부분 방 0개 → 메시지당 DB 0). **관리·안전 필수(설정·오너·명령끄기·도움말…)는 못 끔**(PROTECT_ALIASES→런타임 canon). handlers 가 commands.parse 직후 is_off 면 **조용히 무시**(1:1 엔 적용 안 함).
+- **🔕 ⑥ 조용한 제재** (`tools._ask_sanction` quiet·`PendingAction.quiet`·`handlers._confirm_action`, tests/test_admin_nl.py quiet_* · 뮤테이션 5개): AI 도구 warn/mute/ban 에 **quiet 인자**('조용히·몰래·방에 안 띄우고'). 소담 제재는 원래 방에 메시지 안 보내고(텔레그램 밴만) 방 안내는 카드 `:p`(+방에 안내)뿐 → quiet 면 카드·결과를 **요청 관리자 1:1 로**(from_dm 과 달리 오너 아닌 요청 관리자가 누름), 버튼은 `:y`(실행만) 하나라 방 안내 자동 없음. 기본 False → 기존 회귀 0. 1:1 안 연 관리자는 '/start 하라' 안내.
+- **👍 ⑦ 멤버 평판 karma** (`karma.py`·`panels/karma.py`, tests/test_karma.py · 뮤테이션 4개): 글에 `+1`·👍·추천·따봉 답장 → 상대 평판 +1. `.평판`·`.평판순위`. **포인트 게임과 완전 분리**(순수 추천). 자기 자신 금지·같은 상대 하루 1번·봇 제외. handlers 에서 notes 다음.
+- **🌐 실시간 번역 브리지** (`translate.py`, tests/test_translate.py · 뮤테이션 5개): 외국인 멤버의 외국어 글 → 한국어 번역 답장. **한국인 多·외국인 少 라 2층 게이트** — 1층 코드(명령·링크·짧은글·한글위주·흔한영어감탄 거름, 비용0) → 2층 작은모델 1회(언어감지+번역+오탐거름, '__SKIP__' 면 안 보냄). 방 설정 translate_mode(기본 off)·translate_daily, 이용중인 방만·방 예산 포함, 원문 nonce 데이터·결과 strip_unsafe. 단방향(외국어→한국어). hooks.add_group_message_hook.
+- **⑧ 연합(fedban) 고급 = 대부분 이미 됨** — 소담 fedban 은 모든 방이 같은 명단 공유(전역)라 Rose '구독'은 이미 달성. csv 내보내기/가져오기만 갭인데 쓸 일 적어 보류(오너 결정 대기).
+- **④ 서비스 메시지 청소는 이미 있음** (`cleanservice.py`, 2026-11-19) · **① 멤버 신고 `/report @admin` 은 아직** (c_report 는 통계 요약).
+
 ## 💡 기능 요청 받기 (`featreq.py`, `panels/featreq.py`, tests/test_featreq.py · 뮤테이션 21개)
 - AI 도구 feature_request(summary, detail): 누구나·방/1:1, '못 해요' 대신 이걸로 접수 (날짜 약속 금지, tainted 면 안 됨). 글 500자·데이터로만.
 - 같은 사람 24시간 비슷한 글 = 횟수 +1, 다른 사람 비슷한 글 = 묶음 👍n명 (3-gram+2-gram), 끝난 묶음엔 안 붙음, 1인 24시간 5개.
@@ -484,8 +495,9 @@
 
 ## 📢 채널 관리 + ✍️ 글 편집기 (`channel.py`, `composer.py`, `panels/channel.py`·`composer.py`, tests/test_channel.py·test_composer.py)
 - 소담을 채널 관리자로 넣으면 등록 + 넣은 사람 1:1 권한 체크리스트. 관리 = 그 채널 TG 관리자 + 오너 (올리기·예약·승인은 매번 텔레그램 재확인).
-- 편집기: 허용 HTML(b,i,u,s,code,pre,a,blockquote,tg-spoiler)만, 깨진 태그는 위치와 함께 거절, 텔레그램 서식 글은 자동 변환. URL 버튼 줄 편집.
+- 편집기: 허용 HTML(b,i,u,s,code,pre,a,blockquote,tg-spoiler,**tg-emoji**)만, 깨진 태그는 위치와 함께 거절, 텔레그램 서식 글은 자동 변환. URL 버튼 줄 편집.
   초안은 DB(재시작 OK), 올리기·수정은 DB 차지로 한 번만. 예약은 announce 시각 형식. AI `channel_draft`(1:1, 버튼 눌러야 올라감)·`channel_posts`(방, 읽기).
+- **🚨 채널 공지 커스텀(프리미엄) 이모지 깨짐 수정** (`composer.ALLOWED` tg-emoji·`clean_html` emoji-id·`_icon_retry` 본문 폴백·`util.strip_custom_emoji`, tests/test_composer.py custom_emoji·non_premium · 뮤테이션 3개, 2026-11-22 오너 '채널 공지 이모지 다 깨짐'): 채널 공지(composer) 본문·미리보기에서 텔레그램 커스텀 이모지가 전부 일반 이모지로 깨짐 — **`clean_html` 의 `ALLOWED` 에 `tg-emoji` 가 빠져** 태그를 통째로 버렸음(예약공지는 rich_html 경로라 됐는데 채널 composer 만 이 버그). ① ALLOWED 에 tg-emoji 추가 + emoji-id(숫자) 없으면 일반 이모지 글자로 ② **봇 주인이 프리미엄 아니면 커스텀 이모지 발송 거절 → ALLOWED 만 고치면 오히려 발송 실패(회귀)** 라 `_icon_retry` 에 본문 tg-emoji 글자 폴백(`util.strip_custom_emoji`) 추가(버튼 아이콘 폴백과 함께). **다른 데서 커스텀 이모지 보낼 때도 비프리미엄 봇이면 글자 폴백 필요** — util.strip_custom_emoji 재사용.
 - **📢→💬 채널 글 방에 그대로 올리기** (`channel_repost` 도구·`t_cpr_ok`·`_match_posts`, panels/channel.py, tests/test_channel.py channel_repost_* · 뮤테이션 2개, 2026-10-25 泰山 '채널에서 끌어와서 올려줘'): AI 도구 `channel_repost(query)`(관리자·room) → `channel.recent_posts`(연결 채널 최근 14일 글, 글자만 기록) 중 query 낱말 다 든 글 → 방에 확인 카드(cards.card cpr_ok/cpr_no, 요청자만) → 누르면 `forward_message`(원본 그대로 — 버튼·서식·미디어 유지, '전달' 머리말 남음). **봇은 채널 과거 글 못 읽음**(텔레그램 한계) → 소담이 채널 관리자로 들어온 뒤 올라온 글만, 사진만(설명 없는) 글은 text='' 라 검색 안 됨. spec 의 ch_id·msg_id 는 JSON int 라 `int()` 로 (util.to_int 는 문자열 전용 → None 버그 주의). 지도(prompt)에 한 줄.
 - 요금: 예약·AI 초안·방 알림은 이용 중인 방에 연결된 채널 1개(방당). 지금 올리기·가입 신청·구독자 추이는 무료. 방 예약공지는 아직 옛 마법사.
 - **🎛 버튼 메뉴 (리모컨)** (그룹 허브 m:rmc, TG_ADMIN, 2026-10-15 손님 '리모컨처럼'): 같은 편집기가 **그룹방**도 대상(target = 방, 등록 채널이 아니면 방) —
