@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, cleanservice, disable, emojilab, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report
+from . import autoreply, cleanservice, disable, emojilab, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
 from .panels import motionbanner
 from .panels import repost as _repost
 
