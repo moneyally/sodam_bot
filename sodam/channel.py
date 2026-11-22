@@ -24,7 +24,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest, Forbidden, TelegramError
 
-from . import announce, composer, hooks, joinreq
+from . import announce, composer, hooks, joinpending, joinreq
 from .db import register_schema
 from .util import esc, user_name
 
@@ -335,6 +335,7 @@ async def decide(svc: Services, bot, chat_id: int, uid: int, approve: bool) -> s
     except TelegramError as e:
         return f"텔레그램에서 처리하지 못했어요 (이미 처리됐거나 취소된 신청): {e.message[:60]}"
     await svc.db.log_mod(chat_id, None, uid, "join_pass" if approve else "join_decline", "채널 가입 신청 (직접)")
+    await joinpending.forget(svc, chat_id, uid)
     return None
 
 
