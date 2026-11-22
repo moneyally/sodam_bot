@@ -145,3 +145,40 @@ async def defaults_pick_the_only_channel_and_auto():
     assert st["diary_mode"] == "auto" and st["diary_channel"] == CH
     await r.db._write("INSERT INTO channels(chat_id, title, active, can_post) VALUES(?,?,1,1)", (-100999, "다른 채널"))
     assert (await diary.settings(r.db))["diary_channel"] is None, "채널이 둘이면 고르게"
+
+
+@test
+async def clone_bot_is_detected_by_db_path():
+    import dataclasses
+    r = await world()
+    main = r.svc.cfg
+    assert not main.is_clone                                                         # 본체 data/sodam.db
+    assert dataclasses.replace(main, db_path="data/clones/yesu22bot/sodam.db").is_clone
+    assert not dataclasses.replace(main, db_path="data/dealer.db").is_clone          # 딜러·그 외는 클론 아님
+
+
+@test
+async def clone_bot_never_posts_diary_to_channel():
+    import dataclasses
+    r = await world(mode="auto", time="21:00")
+    r.svc.cfg = dataclasses.replace(r.svc.cfg, db_path="data/clones/yesu22bot/sodam.db")
+    assert r.svc.cfg.is_clone
+    r.llm.script = [reply(DIARY)]
+    orig = diary.datetime                                                            # 올릴 시각(due)로 맞춤
+    class Late(orig):
+        @classmethod
+        def now(cls, tz=None):
+            return orig.now(tz).replace(hour=23, minute=40)
+    diary.datetime = Late
+    try:
+        await diary.tick(r.svc, r.bot)
+    finally:
+        diary.datetime = orig
+    assert not [c for c in r.bot.named("send_message") if c[1] == CH], "클론은 채널에 일기 안 올림"
+    assert not r.llm.of("chat"), "클론은 일기 AI(비용)도 안 부름 (tick 가드: write 전에 멈춤)"
+    try:                                                                             # 수동 '지금 써보기'도 같은 관문
+        await diary.post(r.svc, r.bot, "강제 일기")
+        assert False, "클론 post 가 통과됨"
+    except RuntimeError:
+        pass
+    assert not [c for c in r.bot.named("send_message") if c[1] == CH], "post 도 안 올림"

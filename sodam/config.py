@@ -124,6 +124,12 @@ class Config:
     # 문의처 (봇 초대 인사·새 관리자 안내에 표시). 비우면 안 보임. .env BOT_SUPPORT_CONTACT
     support_contact: str = ""
 
+    @property
+    def is_clone(self) -> bool:
+        """화이트라벨 클론봇인지 — DB 가 data/clones/<slug>/ 안이면 클론 (본체는 data/sodam.db).
+        클론은 📓 일기를 등록 채널에 안 올림 (2026-11-22 오너 '클론들이 자꾸 채널에 일기 올림')."""
+        return "clones" in Path(self.db_path).parts
+
 
 def load_config() -> Config:
     # 봇을 두 개(메인·딜러) 켤 때: SODAM_ENV=.env.dealer python -m sodam

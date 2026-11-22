@@ -146,6 +146,8 @@ async def write(svc, now: datetime) -> str:
 
 async def post(svc, bot, text: str) -> int:
     """채널에 올리고 번호를 올림 → 올린 번호."""
+    if svc.cfg.is_clone:   # 클론봇은 채널에 일기 안 올림 (자동·수동 공통 관문, 2026-11-22 오너)
+        raise RuntimeError("클론봇은 일기를 채널에 올리지 않아요.")
     st = await settings(svc.db)
     no = int(st["diary_no"] or 1) + 1           # #1 은 사람이 직접 올림
     await bot.send_message(st["diary_channel"], f"📓 소담이의 메모장 #{no}\n\n{text}", link_preview_options=NO_PREVIEW)
@@ -164,6 +166,8 @@ async def _to_owners(svc, bot, text: str, kb=None) -> None:
 
 
 async def tick(svc, bot) -> None:
+    if svc.cfg.is_clone:   # 클론봇은 일기를 등록 채널에 안 올림 (2026-11-22 오너)
+        return
     st = await settings(svc.db)
     if st["diary_mode"] not in ("auto", "preview") or not st["diary_channel"]:
         return
