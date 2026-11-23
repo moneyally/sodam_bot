@@ -21,7 +21,7 @@ from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Inp
                       MenuButtonDefault, MenuButtonWebApp, ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo)
 from telegram.error import BadRequest, Forbidden, TelegramError
 
-from .. import brand, brandcard, fortune, hooks, lottery, menu, miniapp, persist, tools
+from .. import brand, brandcard, fortune, hooks, imagecap, lottery, menu, miniapp, persist, tools
 from ..menu import ADMIN, PUBLIC, B, HubItem, PanelCtx, Route, Screen
 from ..permissions import Role
 from ..util import esc, mention
@@ -1082,11 +1082,17 @@ async def in_ai(c: PanelCtx, msg: Message) -> tuple[bool, str]:
         return True, "AI 그림은 이용 기간 중인 방만 돼요. 사진 올리기는 돼요."
     owner = c.uid in await c.svc.perms.owners()
     day = _kst_day(c.svc)
-    limit = int((await c.svc.db.get_settings(c.cid)).get("image_daily", 5))
+    s = await c.svc.db.get_settings(c.cid)
+    limit = int(s.get("image_daily", 5))
+    mlimit = int(s.get("image_monthly", 0) or 0)   # 월 이미지 한도(image_monthly) — 0=끔
     if not owner:   # 방 그림 한도(image_daily, 오너만 올림)와 같은 카운터 — 먼저 자리를 잡고(+1) 넘으면 되돌림 (동시에 눌러도 안 넘게)
         if await c.svc.db.bump(day, c.cid, "image") > limit:
             await c.svc.db.bump(day, c.cid, "image", -1)
             return True, f"오늘 이 방 그림 한도({limit}장)를 다 썼어요. 내일 다시 하거나 사진을 올려 주세요."
+        if mlimit > 0 and await imagecap.bump(c.svc, c.cid) > mlimit:   # 월 한도도 '둘 다' — 하루 자리 잡힌 뒤
+            await imagecap.bump(c.svc, c.cid, -1)
+            await c.svc.db.bump(day, c.cid, "image", -1)
+            return True, f"이번 달 이 방 그림 한도({mlimit}장)를 다 썼어요. 다음 달에 다시 하거나 사진을 올려 주세요."
     await c.bot.send_message(c.uid, "🤖 그리는 중… (30초~1분)")
     try:
         try:   # 카드는 가로 16:9 → 가로 그림(1536×1024)으로 (정사각이면 위아래가 잘림). 모델이 그 크기를 거절하면 정사각

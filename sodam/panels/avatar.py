@@ -19,7 +19,7 @@ from telegram import InputFile
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from .. import avatar, stickerforge as SF, stickerlearn as L, tools
+from .. import avatar, imagecap, stickerforge as SF, stickerlearn as L, tools
 from ..stickerforge import examples as EX
 from ..llm import BudgetExceeded
 from ..util import display_name, esc
@@ -119,6 +119,8 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
         skipped_art, art = f"(원본이 이미 그림이라 그림체 {art} 는 건너뜀) ", "none"
     if art != "none" and await db.counter(day, ctx.chat_id, "image") >= ctx.settings["image_daily"]:
         return "오늘 이 방 이미지 한도를 다 써서 그림체 바꾸기는 안 됨. 그림체 없이(art=none) 움직임만은 가능하다고 안내."
+    if art != "none" and await imagecap.over(ctx.svc, ctx.chat_id, ctx.settings):   # 월 이미지 한도(image_monthly)도 같이
+        return "이번 달 이 방 이미지 한도를 다 써서 그림체 바꾸기는 안 됨. 그림체 없이(art=none) 움직임만은 가능하다고 안내."
     busy = asyncio.create_task(_busy(ctx))
     try:
         if art != "none":
@@ -132,6 +134,7 @@ async def t_make_profile_video(ctx: tools.ToolCtx, a: dict) -> str:
                 log.warning("avatar art failed: %s", e)
                 return "그림 서버가 잠깐 불안정함. 잠시 후 다시 부탁하라고 안내."
             await db.bump(day, ctx.chat_id, "image")
+            await imagecap.bump(ctx.svc, ctx.chat_id)   # 월 카운터도 같이
         warnings: list = []
         try:
             res = await SF.forge_video(src, forge_spec)
