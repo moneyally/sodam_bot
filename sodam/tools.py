@@ -22,7 +22,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParam
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
-from . import cards, cron, gametime, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨
+from . import cards, cron, gametime, imagecap, knowledge, memory, rules, stats  # memory: AI 설정 키도 여기서 등록됨 · imagecap: 월 이미지 한도
 from . import modactions, setkeys   # 확인 카드 조치 종류 · change_setting 키 목록(부를 때마다)
 from .llm import BudgetExceeded
 from .vision import Attached
@@ -457,6 +457,11 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
         return (f"오늘 이 방 이미지 한도({limit}장)를 다 썼음 (오늘 {await ctx.svc.db.counter(day, ctx.chat_id, 'image')}장 만듦). "
                 "내일 다시 가능하다고 안내할 것. 방 관리자가 한도를 {cap}장까지 늘릴 수 있고 더 늘리는 건 봇 오너만.".replace(
                     "{cap}", str(OWNER_CAP.get("image_daily", limit))))
+    if ctx.role < Role.OWNER:   # 월 이미지 한도(image_monthly)도 '둘 다' 걸림 (하루와 별개, sodam/imagecap.py)
+        mcap = await imagecap.over(ctx.svc, ctx.chat_id, ctx.settings)
+        if mcap:
+            return (f"이번 달 이 방 이미지 한도({mcap}장)를 다 썼음 (이번 달 "
+                    f"{await imagecap.used(ctx.svc, ctx.chat_id)}장 만듦). 다음 달 1일에 다시 가능하다고 안내할 것.")
     busy = asyncio.create_task(_uploading(ctx))   # 그리는 동안(20~80초) '사진 보내는 중…' 표시를 계속 띄움
     try:
         data = await ctx.svc.llm.image(prompt, ctx.image if edit else None, ctx.chat_id)
@@ -482,6 +487,7 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
     await memory.record_turn(ctx.svc.db, ctx.chat_id, ctx.caller.id, "image", prompt, "(그림을 그려 보냄)", sent.message_id,
                              media=photo[-1].file_id if photo else None)
     await ctx.svc.db.bump(day, ctx.chat_id, "image")
+    await imagecap.bump(ctx.svc, ctx.chat_id)   # 월 카운터도 같이
     # 방금 그린 그림을 이 실행의 원본으로 → '새 그림 만들어서 움프/스티커로' 를 한 번에 이어서 (make_profile_video·make_sticker)
     ctx.image = Attached(data, "image/png", ctx.caller.id)
     return "이미지를 방에 보냈음 (이 그림이 이제 원본 — 움프·스티커로 이어서 만들 수 있음). 사진 설명은 다시 하지 말고 한마디만 짧게."
