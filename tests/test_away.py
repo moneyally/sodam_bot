@@ -218,5 +218,32 @@ async def caps_notices_when_many_away_users_mentioned():
     assert len(notices) == away.MAX_NOTIFY, f"한 메시지 안내는 최대 {away.MAX_NOTIFY}개: {len(notices)}"
 
 
+@test
+async def away_commands_are_in_index_and_parse():
+    # register_commands 가 _INDEX 에도 넣어야 parse 가 명령으로 인식 (빠지면 .자리비움 이 통째로 씹힘 — 2026-11-23 일루왕)
+    import sodam.__main__  # noqa: F401  (핸들러가 away.register_commands 호출)
+    from sodam import commands
+    for name in ("자리비움", "잠수", "자러감", "복귀", "돌아옴"):
+        assert name in commands._INDEX, f"{name} 이 _INDEX 에 없음 → parse 가 못 찾음"
+    for text, fn in ((".자리비움 @BAN_1599  커피먹으러감", away.c_away), (".복귀", away.c_back)):
+        p = commands.parse(text, "SoDam33_bot")
+        assert p is not None and p[0].fn is fn, f"{text!r} parse 실패: {p}"
+
+
+@test
+async def away_command_sets_away_and_replies():
+    db, svc, bot = await world()
+    import sodam.__main__  # noqa: F401
+    from sodam import commands
+    from sodam.commands import CmdCtx
+    from sodam.permissions import Role
+    cmd, args, argstr = commands.parse(".자리비움 커피먹으러감", "SoDam33_bot")
+    u = fake_user(AWAY, "자이", "away")
+    m = FakeMsg(CHAT, u, ".자리비움 커피먹으러감", message_id=500)
+    await commands.dispatch(CmdCtx(svc, bot, m, CHAT, u, Role.MEMBER, args, argstr), cmd)
+    assert await away.get_away(db, AWAY) is not None, "자리비움 저장 안 됨"
+    assert any("자리비움으로 바꿨어요" in r for r in m.replies), m.replies
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())
