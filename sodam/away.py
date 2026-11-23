@@ -153,8 +153,7 @@ async def c_away(c) -> None:
     msg_text = c.argstr.strip()
     await set_away(c.svc.db, c.user.id, user_name(c.user), msg_text)
     shown = f": <i>{esc(msg_text[:MAX_MSG])}</i>" if msg_text else ""
-    await c.reply(f"💤 자리비움으로 바꿨어요{shown}\n돌아와서 방에 글 쓰면 자동으로 풀려요 (<code>.복귀</code> 로도).",
-                  parse_mode="HTML")
+    await c.reply(f"💤 자리비움으로 바꿨어요{shown}\n돌아와서 방에 글 쓰면 자동으로 풀려요 (<code>.복귀</code> 로도).")
 
 
 async def c_back(c) -> None:
@@ -163,7 +162,7 @@ async def c_back(c) -> None:
         return
     pings = await clear_away(c.svc.db, c.user.id)
     extra = (f"\n자리비운 동안 <b>{len(pings)}명</b>이 찾았어요: " + " ".join(pings[:MAX_PINGS])) if pings else ""
-    await c.reply(f"👋 돌아왔어요!{extra}", parse_mode="HTML")
+    await c.reply(f"👋 돌아왔어요!{extra}")
 
 
 def register_commands() -> None:
@@ -175,3 +174,5 @@ def register_commands() -> None:
         commands.Cmd(("복귀", "돌아옴", "back"), c_back, Role.MEMBER, help="자리비움 풀기", group="💤 자리비움"),
     ):
         commands.COMMANDS.append(cmd)
+        for name in cmd.names:   # _INDEX 에도 넣어야 parse 가 명령으로 인식 (빠져서 .자리비움 이 통째로 씹혔음 — 2026-11-23 일루왕)
+            commands._INDEX.setdefault(name.lower(), cmd)
