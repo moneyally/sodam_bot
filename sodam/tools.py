@@ -1638,6 +1638,7 @@ CORE_TOOLS = frozenset({
     # 22:51~12:40 실행 47번 중 9번이 sticker_catalog·run_code·other_bot_results·game_control 등을 불러와 캐시 미스, run_code 1번 $0.095)
     "sticker_catalog", "make_sticker", "copy_sticker", "run_code", "other_bot_results", "game_control",
     "schedule_task", "alert_rule",   # '23시55분에 나 불러줘' 를 말로만 약속한 실제 사례 (2026-10-05)
+    "ad_rotate",          # 📢 채널 광고 자동순환 '채널 광고 30분마다 돌려줘' (2026-11-24 누룽지, panels/adrotate.py)
     "feature_request",    # 못 하는 일 = 바로 기능 요청으로 접수 (8번 규칙)
     "attendance",         # 📅 출석·🎟 복권 '소담아 출석' (2026-10-11 FOX 고객, panels/lottery.py)
     "music",              # 🎵 소담 뮤직봇 '○○ 틀어줘' (2026-10-08 — 음성채팅 DJ, panels/music.py)
