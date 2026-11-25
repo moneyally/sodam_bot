@@ -160,6 +160,18 @@ def capture_evidence(reply_msg):
     return (html_truncate(text, 3000) if text else None), kind, media_id
 
 
+# 밴 실패가 봇 '사용자 차단' 권한 부족 때문인지, 아니면 그냥 방에 없는 사람(박제는 됐고 들어오면 자동 차단)인지 구분.
+# 방 밖 사기꾼을 박제하면 늘 밴이 실패(Participant_id_invalid)하는데, 예전엔 그걸 '권한 확인'으로만 안내해 오해를 샀다
+# (2026-11-25 일루왕 오너: 권한 있는데 '내보내기 실패·권한 확인' 떠서 박제 안 된 줄 앎 — 실제론 #58 등재 성공).
+_PERM_HINTS = ("not enough rights", "need administrator", "administrator rights",
+               "chat_admin_required", "enough rights", "privileges", "can_restrict")
+
+
+def _ban_fail_is_perm(e) -> bool:
+    """밴 실패 원인이 봇 권한 부족이면 True, 방에 없는 사람 등이면 False."""
+    return type(e).__name__ == "Forbidden" or any(h in str(e).lower() for h in _PERM_HINTS)
+
+
 async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, actor_id: int,
               evidence=None, media_kind=None, media_id=None, by_name=None, *, auto_ban: bool = True,
               reply_to: int | None = None) -> str:
@@ -205,7 +217,12 @@ async def add(svc, bot, chat_id: int, user_id: int, name: str, reason: str, acto
         banned = "이 방에서 내보냈어요"
     except TelegramError as e:
         log.warning("fedban ban failed in %s: %s", chat_id, e)
-        banned = "이 방에서 내보내기는 실패했어요 (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)"
+        if _ban_fail_is_perm(e):
+            banned = "이 방에서 내보내기는 실패했어요 (봇에게 '사용자 차단' 권한이 있는지 확인해주세요)"
+        else:   # 방에 없는 사람(방 밖 사기꾼 등) — 명단엔 이미 올렸으니 들어오면 자동 차단
+            no = info.get("no") if isinstance(info, dict) else None
+            banned = ("그 사람은 이 방에 없어서 지금 내보내진 못했지만, 들어오면 자동으로 차단돼요"
+                      + (f" (수배 #{no})" if no else ""))
     return (f"🛡️ {mention(user_id, name)}님을 <b>공동 차단 명단</b>에 올리고 {banned}.\n"
             f"사유: {esc(reason)}\n"
             f"지금 {info['rooms']}개 방이 올린 계정이에요. 소담을 쓰는 다른 방에 들어오면 그 방 관리자에게 알려드려요.")
