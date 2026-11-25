@@ -382,6 +382,7 @@ tools.register_tool(tools.Tool(
      "png": {"type": "boolean", "description": "PNG 파일·파일로 달라고 하면 true (정지 스티커와 함께 투명 PNG 문서)"},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true"},
      "request": {"type": "string", "description": "사용자 요청 원문"},
+     "frame": {"type": "string", "description": "원본이 영상·GIF 일 때 어느 장면을 원본으로: 시작·가운데·끝, 'N번째'·'N초'·'N%'. 기본 가운데"},
      "wanted": {"type": "string", "description": "정말 못 하는 연출을 원했을 때 그 말 그대로 (기능 요청 접수)"}},
     ["spec"], t_make_sticker))
 

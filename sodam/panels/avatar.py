@@ -57,8 +57,8 @@ async def source_photo(ctx, a: dict) -> tuple[bytes | None, str | None]:
             return None, (f"{tools._row_name(row)} 님 프사를 못 가져옴 (프사가 없거나 공개 설정이 막힘). "
                           "그 사람 사진에 답장하면서 다시 부탁하라고 안내.")
         return data, None
-    if ctx.image is not None:
-        return ctx.image.data, None
+    if ctx.image is not None:   # 영상·GIF 원본이면 고른 장면(frame: 시작/끝/가운데/N초/N%)을 원본으로 (기본 가운데)
+        return ctx.image.pick_frame(a.get("frame")), None
     data = await _profile_photo(ctx.bot, ctx.caller.id)
     if not data:
         return None, "원본 사진이 없음: 붙은·답장한 사진이 없고 프사를 못 가져옴 (프사가 없거나 공개 설정이 막힘). 사진과 함께 또는 사진에 답장하며 다시 부탁하라고 안내."
@@ -179,5 +179,6 @@ tools.register_tool(tools.Tool(
      "seed": {"type": "integer", "description": "변주 번호 (안 주면 매번 새로)"},
      "accept_warnings": {"type": "boolean", "description": "검수 경고를 한 번 고친 뒤에도 남으면 true"},
      "request": {"type": "string", "description": "사용자 요청 원문"},
+     "frame": {"type": "string", "description": "원본이 영상·GIF 일 때 어느 장면을 원본으로: 시작·가운데·끝, 'N번째'·'N초'·'N%'. 기본 가운데"},
      "wanted": {"type": "string", "description": "정말 못 하는 연출(사진 속 사람이 실제로 움직이기 등)을 원했을 때 그 말 그대로"}},
     [], t_make_profile_video))

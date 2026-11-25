@@ -55,6 +55,35 @@ class Attached:
             out += [{"type": "text", "text": f"[{t:.1f}초]"}, _img(jpg, "image/jpeg")]
         return out
 
+    def pick_frame(self, sel: str | None) -> bytes:
+        """영상·GIF 에서 뽑은 장면(frames) 중 하나를 골라 그 이미지 bytes 를 돌려준다 (부품+값 틀 — 하드코딩 목록 아님).
+        시작/처음/앞 → 첫 장면 · 끝/마지막/뒤 → 끝 장면 · 가운데/중간 → 가운데(기본) · 'N번째' → N번째 장면 ·
+        'N%' → 비율 위치 · 'N초' 또는 숫자 → 그 시각에 가장 가까운 장면. 프레임 없거나 못 알아들으면 원래 data(가운데)."""
+        frames, n = self.frames, len(self.frames)
+        if not frames or not sel:
+            return self.data
+        s = str(sel).strip().lower()
+        if any(k in s for k in ("시작", "처음", "앞", "맨앞", "첫", "start", "begin", "first", "intro")):
+            return frames[0][1]
+        if any(k in s for k in ("끝", "마지막", "뒤", "맨뒤", "막판", "최후", "end", "last", "final", "outro")):
+            return frames[-1][1]
+        if any(k in s for k in ("가운데", "중간", "중앙", "mid", "middle", "center", "centre")):
+            return frames[n // 2][1]
+        if m := re.search(r"(\d+)\s*번째", s):
+            return frames[min(n - 1, max(1, int(m.group(1))) - 1)][1]
+        if m := re.search(r"(\d+(?:\.\d+)?)\s*%", s):
+            frac = max(0.0, min(float(m.group(1)) / 100.0, 1.0))
+            return frames[min(n - 1, round(frac * (n - 1)))][1]
+        if m := re.search(r"(\d+(?:\.\d+)?)", s):     # 'N초' 또는 그냥 숫자 → 그 시각에 가장 가까운 장면
+            want = float(m.group(1))
+            return min(frames, key=lambda f: abs(f[0] - want))[1]
+        return self.data
+
+    def use_frame(self, sel: str | None) -> "Attached":
+        """고른 장면을 편집 원본(data)으로 삼는다 (make_image·make_sticker·make_profile_video 공통)."""
+        self.data = self.pick_frame(sel)
+        return self
+
 
 # 방금 올린 사진·영상 (같은 사람, RECENT_SEC 안): '영상 올리고 → 답장 없이 이건어떰' 도 그 영상을 봄
 # (실제 2026-10-03 오너 1:1: Grok 으로 만든 영상 보내고 '이건어떰' → '화면을 못 봐서' — 답장이 아니라 첨부를 몰랐음)
