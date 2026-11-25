@@ -451,6 +451,8 @@ async def t_make_image(ctx: ToolCtx, a: dict) -> str:
         ctx.image = await _last_made(ctx)
     if edit and ctx.image is None:
         return "고칠 사진이 없음. 사진에 답장하면서 부탁하거나 사진과 함께 보내 달라고 안내할 것."
+    if edit and a.get("frame"):   # 영상·GIF 원본이면 고른 장면(시작/끝/가운데/N초/N%)을 편집 기준으로 (기본 가운데)
+        ctx.image.use_frame(a["frame"])
     day = datetime.now(ctx.svc.cfg.tz).strftime("%Y-%m-%d")
     limit = ctx.settings["image_daily"]
     if ctx.role < Role.OWNER and await ctx.svc.db.counter(day, ctx.chat_id, "image") >= limit:
@@ -1461,7 +1463,9 @@ TOOLS: list[Tool] = [
          "앞에서 한도·실패였어도 다시 부탁하면 기억으로 '막혔다'고 답하지 말고 이 도구를 다시 부른다 (관리자가 한도를 바꿨을 수 있음).",
          {"prompt": {"type": "string", "description": "원하는 그림을 구체적으로 (피사체·분위기·색·글자·구도)"},
           "mode": {"type": "string", "enum": ["new", "edit"]},
-          "photo_of": {"type": "string", "description": "이 방 멤버 프사를 원본으로 (이름·@아이디·ID). 있으면 edit"}},
+          "photo_of": {"type": "string", "description": "이 방 멤버 프사를 원본으로 (이름·@아이디·ID). 있으면 edit"},
+          "frame": {"type": "string", "description": "원본이 영상·GIF 일 때 어느 장면을 쓸지: "
+                    "시작·가운데·끝, 또는 'N번째'·'N초'·'N%'. 기본 가운데. 사진이면 무시됨"}},
          ["prompt", "mode"], t_make_image, setting="image_daily"),
     Tool("web_search", "최신 뉴스·사실·경기 기록 확인이 필요할 때 웹을 검색한다 (검색 담당이 페이지까지 열어 확인). "
          "query 는 짧은 핵심 낱말 (예: '흥국생명 최근 경기 결과', '흥국생명 IBK 상대 전적') — 날짜·여러 질문을 한 줄에 몰아넣지 말 것. "
