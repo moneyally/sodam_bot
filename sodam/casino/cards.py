@@ -28,7 +28,7 @@ from telegram.error import TelegramError
 from ..settings import register_setting
 from ..util import esc, user_name
 from . import SHUTDOWN_HOOKS, Ctx, basic, cardimg, register, register_callback
-from .basic import edit_live, show, show_anim
+from .basic import edit_live, show, show_anim, text_only
 from .board import record
 from .core import OPEN_CHECKS, SWEEPS, balance, credit, dealer_tail, debit, fmt, handoff, result_line, rng, settle, split_bet, take_bet, tilt, lose_pct, tilt_pick
 
@@ -355,7 +355,7 @@ async def _edit(h: Hand, view: View | str, kb=None, q=None, final: bool = False)
 async def _send(ctx: Ctx, h: Hand, view: View, kb=None) -> None:
     """판 시작 화면: 카드 그림 사진(+캡션·버튼). 그리기·보내기가 안 되면 글자 답장."""
     text, cap, img = view
-    if IMAGES and (data := await _render(img)) is not None:
+    if IMAGES and not await text_only(ctx) and (data := await _render(img)) is not None:
         try:
             sent = await ctx.bot.send_photo(ctx.chat_id, photo=data, caption=cap, parse_mode="HTML", reply_markup=kb,
                                             reply_parameters=ReplyParameters(ctx.msg.message_id,
@@ -593,8 +593,10 @@ async def _bj_finish(h: Hand, q=None, note: str = "", animate: bool = False, bg:
     if dealer_turn:
         pct = await lose_pct(h.ctx.svc.db, h.ctx.chat_id)
         if pct and len(h.dealer) == 2:                               # 🎚 난이도: 숨긴 카드부터 다시 (딜러 블랙잭은 처음에 이미 아님)
-            h.dealer, h.shoe = tilt_pick(pct, lambda: _bj_dealer_draw(h),
-                                         lambda r: bj_payout(h.player, r[0], h.bet)[0] < h.bet)
+            # 표본 400번(매번 슈 복사)은 스레드로 — 이벤트 루프(봇 전체) 안 막게 (2026-11-25)
+            h.dealer, h.shoe = await asyncio.to_thread(
+                tilt_pick, pct, lambda: _bj_dealer_draw(h),
+                lambda r: bj_payout(h.player, r[0], h.bet)[0] < h.bet)
         dealer_play(h.dealer, h.shoe)                                # 다시 정산할 때도 이미 17 이상이라 그대로
     payout, verdict = bj_payout(h.player, h.dealer, h.bet)
     bal = await _settle_hand(h, payout, "blackjack")                 # 정산 먼저 (연출이 실패해도 돈은 끝)

@@ -263,8 +263,11 @@ class Round:
         return None
 
     async def send_anim(self, make_gif, caption: str) -> bool:
-        """결과 애니메이션(GIF) 한 번 보내고 그 메시지를 live 로. 그리기·보내기 실패면 False (글자 연출로)."""
+        """결과 애니메이션(GIF) 한 번 보내고 그 메시지를 live 로. 그리기·보내기 실패면 False (글자 연출로).
+        글만 모드(casino_game_visual=text)면 GIF 안 보내고 글자 연출로 (2026-11-25 — 오너가 움짤 꺼도 경마·그래프는 계속 나가던 버그)."""
         try:
+            if (await self.svc.db.get_settings(self.chat_id)).get("casino_game_visual") == "text":
+                return False
             gif = await asyncio.to_thread(make_gif)
             from .basic import gif_file                 # 이름표 없으면 텔레그램이 파일로 받음 (2026-10-14 실측)
             self.live = await self.bot.send_animation(self.chat_id, animation=gif_file(gif, self.game), caption=caption,
@@ -435,10 +438,13 @@ async def _join(ctx: Ctx, cls: type[Round], amount: int | None, pick: int, pick_
             return
         handoff(ctx, bet)               # 이제 판(과 재시작 때 core.recover_open)이 정산·환불을 맡음
         p = Player(ctx, bet, pick)
+        style = (await ctx.svc.db.get_settings(cid))["style"]  # 딜러 소담 말투 — current() 검사 '전에' 미리 읽는다(아래 ⚠️)
         r = current(cid, game)
         if r is None:                   # 첫 베팅 → 새 판
+            # ⚠️ current()==None 확인부터 _start(판 등록)까지 await 가 없어야 한다 — 예전엔 여기서 style 을 await 로 읽어
+            #    그 틈에 두 번째 사람의 첫 베팅이 current()==None 을 또 봐서 같은 게임 판이 2개 열렸다 (2026-11-25).
             r = cls(ctx)
-            r.style = (await ctx.svc.db.get_settings(cid))["style"]  # 딜러 소담 말투 (자유분방=반말)
+            r.style = style
             r.players[uid] = p
             _start(r)
             if hasattr(r, "open_send"):   # 판 여는 화면을 직접 (바카라 회차판 = 덮인 카드 사진, casino/bactable.py)

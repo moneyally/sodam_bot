@@ -60,6 +60,11 @@ class BacTableRound(Round):
         self.no = int(await self.svc.db.get_state(self.chat_id, ROUND_KEY, 0) or 0) + 1
         await self.svc.db.set_state(self.chat_id, ROUND_KEY, self.no)
         text = self.open_text(p, pick_txt)
+        # 글만 모드면 사진 없이 글자로 (self.live=None 이면 play 가 공개 사진 단계를 자동으로 건너뜀) — 2026-11-25
+        if (await self.svc.db.get_settings(self.chat_id)).get("casino_game_visual") == "text":
+            self.live = None
+            await ctx.reply(text)
+            return
         if cardart.available():
             try:
                 img = await asyncio.to_thread(cardart.open_image, self.no)
