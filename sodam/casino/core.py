@@ -460,7 +460,13 @@ def tilt_pick(pct: int, draw: Callable, lost: Callable):
 
 
 async def tilt(db, draw: Callable, lost: Callable, chat_id: int | None = None):
-    return tilt_pick(await lose_pct(db, chat_id), draw, lost)
+    # 난이도>0 이면 원래 지는 확률을 표본 400번으로 재는데(바카라는 한 번이 8덱 슈 생성),
+    # 이걸 이벤트 루프에서 직접 돌리면 그동안 봇 전체(모든 방·AI·전송)가 멈춘다 → 스레드로 뺀다
+    # (2026-11-25 클린뱅크 난이도80 바카라 난사 → 봇 전체 렉). 난이도 안 켜졌으면 표본 없이 한 번만.
+    pct = await lose_pct(db, chat_id)
+    if pct <= 0:
+        return draw()
+    return await asyncio.to_thread(tilt_pick, pct, draw, lost)
 
 
 # ── 잠깐 보이는 답장 ──────────────────────────────────────
