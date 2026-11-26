@@ -55,10 +55,11 @@ def _maker_line(cfg) -> str:
     if not maker:
         return "소담 운영자가 만들고 운영해요."
     contact = (getattr(cfg, "support_contact", "") or "").strip()
-    line = f"{maker}가 만들고 운영해요."
-    if contact:
-        line += f" 봇을 쓰고 싶으면 {contact}로 연락 주세요."
-    return line
+    if not contact:
+        return f"{maker}가 만들고 운영해요."
+    # 아이디를 '만든 사람' 이름에 괄호로 붙여 한 덩어리로 → '누가 만들었어'만 물어도 AI 가 연락처를 안 떼고 같이 답한다
+    # (2026-11-26 실측: 두 문장이면 둘째(연락처)를 버렸음). '봇 쓰고 싶으면 연락' 뜻도 한 줄에.
+    return f"{maker}({contact})가 만들고 운영해요. 봇 쓰고 싶으면 {contact} 로 연락 주세요."
 
 
 def render(body: str, cfg) -> str:

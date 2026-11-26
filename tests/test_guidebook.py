@@ -145,7 +145,8 @@ async def maker_line_is_per_bot_name_only_on_main():
     # 본체: BOT_MAKER_NAME 있으면 그 이름 + 연락처
     main = SimpleNamespace(bot_maker="자이", support_contact="@ban_1599")
     out = G.render(faq, main)
-    assert "자이가 만들고 운영해요" in out and "@ban_1599" in out and "소담 운영자가 만들" not in out
+    # 아이디를 이름에 붙여 한 덩어리 → '누가 만들었어'만 물어도 연락처가 안 떨어짐
+    assert "자이(@ban_1599)가 만들고 운영해요" in out and "@ban_1599" in out and "소담 운영자가 만들" not in out
 
     # 클론·기본: 이름 없으면 '소담 운영자…' 그대로 (보낼 때 brandname 이 소담→클론명). 자이 이름 안 샘.
     clone = SimpleNamespace(bot_maker="", support_contact="@ban_1599")
