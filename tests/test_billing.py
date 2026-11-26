@@ -347,6 +347,32 @@ async def subscribe_command_in_group_hides_details():
         assert (".구독" in msg.replies[0]) is visible, role
 
 
+@test
+async def dm_ai_is_owner_only_with_notice():
+    """🚫 1:1 AI 대화는 오너 전용 (2026-11-26): 비오너는 막고 문구 1번, 오너만 됨. 버튼·명령은 이 함수 안 거쳐 그대로."""
+    db, svc, _ = await setup(free_ai_per_day=5, dm_ai_owner_only=True)
+    bot = FakeBot()
+    ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
+    # 비오너 1:1(chat_id>0) → 막힘 + 안내는 사람마다 10분 1번 (연타해도 도배 X)
+    r = [await handlers._within_ai_quota(ctx, 777, 777, Role.MEMBER) for _ in range(3)]
+    assert r == [False, False, False], r
+    notices = [c for c in bot.named("send_message") if "운영자 전용" in c[2]]
+    assert len(notices) == 1, "차단 안내 10분 1번"
+    assert await handlers._within_ai_quota(ctx, 999, 999, Role.OWNER) is True        # 오너는 1:1 AI 됨
+    assert await handlers._within_ai_quota(ctx, 888, 888, Role.ADMIN) is False        # 관리자도 1:1 AI 는 막힘(오너 전용)
+
+
+@test
+async def dm_ai_block_off_falls_back_to_free_limit():
+    """끄면(DM_AI_OWNER_ONLY=0) 예전처럼 하루 무료 한도로 (회귀 안전)."""
+    db, svc, _ = await setup(free_ai_per_day=2, dm_ai_owner_only=False)
+    bot = FakeBot()
+    ctx = SimpleNamespace(bot=bot, job_queue=FakeJobQueue(), bot_data={"svc": svc})
+    r = [await handlers._within_ai_quota(ctx, 555, 555, Role.MEMBER) for _ in range(3)]
+    assert r == [True, True, False], r      # 2번 무료 뒤 한도
+    assert not [c for c in bot.named("send_message") if "운영자 전용" in c[2]], "꺼졌으면 전용 안내 X"
+
+
 if __name__ == "__main__":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     sys.exit(1 if asyncio.run(run_all()) else 0)

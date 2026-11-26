@@ -127,6 +127,9 @@ class Config:
     # 비우면 "소담 운영자가 만들고 운영해요"(기본·클론 그대로, 브랜드네임이 소담→클론명 치환) → 클론엔 이름 안 샘.
     # 이름은 .env(비공개)에만 둬서 공개 저장소엔 안 들어감. 연락처는 support_contact(@ban_1599) 재사용.
     bot_maker: str = ""
+    # 🚫 1:1 AI 대화를 오너 전용으로 (외부인이 봇을 공짜 AI 로 악용 방지, 2026-11-26 오너). 버튼·메뉴·결제·명령은 그대로.
+    # 기본 켬. 끄려면 .env DM_AI_OWNER_ONLY=0. 클론도 각자 cfg.owner_ids(로컬 오너)만 1:1 AI 허용.
+    dm_ai_owner_only: bool = True
 
     @property
     def is_clone(self) -> bool:
@@ -194,6 +197,7 @@ def load_config() -> Config:
         mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
         support_contact=os.getenv("BOT_SUPPORT_CONTACT", "@ban_1599").strip(),
         bot_maker=os.getenv("BOT_MAKER_NAME", "").strip(),
+        dm_ai_owner_only=os.getenv("DM_AI_OWNER_ONLY", "1") != "0",
     )
 
 

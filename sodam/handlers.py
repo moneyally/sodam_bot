@@ -771,6 +771,7 @@ async def _prefix_hint(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: s
 
 
 EXPIRED_NOTICE_GAP = 3600   # 끝난 방에서 AI 를 부를 때 안내는 방마다 1시간에 1번
+DM_AI_BLOCK_GAP = 600       # 1:1 오너전용 차단 안내는 사람마다 10분에 1번 (연타 도배 방지)
 EXPIRED_AI_NOTICE = "🔒 이 방의 {name} 이용 기간이 끝나서 AI 대화는 쉬고 있어요. 관리자님은 아래 버튼에서 연장할 수 있어요."
 ENDED_NOTICE = ("⛔ {name} {what}이 끝났어요. AI 대화·게임·예약공지 같은 기능은 멈추고, "
                 "방 관리(캡차·도배·금지어·경고)는 계속 무료로 동작해요. 관리자님은 아래 버튼에서 연장할 수 있어요.")
@@ -807,6 +808,13 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
         if await persist.claim(svc.db, f"expired_notice:{chat_id}", EXPIRED_NOTICE_GAP):
             await send_temp(context, chat_id, EXPIRED_AI_NOTICE.format(name=svc.cfg.bot_name), 120,
                             reply_markup=subscription.setup_button(context.bot.username, chat_id))
+        return False
+    # 1:1 AI 대화는 오너 전용 (2026-11-26 오너: 외부인이 1:1 로 봇을 공짜 AI 처럼 악용 → 매출 0·비용만).
+    # 오너는 위에서 이미 통과. 버튼·메뉴·결제·명령·딥링크는 이 함수를 안 거치므로 그대로 작동한다.
+    # 안내는 사람마다 DM_AI_BLOCK_GAP 에 한 번만 (연타해도 도배 안 되게), 나머지는 조용히 무시.
+    if svc.cfg.dm_ai_owner_only:
+        if await persist.claim(svc.db, f"dm_ai_block:{user_id}", DM_AI_BLOCK_GAP):
+            await send_temp(context, chat_id, "1:1 AI 대화는 운영자 전용이에요. 봇은 그룹방에서 써주세요 🙂", 30)
         return False
     # 1:1 은 결제 여부와 상관없이 하루 무료 한도 적용 → 낯선 사람이 전체 AI 예산을 다 쓰지 못하게
     day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
