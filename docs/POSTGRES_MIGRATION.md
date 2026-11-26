@@ -56,5 +56,19 @@
 - 디스크: PG 는 SQLite 대비 2~3배. 지금 11GB 여유 → 클론 하나씩 옮기며 감시(한꺼번에 X).
 - 백업: `backup.sh` 에 PG `pg_dump` 추가(SQLite 백업과 병행).
 
+## ✅ 아키텍처 검증 (PoC, `tools/pg_poc.py`, 2026-11-27)
+**결론: 동기 psycopg + SQL 번역 껍데기로 가면 144개 atomic() 콜백을 안 뜯고 PG 사용 가능.** 로컬 PG 로 증명:
+- ✅ 스키마(AUTOINCREMENT→IDENTITY) · INSERT OR IGNORE→ON CONFLICT DO NOTHING · **atomic 콜백(sync c.execute) 무수정 동작**
+- ✅ **pg_trgm 한글 두 글자 검색**(FTS5 대체) · **pgvector cosine**(sqlite-vec 대체)
+- 핵심: aiosqlite 가 sqlite3(동기)를 백그라운드 스레드에서 돌리는 구조 그대로, **psycopg(동기)를 같은 자리에** + `self.conn` 을 sqlite3 흉내 껍데기로. 그래서 `db.atomic(fn)` 콜백·`conn.execute` 직접 호출이 다 그대로 산다.
+
+### 작업량 (실측 2026-11-27)
+atomic() 콜백 **144개**(58파일) · 직접 conn.execute 28 · INSERT OR IGNORE/REPLACE **85** · strftime **116** · AUTOINCREMENT **55**.
+
+### 번역 껍데기가 자동 처리 / 수동 필요
+- 자동: `?`→`%s`, INSERT OR IGNORE→ON CONFLICT DO NOTHING, AUTOINCREMENT→IDENTITY, PRAGMA 무시, lastrowid→lastval(savepoint 격리), `strftime('%s','now')`.
+- **수동(이게 남은 큰 일)**: ① `INSERT OR REPLACE`(PK·전체 컬럼 알아야 ON CONFLICT DO UPDATE — 표마다) ② `strftime('%H'/'%Y-%m-%d'/…)` 다양한 꼴 116곳 → PG `to_char`/`extract` 매핑 ③ FTS5 색인/쿼리를 pg_trgm GIN 으로 교체(search.py·semsearch.py) ④ sqlite-vec vec0 → pgvector 표·HNSW(semsearch.py) ⑤ **PG 트랜잭션 중단 의미**(에러 하나가 트랜잭션 전체를 막음 — best-effort insert 하는 콜백 재검토).
+
 ## 현황
-- 0단계 완료(2026-11-27). 다음: 1단계 추상화 — 코드만, 라이브 0 접촉, 전체 시험으로 안전 확인.
+- **0단계 완료**(PG16+pgvector 서버·로컬 설치) · **아키텍처 PoC 검증 완료**(접근 확정: 동기 psycopg+번역 껍데기).
+- 다음(1단계): PoC 를 db.py 에 정식 통합 — `Backend` 분기(sqlite|pg) + 번역 껍데기 + 위 수동 항목 처리 → `DB_BACKEND=pg` 로 전체 시험 통과. **코드만, 라이브 0 접촉.** 수 주 규모라 조각내서.
