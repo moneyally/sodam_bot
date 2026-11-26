@@ -364,6 +364,35 @@ async def harness_reaches_timeline():
     assert not rep.issues, rep.issues[:5]
 
 
+@test
+async def room_profiles_one_call_all_members_with_trend():
+    """📊 방 전원 채팅 성향을 집계 쿼리 '한 번'에 (멤버별 member_timeline N번 → 170초 타임아웃 막기, 2026-11-26 알감자)."""
+    db = await make_db()
+    svc = await make_svc(db, admins={ADMIN})
+    await db.ensure_chat(CHAT, "방")
+    now = int(time.time())
+    for uid, nm in ((101, "활발이"), (102, "조용이"), (103, "줄은이")):
+        await db.upsert_user(fake_user(uid, nm))
+    for i in range(20):                                   # 활발이: 최근 24h 20개 + 평소 적음 → 급증
+        await db.log_message(CHAT, 101, None, f"a{i}", ts=now - 600)
+    await db.log_message(CHAT, 101, None, "p", ts=now - 6 * DAY)
+    for i in range(70):                                   # 줄은이: 평소(4일 전) 70개, 최근 24h 0 → 줄어듦, m30 1위
+        await db.log_message(CHAT, 103, None, f"c{i}", ts=now - 4 * DAY)
+    for i in range(5):                                    # 조용이: 30일 안 5개(10일 전) → 태그 없음
+        await db.log_message(CHAT, 102, None, f"b{i}", ts=now - 10 * DAY)
+
+    out = await insight.room_profiles(svc, CHAT, 15)
+    assert out.index("줄은이") < out.index("활발이") < out.index("조용이"), out   # m30 많은 순
+    for line in out.splitlines():
+        if "활발이" in line:
+            assert "24h 20" in line and "급증↑" in line, line
+        if "줄은이" in line:
+            assert "24h 0" in line and "줄어듦↓" in line and "30일 70" in line, line
+        if "조용이" in line:
+            assert "급증" not in line and "줄어듦" not in line, line           # 평소 적으면 태그 X
+    assert "30일" in out and "7일" in out and "24h" in out
+
+
 if __name__ == "__main__":
     import asyncio
     asyncio.run(run_all())

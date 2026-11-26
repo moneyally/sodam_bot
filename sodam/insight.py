@@ -635,9 +635,52 @@ async def _voice(db, f: Facts, user_id: int) -> None:
         log.warning("타임라인 음성 집계 실패: %s", e)
 
 
+async def room_profiles(svc, chat_id: int, limit: int = 15) -> str:
+    """방 전원(상위 N명)의 채팅 성향을 한 번에 — 사람마다 메시지 수(30일·7일·24h)와 추세(급증·줄어듦).
+    집계 쿼리 '한 개'로 전원을 뽑는다 (멤버 한 명씩 member_timeline 을 N번 부르면 라운드가 쌓여 170초 상한에 걸림 —
+    2026-11-26 알감자 '전원 채팅 성향 조사' → 8명 순차 조회로 하드 타임아웃). 개인 메모·경고는 없음(그건 member_timeline)."""
+    db = svc.db
+    now = int(time.time())
+    t30, t7, t24, t8 = now - 30 * 86400, now - 7 * 86400, now - 86400, now - 8 * 86400
+    limit = max(3, min(int(limit or 15), 30))
+    rows = [r for r in await db._all(
+        "SELECT user_id, "
+        "SUM(CASE WHEN ts>=? THEN 1 ELSE 0 END) m30, "
+        "SUM(CASE WHEN ts>=? THEN 1 ELSE 0 END) m7, "
+        "SUM(CASE WHEN ts>=? THEN 1 ELSE 0 END) m24, "
+        "SUM(CASE WHEN ts>=? AND ts<? THEN 1 ELSE 0 END) prev7 "
+        "FROM messages WHERE chat_id=? AND is_bot=0 AND ts>=? "
+        "GROUP BY user_id ORDER BY m30 DESC LIMIT ?",
+        (t30, t7, t24, t8, t24, chat_id, t30, limit)) if r["m30"]]
+    if not rows:
+        return "최근 30일 채팅 기록이 없음."
+    marks = ",".join("?" * len(rows))
+    names = {u["user_id"]: (u["first_name"] or u["username"] or str(u["user_id"]))
+             for u in await db._all(f"SELECT user_id, first_name, username FROM users WHERE user_id IN ({marks})",
+                                    tuple(r["user_id"] for r in rows))}
+    out = [f"📊 방 전원 채팅 성향 (상위 {len(rows)}명, 활동량 기준)"]
+    for i, r in enumerate(rows, 1):
+        avg = r["prev7"] / 7
+        # 추세 기준은 Facts.spike·trend 와 같게 (급증=24h 20개↑ & 평소 3배↑ · 줄어듦=평소 5개↑인데 1/3 이하)
+        spike = r["m24"] >= 20 and r["m24"] >= 3 * max(avg, 1.0)
+        tag = " 급증↑" if spike else " 줄어듦↓" if (avg >= 5 and r["m24"] <= avg / 3) else ""
+        out.append(f"{i}. {names.get(r['user_id'], r['user_id'])} — 30일 {r['m30']} · 7일 {r['m7']} · 24h {r['m24']}(평소 {avg:.0f}/일){tag}")
+    return "\n".join(out)
+
+
+async def t_room_profiles(ctx: ToolCtx, a: dict) -> str:
+    if ctx.chat_id > 0:
+        return "1:1 채팅이라 방 멤버 정보가 없음."
+    return await room_profiles(ctx.svc, ctx.chat_id, a.get("limit"))
+
+
 NAME = {"type": "string", "description": "@username, 이름, 또는 숫자 ID"}
 PERIOD_PARAM = {"type": "string", "enum": list(PERIODS), "description": "today=오늘 0시부터, 24h, 7d"}
 INSIGHT_TOOLS = [
+    Tool("room_profiles", "방 전원(상위 N명)의 채팅 성향을 한 번에: 사람마다 메시지 수(30일·7일·24시간)와 추세(급증·줄어듦). "
+         "'멤버 전원 채팅 성향 조사', '다들 얼마나 쳐?', '누가 제일 활발해?' 같은 전체 조회는 멤버 한 명씩 member_timeline 을 "
+         "여러 번 부르지 말고 반드시 이걸 한 번. 개인 메모·경고는 없음(그건 member_timeline).",
+         {"limit": {"type": "integer", "description": "상위 몇 명 (3~30, 기본 15)"}}, [], t_room_profiles, where="room"),
     Tool("member_timeline", "[관리자] 멤버 한 사람의 기록 타임라인: 처음 본 날·이름 변경·메시지 수(7일/30일)·답장·링크 글·"
          "경고·제재 날짜·최근 활동 추세 + AI 기억 메모(확인 안 됨). '철수 요즘 어때?', '이 사람 어떤 사람이야?' 같은 질문에.",
          {"name": NAME}, ["name"], t_member_timeline, Role.ADMIN, where="room"),
