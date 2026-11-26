@@ -123,6 +123,10 @@ class Config:
     call_names_en: tuple[str, ...] = ("sodam",)
     # 문의처 (봇 초대 인사·새 관리자 안내에 표시). 비우면 안 보임. .env BOT_SUPPORT_CONTACT
     support_contact: str = ""
+    # 🏷 "누가 만들었어?" 답에 쓸 만든 사람 이름 (안내서 faq {maker}). .env BOT_MAKER_NAME 으로 본체만 넣음.
+    # 비우면 "소담 운영자가 만들고 운영해요"(기본·클론 그대로, 브랜드네임이 소담→클론명 치환) → 클론엔 이름 안 샘.
+    # 이름은 .env(비공개)에만 둬서 공개 저장소엔 안 들어감. 연락처는 support_contact(@ban_1599) 재사용.
+    bot_maker: str = ""
 
     @property
     def is_clone(self) -> bool:
@@ -189,6 +193,7 @@ def load_config() -> Config:
         mtproto_api_id=_int0(os.getenv("MTPROTO_API_ID", "")),
         mtproto_api_hash=os.getenv("MTPROTO_API_HASH", "").strip(),
         support_contact=os.getenv("BOT_SUPPORT_CONTACT", "@ban_1599").strip(),
+        bot_maker=os.getenv("BOT_MAKER_NAME", "").strip(),
     )
 
 
