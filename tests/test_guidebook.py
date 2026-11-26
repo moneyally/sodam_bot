@@ -20,7 +20,7 @@ def ctx(svc, bot, chat):
 
 
 CFG = SimpleNamespace(sub_price_usdt="30", sub_days=30, trial_days=3, free_ai_per_day=10, invoice_minutes=60)
-PLACEHOLDERS = {"price", "days", "trial", "free_ai", "invoice_min", "voice_min", "call_min", "video_weekly", "video_sec"}
+PLACEHOLDERS = {"price", "days", "trial", "free_ai", "invoice_min", "voice_min", "call_min", "video_weekly", "video_sec", "maker"}
 
 
 @test
@@ -133,6 +133,25 @@ async def tool_answers_price_from_config_and_sends_buttons_once_in_room_only():
     assert len(bot.named("send_message")) == 1, "1:1 엔 카드 안 보냄"
     assert "sodam_guide" in {t.name for t in tools.available(Role.MEMBER, {}, False)} and "sodam_guide" in tools.READ_ONLY
     assert "sodam_guide" in prompt.SYSTEM
+
+
+@test
+async def maker_line_is_per_bot_name_only_on_main():
+    """🏷 '누가 만들었어?' = 본체만 .env BOT_MAKER_NAME 이름, 클론·기본은 '소담 운영자'(브랜드네임이 소담→클론명).
+    자이 이름은 .env 에만 있어야(공개 저장소·공유 faq.md 엔 X) → 클론엔 안 샌다."""
+    faq = G.load()["faq"]["body"]
+    assert "{maker}" in faq and "자이" not in faq, "이름은 faq.md 에 박지 말고 {maker} 로 (공개·클론 안전)"
+
+    # 본체: BOT_MAKER_NAME 있으면 그 이름 + 연락처
+    main = SimpleNamespace(bot_maker="자이", support_contact="@ban_1599")
+    out = G.render(faq, main)
+    assert "자이가 만들고 운영해요" in out and "@ban_1599" in out and "소담 운영자가 만들" not in out
+
+    # 클론·기본: 이름 없으면 '소담 운영자…' 그대로 (보낼 때 brandname 이 소담→클론명). 자이 이름 안 샘.
+    clone = SimpleNamespace(bot_maker="", support_contact="@ban_1599")
+    out2 = G.render(faq, clone)
+    assert "소담 운영자가 만들고 운영해요" in out2 and "자이" not in out2
+    assert not __import__("re").search(r"\{\w+\}", out2), "치환 안 된 자리표시자 남으면 안 됨"
 
 
 if __name__ == "__main__":

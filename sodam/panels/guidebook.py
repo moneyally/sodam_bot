@@ -48,8 +48,22 @@ def load() -> dict[str, dict]:
 from ..settings import DEFAULTS  # noqa: E402  (영상 한도 기본값 — ai_settings 가 등록)
 
 
+def _maker_line(cfg) -> str:
+    """'누가 만들었어?' 답 ({maker}). 본체는 .env BOT_MAKER_NAME 으로 만든 사람 이름, 클론·기본은 그대로.
+    기본은 '소담 운영자…' — 브랜드네임(brandname)이 보낼 때 소담→클론명 으로 바꿔서 클론엔 자이 이름이 안 샌다."""
+    maker = (getattr(cfg, "bot_maker", "") or "").strip()
+    if not maker:
+        return "소담 운영자가 만들고 운영해요."
+    contact = (getattr(cfg, "support_contact", "") or "").strip()
+    line = f"{maker}가 만들고 운영해요."
+    if contact:
+        line += f" 봇을 쓰고 싶으면 {contact}로 연락 주세요."
+    return line
+
+
 def render(body: str, cfg) -> str:
     values = {"price": getattr(cfg, "sub_price_usdt", "30"), "days": getattr(cfg, "sub_days", 30),
+              "maker": _maker_line(cfg),
               "trial": getattr(cfg, "trial_days", 3), "free_ai": getattr(cfg, "free_ai_per_day", 10),
               "invoice_min": getattr(cfg, "invoice_minutes", 60),
               "voice_min": os.getenv("VOICE_ROOM_MONTH_MIN", "120"),
