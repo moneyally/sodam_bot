@@ -200,6 +200,51 @@ async def pg_trgm_and_pgvector():
         await c.close()
 
 
+@test
+async def ddl_translation_rules():
+    """스키마 DDL 변환 (순수 함수 — PG 없어도 검사)."""
+    from sodam.pgbackend import ddl_for_pg
+    out = ddl_for_pg("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(body)")
+    assert out == "CREATE TABLE IF NOT EXISTS messages_fts (rowid BIGINT PRIMARY KEY, body TEXT)", out
+    assert ddl_for_pg("CREATE VIRTUAL TABLE knowledge_fts USING fts5(body)") == \
+        "CREATE TABLE knowledge_fts (rowid BIGINT PRIMARY KEY, body TEXT)"
+    assert "COLLATE" not in ddl_for_pg("CREATE INDEX i ON users(username COLLATE NOCASE)")
+    assert "IDENTITY" in ddl_for_pg("CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT)")
+
+
+@test
+async def full_sodam_schema_creates_on_pg():
+    """진짜 소담 전체 스키마(db.SCHEMA + EXTRA_SCHEMA 81조각, ~170표)가 PG 에 통째로 생성되는지.
+    db.py 가 open() 에서 하는 그대로 executescript 로 — 이게 되면 db.py 통합의 제일 큰 미지수가 풀림.
+    PG_TEST=1 opt-in 일 때만 (서버 배포엔 접속 안 함)."""
+    c = _conn()
+    if c is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    try:
+        import sodam.handlers  # noqa: F401  — 모든 모듈 로드 → register_schema 전부 실행
+        from sodam import db as dbmod
+        # 깨끗한 스키마(앞 테스트 잔재 제거): public 싹 비우고 확장 다시
+        await c.executescript("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await c._run(lambda: __import__("psycopg") and c._pg.cursor().execute(
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector"))
+        await c.commit()
+        await c.executescript(dbmod.SCHEMA)
+        for extra in dbmod.EXTRA_SCHEMA:
+            await c.executescript(extra)
+        await c.commit()
+        n = (await c.execute_fetchall(
+            "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema='public'"))[0]["n"]
+        assert n >= 150, f"표가 너무 적음: {n}"   # 실측 ~170
+        # FTS 표가 평범한 표로 만들어졌고 rowid 로 넣을 수 있나
+        await c.execute("INSERT INTO messages_fts(rowid, body) VALUES(?, ?)", (1, "원두 커피"))
+        await c.commit()
+        got = (await c.execute_fetchall("SELECT body FROM messages_fts WHERE rowid=?", (1,)))[0]["body"]
+        assert got == "원두 커피", got
+    finally:
+        await c.close()
+
+
 if __name__ == "__main__":
     import asyncio
     sys.exit(1 if asyncio.run(run_all()) else 0)

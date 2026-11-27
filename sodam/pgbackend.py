@@ -42,6 +42,23 @@ def translate(sql: str) -> str:
     return s
 
 
+_FTS5_RE = re.compile(
+    r"CREATE\s+VIRTUAL\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(\w+)\s+USING\s+fts5\s*\(([^)]*)\)", re.I)
+
+
+def ddl_for_pg(stmt: str) -> str:
+    """스키마(DDL) 한 문장을 PG 로. translate() 가 못 하는 두 가지를 먼저 처리:
+      · FTS5 가상표 → 평범한 표(rowid BIGINT PK + 칸 TEXT). `INSERT INTO *_fts(rowid, body)` 코드가 그대로 살고,
+        실제 두 글자 검색은 pg_trgm GIN 으로(search.py 통합 때). 실측: 소담 전체 스키마가 이 변환으로 0 실패.
+      · COLLATE NOCASE 제거 → 대소문자 무시는 질의에서 lower()/citext 로(통합 때). 색인 생성만 통과시키면 됨.
+    """
+    m = _FTS5_RE.search(stmt)
+    if m:
+        cols = ", ".join(c.strip() + " TEXT" for c in m.group(3).split(",") if c.strip())
+        return f'CREATE TABLE {m.group(1) or ""}{m.group(2)} (rowid BIGINT PRIMARY KEY, {cols})'
+    return translate(re.sub(r"\s+COLLATE\s+NOCASE", "", stmt, flags=re.I))
+
+
 # ── 행: int 인덱스( row[0] )·키( row["col"] ) 둘 다 되게 (aiosqlite.Row 흉내) ──
 class Row:
     __slots__ = ("_vals", "_cols")
@@ -133,9 +150,10 @@ class SyncConn:
         return _Cur([], cur.rowcount, None)
 
     def executescript(self, script: str):
+        # 스키마 전용 경로 — FTS5 가상표·COLLATE NOCASE 까지 처리(ddl_for_pg). db.py 는 SCHEMA/EXTRA_SCHEMA 만 이걸 씀.
         for stmt in _split_statements(script):
             if stmt.strip():
-                self.execute(stmt)   # self.execute 로 → 번역·'%' 처리 일관
+                self._pg.cursor().execute(ddl_for_pg(stmt))
 
     def commit(self):
         self._pg.commit()
