@@ -217,7 +217,7 @@ async def month_rank(db, tz, chat_id: int, now: float | None = None, limit: int 
     month = kst_day(tz, now)[:7]
     return await db._all("SELECT a.user_id, COALESCE(u.first_name,'?') AS name, COUNT(*) AS n, MAX(a.streak) AS best "
                          "FROM attend a LEFT JOIN users u ON u.user_id=a.user_id WHERE a.chat_id=? AND a.day LIKE ? "
-                         "GROUP BY a.user_id ORDER BY n DESC, best DESC LIMIT ?", (chat_id, month + "%", limit))
+                         "GROUP BY a.user_id, u.first_name ORDER BY n DESC, best DESC LIMIT ?", (chat_id, month + "%", limit))
 
 
 async def prune(db, now: float) -> None:

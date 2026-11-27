@@ -86,7 +86,7 @@ async def clear_away(db, uid: int) -> list[str]:
     """자리비움 해제 + 그 사이 부른 사람(중복 제거) 표시명 목록을 돌려준다."""
     # caller 는 '순수 이름'으로 저장 → 멘션은 여기서 caller_id 로 만든다 (HTML 앵커를 통째로 저장/자르지 않음)
     pings = [mention(r["caller_id"], r["caller"]) for r in await db._all(
-        "SELECT caller_id, caller, MIN(ts) t FROM away_pings WHERE user_id=? GROUP BY caller_id ORDER BY t", (uid,))]
+        "SELECT caller_id, caller, MIN(ts) t FROM away_pings WHERE user_id=? GROUP BY caller_id, caller ORDER BY t", (uid,))]
     await db._write("DELETE FROM away WHERE user_id=?", (uid,))
     await db._write("DELETE FROM away_pings WHERE user_id=?", (uid,))
     _invalidate()

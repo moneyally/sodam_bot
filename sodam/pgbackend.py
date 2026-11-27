@@ -39,6 +39,7 @@ def translate(sql: str) -> str:
     s = re.sub(r"strftime\(\s*'%s'\s*,\s*'now'\s*\)", "extract(epoch from now())::bigint", s, flags=re.I)
     # SQLite char(N)=코드포인트 문자 → PG 는 chr(N) (char 는 PG 에선 타입). DDL 엔 CHAR(N) 타입 안 씀(실측).
     s = re.sub(r"\bchar\(", "chr(", s)
+    s = re.sub(r"\binstr\(", "strpos(", s, flags=re.I)   # SQLite instr(hay,needle) = PG strpos(hay,needle) (둘 다 1-based·없으면 0)
     # (ON CONFLICT DO UPDATE SET 의 기존행 bare 컬럼 모호성은 SyncConn._qualify_update 가 introspect 로 처리)
     # PRAGMA (유지보수·open) → PG 엔 없음. 통째 no-op (open 의 PRAGMA 는 _open_pg 가 안 부르지만 optimize 등 유지보수용 대비)
     if re.match(r"\s*PRAGMA\b", s, re.I):
@@ -50,9 +51,19 @@ def translate(sql: str) -> str:
     # col = X COLLATE NOCASE (대소문자 무시 비교) → LOWER(col)=LOWER(X). 남은 COLLATE NOCASE 는 떼기(ORDER/색인).
     s = re.sub(r"([\w.]+)\s*=\s*(\S+?)\s+COLLATE\s+NOCASE", r"LOWER(\1)=LOWER(\2)", s, flags=re.I)
     s = re.sub(r"\s+COLLATE\s+NOCASE", "", s, flags=re.I)
-    # 자리표시자 ? → %s (psycopg). 먼저 '%' 를 '%%' 로 (LIKE '%x%' 등 리터럴 보존), 그 다음 ? → %s
-    s = s.replace("%", "%%")
-    s = re.sub(r"\?", "%s", s)
+    # 자리표시자 ? → %s, 리터럴 % → %% (psycopg). 단 **문자열 리터럴 안의 ? 는 글자**(예 COALESCE(x,'?')) → 안 바꿈.
+    out, in_str = [], False
+    for ch in s:
+        if ch == "'":
+            in_str = not in_str   # '' (이스케이프 따옴표)는 두 번 토글 = 상태 유지 → OK
+            out.append(ch)
+        elif ch == "%":
+            out.append("%%")      # 리터럴 % → %% (안팎 모두, psycopg 가 되돌림)
+        elif ch == "?" and not in_str:
+            out.append("%s")
+        else:
+            out.append(ch)
+    s = "".join(out)
     if ignore:
         s = s.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
     return s

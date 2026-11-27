@@ -184,7 +184,7 @@ async def ranking(db, *, week: bool = True, chat_id: int | None = None, limit: i
     rows = await db._all(
         f"SELECT p.user_id, COALESCE(u.first_name,'?') name, SUM(p.points) pts, SUM(p.result='win') w, COUNT(*) n "
         f"FROM sports_picks p {join} LEFT JOIN users u ON u.user_id=p.user_id WHERE {' AND '.join(where)} "
-        f"GROUP BY p.user_id HAVING pts > 0 ORDER BY pts DESC, w DESC LIMIT ?", (*args, limit))
+        f"GROUP BY p.user_id, u.first_name HAVING SUM(p.points) > 0 ORDER BY pts DESC, w DESC LIMIT ?", (*args, limit))
     return [(r["user_id"], r["name"], r["pts"], r["w"], r["n"]) for r in rows]
 
 
