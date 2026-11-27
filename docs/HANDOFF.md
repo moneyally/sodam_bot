@@ -1,6 +1,6 @@
 # 🤝 인수인계 (HANDOFF) — 새 세션은 CLAUDE.md 다음에 이것부터
 
-마지막 갱신: 2026-11-27 KST (🐘 **PostgreSQL 이관 — 코드층 + 방언 변환 거의 완성, 돈 경로 PG 검증**).
+마지막 갱신: 2026-11-27 KST (🐘 **PostgreSQL 이관 — 에이전트 5갈래 전 모듈 PG 전수조사 완료, 방언에러 0건 확인, 매일 백업 PG 분기까지 해결**).
 **규칙: 큰 작업이 끝날 때마다 이 파일 맨 위 '지금 상태'와 '할 일'을 고친다.** 끝난 일은 '최근 한 일'로 내리고, 1주 넘은 건 지운다
 (자세한 설계는 CLAUDE.md 각 단락에 이미 있음 — 여기엔 '어디까지 했고 다음에 뭘 할지'만).
 
@@ -28,14 +28,22 @@
   scamring·anomaly 23/24·mediastore 8/9·opsdesk 24/25·spamshield 34/35·news 32/33. **persist.claim(전역 dedup) PG 정상 확인.**
 - **🔍 SQLite 전용 문법 grep 전수 감사 결과 (안 놓치려고)**: group_concat·IFNULL·GLOB·printf·json_set/object/array·RANDOM()·date()/time()/datetime()/julianday·
   typeof/hex/quote/randomblob·last_insert_rowid·total_changes·WITHOUT ROWID = **전부 0건**. rowid 참조는 **전부 내가 만든 explicit 컬럼**(fts·msg_vec) — 암묵 rowid 의존 **없음**.
+- **🤖 에이전트 5갈래 전 모듈 PG 전수조사 (2026-11-27 완료)**: casino/games·AI/agent·admin/owner·announce/channel/sports·방어/인사/결제감사/메모리/기타 =
+  소담 레포 거의 전 모듈을 `DB_BACKEND=pg` 하네스로 돌림. **제품 SQL 방언에러 총 0건**(GROUP BY 누락·DISTINCT+ORDER BY·함수없음·syntax 어디서도 안 나옴).
+  찾은 진짜 버그는 전부 중앙 수정 완료: owner/ownertools `ORDER BY` 식 안 SELECT 별칭(`_ROOMS_ORDER` 상수)·featreq `DISTINCT+ORDER BY`(GROUP BY)·
+  composer `LIMIT -1`(→LIMIT ALL)·`? IS NULL`(→`%s::text IS NULL`)·psycopg→sqlite3 예외 매핑(channel `except sqlite3.*`)·Row 없는키 IndexError(announce `_col`).
+- **💾 매일 백업 PG 분기 (유일한 '운영 영향' 갭이었음, 해결·실측)**: `db.backup_to` 가 sqlite 전용 `conn.backup()` 라 PG 면 매일 백업이 통째로 터지던 것 →
+  `pgbackend.PgConnection.dump_to`(pg_dump 평문 SQL, repeatable-read 스냅샷 = 봇 돌아가는 중에도 일관) + `backup._verify_and_compress` 가 PG 는 'dump complete' 완료 마커로 검증.
+  **PG 하네스로 backup_run_verify_prune 실측 통과**(덤프→gz→마커→데이터 확인), SQLite 26/26 회귀 0. ⚠️ VPS 에 `postgresql-client`(pg_dump) 필요.
+  복원은 sqlite 와 다름: PG 덤프는 `psql <파일>` 또는 `pg_restore`(restore_check.py 는 아직 sqlite 전용 — Phase 2).
 
 ### ⚠️ 아직 안 된 것 — 다음 세션이 꼭 할 것 (놓치면 사업 깨짐)
 1. **`ATTACH DATABASE`(clone_migrate.py:50)** — 클론 방 이관이 raw sqlite3 + ATTACH 로 두 .db 복사. **PG 엔 ATTACH 없음** → PG 에선 작동 안 함.
    클론을 PG 로 옮기기 전에 **반드시 재작성**(postgres_fdw 또는 앱단에서 main→clone 읽어쓰기, 또는 dump/restore). Phase 2 클론 이관의 전제.
-2. **per-query 꼬리 (PG 에선 에러로 터지니 조용한 버그 아님 — DB_BACKEND=pg 전체 시험이 다 찾아줌)**: `SELECT DISTINCT … ORDER BY`(SELECT 목록에 ORDER BY 컬럼 추가) ·
-   남은 `GROUP BY` bare 컬럼(집계 안 한 컬럼을 GROUP BY 에 추가, SQLite 무해). 이미 여러 개 고침(top_chatters·reply_stats·away·lottery·sports_picks·casino_event).
-   **찾는 법**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>` 돌려 `psycopg.errors.GroupingError`/`InvalidColumnReference` 나오는 컬럼을 그대로 GROUP BY/SELECT 에 추가.
-3. **테스트 전용 sqlite 문법** (PG 하네스에서만 문제, 제품 아님): 테스트가 `CREATE TRIGGER … WHEN NEW.…` 로 오류 흉내(name_key·memory), `.db 직접 읽는 도구`(usage_report), 클론이 `dbname=sodam_main` 여는 것 — PG 용으로 바꾸거나 skip.
+2. **per-query 꼬리 (PG 에선 에러로 터지니 조용한 버그 아님)**: 에이전트 5갈래 전 모듈 PG 스윕에서 **새로 나온 건 0건** — 이미 다 고침(top_chatters·reply_stats·away·lottery·sports_picks·casino_event·featreq·owner/ownertools·composer).
+   새 SQL 추가할 때만 주의. **찾는 법**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>` → `psycopg.errors.GroupingError`/`InvalidColumnReference`/`UndefinedColumn` 나오는 컬럼을 그대로 GROUP BY/SELECT 에 추가.
+3. **테스트 전용 sqlite 문법** (PG 하네스에서만 문제, 제품 아님 — 대부분 skip 가드 넣음): `CREATE TEMP TRIGGER`(fix_billing_ai)·`set_trace_callback` 왕복수(fix_audit2)·`.db 직접 읽는 CLI`(costs/usage_report.py)·옛 sqlite ALTER 경로(features db_migration)·captcha answer 비정수(farewell) = 전부 `DB_BACKEND=pg` 가드/값수정 완료.
+   **남은 CLI 포팅(Phase 2)**: `tools/usage_report.py`·`tools/restore_check.py` 는 아직 .db 를 sqlite3 로 직접 엶 → PG 운영 전 pg 판 필요(오너 점검·복원 도구라 봇 런타임 아님).
 4. **⚠️ PG 쿼리 지연 실측(실서버 VPS)**: dev 컨테이너선 게임 명령 1회 ~1s(쿼리 수십 개 × 스레드홉+소켓). **VPS(로컬 소켓·튜닝)에서 실측 필수** — 느리면 게임 핫패스 쿼리 묶기. go/no-go 숫자.
 5. **조용한 behavior 차이 더 점검**(에러 안 나서 위험 — 놓치기 쉬움):
    - **ORDER BY 한글 정렬**: SQLite BINARY(코드포인트) vs PG locale collation → 순위/목록 순서 바뀔 수 있음. 실측 필요. (필요하면 쿼리에 `COLLATE "C"`.)
