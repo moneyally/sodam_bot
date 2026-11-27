@@ -71,4 +71,7 @@ atomic() 콜백 **144개**(58파일) · 직접 conn.execute 28 · INSERT OR IGNO
 
 ## 현황
 - **0단계 완료**(PG16+pgvector 서버·로컬 설치) · **아키텍처 PoC 검증 완료**(접근 확정: 동기 psycopg+번역 껍데기).
-- 다음(1단계): PoC 를 db.py 에 정식 통합 — `Backend` 분기(sqlite|pg) + 번역 껍데기 + 위 수동 항목 처리 → `DB_BACKEND=pg` 로 전체 시험 통과. **코드만, 라이브 0 접촉.** 수 주 규모라 조각내서.
+- **1단계 진행 중 — 조각① 완료**: `sodam/pgbackend.py`(백엔드 껍데기 모듈) + `tests/test_pgbackend.py`(실제 로컬 PG 로 6개, 뮤테이션 3개). `requirements.txt` 에 `psycopg[binary]`(선택). **db.py 에 아직 안 꽂음 — 라이브 0 접촉.**
+  - 모듈 핵심: `PgConnection` 이 aiosqlite 흉내 — `execute/execute_fetchall/executemany/executescript/commit` + **내부 `_execute(fn, *args)`·`_conn`(SyncConn)** 까지 흉내 내서 **db.py 의 `atomic()`(`self.conn._execute(run, self.conn._conn)` + SAVEPOINT) 을 안 고치고** 통과. psycopg 연결은 전용 스레드 1개에 고정, `lastrowid`·`rowcount`·행은 **그 스레드에서 미리 뽑아 _Cur 에 값으로** 담음(메인 스레드가 psycopg 소켓을 안 만지게 — 스레드 안전).
+  - 시험 통과(로컬 PG): 번역 규칙 · Row int/키 접근 · INSERT OR IGNORE→ON CONFLICT · **db.py 식 atomic(SAVEPOINT 전부/전무)** · pg_trgm 한글 검색 · pgvector cosine.
+- 다음(조각②~): db.py 에 `DB_BACKEND` 분기로 `PgConnection` 선택 꽂기 + SCHEMA 의 FTS5→pg_trgm·sqlite-vec→pgvector 재작성 + INSERT OR REPLACE 표별 ON CONFLICT + strftime 다양꼴 → `DB_BACKEND=pg` 로 전체 시험 통과. **코드만, 라이브 0 접촉.** 수 주 규모라 조각내서(각 조각 시험 통과분만 커밋).
