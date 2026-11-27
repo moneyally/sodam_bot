@@ -172,3 +172,33 @@ async def concurrency_cap_off_means_unlimited():
     finally:
         agent._run_agent, agent.MAX_CONCURRENT = orig_run, orig_max
         agent._SEM_BY_LOOP.clear()
+
+
+@test
+async def hung_run_agent_releases_slot_within_hard_cap():
+    """세마포어 슬롯을 쥔 _run_agent 가 극단적으로 매달려도 RUN_HARD_CAP 안에 반드시 슬롯을 돌려줘야 한다.
+    2026-11-27 베베방 8분 먹통 근본원인: social(끼어들기·이어말하기)·askchoice 가 타임아웃 없이 run_agent 를 불러
+    내부 CALL_CAP·DEADLINE 이 못 잡는 hang 이 슬롯을 영구 점유 → 24칸이 다 말라 전체 응답이 먹통. 안 풀리면 뒤 요청이 영원히 막힌다."""
+    async def hung(*a, **k):
+        await asyncio.Event().wait()   # 영원히 안 끝남
+
+    orig_run, orig_max, orig_cap = agent._run_agent, agent.MAX_CONCURRENT, agent.RUN_HARD_CAP
+    agent._run_agent = hung
+    agent.MAX_CONCURRENT = 1           # 슬롯 1칸뿐 — 안 풀리면 다음 호출이 영원히 막힘
+    agent.RUN_HARD_CAP = 0.1
+    agent._SEM_BY_LOOP.clear()
+    try:
+        try:
+            await run_agent(None, style_key="", notes={}, history=[], reply_to=None, request="x")
+            assert False, "매달린 호출이 상한에 끊겨야 함"
+        except asyncio.TimeoutError:
+            pass
+        async def ok(*a, **k):
+            return "ok"
+        agent._run_agent = ok
+        got = await asyncio.wait_for(                      # 슬롯이 안 풀렸으면 여기서 막혀 TimeoutError 로 실패
+            run_agent(None, style_key="", notes={}, history=[], reply_to=None, request="y"), 2)
+        assert got == "ok", got
+    finally:
+        agent._run_agent, agent.MAX_CONCURRENT, agent.RUN_HARD_CAP = orig_run, orig_max, orig_cap
+        agent._SEM_BY_LOOP.clear()
