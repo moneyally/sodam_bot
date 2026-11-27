@@ -37,6 +37,20 @@ def _conn():
         return None
 
 
+async def _reset_public():
+    """public 스키마를 확장만 남기고 비움 — 이 파일의 '진짜 db.open() 부팅' 테스트들이 public 에 full schema 를 만들므로,
+    finally 에서 되돌려 공유 하네스 DB(sodam_harness)를 다른 모듈에 오염시키지 않게(안 하면 run_all 순서에 따라 onboard 등 실패주입이 public 폴백으로 무력화됨)."""
+    c = _conn()
+    if c is None:
+        return
+    try:
+        await c.executescript("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; "
+                              "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector")
+        await c.commit()
+    finally:
+        await c.close()
+
+
 # ── 번역은 PG 없어도 검사 (순수 함수) ──────────────────────────────────
 @test
 async def translate_rules():
@@ -291,6 +305,7 @@ async def pgvector_semsearch_path_on_pg():
         else:
             os.environ["DB_BACKEND"] = old
         os.environ.pop("PG_DSN", None)
+        await _reset_public()   # public 되돌려 다른 모듈 오염 방지
 
 
 @test
@@ -334,6 +349,7 @@ async def fts_search_works_on_pg():
         else:
             os.environ["DB_BACKEND"] = old
         os.environ.pop("PG_DSN", None)
+        await _reset_public()   # public 되돌려 다른 모듈 오염 방지
 
 
 @test
@@ -475,6 +491,7 @@ async def full_sodam_schema_creates_on_pg():
         assert got == "원두 커피", got
     finally:
         await c.close()
+        await _reset_public()   # full schema 를 public 에 만들었으니 되돌려 다른 모듈 오염 방지
 
 
 @test
@@ -518,6 +535,7 @@ async def db_boots_on_pg_and_atomic_roundtrip():
         await db.close()
         os.environ.pop("DB_BACKEND", None)
         os.environ.pop("PG_DSN", None)
+        await _reset_public()   # public 되돌려 다른 모듈 오염 방지
 
 
 if __name__ == "__main__":
