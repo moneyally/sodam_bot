@@ -38,17 +38,13 @@ def translate(sql: str) -> str:
     s = re.sub(r"strftime\(\s*'%s'\s*,\s*'now'\s*\)", "extract(epoch from now())::bigint", s, flags=re.I)
     # SQLite char(N)=코드포인트 문자 → PG 는 chr(N) (char 는 PG 에선 타입). DDL 엔 CHAR(N) 타입 안 씀(실측).
     s = re.sub(r"\bchar\(", "chr(", s)
-    # ON CONFLICT DO UPDATE SET col=col±… : PG 는 기존행 col 이 EXCLUDED 와 모호 → 표이름으로 수식 (points=members.points+…)
-    if re.search(r"DO\s+UPDATE\s+SET", s, re.I):
-        mt = re.search(r"INSERT\s+INTO\s+(\w+)", s, re.I)
-        if mt:
-            s = re.sub(r"\b(\w+)\s*=\s*\1\s*([-+])", rf"\1={mt.group(1)}.\1\2", s)
+    # (ON CONFLICT DO UPDATE SET 의 기존행 bare 컬럼 모호성은 SyncConn._qualify_update 가 introspect 로 처리)
     # PRAGMA (유지보수·open) → PG 엔 없음. 통째 no-op (open 의 PRAGMA 는 _open_pg 가 안 부르지만 optimize 등 유지보수용 대비)
     if re.match(r"\s*PRAGMA\b", s, re.I):
         return "SELECT 1"
-    # 스칼라 MAX(a,b)/MIN(a,b) → GREATEST/LEAST (PG MAX/MIN 은 집계 전용). 인자 2개(쉼표)일 때만.
-    s = re.sub(r"\bMAX\(([^()]*?,[^()]*?)\)", r"GREATEST(\1)", s, flags=re.I)
-    s = re.sub(r"\bMIN\(([^()]*?,[^()]*?)\)", r"LEAST(\1)", s, flags=re.I)
+    # 스칼라 MAX(a,b,…)/MIN(…) → GREATEST/LEAST (PG MAX/MIN 은 집계 전용·1인자). 괄호 균형으로 top-level 쉼표 있을 때만
+    # (중첩 COALESCE(…) 안의 쉼표는 세지 않음 → 집계 MAX(col) 는 안 건드림). 돈 쿼리(구독연장 MAX(?,COALESCE(…),…)) 포함.
+    s = _scalar_minmax(s)
     # col = X COLLATE NOCASE (대소문자 무시 비교) → LOWER(col)=LOWER(X). 남은 COLLATE NOCASE 는 떼기(ORDER/색인).
     s = re.sub(r"([\w.]+)\s*=\s*(\S+?)\s+COLLATE\s+NOCASE", r"LOWER(\1)=LOWER(\2)", s, flags=re.I)
     s = re.sub(r"\s+COLLATE\s+NOCASE", "", s, flags=re.I)
@@ -58,6 +54,32 @@ def translate(sql: str) -> str:
     if ignore:
         s = s.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
     return s
+
+
+def _scalar_minmax(sql: str) -> str:
+    """스칼라 MAX(a,b,…)/MIN(…) → GREATEST/LEAST. 괄호 균형으로 top-level 쉼표가 있을 때만 바꾼다
+    (집계 MAX(col)·중첩 COALESCE(x,0) 안의 쉼표는 안 셈)."""
+    for name, repl in (("MAX", "GREATEST"), ("MIN", "LEAST")):
+        out, i = [], 0
+        for m in re.finditer(rf"\b{name}\(", sql, re.I):
+            if m.start() < i:
+                continue
+            j, depth, top_comma = m.end(), 1, False
+            while j < len(sql) and depth:
+                ch = sql[j]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif ch == "," and depth == 1:
+                    top_comma = True
+                j += 1
+            out.append(sql[i:m.start()])
+            out.append(repl + "(" if top_comma else sql[m.start():m.end()])   # top-level 쉼표 = 스칼라 → 이름만 교체
+            i = m.end()
+        out.append(sql[i:])
+        sql = "".join(out)
+    return sql
 
 
 _FTS5_RE = re.compile(
@@ -142,6 +164,23 @@ class _Cur:
 _REPLACE_RE = re.compile(r"\bINSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*(\(([^)]*)\))?", re.I)
 
 
+def _split_top_commas(s: str) -> list[str]:
+    """괄호 밖(top-level) 쉼표로만 쪼갬 (COALESCE(x,0) 안의 쉼표는 안 쪼갬)."""
+    out, buf, depth = [], [], 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    out.append("".join(buf))
+    return out
+
+
 class SyncConn:
     def __init__(self, pg):
         self._pg = pg
@@ -161,9 +200,41 @@ class SyncConn:
         if table not in self._cols:
             cur = self._pg.cursor()
             cur.execute("SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (table,))
+                        "WHERE table_schema=current_schema() AND table_name=%s ORDER BY ordinal_position", (table,))
             self._cols[table] = [r[0] for r in cur.fetchall()]
         return self._cols[table]
+
+    def _qualify_update(self, sql: str) -> str:
+        """ON CONFLICT DO UPDATE SET 의 RHS 에 나오는 '기존행 컬럼'을 표이름으로 수식 (PG 는 EXCLUDED 와 모호).
+        표 컬럼을 introspect 해서 bare 컬럼만(앞이 '.'·'excluded.' 아니고 실제 컬럼일 때) table.col 로. LHS(대입 대상)는 그대로."""
+        m = re.search(r"\bINSERT\s+INTO\s+(\w+)", sql, re.I)
+        mset = re.search(r"\bDO\s+UPDATE\s+SET\b", sql, re.I)
+        if not m or not mset:
+            return sql
+        table = m.group(1)
+        cols = set(self._table_cols(table))
+        if not cols:
+            return sql
+        rest = sql[mset.end():]
+        mw = re.search(r"\bWHERE\b", rest, re.I)   # ON CONFLICT 의 조건부 WHERE 뒤는 안 건드림(거기도 수식 필요하면 별개)
+        setclause, tail = (rest[:mw.start()], rest[mw.start():]) if mw else (rest, "")
+        segs = _split_top_commas(setclause)
+        new = []
+        for seg in segs:
+            eq = seg.find("=")
+            if eq < 0:
+                new.append(seg)
+                continue
+            lhs, rhs = seg[:eq + 1], seg[eq + 1:]
+
+            def q(mm):
+                w = mm.group(0)
+                before = rhs[:mm.start()].rstrip()
+                if before.endswith(".") or before.lower().endswith("excluded"):
+                    return w
+                return f"{table}.{w}" if w in cols else w
+            new.append(lhs + re.sub(r"\b[A-Za-z_]\w*\b", q, rhs))
+        return sql[:mset.end()] + ",".join(new) + tail
 
     def _replace_to_upsert(self, sql: str) -> str:
         """INSERT OR REPLACE INTO t(cols) VALUES(…) → INSERT … ON CONFLICT(pk) DO UPDATE SET 비-pk=EXCLUDED.…
@@ -191,6 +262,8 @@ class SyncConn:
         is_insert = bool(re.match(r"\s*INSERT", sql, re.I))
         if is_insert and _REPLACE_RE.search(sql):
             sql = self._replace_to_upsert(sql)
+        if is_insert and re.search(r"DO\s+UPDATE\s+SET", sql, re.I):
+            sql = self._qualify_update(sql)
         cur = self._pg.cursor()
         cur.row_factory = _row_factory
         cur.execute(translate(sql), tuple(params))
@@ -211,6 +284,8 @@ class SyncConn:
     def executemany(self, sql: str, rows):
         if _REPLACE_RE.search(sql):
             sql = self._replace_to_upsert(sql)
+        if re.match(r"\s*INSERT", sql, re.I) and re.search(r"DO\s+UPDATE\s+SET", sql, re.I):
+            sql = self._qualify_update(sql)
         cur = self._pg.cursor()
         cur.executemany(translate(sql), [tuple(r) for r in rows])
         return _Cur([], cur.rowcount, None)

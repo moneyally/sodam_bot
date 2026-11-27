@@ -52,8 +52,6 @@ async def translate_rules():
     assert "GREATEST(used_n, 1)" in translate("UPDATE member_memory SET used_n=MAX(used_n, 1) WHERE id=?")
     assert "LEAST(" in translate("SELECT MIN(a, b) FROM t")
     assert translate("SELECT 1 FROM x WHERE u.username=? COLLATE NOCASE") == "SELECT 1 FROM x WHERE LOWER(u.username)=LOWER(%s)"
-    assert "counters.n+excluded.n" in translate(
-        "INSERT INTO counters(day,k,n) VALUES(?,?,?) ON CONFLICT(day,k) DO UPDATE SET n=n+excluded.n")
 
 
 @test
@@ -170,6 +168,38 @@ async def db_style_atomic_via_execute_and_conn():
         bal2 = (await c.execute_fetchall("SELECT points FROM pgt_m WHERE user_id=7"))[0]["points"]
         assert bal2 == 1500, f"SAVEPOINT 롤백 안 됨: {bal2}"
         await c.executescript("DROP TABLE pgt_m; DROP TABLE pgt_l;")
+        await c.commit()
+    finally:
+        await c.close()
+
+
+@test
+async def on_conflict_update_qualifies_existing_row_columns():
+    """ON CONFLICT DO UPDATE SET 의 기존행 컬럼(증가형·함수 안 bare)이 PG 에서 모호하지 않게 수식되나.
+    돈 쿼리: counters n=n+… · subscriptions paid_until=GREATEST(?,COALESCE(paid_until,0),…)."""
+    c = _conn()
+    if c is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    try:
+        await c.executescript(
+            "DROP TABLE IF EXISTS pgt_c; DROP TABLE IF EXISTS pgt_s;"
+            "CREATE TABLE pgt_c(day TEXT, k TEXT, n BIGINT, PRIMARY KEY(day,k));"
+            "CREATE TABLE pgt_s(chat_id BIGINT PRIMARY KEY, paid_until BIGINT, trial_until BIGINT);")
+        # ① 증가형: n=n+excluded.n (기존행 n 모호) — 두 번 넣으면 합산
+        for d in (5, 7):
+            await c.execute("INSERT INTO pgt_c(day,k,n) VALUES(?,?,?) ON CONFLICT(day,k) DO UPDATE SET n=n+excluded.n",
+                            ("d", "x", d))
+        await c.commit()
+        assert (await c.execute_fetchall("SELECT n FROM pgt_c WHERE day='d' AND k='x'"))[0]["n"] == 12
+        # ② 함수 안 bare 컬럼: paid_until=GREATEST(?, COALESCE(paid_until,0), COALESCE(trial_until,0)) + ?
+        sql = ("INSERT INTO pgt_s(chat_id,paid_until,trial_until) VALUES(?,?,?) ON CONFLICT(chat_id) "
+               "DO UPDATE SET paid_until = MAX(?, COALESCE(paid_until,0), COALESCE(trial_until,0)) + ?")
+        await c.execute(sql, (-1, 100, 50, 0, 0))       # 새 행 → paid_until=100
+        await c.execute(sql, (-1, 0, 0, 30, 1000))      # 기존 max(30,100,0)=100 +1000 = 1100
+        await c.commit()
+        assert (await c.execute_fetchall("SELECT paid_until FROM pgt_s WHERE chat_id=-1"))[0]["paid_until"] == 1100
+        await c.executescript("DROP TABLE pgt_c; DROP TABLE pgt_s;")
         await c.commit()
     finally:
         await c.close()
