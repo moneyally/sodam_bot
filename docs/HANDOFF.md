@@ -37,7 +37,10 @@
    **찾는 법**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>` 돌려 `psycopg.errors.GroupingError`/`InvalidColumnReference` 나오는 컬럼을 그대로 GROUP BY/SELECT 에 추가.
 3. **테스트 전용 sqlite 문법** (PG 하네스에서만 문제, 제품 아님): 테스트가 `CREATE TRIGGER … WHEN NEW.…` 로 오류 흉내(name_key·memory), `.db 직접 읽는 도구`(usage_report), 클론이 `dbname=sodam_main` 여는 것 — PG 용으로 바꾸거나 skip.
 4. **⚠️ PG 쿼리 지연 실측(실서버 VPS)**: dev 컨테이너선 게임 명령 1회 ~1s(쿼리 수십 개 × 스레드홉+소켓). **VPS(로컬 소켓·튜닝)에서 실측 필수** — 느리면 게임 핫패스 쿼리 묶기. go/no-go 숫자.
-5. **조용한 behavior 차이 더 점검**(에러 안 나서 위험): ORDER BY 한글 정렬 순서(SQLite BINARY vs PG locale) — 순위/목록 순서 바뀔 수 있음, 실측 필요. (LIKE 대소문자는 ILIKE 로 이미 잡음.)
+5. **조용한 behavior 차이 더 점검**(에러 안 나서 위험 — 놓치기 쉬움):
+   - **ORDER BY 한글 정렬**: SQLite BINARY(코드포인트) vs PG locale collation → 순위/목록 순서 바뀔 수 있음. 실측 필요. (필요하면 쿼리에 `COLLATE "C"`.)
+   - **ORDER BY NULL 위치**: SQLite 는 NULL 을 앞(ASC)에, PG 는 뒤에 둠 → nullable 컬럼으로 정렬하는 top-N 결과가 달라질 수 있음. nullable 정렬 쿼리 점검(필요하면 `NULLS FIRST`).
+   - (LIKE 대소문자는 ILIKE 로 이미 잡음. 타입 느슨비교는 PG 에서 에러로 터지니 조용하지 않음 — 시험이 잡아줌.)
 
 ### Phase(단계)
 - **1단계(코드, 거의 끝)**: 위. 남은 건 per-query 꼬리 + ATTACH 재작성 + behavior 점검.
