@@ -245,6 +245,22 @@ class SyncConn:
             self._cols[table] = [r[0] for r in cur.fetchall()]
         return self._cols[table]
 
+    def _update_or_ignore(self, sql: str, params: tuple):
+        """SQLite UPDATE OR IGNORE(충돌 행만 건너뜀) → PG 는 없음. PK introspect 로 '충돌 안 하는 행만' 업데이트
+        (행별 skip 재현). 유일한 쓰임 = migrate_chat 의 UPDATE OR IGNORE t SET chat_id=? WHERE chat_id=?."""
+        m = re.match(r"\s*UPDATE\s+OR\s+IGNORE\s+(\w+)\s+SET\s+(\w+)\s*=\s*\?(.*)", sql, re.I | re.S)
+        if not m:   # 단일 SET=? 꼴 아니면 그냥 OR IGNORE 떼기 (충돌 없으면 동일)
+            return re.sub(r"\bUPDATE\s+OR\s+IGNORE\b", "UPDATE", sql, flags=re.I), params
+        table, setcol, after = m.group(1), m.group(2), m.group(3)
+        others = [c for c in self._pk_cols(table) if c != setcol]
+        stripped = f"UPDATE {table} SET {setcol}=?{after}"
+        if not others:
+            return stripped, params
+        cols = ", ".join(others)
+        # 바꿀 값(params[0])로 새 PK 가 이미 있는 행은 제외 → 충돌 행만 건너뜀
+        guard = f" AND ({cols}) NOT IN (SELECT {cols} FROM {table} WHERE {setcol}=?)"
+        return stripped + guard, tuple(params) + (params[0],)
+
     def _qualify_update(self, sql: str) -> str:
         """ON CONFLICT DO UPDATE SET 의 RHS 에 나오는 '기존행 컬럼'을 표이름으로 수식 (PG 는 EXCLUDED 와 모호).
         표 컬럼을 introspect 해서 bare 컬럼만(앞이 '.'·'excluded.' 아니고 실제 컬럼일 때) table.col 로. LHS(대입 대상)는 그대로."""
@@ -305,6 +321,8 @@ class SyncConn:
             sql = self._replace_to_upsert(sql)
         if is_insert and re.search(r"DO\s+UPDATE\s+SET", sql, re.I):
             sql = self._qualify_update(sql)
+        if re.match(r"\s*UPDATE\s+OR\s+IGNORE", sql, re.I):
+            sql, params = self._update_or_ignore(sql, tuple(params))
         cur = self._pg.cursor()
         cur.row_factory = _row_factory
         cur.execute(translate(sql), tuple(params))

@@ -181,6 +181,30 @@ async def db_style_atomic_via_execute_and_conn():
 
 
 @test
+async def update_or_ignore_skips_only_conflicting_rows():
+    """SQLite UPDATE OR IGNORE(충돌 행만 건너뜀) → PG 는 PK introspect 로 행별 skip 재현 (migrate_chat 슈퍼그룹 전환)."""
+    c = _conn()
+    if c is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    try:
+        await c.executescript(
+            "DROP TABLE IF EXISTS pgt_m;"
+            "CREATE TABLE pgt_m(chat_id BIGINT, user_id BIGINT, points BIGINT, PRIMARY KEY(chat_id,user_id));")
+        for cu in ((-1, 7), (-1, 8), (-2, 8)):   # -2,8 이 미리 있어 u8 이동은 충돌
+            await c.execute("INSERT INTO pgt_m(chat_id,user_id,points) VALUES(?,?,?)", (*cu, 1))
+        await c.commit()
+        await c.execute("UPDATE OR IGNORE pgt_m SET chat_id=? WHERE chat_id=?", (-2, -1))
+        await c.commit()
+        rows = sorted((r["chat_id"], r["user_id"]) for r in await c.execute_fetchall("SELECT chat_id,user_id FROM pgt_m"))
+        assert rows == [(-2, 7), (-2, 8), (-1, 8)], rows   # u7 이동·u8 건너뜀·옛 u8 남음
+        await c.executescript("DROP TABLE pgt_m;")
+        await c.commit()
+    finally:
+        await c.close()
+
+
+@test
 async def on_conflict_update_qualifies_existing_row_columns():
     """ON CONFLICT DO UPDATE SET 의 기존행 컬럼(증가형·함수 안 bare)이 PG 에서 모호하지 않게 수식되나.
     돈 쿼리: counters n=n+… · subscriptions paid_until=GREATEST(?,COALESCE(paid_until,0),…)."""
