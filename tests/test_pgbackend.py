@@ -168,6 +168,38 @@ async def db_style_atomic_via_execute_and_conn():
 
 
 @test
+async def insert_or_replace_becomes_upsert():
+    """INSERT OR REPLACE → ON CONFLICT DO UPDATE (표 PK 자동 introspect). 컬럼 명시형·미명시형 둘 다."""
+    c = _conn()
+    if c is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    try:
+        await c.executescript(
+            "DROP TABLE IF EXISTS pgt_m; DROP TABLE IF EXISTS pgt_p;"
+            "CREATE TABLE pgt_m(chat_id BIGINT, user_id BIGINT, points BIGINT DEFAULT 0, name TEXT, PRIMARY KEY(chat_id,user_id));"
+            "CREATE TABLE pgt_p(id BIGINT PRIMARY KEY, a TEXT, b TEXT);")
+        # ① 컬럼 명시형: 같은 PK 로 다시 넣으면 덮어써야(REPLACE 의미)
+        await c.execute("INSERT OR REPLACE INTO pgt_m(chat_id,user_id,points,name) VALUES(?,?,?,?)", (-1, 7, 100, "가"))
+        await c.execute("INSERT OR REPLACE INTO pgt_m(chat_id,user_id,points,name) VALUES(?,?,?,?)", (-1, 7, 555, "나"))
+        await c.commit()
+        row = (await c.execute_fetchall("SELECT points,name FROM pgt_m WHERE chat_id=? AND user_id=?", (-1, 7)))[0]
+        assert row["points"] == 555 and row["name"] == "나", dict(zip(row.keys(), row))   # 덮어써짐
+        n = (await c.execute_fetchall("SELECT count(*) AS n FROM pgt_m"))[0]["n"]
+        assert n == 1, n   # 중복 row 안 생김
+        # ② 컬럼 미명시형 (VALUES 만): executemany 도
+        await c.executemany("INSERT OR REPLACE INTO pgt_p VALUES(?,?,?)", [(1, "x", "y"), (1, "x2", "y2")])
+        await c.commit()
+        p = (await c.execute_fetchall("SELECT a,b FROM pgt_p WHERE id=1"))[0]
+        assert p["a"] == "x2" and p["b"] == "y2", dict(zip(p.keys(), p))
+        assert (await c.execute_fetchall("SELECT count(*) AS n FROM pgt_p"))[0]["n"] == 1
+        await c.executescript("DROP TABLE pgt_m; DROP TABLE pgt_p;")
+        await c.commit()
+    finally:
+        await c.close()
+
+
+@test
 async def pg_trgm_and_pgvector():
     """FTS5 대체(pg_trgm 한글 두 글자)·sqlite-vec 대체(pgvector) 동작."""
     c = _conn()

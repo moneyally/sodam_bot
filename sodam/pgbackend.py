@@ -121,12 +121,58 @@ class _Cur:
 
 
 # ── 동기 연결 래퍼 (스레드 안에서만 씀. atomic 콜백이 받는 'c' = db.py 의 self.conn._conn) ──
+_REPLACE_RE = re.compile(r"\bINSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*(\(([^)]*)\))?", re.I)
+
+
 class SyncConn:
     def __init__(self, pg):
         self._pg = pg
+        self._pk: dict[str, list[str]] = {}      # 표별 기본키 컬럼 (INSERT OR REPLACE → ON CONFLICT 용, 캐시)
+        self._cols: dict[str, list[str]] = {}    # 표별 전체 컬럼 순서 (컬럼목록 없는 OR REPLACE 용)
+
+    def _pk_cols(self, table: str) -> list[str]:
+        if table not in self._pk:
+            cur = self._pg.cursor()
+            cur.execute("SELECT a.attname FROM pg_index i JOIN pg_attribute a "
+                        "ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey) "
+                        "WHERE i.indrelid=%s::regclass AND i.indisprimary ORDER BY a.attnum", (table,))
+            self._pk[table] = [r[0] for r in cur.fetchall()]
+        return self._pk[table]
+
+    def _table_cols(self, table: str) -> list[str]:
+        if table not in self._cols:
+            cur = self._pg.cursor()
+            cur.execute("SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (table,))
+            self._cols[table] = [r[0] for r in cur.fetchall()]
+        return self._cols[table]
+
+    def _replace_to_upsert(self, sql: str) -> str:
+        """INSERT OR REPLACE INTO t(cols) VALUES(…) → INSERT … ON CONFLICT(pk) DO UPDATE SET 비-pk=EXCLUDED.…
+        표의 기본키를 PG 카탈로그에서 뽑아 자동 변환 (표마다 하드코딩 X — 새 표도 자동)."""
+        m = _REPLACE_RE.search(sql)
+        if not m:
+            return sql
+        table = m.group(1)
+        explicit = [c.strip() for c in m.group(3).split(",")] if m.group(3) else None
+        pk = self._pk_cols(table)
+        cols = explicit if explicit is not None else self._table_cols(table)
+        # 끝의 \s* 가 VALUES 앞 공백을 먹으므로 뒤에 공백 하나 (pgt_pVALUES 방지)
+        new = _REPLACE_RE.sub(lambda mm: "INSERT INTO " + mm.group(1) + (mm.group(2) or "") + " ", sql, count=1)
+        if not pk:
+            return new   # 기본키 없으면 그냥 INSERT (이 표들엔 없음 — 드묾)
+        nonpk = [c for c in cols if c not in pk]
+        if nonpk:
+            setc = ", ".join(f"{c}=EXCLUDED.{c}" for c in nonpk)
+            tail = f" ON CONFLICT ({', '.join(pk)}) DO UPDATE SET {setc}"
+        else:
+            tail = f" ON CONFLICT ({', '.join(pk)}) DO NOTHING"   # 전부 키면 바꿀 게 없음
+        return new.rstrip().rstrip(";") + tail
 
     def execute(self, sql: str, params: tuple = ()):
         is_insert = bool(re.match(r"\s*INSERT", sql, re.I))
+        if is_insert and _REPLACE_RE.search(sql):
+            sql = self._replace_to_upsert(sql)
         cur = self._pg.cursor()
         cur.row_factory = _row_factory
         cur.execute(translate(sql), tuple(params))
@@ -145,6 +191,8 @@ class SyncConn:
         return _Cur(rows, rowcount, last)
 
     def executemany(self, sql: str, rows):
+        if _REPLACE_RE.search(sql):
+            sql = self._replace_to_upsert(sql)
         cur = self._pg.cursor()
         cur.executemany(translate(sql), [tuple(r) for r in rows])
         return _Cur([], cur.rowcount, None)
