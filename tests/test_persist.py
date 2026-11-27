@@ -309,8 +309,10 @@ async def memory_extract_queue_resumes_after_restart():
     db, svc, bot = await world()
     await db.set_setting(CHAT, "ai_memory", True)
     assert memory.observe(svc, CHAT, MEMBER.id, "저는 강남에서 카페를 운영하고 있어요")
-    for _ in range(20):
-        await asyncio.sleep(0)
+    for _ in range(300):   # observe 가 백그라운드로 memory_queue 에 넣을 때까지 (PG 는 DB 쓰기가 스레드홉이라 sleep(0)만으론 모자람 — 실제 시간 필요)
+        if await db._all("SELECT 1 FROM memory_queue WHERE user_id=?", (MEMBER.id,)):
+            break
+        await asyncio.sleep(0.01)
     await memory.shutdown(svc)                                             # 90초 기다리던 정리 취소 (배포)
     assert await db._all("SELECT 1 FROM memory_queue WHERE user_id=?", (MEMBER.id,))
     calls = []
