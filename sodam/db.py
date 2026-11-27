@@ -393,12 +393,18 @@ class DB:
         from . import pgbackend
         dsn = os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
         self.conn = pgbackend.PgConnection(dsn)
-        self.vec = False   # 의미검색(pgvector)은 통합 전까지 끔 — 단어검색(pg_trgm)은 됨
         try:
             await self.conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")   # 전문검색 LIKE 가속(FTS5 대체)
             await self.conn.commit()
         except Exception as e:   # 권한 없으면 색인 없이 LIKE 로 (느려도 동작)
             log.info("pg_trgm 확장 못 켬 — 검색은 색인 없는 LIKE (%s)", e)
+        try:
+            await self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")    # 의미검색(pgvector, sqlite-vec 대체)
+            await self.conn.commit()
+            self.vec = True
+        except Exception as e:
+            self.vec = False
+            log.info("pgvector 없음 → 의미 검색 끔 (%s)", e)
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:   # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)

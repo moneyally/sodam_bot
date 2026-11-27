@@ -168,6 +168,55 @@ async def db_style_atomic_via_execute_and_conn():
 
 
 @test
+async def pgvector_semsearch_path_on_pg():
+    """semsearch._table·_veclit·KNN 쿼리가 PG(pgvector)에서 동작하나 (sqlite-vec 대체). OpenAI 없이 SQL 층만."""
+    pre = _conn()
+    if pre is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    dsn = os.getenv("PG_TEST_DSN") or "dbname=sodam_probe"
+    await pre.executescript("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    await pre._run(lambda: pre._pg.cursor().execute("CREATE EXTENSION IF NOT EXISTS vector"))
+    await pre.commit()
+    await pre.close()
+
+    import sodam.handlers  # noqa: F401
+    from sodam import semsearch
+    from sodam.db import DB
+    old = os.environ.get("DB_BACKEND")
+    os.environ["DB_BACKEND"] = "pg"
+    os.environ["PG_DSN"] = dsn
+    db = DB("unused")
+    try:
+        await db.open()
+        assert db.vec is True   # _open_pg 가 pgvector 켬
+        await semsearch._table(db)
+
+        def vec(a, b):   # 2D 방향 벡터(나머지 0) → 각도로 거리 조절
+            return semsearch._veclit(db, [a, b] + [0.0] * (semsearch.DIM - 2))
+        q = vec(1.0, 0.0)
+        # 질문에 가까운 순서대로 id 1<2<3 … 넣되, 넣는 순서는 섞어서 (ORDER BY 가 진짜 정렬하는지)
+        rows = [(3, vec(0.3, 0.95)), (1, vec(1.0, 0.03)), (6, vec(-1.0, 0.1)),
+                (2, vec(0.8, 0.6)), (5, vec(-0.5, 0.9)), (4, vec(0.0, 1.0))]
+        await db.atomic(lambda c: c.executemany(
+            "INSERT OR REPLACE INTO msg_vec(rowid, chat_id, embedding) VALUES(?,?,?)",
+            [(rid, -10, v) for rid, v in rows]))
+        # LIMIT 으로 잘리므로 '가까운 3개'(1,2,3)만 나와야 — DESC 로 뒤집으면 먼 것들(6,5,4)이 나와 실패
+        near = await db._all("SELECT rowid, (embedding <=> ?) AS distance FROM msg_vec "
+                             "WHERE chat_id=? ORDER BY embedding <=> ? LIMIT ?", (q, -10, q, 3))
+        ids = [r["rowid"] for r in near]
+        assert ids == [1, 2, 3], ids   # 가까운 순, 먼 것(4,5,6) 안 섞임
+        assert near[0]["distance"] < near[2]["distance"], [r["distance"] for r in near]
+    finally:
+        await db.close()
+        if old is None:
+            os.environ.pop("DB_BACKEND", None)
+        else:
+            os.environ["DB_BACKEND"] = old
+        os.environ.pop("PG_DSN", None)
+
+
+@test
 async def fts_search_works_on_pg():
     """db.search_messages·knowledge_candidates 가 PG(평범표+pg_trgm, FTS5 대체)에서 한국어 2글자 검색되나."""
     pre = _conn()
