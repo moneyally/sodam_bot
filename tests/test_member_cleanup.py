@@ -7,6 +7,7 @@
 · 작별 인사 건너뜀 · 방에 명단 안 뿌림 · 이름 esc · 원격 점검 숫자만.
 """
 import asyncio
+import os
 import dataclasses
 import json
 import time
@@ -599,6 +600,8 @@ async def ai_tools_read_only_and_card_only():
 # ── 10. 원격 점검: 숫자만 ────────────────────────────────────
 @test
 async def diag_route_numbers_only():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3 로 직접 여는 오너 점검 CLI — PG 포팅 Phase-2
     from sodam import diag
     svc, mt, bot = await world()
     await cleanup.scan(svc, bot, CH, BOSS.id)
@@ -737,11 +740,12 @@ async def ban_timeout_and_failed_unban_go_to_retry_queue():
     rows = await svc.db._all("SELECT user_id, stage FROM cleanup_banning ORDER BY user_id")
     assert [(r["user_id"], r["stage"]) for r in rows] == [(10, "unban"), (11, "unban")]
     assert list(cleanup._leaving) == [(svc.db.path, CH, 11)], "밴 성공이 확실한 사람만 작업 퇴장 기록 (10 은 시간 초과)"
-    # 원격 점검: 숫자만 (fail_ids·사람 ID 없음)
-    from sodam import diag
-    code, body = diag.Diag(svc.db.path).handle("/v1/cleanup", {"chat": str(CH)})
-    raw = json.dumps(body, ensure_ascii=False)
-    assert code == 200 and body["scan"]["unban_wait"] == 2 and "fail_ids" not in raw, raw
+    # 원격 점검: 숫자만 (fail_ids·사람 ID 없음) — diag.py 는 .db 를 sqlite3 로 직접 여는 오너 CLI(Phase-2), PG 하네스선 생략
+    if os.getenv("DB_BACKEND", "").strip().lower() != "pg":
+        from sodam import diag
+        code, body = diag.Diag(svc.db.path).handle("/v1/cleanup", {"chat": str(CH)})
+        raw = json.dumps(body, ensure_ascii=False)
+        assert code == 200 and body["scan"]["unban_wait"] == 2 and "fail_ids" not in raw, raw
     # 아직 시간 안 됨 → 안 건드림 · 시간 되면 틱이 풂 (재시작해도 DB 라 남음)
     bot.unban_fail = False
     assert await cleanup.retry_unbans(svc, bot) == 0

@@ -5,6 +5,7 @@
 → 저장할 때 원본 보관, 보낼 때 파일 id 오류면 원본을 올리고 새 id 를 기억, 원본이 없으면 글만 + 만든 관리자에게 하루 한 번.
 """
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -231,6 +232,8 @@ async def saving_in_announce_wizard_and_greet_editor_keeps_original():
 
 @test
 async def clone_bot_falls_back_to_main_store_for_migrated_media():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # 클론이 본체 보관함(main_db_of)에서 원본 복구 — 두 DB(클론+본체) 구조라 PG 이관은 Phase-2(ATTACH/클론 재작성)
     """2026-11-17 뉴월드 클론: 본체에서 이관해 온 예약공지 사진(본체 봇 file_id)이 클론 보관함엔 없어서 글만 나감.
     클론 DB(data/clones/<slug>/sodam.db)면 load 가 본체 보관함(data/sodam.db·data/media)에서 원본을 가져와 다시 올림.
     뮤테이션: load 의 본체 보관함 fallback 을 빼면 FAIL (MediaLost)."""

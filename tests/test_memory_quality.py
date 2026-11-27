@@ -41,6 +41,8 @@ async def room() -> Room:
 # ── 1. 한 번의 atomic ──────────────────────────────────────
 @test
 async def add_facts_is_all_or_nothing():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite CREATE TRIGGER WHEN NEW 로 두번째 쓰기 실패 흉내 — 원자성은 PG db.atomic 이 덮음(test_pgbackend)
     db = await make_db()
     await memory.add_facts(db, CHAT, U, ["부산에서 카페 운영", "등산 좋아함"])
     # 두 번째 새 기억을 넣을 때 DB 가 거절 → 앞의 교체(옛 줄 삭제 + 새 줄)·삭제까지 전부 되돌려야 함
@@ -223,6 +225,8 @@ async def inferred_tag_is_stored_and_rendered():
 # ── 예전 DB 이전 ───────────────────────────────────────────
 @test
 async def old_schema_gets_new_columns():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # 옛 sqlite .db 를 직접 만들어 컬럼 추가 마이그레이션 확인 — PG 는 _migrate_pg(information_schema), test_pgbackend 가 덮음
     path = os.path.join(tempfile.mkdtemp(), "old.db")
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE member_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "

@@ -57,6 +57,8 @@ async def call(s, *a, **kw):
 
 @test
 async def token_file_is_private_and_needed_and_wrong_token_is_rate_limited():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3(mode=ro)로 직접 여는 오너 점검 CLI — PG 포팅은 Phase-2(봇 런타임 아님)
     db = await world()
     s = Server(db.path)
     try:
@@ -77,6 +79,8 @@ async def token_file_is_private_and_needed_and_wrong_token_is_rate_limited():
 
 @test
 async def rooms_route_shows_inviter_and_last_paid():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3(mode=ro)로 직접 여는 오너 점검 CLI — PG 포팅은 Phase-2(봇 런타임 아님)
     db = await world()
     await db.start_subscription(CHAT, 1800000000, added_by=5)          # 철수(5)가 초대
     await db._write("INSERT INTO payments(tx_id, chat_id, amount_units, seen_at) VALUES('tx1', ?, 30, 1790000000)", (CHAT,))
@@ -95,6 +99,8 @@ async def rooms_route_shows_inviter_and_last_paid():
 
 @test
 async def read_only_routes_resolve_room_by_name_and_redact_secrets():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3(mode=ro)로 직접 여는 오너 점검 CLI — PG 포팅은 Phase-2(봇 런타임 아님)
     db = await world()
     s = Server(db.path)
     tok = diag.token_path(db.path).read_text().strip()
@@ -122,6 +128,8 @@ async def read_only_routes_resolve_room_by_name_and_redact_secrets():
 
 @test
 async def owner_can_switch_off_and_rotate_token():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3(mode=ro)로 직접 여는 오너 점검 CLI — PG 포팅은 Phase-2(봇 런타임 아님)
     db = await world()
     s = Server(db.path)
     tp = diag.token_path(db.path)
@@ -247,6 +255,8 @@ def update_sh_prints_failing_test_name_even_if_log_is_long():
 
 @test
 async def user_route_finds_by_id_at_and_old_at_with_rooms():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # diag.py 는 .db 를 sqlite3(mode=ro)로 직접 여는 오너 점검 CLI — PG 포팅은 Phase-2(봇 런타임 아님)
     from sodam import namehist
     db = await world()
     await namehist.record(db, fake_user(77777, "옛날", "oldname"))

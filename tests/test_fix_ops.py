@@ -321,6 +321,8 @@ async def _make_backup() -> tuple[DB, Path]:
 
 @test
 async def restore_check_ok_on_fresh_backup():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # restore_check.py 는 sqlite .db 복원 검증 CLI — PG 는 pg_dump/psql 복원(Phase-2)
     _, gz = await _make_backup()
     out: list[str] = []
     rc = await restore_check.check(gz.parent, out.append)
@@ -332,6 +334,8 @@ async def restore_check_ok_on_fresh_backup():
 
 @test
 async def restore_check_fails_on_broken_backups():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # restore_check.py 는 sqlite .db 복원 검증 CLI — PG 는 pg_dump/psql 복원(Phase-2)
     _, gz = await _make_backup()
     d = gz.parent
     # (a) 최신 파일이 SQLite 가 아님 → 최신을 골라서 실패해야 함

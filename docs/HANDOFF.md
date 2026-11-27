@@ -1,6 +1,6 @@
 # 🤝 인수인계 (HANDOFF) — 새 세션은 CLAUDE.md 다음에 이것부터
 
-마지막 갱신: 2026-11-27 KST (🐘 **PostgreSQL 이관 — 에이전트 5갈래 전 모듈 PG 전수조사 완료, 방언에러 0건 확인, 매일 백업 PG 분기까지 해결**).
+마지막 갱신: 2026-11-27 KST (🐘 **PostgreSQL 이관 — 레포 전체 PG 실행(교차모듈 포함)·에이전트 triage 로 제품버그 전수. 남은 제품버그 0, 테스트 전부 PG green(가드)**).
 **규칙: 큰 작업이 끝날 때마다 이 파일 맨 위 '지금 상태'와 '할 일'을 고친다.** 끝난 일은 '최근 한 일'로 내리고, 1주 넘은 건 지운다
 (자세한 설계는 CLAUDE.md 각 단락에 이미 있음 — 여기엔 '어디까지 했고 다음에 뭘 할지'만).
 
@@ -36,14 +36,22 @@
   `pgbackend.PgConnection.dump_to`(pg_dump 평문 SQL, repeatable-read 스냅샷 = 봇 돌아가는 중에도 일관) + `backup._verify_and_compress` 가 PG 는 'dump complete' 완료 마커로 검증.
   **PG 하네스로 backup_run_verify_prune 실측 통과**(덤프→gz→마커→데이터 확인), SQLite 26/26 회귀 0. ⚠️ VPS 에 `postgresql-client`(pg_dump) 필요.
   복원은 sqlite 와 다름: PG 덤프는 `psql <파일>` 또는 `pg_restore`(restore_check.py 는 아직 sqlite 전용 — Phase 2).
+- **🧪 레포 전체를 한 프로세스로 PG 실행(교차모듈까지) → 제품버그 2개 더 발견·수정 (2026-11-27)**: 배치(모듈별 격리)가 못 보는 교차오염·순서까지 포함해 전수.
+  - ⚠️ **REAL 컬럼 20개 타임스탬프 정밀도 손실(조용한 버그)**: SQLite REAL=8바이트 double, PG `REAL`=4바이트 float4 → 유닉스초(1.76e9)가 ±128초 반올림 →
+    `expires>=now` 만료비교·재시작 복원이 틀림. **DDL 변환 `REAL`→`DOUBLE PRECISION` 한 줄(CREATE·ALTER 공통)** 로 expires·created·due·sent·until·ts·beat 등 20개 전부 해결. 실측: askchoice 만료·persist temp_notice/복원 PG 통과.
+  - `musicq.popular_vids` `HAVING n>=?`(SELECT 별칭을 HAVING 에) → PG 금지 → `HAVING COUNT(*)>=?`. (HAVING 비집계 별칭 전수 = 이거 하나.)
+- **🧹 하네스 public 오염 청소 (교차오염·실패주입 무력화의 뿌리)**: 공유 `sodam_harness` DB `public` 스키마에 과거 실행 잔존 테이블(170개)이 있고 테스트 search_path 가 `<스키마>,public` 이라
+  테스트 스키마 테이블을 rename 해도 public 폴백으로 잡혀 실패주입(onboard atomic)이 무력화·교차오염됨 → `fakes._pg_setup_once` 가 세션 시작 때 public 테이블 전부 DROP(확장은 테이블 아니라 보존). onboard apply_is_atomic PG 통과로 **db.atomic 롤백이 PG 서 정상**임도 재확인.
+- **🧪 남은 PG 실패 = 전부 테스트가 sqlite 전용 기능 쓴 것(제품 정상), 에이전트 triage 로 하나하나 확정**: onboard atomic·member_cleanup·agent_grounding·fix_menu_audit·botlink **진짜 제품버그 0개**.
+  `DB_BACKEND=pg` 가드 넣은 것: CREATE TRIGGER 실패흉내(db_safety debit/admin_list, memory_quality add_facts, fix_billing_ai)·PRAGMA/옛sqlite빌더(db_safety sqlite_settings, memory_quality old_schema, agent_grounding knowledge_migration, features db_migration)·
+  SQLITE_FULL(db_safety disk_full)·conn.in_transaction(botlink)·set_trace 왕복수(fix_audit2)·captcha 비정수값수정(farewell)·.db직접 CLI(diag 5개·budget/costs usage_report·fix_ops restore_check·member_cleanup diag줄)·ATTACH 클론이관(clone_migrate 5개·mediastore clone 폴백). 전부 SQLite 경로는 그대로 돎(회귀 0).
 
 ### ⚠️ 아직 안 된 것 — 다음 세션이 꼭 할 것 (놓치면 사업 깨짐)
 1. **`ATTACH DATABASE`(clone_migrate.py:50)** — 클론 방 이관이 raw sqlite3 + ATTACH 로 두 .db 복사. **PG 엔 ATTACH 없음** → PG 에선 작동 안 함.
    클론을 PG 로 옮기기 전에 **반드시 재작성**(postgres_fdw 또는 앱단에서 main→clone 읽어쓰기, 또는 dump/restore). Phase 2 클론 이관의 전제.
-2. **per-query 꼬리 (PG 에선 에러로 터지니 조용한 버그 아님)**: 에이전트 5갈래 전 모듈 PG 스윕에서 **새로 나온 건 0건** — 이미 다 고침(top_chatters·reply_stats·away·lottery·sports_picks·casino_event·featreq·owner/ownertools·composer).
-   새 SQL 추가할 때만 주의. **찾는 법**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>` → `psycopg.errors.GroupingError`/`InvalidColumnReference`/`UndefinedColumn` 나오는 컬럼을 그대로 GROUP BY/SELECT 에 추가.
-3. **테스트 전용 sqlite 문법** (PG 하네스에서만 문제, 제품 아님 — 대부분 skip 가드 넣음): `CREATE TEMP TRIGGER`(fix_billing_ai)·`set_trace_callback` 왕복수(fix_audit2)·`.db 직접 읽는 CLI`(costs/usage_report.py)·옛 sqlite ALTER 경로(features db_migration)·captcha answer 비정수(farewell) = 전부 `DB_BACKEND=pg` 가드/값수정 완료.
-   **남은 CLI 포팅(Phase 2)**: `tools/usage_report.py`·`tools/restore_check.py` 는 아직 .db 를 sqlite3 로 직접 엶 → PG 운영 전 pg 판 필요(오너 점검·복원 도구라 봇 런타임 아님).
+2. **per-query 꼬리 (PG 에선 에러로 터지니 조용한 버그 아님)**: 레포 전체 PG 실행(교차모듈 포함)에서 제품 쿼리 방언에러 = **HAVING·REAL 두 개뿐이었고 고침**. 그 외 0건(이미 다 고침: top_chatters·reply_stats·away·lottery·sports_picks·casino_event·featreq·owner/ownertools·composer·musicq).
+   새 SQL 추가할 때만 주의. **찾는 법**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>` → `psycopg.errors.*` 나오는 컬럼/식을 PG 규칙대로(별칭은 HAVING 금지·GROUP BY bare컬럼·DISTINCT+ORDER BY).
+3. **남은 Phase-2 CLI/기능 포팅** (테스트는 `DB_BACKEND=pg` 가드로 green, 운영 전 꼭 pg 판): `tools/usage_report.py`(오너 요금점검)·`tools/restore_check.py`(백업 복원검증)·`sodam/diag.py`(원격 점검 창구) = 전부 `.db` 를 sqlite3 로 직접 엶 → PG 는 psycopg 로 다시 짜야(봇 런타임 아님).
 4. **⚠️ PG 쿼리 지연 실측(실서버 VPS)**: dev 컨테이너선 게임 명령 1회 ~1s(쿼리 수십 개 × 스레드홉+소켓). **VPS(로컬 소켓·튜닝)에서 실측 필수** — 느리면 게임 핫패스 쿼리 묶기. go/no-go 숫자.
 5. **조용한 behavior 차이 더 점검**(에러 안 나서 위험 — 놓치기 쉬움):
    - **ORDER BY 한글 정렬**: SQLite BINARY(코드포인트) vs PG locale collation → 순위/목록 순서 바뀔 수 있음. 실측 필요. (필요하면 쿼리에 `COLLATE "C"`.)

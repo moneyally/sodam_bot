@@ -1,5 +1,6 @@
 """근거 있는 답: 예전 이름으로 사람 찾기 · 지시어('걔') · 숫자 검사 · 자료끼리 다름 · 근거 보여줘.
 python tests/run_all.py agent_grounding (가짜 LLM, 네트워크 없음)"""
+import os
 import time
 from types import SimpleNamespace
 
@@ -221,6 +222,8 @@ async def knowledge_conflict_marks_newest_and_older():
 
 @test
 async def knowledge_updated_at_migration_for_old_db():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite _migrate()(PRAGMA table_info) 경로 검사 — PG 는 _migrate_pg(information_schema), test_pgbackend 가 덮음
     db = await make_db()
     await db._write("ALTER TABLE knowledge_docs DROP COLUMN updated_at")
     await db._migrate()

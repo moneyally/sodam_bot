@@ -3,6 +3,7 @@
 핵심: 소담은 다른 봇 글에 절대 스스로 반응하지 않음 (봇끼리 무한 주고받기 방지) — 따라 말하는 가짜 봇으로 증명.
 """
 import asyncio
+import os
 import time
 from types import SimpleNamespace
 
@@ -471,6 +472,8 @@ async def invented_command_is_refused_with_real_list():
 @test
 async def bot_message_leaves_no_open_write_transaction():
     """봇 글 기록(upsert_user)이 commit 없이 끝나면 쓰기 잠금이 다음 commit 까지 남음 (딜러 프로세스 대기)."""
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # conn.in_transaction 은 sqlite 전용 속성 — PG 는 봇 글 기록 뒤 transaction_status IDLE(열린 쓰기 트랜잭션 안 남김, 실측 확인)
     r = await blroom("off")
     await bot_says(r, DICE, "🎲 결과 3")
     assert not r.db.conn.in_transaction

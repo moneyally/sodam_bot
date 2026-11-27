@@ -388,17 +388,22 @@ def _pg_setup_once() -> None:
     import re
     import psycopg
     base = _pg_base_dsn()
+    def _prep(c):
+        c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # public 에 쌓인 과거 실행 잔존 테이블 청소: 테스트는 경로별 스키마(_pg_make)로 격리되는데,
+        # search_path 가 '<스키마>,public' 이라 public 에 남은 테이블이 폴백으로 잡혀 실패주입 무력화·교차오염을 일으킴(확장은 테이블 아니라 안 건드림).
+        for (t,) in c.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall():
+            c.execute(f'DROP TABLE IF EXISTS public."{t}" CASCADE')
     try:
         with psycopg.connect(base, autocommit=True) as c:
-            c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            _prep(c)
     except psycopg.OperationalError:   # DB 자체가 없으면 만든다
         name = (re.search(r"dbname=(\S+)", base) or [None, "sodam_harness"])[1]
         with psycopg.connect("dbname=postgres", autocommit=True) as c:
             c.execute(f'CREATE DATABASE "{name}"')
         with psycopg.connect(base, autocommit=True) as c:
-            c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            _prep(c)
     _PG_READY = True
 
 

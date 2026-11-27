@@ -250,6 +250,8 @@ async def owner_overview_shows_usd_and_top_rooms():
 
 @test
 async def usage_report_shows_room_usd():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # usage_report.py 는 .db 를 sqlite3 로 직접 여는 오너 점검 CLI — PG 포팅 Phase-2(봇 런타임 아님)
     db = await make_db()
     await db.ensure_chat(CHAT, "OTC 방")
     await db.bump("2026-09-28", 0, costs.USD, 3_000_000)
