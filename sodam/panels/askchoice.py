@@ -218,7 +218,7 @@ async def _rerun(svc, bot, row, label: str) -> None:
                                      reply_to=f"{svc.cfg.bot_name}(봇): {row['question']}", request=request, mode="call")
         except BudgetExceeded:
             answer = "오늘 AI 사용량을 다 써서 내일 다시 불러주세요 🙏"
-        except OpenAIError as e:
+        except (OpenAIError, asyncio.TimeoutError) as e:   # TimeoutError = RUN_HARD_CAP 안전망(슬롯 반납됨)
             log.warning("ask_choice rerun openai error: %s", e)
             answer = "AI 연결이 잠깐 불안정해요. 잠시 후 다시 불러주세요."
         if ctx.quiet:

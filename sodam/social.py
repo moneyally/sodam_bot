@@ -268,8 +268,8 @@ async def _chime_now(svc: Services, bot, msg, text: str, kind: str) -> bool:
     try:
         answer = await run_agent(ctx, style_key=style, notes=notes, history=history, reply_to=None,
                                  request=text, mode=kind)
-    except (OpenAIError, BudgetExceeded) as e:
-        log.info("chime answer skipped: %s", e)
+    except (OpenAIError, BudgetExceeded, asyncio.TimeoutError) as e:
+        log.info("chime answer skipped: %s", e)   # TimeoutError = RUN_HARD_CAP 안전망(슬롯 반납됨) → 그냥 끼어들기 포기
         return False
     answer = (answer or "").strip()
     if not answer or answer.upper().strip(" .!\"'").startswith("PASS") or len(answer) < 2:
