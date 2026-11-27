@@ -36,6 +36,22 @@ def translate(sql: str) -> str:
     s = re.sub(r"\bINTEGER\b", "BIGINT", s)          # SQLite INTEGER → PG BIGINT(64bit, telegram id 안전)
     # 시각 (흔한 꼴만; '%H'·'%Y-%m-%d' 등은 db.py 통합 때 수동)
     s = re.sub(r"strftime\(\s*'%s'\s*,\s*'now'\s*\)", "extract(epoch from now())::bigint", s, flags=re.I)
+    # SQLite char(N)=코드포인트 문자 → PG 는 chr(N) (char 는 PG 에선 타입). DDL 엔 CHAR(N) 타입 안 씀(실측).
+    s = re.sub(r"\bchar\(", "chr(", s)
+    # ON CONFLICT DO UPDATE SET col=col±… : PG 는 기존행 col 이 EXCLUDED 와 모호 → 표이름으로 수식 (points=members.points+…)
+    if re.search(r"DO\s+UPDATE\s+SET", s, re.I):
+        mt = re.search(r"INSERT\s+INTO\s+(\w+)", s, re.I)
+        if mt:
+            s = re.sub(r"\b(\w+)\s*=\s*\1\s*([-+])", rf"\1={mt.group(1)}.\1\2", s)
+    # PRAGMA (유지보수·open) → PG 엔 없음. 통째 no-op (open 의 PRAGMA 는 _open_pg 가 안 부르지만 optimize 등 유지보수용 대비)
+    if re.match(r"\s*PRAGMA\b", s, re.I):
+        return "SELECT 1"
+    # 스칼라 MAX(a,b)/MIN(a,b) → GREATEST/LEAST (PG MAX/MIN 은 집계 전용). 인자 2개(쉼표)일 때만.
+    s = re.sub(r"\bMAX\(([^()]*?,[^()]*?)\)", r"GREATEST(\1)", s, flags=re.I)
+    s = re.sub(r"\bMIN\(([^()]*?,[^()]*?)\)", r"LEAST(\1)", s, flags=re.I)
+    # col = X COLLATE NOCASE (대소문자 무시 비교) → LOWER(col)=LOWER(X). 남은 COLLATE NOCASE 는 떼기(ORDER/색인).
+    s = re.sub(r"([\w.]+)\s*=\s*(\S+?)\s+COLLATE\s+NOCASE", r"LOWER(\1)=LOWER(\2)", s, flags=re.I)
+    s = re.sub(r"\s+COLLATE\s+NOCASE", "", s, flags=re.I)
     # 자리표시자 ? → %s (psycopg). 먼저 '%' 를 '%%' 로 (LIKE '%x%' 등 리터럴 보존), 그 다음 ? → %s
     s = s.replace("%", "%%")
     s = re.sub(r"\?", "%s", s)

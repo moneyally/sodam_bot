@@ -371,6 +371,50 @@ atexit.register(shutil.rmtree, tempfile.tempdir, True)
 OPEN_DBS: list[DB] = []
 _VISION_ORIG: dict = {}   # vision 모듈 전역의 원본 (테스트가 가짜로 바꿔 놓은 걸 테스트마다 되돌림)
 
+# ── 🐘 PG 하네스 (DB_BACKEND=pg 로 전체 시험 돌릴 때) — 테스트마다 고유 스키마로 격리 ──
+_PG_HARNESS = (os.getenv("DB_BACKEND", "").strip().lower() == "pg")
+_PG_READY = False
+
+
+def _pg_base_dsn() -> str:
+    return os.getenv("PG_TEST_DSN") or os.getenv("PG_DSN") or "dbname=sodam_harness"
+
+
+def _pg_setup_once() -> None:
+    """하네스 DB + 확장을 한 번만 준비 (psycopg 동기 — 테스트는 순차라 OK)."""
+    global _PG_READY
+    if _PG_READY:
+        return
+    import re
+    import psycopg
+    base = _pg_base_dsn()
+    try:
+        with psycopg.connect(base, autocommit=True) as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except psycopg.OperationalError:   # DB 자체가 없으면 만든다
+        name = (re.search(r"dbname=(\S+)", base) or [None, "sodam_harness"])[1]
+        with psycopg.connect("dbname=postgres", autocommit=True) as c:
+            c.execute(f'CREATE DATABASE "{name}"')
+        with psycopg.connect(base, autocommit=True) as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    _PG_READY = True
+
+
+def _pg_make(path: str) -> DB:
+    """PG 백엔드 테스트 DB — 고유 스키마 + search_path (확장은 public 에)."""
+    import uuid
+    import psycopg
+    _pg_setup_once()
+    base = _pg_base_dsn()
+    schema = "t" + uuid.uuid4().hex[:16]
+    with psycopg.connect(base, autocommit=True) as c:
+        c.execute(f'CREATE SCHEMA "{schema}"')
+    db = DB(path, pg_dsn=f"{base} options=-csearch_path={schema},public")
+    db._pg_schema, db._pg_base = schema, base   # close 때 DROP
+    return db
+
 
 def _reset_global_caches() -> None:
     """테스트마다 '새 세상' — production 은 DB 하나라 괜찮지만 테스트는 DB 를 새로 만드는데,
@@ -400,7 +444,8 @@ def _reset_global_caches() -> None:
 
 async def make_db() -> DB:
     _reset_global_caches()
-    db = DB(os.path.join(tempfile.mkdtemp(), "t.db"))
+    path = os.path.join(tempfile.mkdtemp(), "t.db")
+    db = _pg_make(path) if _PG_HARNESS else DB(path)
     await db.open()
     OPEN_DBS.append(db)  # 테스트가 중간에 실패해도 runner 가 닫는다 (안 닫으면 프로세스가 안 끝남)
     return db
@@ -427,6 +472,14 @@ async def close_open_dbs() -> None:
         db = OPEN_DBS.pop()
         dirs.add(os.path.dirname(db.path))
         await db.close()
+        sch = getattr(db, "_pg_schema", None)   # PG 하네스: 그 테스트 스키마 통째로 지움
+        if sch:
+            try:
+                import psycopg
+                with psycopg.connect(db._pg_base, autocommit=True) as c:
+                    c.execute(f'DROP SCHEMA "{sch}" CASCADE')
+            except Exception:
+                pass
     for d in dirs:
         if d and d != tempfile.tempdir:
             shutil.rmtree(d, ignore_errors=True)

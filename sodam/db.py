@@ -351,10 +351,11 @@ NOT_AUDIT = ("l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press
 # link_del = 사람별 링크 삭제 (타임라인용) · join_info = 입장 경로 · subgate_pass = 입장 때 이미 구독 — 양이 많아 관리 기록엔 안 보임
 
 class DB:
-    def __init__(self, path: str):
+    def __init__(self, path: str, pg_dsn: str | None = None):
         self.path = path
         # DB_BACKEND=pg 면 PostgreSQL(sodam/pgbackend.py), 아니면 SQLite(기본). 이관 중 env 하나로 1초 롤백.
         self.backend = (os.getenv("DB_BACKEND") or "sqlite").strip().lower()
+        self._pg_dsn = pg_dsn   # 테스트 하네스가 스키마 격리된 dsn 을 넘길 때 (실서버는 None → env/기본)
         self.conn: aiosqlite.Connection | None = None
         self._settings_cache: dict[int, dict[str, Any]] = {}
         self._settings_at: dict[int, float] = {}   # 읽은 시각 (다른 프로세스가 바꾼 설정도 TTL 뒤 반영)
@@ -391,7 +392,7 @@ class DB:
         """PostgreSQL 로 켜기 (DB_BACKEND=pg). SQLite 의 PRAGMA·WAL·sqlite-vec 는 PG 엔 불필요/서버측 대체.
         스키마·컬럼 추가·FTS 채우기는 SQLite 와 같은 메서드를 공유 — 변환은 pgbackend 가 처리."""
         from . import pgbackend
-        dsn = os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
+        dsn = self._pg_dsn or os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
         self.conn = pgbackend.PgConnection(dsn)
         try:
             await self.conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")   # 전문검색 LIKE 가속(FTS5 대체)
@@ -421,7 +422,7 @@ class DB:
         """있어야 할 컬럼 추가 (PG — PRAGMA table_info 대신 information_schema). 선언은 execute 가 번역(INTEGER→BIGINT)."""
         for table, cols in self._wanted_columns().items():
             rows = await self._all(
-                "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?",
+                "SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?",
                 (table,))
             have = {r["column_name"] for r in rows}
             for col, decl in cols.items():
@@ -759,7 +760,7 @@ class DB:
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
             "LEFT JOIN users u ON u.user_id=msg.user_id " + join +
             "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + cut + count_filter("msg", rule) +
-            " GROUP BY msg.user_id ORDER BY n DESC LIMIT ?",
+            " GROUP BY msg.user_id, u.username, u.first_name ORDER BY n DESC LIMIT ?",  # PG 는 GROUP BY 엄격(SQLite 도 무해)
             (chat_id, since, end, *((end,) if user_cuts else ()), *rule.args, limit))
 
     async def chat_totals(self, chat_id: int, since: int, until: int | None = None,

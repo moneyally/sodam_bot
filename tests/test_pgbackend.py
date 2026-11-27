@@ -46,6 +46,14 @@ async def translate_rules():
     assert "AUTOINCREMENT" not in translate("CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT)")
     assert "extract(epoch from now())" in translate("INSERT INTO t(ts) VALUES(strftime('%s','now'))")
     assert translate("SELECT x FROM t WHERE b LIKE '%a%'") == "SELECT x FROM t WHERE b LIKE '%%a%%'"   # % 보존
+    # 방언 더: char(N)→chr, PRAGMA→no-op, 스칼라 MAX/MIN→GREATEST/LEAST, COLLATE NOCASE→LOWER, upsert 기존행 수식
+    assert "chr(10)" in translate("SELECT length(replace(text, char(10), ''))")
+    assert translate("PRAGMA optimize") == "SELECT 1"
+    assert "GREATEST(used_n, 1)" in translate("UPDATE member_memory SET used_n=MAX(used_n, 1) WHERE id=?")
+    assert "LEAST(" in translate("SELECT MIN(a, b) FROM t")
+    assert translate("SELECT 1 FROM x WHERE u.username=? COLLATE NOCASE") == "SELECT 1 FROM x WHERE LOWER(u.username)=LOWER(%s)"
+    assert "counters.n+excluded.n" in translate(
+        "INSERT INTO counters(day,k,n) VALUES(?,?,?) ON CONFLICT(day,k) DO UPDATE SET n=n+excluded.n")
 
 
 @test
