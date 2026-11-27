@@ -150,8 +150,10 @@ async def submit(db: DB, user_id: int, user_name: str, chat_id: int | None, summ
                 return Submitted("again", gid, _voters(c, gid), status)
         # 2) 다른 사람의 비슷한 요청(열린 묶음) → 같은 묶음에
         #    (묶음 안 모든 요청 글과 비교 — 묶음 첫 글과 표현이 달라도 누군가의 글과 비슷하면 같은 묶음)
-        rows = c.execute("SELECT DISTINCT i.group_id, i.norm FROM featreq_items i JOIN featreq_groups g ON g.id=i.group_id "
-                         "WHERE g.status IN ('new','doing') ORDER BY i.last_ts DESC LIMIT ?", (MATCH_GROUPS,)).fetchall()
+        # distinct (group_id, norm) 를 최신순 — PG 는 SELECT DISTINCT + ORDER BY 비선택컬럼 금지라 GROUP BY + MAX 로 (SQLite 도 동일)
+        rows = c.execute("SELECT i.group_id, i.norm FROM featreq_items i JOIN featreq_groups g ON g.id=i.group_id "
+                         "WHERE g.status IN ('new','doing') GROUP BY i.group_id, i.norm "
+                         "ORDER BY MAX(i.last_ts) DESC LIMIT ?", (MATCH_GROUPS,)).fetchall()
         gid = next((g for g, inorm in rows if similar(norm, inorm)), None)
         outcome = "grouped"
         if gid is None:
