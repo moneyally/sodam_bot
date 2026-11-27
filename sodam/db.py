@@ -798,7 +798,8 @@ class DB:
             "LEFT JOIN users fu ON fu.user_id=msg.user_id LEFT JOIN users tu ON tu.user_id=msg.reply_to_user "
             "WHERE msg.chat_id=? AND msg.ts>=? AND msg.is_bot=0 AND msg.reply_to_user IS NOT NULL "
             "AND msg.reply_to_user<>msg.user_id " + who +
-            "GROUP BY msg.user_id, msg.reply_to_user ORDER BY n DESC, from_id LIMIT ?",
+            "GROUP BY msg.user_id, msg.reply_to_user, fu.first_name, fu.username, tu.first_name, tu.username "
+            "ORDER BY n DESC, from_id LIMIT ?",   # PG 는 GROUP BY 엄격(SQLite 도 무해)
             (chat_id, since, *(() if user_id is None else (user_id, user_id)), limit))
 
     async def prune(self, now_ts: int, days: int = KEEP_DAYS) -> None:
