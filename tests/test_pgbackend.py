@@ -59,6 +59,10 @@ async def translate_rules():
     # 문자열 리터럴 안의 ? 는 글자(placeholder 아님), instr→strpos
     assert translate("SELECT COALESCE(x,'?') AS n WHERE id=?") == "SELECT COALESCE(x,'?') AS n WHERE id=%s"
     assert "strpos(" in translate("SELECT substr(r, instr(r, ':')+1) FROM x")
+    # IS 널세이프 등호, json_extract, 커서 순회
+    assert translate("SELECT x WHERE s IS 't' AND a IS NULL AND b IS NOT NULL AND c IS NOT 'w'") == \
+        "SELECT x WHERE s IS NOT DISTINCT FROM 't' AND a IS NULL AND b IS NOT NULL AND c IS DISTINCT FROM 'w'"
+    assert "::jsonb #>> '{news_mode}'" in translate("SELECT json_extract(settings, '$.news_mode')")
 
 
 @test

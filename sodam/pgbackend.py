@@ -54,6 +54,9 @@ def translate(sql: str) -> str:
     # col = X COLLATE NOCASE (대소문자 무시 비교) → LOWER(col)=LOWER(X). 남은 COLLATE NOCASE 는 떼기(ORDER/색인).
     s = re.sub(r"([\w.]+)\s*=\s*(\S+?)\s+COLLATE\s+NOCASE", r"LOWER(\1)=LOWER(\2)", s, flags=re.I)
     s = re.sub(r"\s+COLLATE\s+NOCASE", "", s, flags=re.I)
+    # SQLite IS = null-safe 등호(IS NULL 뿐 아니라 IS '값'·IS ? 도) → PG IS NOT DISTINCT FROM. NULL/TRUE/FALSE/DISTINCT 는 그대로.
+    s = re.sub(r"\bIS\s+NOT\s+(?!NULL\b|DISTINCT\b|TRUE\b|FALSE\b)", "IS DISTINCT FROM ", s, flags=re.I)
+    s = re.sub(r"\bIS\s+(?!NULL\b|NOT\b|DISTINCT\b|TRUE\b|FALSE\b)", "IS NOT DISTINCT FROM ", s, flags=re.I)
     # 자리표시자 ? → %s, 리터럴 % → %% (psycopg). 단 **문자열 리터럴 안의 ? 는 글자**(예 COALESCE(x,'?')) → 안 바꿈.
     out, in_str = [], False
     for ch in s:
