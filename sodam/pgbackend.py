@@ -61,6 +61,10 @@ def translate(sql: str) -> str:
     # (pg_trgm GIN 은 ILIKE 도 가속. 구조화된 키 LIKE 는 소문자라 과매치 없음.)
     s = re.sub(r"\bNOT\s+LIKE\b", "NOT ILIKE", s, flags=re.I)
     s = re.sub(r"(?<!I)\bLIKE\b", "ILIKE", s, flags=re.I)
+    # SQLite LIMIT -1 = 무제한 → PG LIMIT ALL (PG 는 음수 거부)
+    s = re.sub(r"\bLIMIT\s+-1\b", "LIMIT ALL", s, flags=re.I)
+    # bare 파라미터 ? IS NULL : None 이면 PG 가 타입 못 정함(IndeterminateDatatype) → ?::text IS NULL (NULL 여부만 보니 안전)
+    s = re.sub(r"\?\s+IS\s+NULL", "?::text IS NULL", s, flags=re.I)
     # 자리표시자 ? → %s, 리터럴 % → %% (psycopg). 단 **문자열 리터럴 안의 ? 는 글자**(예 COALESCE(x,'?')) → 안 바꿈.
     out, in_str = [], False
     for ch in s:
@@ -161,7 +165,10 @@ class Row:
     def __getitem__(self, k):
         if isinstance(k, int):
             return self._vals[k]
-        return self._vals[self._cols.index(k)]
+        try:
+            return self._vals[self._cols.index(k)]
+        except ValueError:                 # 없는 컬럼 → aiosqlite.Row 처럼 IndexError (코드가 except IndexError 로 기본값 처리)
+            raise IndexError(k) from None
 
     def keys(self):
         return list(self._cols)
@@ -169,7 +176,7 @@ class Row:
     def get(self, k, default=None):
         try:
             return self[k]
-        except (ValueError, IndexError):
+        except (ValueError, IndexError, KeyError):
             return default
 
     def __iter__(self):
@@ -338,7 +345,10 @@ class SyncConn:
             sql, params = self._update_or_ignore(sql, tuple(params))
         cur = self._pg.cursor()
         cur.row_factory = _row_factory
-        cur.execute(translate(sql), tuple(params))
+        try:
+            cur.execute(translate(sql), tuple(params))
+        except BaseException as e:   # psycopg 예외 → sqlite3 (코드의 except sqlite3.* 가 작동)
+            raise (_as_sqlite_error(e) or e) from e
         rows = cur.fetchall() if cur.description else []
         rowcount = cur.rowcount
         last = None
@@ -359,20 +369,40 @@ class SyncConn:
         if re.match(r"\s*INSERT", sql, re.I) and re.search(r"DO\s+UPDATE\s+SET", sql, re.I):
             sql = self._qualify_update(sql)
         cur = self._pg.cursor()
-        cur.executemany(translate(sql), [tuple(r) for r in rows])
+        try:
+            cur.executemany(translate(sql), [tuple(r) for r in rows])
+        except BaseException as e:
+            raise (_as_sqlite_error(e) or e) from e
         return _Cur([], cur.rowcount, None)
 
     def executescript(self, script: str):
         # 스키마 전용 경로 — FTS5 가상표·COLLATE NOCASE 까지 처리(ddl_for_pg). db.py 는 SCHEMA/EXTRA_SCHEMA 만 이걸 씀.
         for stmt in _split_statements(script):
             if stmt.strip():
-                self._pg.cursor().execute(ddl_for_pg(stmt))
+                try:
+                    self._pg.cursor().execute(ddl_for_pg(stmt))
+                except BaseException as e:
+                    raise (_as_sqlite_error(e) or e) from e
 
     def commit(self):
         self._pg.commit()
 
     def rollback(self):
         self._pg.rollback()
+
+
+def _as_sqlite_error(e: BaseException):
+    """psycopg 예외 → 대응하는 sqlite3 예외 (코드 곳곳의 `except sqlite3.IntegrityError/OperationalError/Error` 가 그대로 작동).
+    sqlite3 는 문장 하나 실패해도 연결이 멀쩡하지만 PG 는 트랜잭션이 중단되므로, 부른 쪽에서 롤백도 해야 함(아래 _run_stmt)."""
+    import sqlite3
+    import psycopg
+    if isinstance(e, psycopg.IntegrityError):      # UniqueViolation·ForeignKeyViolation·NotNull·Check …
+        return sqlite3.IntegrityError(str(e))
+    if isinstance(e, psycopg.OperationalError):
+        return sqlite3.OperationalError(str(e))
+    if isinstance(e, psycopg.Error):
+        return sqlite3.DatabaseError(str(e))
+    return None
 
 
 def _split_statements(script: str) -> list[str]:
@@ -412,6 +442,20 @@ class PgConnection:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._pool, fn)
 
+    async def _run_stmt(self, fn: Callable[[], Any]):
+        """단독 문장(_write·_all 등): 에러면 롤백(PG 는 에러가 트랜잭션 전체 중단 → 다음 쿼리까지 막힘, SQLite 는 안 그럼).
+        예외 변환(psycopg→sqlite3)은 SyncConn 이 함. atomic 경로(_execute)는 제외 — db.atomic 이 SAVEPOINT 로 스스로 회복."""
+        def wrapped():
+            try:
+                return fn()
+            except BaseException:
+                try:
+                    self._pg.rollback()   # 중단된 트랜잭션 회복 (이 문장만 날아감 — 이전 _write 는 이미 commit)
+                except Exception:
+                    pass
+                raise
+        return await self._run(wrapped)
+
     # ── aiosqlite 내부 흉내: db.py 의 atomic() 이 self.conn._execute(run, self.conn._conn) 로 씀 ──
     @property
     def _conn(self):
@@ -423,17 +467,17 @@ class PgConnection:
 
     # ── 공개 API (db.py 의 _all/_one/_write·open 이 씀) ──
     async def execute_fetchall(self, sql: str, params: tuple = ()):
-        return await self._run(lambda: self._sync.execute(sql, params).fetchall())
+        return await self._run_stmt(lambda: self._sync.execute(sql, params).fetchall())
 
     async def execute(self, sql: str, params: tuple = ()):
-        return await self._run(lambda: self._sync.execute(sql, params))
+        return await self._run_stmt(lambda: self._sync.execute(sql, params))
 
     async def executemany(self, sql: str, rows):
         rows = list(rows)
-        return await self._run(lambda: self._sync.executemany(sql, rows))
+        return await self._run_stmt(lambda: self._sync.executemany(sql, rows))
 
     async def executescript(self, script: str):
-        return await self._run(lambda: self._sync.executescript(script))
+        return await self._run_stmt(lambda: self._sync.executescript(script))
 
     async def commit(self):
         return await self._run(self._pg.commit)
