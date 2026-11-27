@@ -48,6 +48,7 @@ async def translate_rules():
     assert translate("SELECT x FROM t WHERE b LIKE '%a%'") == "SELECT x FROM t WHERE b ILIKE '%%a%%'"   # % 보존 + LIKE→ILIKE(대소문자 무시 보존)
     assert translate("SELECT x WHERE k NOT LIKE 'a%'") == "SELECT x WHERE k NOT ILIKE 'a%%'"
     assert "LIMIT ALL" in translate("SELECT x ORDER BY y LIMIT -1 OFFSET ?")        # SQLite 무제한
+    assert translate("CREATE TABLE t (expires REAL NOT NULL)") == "CREATE TABLE t (expires DOUBLE PRECISION NOT NULL)"  # float4 정밀도손실 방지
     assert "%s::text IS NULL" in translate("UPDATE t SET a=? WHERE (? IS NULL OR rev=?)")  # None 파라미터 타입
     # 방언 더: char(N)→chr, PRAGMA→no-op, 스칼라 MAX/MIN→GREATEST/LEAST, COLLATE NOCASE→LOWER, upsert 기존행 수식
     assert "chr(10)" in translate("SELECT length(replace(text, char(10), ''))")
