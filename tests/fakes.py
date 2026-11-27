@@ -403,15 +403,16 @@ def _pg_setup_once() -> None:
 
 
 def _pg_make(path: str) -> DB:
-    """PG 백엔드 테스트 DB — 고유 스키마 + search_path (확장은 public 에)."""
-    import uuid
+    """PG 백엔드 테스트 DB — **경로에서 스키마 유도**(db._open_pg 와 같은 해시) → 같은 path 재오픈=같은 데이터(재시작 시뮬)."""
+    import hashlib
     import psycopg
     _pg_setup_once()
     base = _pg_base_dsn()
-    schema = "t" + uuid.uuid4().hex[:16]
+    os.environ["PG_HARNESS_BASE"] = base   # db._open_pg 가 이걸 보고 path→schema 유도 (production 은 안 씀)
+    schema = "t" + hashlib.sha1(path.encode()).hexdigest()[:16]
     with psycopg.connect(base, autocommit=True) as c:
-        c.execute(f'CREATE SCHEMA "{schema}"')
-    db = DB(path, pg_dsn=f"{base} options=-csearch_path={schema},public")
+        c.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    db = DB(path)   # pg_dsn 안 넘김 → _open_pg 가 PG_HARNESS_BASE + path 로 유도 (재시작 때 DB(path) 도 같은 스키마)
     db._pg_schema, db._pg_base = schema, base   # close 때 DROP
     return db
 
@@ -477,7 +478,7 @@ async def close_open_dbs() -> None:
             try:
                 import psycopg
                 with psycopg.connect(db._pg_base, autocommit=True) as c:
-                    c.execute(f'DROP SCHEMA "{sch}" CASCADE')
+                    c.execute(f'DROP SCHEMA IF EXISTS "{sch}" CASCADE')   # 재시작 테스트는 같은 스키마 공유 → IF EXISTS
             except Exception:
                 pass
     for d in dirs:

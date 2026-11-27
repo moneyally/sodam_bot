@@ -392,7 +392,13 @@ class DB:
         """PostgreSQL 로 켜기 (DB_BACKEND=pg). SQLite 의 PRAGMA·WAL·sqlite-vec 는 PG 엔 불필요/서버측 대체.
         스키마·컬럼 추가·FTS 채우기는 SQLite 와 같은 메서드를 공유 — 변환은 pgbackend 가 처리."""
         from . import pgbackend
-        dsn = self._pg_dsn or os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
+        harness = os.getenv("PG_HARNESS_BASE")   # 테스트 전용: 경로에서 스키마 유도 → 같은 path 재오픈=같은 데이터(재시작 시뮬). production 은 안 씀.
+        if not self._pg_dsn and harness:
+            import hashlib
+            sch = "t" + hashlib.sha1(self.path.encode()).hexdigest()[:16]
+            dsn = f"{harness} options=-csearch_path={sch},public"
+        else:
+            dsn = self._pg_dsn or os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
         self.conn = pgbackend.PgConnection(dsn)
         try:
             await self.conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")   # 전문검색 LIKE 가속(FTS5 대체)
