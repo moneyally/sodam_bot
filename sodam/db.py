@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, NamedTuple, TypeVar
 
 import aiosqlite
 
-from .search import index_text, match_query, query_words
+from .search import index_text, query_words
 from .settings import DEFAULTS
 from .util import to_int
 
@@ -394,10 +394,20 @@ class DB:
         dsn = os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
         self.conn = pgbackend.PgConnection(dsn)
         self.vec = False   # 의미검색(pgvector)은 통합 전까지 끔 — 단어검색(pg_trgm)은 됨
+        try:
+            await self.conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")   # 전문검색 LIKE 가속(FTS5 대체)
+            await self.conn.commit()
+        except Exception as e:   # 권한 없으면 색인 없이 LIKE 로 (느려도 동작)
+            log.info("pg_trgm 확장 못 켬 — 검색은 색인 없는 LIKE (%s)", e)
         await self.conn.executescript(SCHEMA)
         for extra in EXTRA_SCHEMA:   # 기능 모듈이 register_schema 로 추가한 테이블
             await self.conn.executescript(extra)
         await self._migrate_pg()
+        for fts in ("messages_fts", "knowledge_fts"):   # body(bigram) 부분일치 GIN — 긴 구문 검색 가속
+            try:
+                await self.conn.execute(f"CREATE INDEX IF NOT EXISTS {fts}_trgm ON {fts} USING gin (body gin_trgm_ops)")
+            except Exception as e:
+                log.info("%s GIN 색인 생략 (%s)", fts, e)
         await self._backfill_fts()
         await self.conn.commit()
 
@@ -702,18 +712,30 @@ class DB:
             (chat_id, since, before, user_id, user_id, chat_id, user_id, since, before, limit))
         return list(reversed(rows))
 
+    def _fts_where(self, table: str, alias: str, query: str) -> "tuple[str | None, list, int]":
+        """FTS 검색 조건을 백엔드별로. SQLite = FTS5 MATCH, PG = bigram body 부분일치(LIKE).
+        반환 (where 조각, 파라미터, 낱말수 n). body 는 두 글자 조각을 공백으로 이은 것(search.index_text).
+        PG 는 FTS5 가 없어 평범한 표 + pg_trgm — 각 낱말(구문)을 LIKE '%조각%' OR 로. 관련도는 호출부가 파이썬으로 다시 매김."""
+        words = query_words(query)
+        if not words:
+            return None, [], 0
+        if self.backend == "pg":
+            return "(" + " OR ".join(f"{alias}.body LIKE ?" for _ in words) + ")", [f"%{w}%" for w in words], len(words)
+        return f"{table} MATCH ?", ['"' + '" OR "'.join(words) + '"'], len(words)
+
     async def search_messages(self, chat_id: int, query: str, since: int, limit: int = 10) -> list[aiosqlite.Row]:
         """전문 검색 (sodam/search.py). 낱말 하나면 최신순. 여러 개면 맞는 낱말이 많은 순 → bm25 → 최신순
         (bm25 만으로는 기록이 적을 때 흔한 낱말 가중치가 0 에 가까워져 '둘 다 맞는 글 먼저'가 안 지켜짐)."""
-        match, n = match_query(query)
-        if not match:
+        where, params, n = self._fts_where("messages_fts", "f", query)
+        if not where:
             return []
-        order = "bm25(messages_fts), msg.id DESC" if n > 1 else "msg.id DESC"
+        # PG 는 bm25 없음 → 최신순으로만 후보를 받고(여러 낱말이면 아래 파이썬 재정렬이 관련도 담당)
+        order = "msg.id DESC" if self.backend == "pg" else ("bm25(messages_fts), msg.id DESC" if n > 1 else "msg.id DESC")
         rows = await self._all(
             "SELECT msg.*, u.username, u.first_name FROM messages_fts f JOIN messages msg ON msg.id=f.rowid "
             "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE messages_fts MATCH ? AND msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? "
-            f"ORDER BY {order} LIMIT ?", (match, chat_id, since, limit if n == 1 else SEARCH_POOL))
+            f"WHERE {where} AND msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? "
+            f"ORDER BY {order} LIMIT ?", (*params, chat_id, since, limit if n == 1 else SEARCH_POOL))
         if n > 1:
             words = query_words(query)
             rows = sorted(rows, key=lambda r: -sum(w in index_text(r["text"]) for w in words))[:limit]  # 안정 정렬
@@ -1026,13 +1048,14 @@ class DB:
 
     async def knowledge_candidates(self, chat_id: int, terms: list[str], limit: int = 300) -> list[aiosqlite.Row]:
         """검색어 중 하나라도 들어간 조각 (이 방 + 공통). 점수는 knowledge.py 에서 매긴다."""
-        match, _ = match_query(" ".join(terms))
-        if not match:
+        where, params, _ = self._fts_where("knowledge_fts", "f", " ".join(terms))
+        if not where:
             return []
+        order = "doc_ts DESC" if self.backend == "pg" else "bm25(knowledge_fts)"  # PG 는 bm25 없음 → 최신 자료 우선(점수는 knowledge.py)
         return await self._all(
             "SELECT c.content, c.doc_id, c.idx, d.title, COALESCE(d.updated_at, d.ts) AS doc_ts FROM knowledge_fts f JOIN knowledge_chunks c ON c.id=f.rowid "
-            "JOIN knowledge_docs d ON d.id=c.doc_id WHERE knowledge_fts MATCH ? AND c.chat_id IN (?, 0) "
-            "ORDER BY bm25(knowledge_fts) LIMIT ?", (match, chat_id, limit))
+            f"JOIN knowledge_docs d ON d.id=c.doc_id WHERE {where} AND c.chat_id IN (?, 0) "
+            f"ORDER BY {order} LIMIT ?", (*params, chat_id, limit))
 
     # ── 구독 / 결제 ───────────────────────────────────────
     async def start_subscription(self, chat_id: int, trial_until: int, added_by: int | None) -> None:
