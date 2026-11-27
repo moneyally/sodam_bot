@@ -57,6 +57,8 @@ def cost_math_and_unknown_model():
 
 @test
 async def usage_report_runs_read_only():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # tools/usage_report.py 는 .db 파일을 sqlite3 로 직접 엶(오너 점검 CLI) — PG 포팅은 Phase-2(HANDOFF)
     db = await make_db()
     await db.bump("2026-09-27", 0, "tokens", 2_100_000)
     await db.bump("2026-09-27", 0, "prompt_tokens", 2_000_000)

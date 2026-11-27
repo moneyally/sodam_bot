@@ -102,6 +102,9 @@ async def alert_rule_change_applies_at_once():
 async def hot_path_db_round_trips_per_message():
     """그룹 메시지 hot path (tools/hotpath_bench.py, 가짜 텔레그램·AI 없음): 감사 전 DB 왕복 13.6/메시지 → 2.6.
     캐시가 빠지거나 훅이 메시지마다 조회를 늘리면 여기서 잡힌다 (대화 기록 쓰기 1번은 꼭 필요)."""
+    import os
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # DB 왕복 수는 sqlite set_trace_callback 로 셈 — PG 는 왕복 구조가 다름(hot path 캐시 자체는 hot_path_caches_see_changes_immediately 가 덮음)
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))

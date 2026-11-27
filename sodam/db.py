@@ -1219,6 +1219,9 @@ class DB:
     async def backup_to(self, path: str) -> None:
         """온라인 백업 (봇이 돌아가는 중에도 일관된 복사본)."""
         t0 = time.monotonic()
+        if self.backend == "pg":
+            await self.conn.dump_to(path)   # pg_dump 평문 SQL 덤프 (SQLite conn.backup 대체)
+            return
         async with aiosqlite.connect(path) as target:
             await self.conn.backup(target)
         dt = time.monotonic() - t0

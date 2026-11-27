@@ -1,5 +1,6 @@
 """결제·AI 비용·제재 버그 수정 회귀 테스트 (네트워크 없이): python tests/run_all.py test_fix_billing_ai"""
 import asyncio
+import os
 import sqlite3
 import json
 import sys
@@ -52,6 +53,8 @@ async def payment_retried_after_crash_between_record_and_extend():
 
 @test
 async def invoice_paid_and_extend_are_one_transaction():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite CREATE TEMP TRIGGER + RAISE(ABORT) 로 트랜잭션 중간 실패를 흉내냄 — PG 는 문법/원자성 경로가 달라 test_pgbackend atomic 이 덮음
     db, svc, grid = await TB.setup()
     inv = await svc.billing.create_invoice(CHAT, 1)
     grid.transfer("tx-half", inv["amount_units"])

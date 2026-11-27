@@ -43,13 +43,19 @@ class Backup:
         return gz
 
     def _verify_and_compress(self, raw: Path) -> Path:
-        con = sqlite3.connect(raw)
-        try:
-            result = con.execute("PRAGMA integrity_check").fetchone()[0]
-        finally:
-            con.close()
-        if result != "ok":
-            raise BackupError(f"무결성 검사 실패: {result}")
+        if getattr(self.db, "backend", "sqlite") == "pg":
+            # pg_dump 평문 덤프: sqlite PRAGMA 못 씀 → 완료 마커로 '끝까지 떠졌나' 확인
+            tail = raw.read_bytes()[-200:]
+            if b"PostgreSQL database dump complete" not in tail:
+                raise BackupError("pg_dump 덤프 미완료(완료 마커 없음)")
+        else:
+            con = sqlite3.connect(raw)
+            try:
+                result = con.execute("PRAGMA integrity_check").fetchone()[0]
+            finally:
+                con.close()
+            if result != "ok":
+                raise BackupError(f"무결성 검사 실패: {result}")
         gz = raw.with_name(raw.name + ".gz")
         with open(raw, "rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
             shutil.copyfileobj(src, dst)

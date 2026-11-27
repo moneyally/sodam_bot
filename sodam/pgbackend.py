@@ -498,6 +498,23 @@ class PgConnection:
                 raise
         return await self._run(run)
 
+    async def dump_to(self, path: str) -> None:
+        """온라인 백업: pg_dump 로 일관된 평문 SQL 덤프 (SQLite conn.backup 의 PG 판).
+        pg_dump 는 자기 연결에서 repeatable-read 스냅샷으로 떠서 봇이 돌아가는 중에도 일관됨 → 전용 스레드(DB 연결) 안 묶음."""
+        import re
+        import subprocess
+        args = ["pg_dump", "-d", self._dsn, "-f", path, "--no-owner", "--no-privileges"]
+        m = re.search(r"-csearch_path=([^,\s]+)", self._dsn)   # 테스트 하네스: 그 스키마만 (production dsn 엔 없음 → DB 전체)
+        if m:
+            args += ["-n", m.group(1)]
+
+        def run():
+            p = subprocess.run(args, capture_output=True, text=True)
+            if p.returncode != 0:
+                raise RuntimeError(f"pg_dump 실패(rc={p.returncode}): {(p.stderr or '').strip()[:300]}")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run)
+
     async def close(self):
         await self._run(self._pg.close)
         self._pool.shutdown(wait=True)
