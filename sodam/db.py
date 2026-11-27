@@ -218,6 +218,24 @@ REPEAT_SEC = 600
 
 KST_SEC = 32400      # 집계 시간대 기준 = 한국 (봇 tz 는 항상 Asia/Seoul). 시간대 빼기에서 ts → 한국 시(時) 변환용
 
+def _backend() -> str:
+    """DB_BACKEND (self 없는 함수가 방언 고를 때 — 매번 읽어 테스트에서 env 바꿔도 반영). DB.__init__ 은 self.backend."""
+    return (os.getenv("DB_BACKEND") or "sqlite").strip().lower()
+
+
+def hour_sql(ts_expr: str) -> str:
+    """epoch 초(ts_expr)의 시(時) 0~23 정수 SQL. SQLite 와 PG 는 함수가 달라 방언으로 (전체 SQL strftime 은 이 꼴 둘뿐)."""
+    if _backend() == "pg":   # to_timestamp 는 UTC timestamptz → 세션 tz 와 무관하게 UTC 시를 뽑으려 at time zone 'UTC'
+        return f"CAST(extract(hour from to_timestamp({ts_expr}) at time zone 'UTC') AS INTEGER)"
+    return f"CAST(strftime('%H', {ts_expr}, 'unixepoch') AS INTEGER)"
+
+
+def hour_offset_sql(ts_expr: str) -> str:
+    """ts_expr(epoch) 에 ? 로 준 시간대(예 '+9 hours')를 더한 시(時). diary 바쁜시간 1곳."""
+    if _backend() == "pg":
+        return f"CAST(extract(hour from to_timestamp({ts_expr}) at time zone 'UTC' + (?)::interval) AS INTEGER)"
+    return f"CAST(strftime('%H', {ts_expr}, 'unixepoch', ?) AS INTEGER)"
+
 
 class CountRule(NamedTuple):
     """채팅 집계 거르기 (방 설정 chat_min_chars · chat_no_repeat · chat_quiet_hours). no_repeat = 같은 사람이 같은 글을
@@ -252,7 +270,7 @@ def count_filter(t: str = "messages", rule=None) -> str:
     끝: 시간대 빼기 — 한국 시가 [시작, 끝) 안이면 제외 (시작<끝 = 그 사이, 시작>끝 = 자정 넘김).
     rule.boosted 면 최소 글자수를 글 ts 의 부스트 구간별로 (rank_boost). SQL 모양이 rule.args 와 짝이라 둘 다 boosted 로 분기."""
     r = as_rule(rule) if rule is not None else CountRule()
-    h = f"CAST(strftime('%H', {t}.ts+{KST_SEC}, 'unixepoch') AS INTEGER)"
+    h = hour_sql(f"{t}.ts+{KST_SEC}")
     if r.boosted:   # 부스트 구간 있는 방: 글 ts 의 구간 min 이상만 (구간 밖은 방 기본 min)
         mc = f"AND length(replace(replace({t}.text,' ',''),char(10),''))>={_boost_min(t)}"
     else:

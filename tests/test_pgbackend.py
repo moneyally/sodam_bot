@@ -168,6 +168,37 @@ async def db_style_atomic_via_execute_and_conn():
 
 
 @test
+async def kst_hour_sql_computes_on_pg():
+    """SQL strftime 2곳의 PG 방언(한국시 추출)이 실제로 맞는 시를 내나. count_filter·diary 바쁜시간 공용."""
+    c = _conn()
+    if c is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    from sodam import db as dbmod
+    old = os.environ.get("DB_BACKEND")
+    os.environ["DB_BACKEND"] = "pg"
+    try:
+        assert "to_timestamp" in dbmod.hour_sql("m.ts+32400"), dbmod.hour_sql("m.ts+32400")
+        # 세션 tz 를 UTC 아닌 걸로 둬도 한국시가 나와야 (at time zone 'UTC' 가 진짜 일하는지)
+        await c.execute("SET TIME ZONE 'America/New_York'")
+        # 2026-01-01 00:00 UTC = 1767225600 → +KST 9시간 = 한국시 9시
+        epoch = 1767225600
+        expr = dbmod.hour_sql(str(epoch + dbmod.KST_SEC))
+        h = (await c.execute_fetchall(f"SELECT {expr} AS h"))[0]["h"]
+        assert h == 9, f"한국시 틀림: {h} (세션 tz 에 휘둘림)"
+        # 시간대 오프셋형(diary): +9 hours
+        oexpr = dbmod.hour_offset_sql(str(epoch))
+        h2 = (await c.execute_fetchall(f"SELECT {oexpr} AS h", ("+9 hours",)))[0]["h"]
+        assert h2 == 9, f"오프셋 한국시 틀림: {h2}"
+    finally:
+        if old is None:
+            os.environ.pop("DB_BACKEND", None)
+        else:
+            os.environ["DB_BACKEND"] = old
+        await c.close()
+
+
+@test
 async def insert_or_replace_becomes_upsert():
     """INSERT OR REPLACE → ON CONFLICT DO UPDATE (표 PK 자동 introspect). 컬럼 명시형·미명시형 둘 다."""
     c = _conn()
