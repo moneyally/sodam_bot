@@ -57,6 +57,10 @@ def translate(sql: str) -> str:
     # SQLite IS = null-safe 등호(IS NULL 뿐 아니라 IS '값'·IS ? 도) → PG IS NOT DISTINCT FROM. NULL/TRUE/FALSE/DISTINCT 는 그대로.
     s = re.sub(r"\bIS\s+NOT\s+(?!NULL\b|DISTINCT\b|TRUE\b|FALSE\b)", "IS DISTINCT FROM ", s, flags=re.I)
     s = re.sub(r"\bIS\s+(?!NULL\b|NOT\b|DISTINCT\b|TRUE\b|FALSE\b)", "IS NOT DISTINCT FROM ", s, flags=re.I)
+    # SQLite LIKE 는 ASCII 대소문자 무시(코드가 그걸 가정) → PG LIKE 는 대소문자 구분 → 조용히 다른 결과. ILIKE 로 보존.
+    # (pg_trgm GIN 은 ILIKE 도 가속. 구조화된 키 LIKE 는 소문자라 과매치 없음.)
+    s = re.sub(r"\bNOT\s+LIKE\b", "NOT ILIKE", s, flags=re.I)
+    s = re.sub(r"(?<!I)\bLIKE\b", "ILIKE", s, flags=re.I)
     # 자리표시자 ? → %s, 리터럴 % → %% (psycopg). 단 **문자열 리터럴 안의 ? 는 글자**(예 COALESCE(x,'?')) → 안 바꿈.
     out, in_str = [], False
     for ch in s:
