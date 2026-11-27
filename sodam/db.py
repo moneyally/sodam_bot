@@ -1,6 +1,7 @@
 """SQLite 저장소. 모든 SQL은 이 파일에만 둔다 (나중에 Postgres로 옮기기 쉽게)."""
 import json
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -334,6 +335,8 @@ NOT_AUDIT = ("l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press
 class DB:
     def __init__(self, path: str):
         self.path = path
+        # DB_BACKEND=pg 면 PostgreSQL(sodam/pgbackend.py), 아니면 SQLite(기본). 이관 중 env 하나로 1초 롤백.
+        self.backend = (os.getenv("DB_BACKEND") or "sqlite").strip().lower()
         self.conn: aiosqlite.Connection | None = None
         self._settings_cache: dict[int, dict[str, Any]] = {}
         self._settings_at: dict[int, float] = {}   # 읽은 시각 (다른 프로세스가 바꾼 설정도 TTL 뒤 반영)
@@ -342,6 +345,9 @@ class DB:
 
     async def open(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        if self.backend == "pg":
+            await self._open_pg()
+            return
         pending = aiosqlite.connect(self.path)
         # 작업 스레드를 daemon 으로: Ctrl+C 로 정리가 끊겨도 프로세스가 멈춰 있지 않게.
         # (SQLite 는 트랜잭션 단위로 원자적이라 중간에 끊겨도 DB 는 깨지지 않음)
@@ -363,6 +369,31 @@ class DB:
         await self._backfill_fts()
         await self.conn.commit()
 
+    async def _open_pg(self) -> None:
+        """PostgreSQL 로 켜기 (DB_BACKEND=pg). SQLite 의 PRAGMA·WAL·sqlite-vec 는 PG 엔 불필요/서버측 대체.
+        스키마·컬럼 추가·FTS 채우기는 SQLite 와 같은 메서드를 공유 — 변환은 pgbackend 가 처리."""
+        from . import pgbackend
+        dsn = os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
+        self.conn = pgbackend.PgConnection(dsn)
+        self.vec = False   # 의미검색(pgvector)은 통합 전까지 끔 — 단어검색(pg_trgm)은 됨
+        await self.conn.executescript(SCHEMA)
+        for extra in EXTRA_SCHEMA:   # 기능 모듈이 register_schema 로 추가한 테이블
+            await self.conn.executescript(extra)
+        await self._migrate_pg()
+        await self._backfill_fts()
+        await self.conn.commit()
+
+    async def _migrate_pg(self) -> None:
+        """있어야 할 컬럼 추가 (PG — PRAGMA table_info 대신 information_schema). 선언은 execute 가 번역(INTEGER→BIGINT)."""
+        for table, cols in self._wanted_columns().items():
+            rows = await self._all(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?",
+                (table,))
+            have = {r["column_name"] for r in rows}
+            for col, decl in cols.items():
+                if col not in have:
+                    await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
     async def _load_vec(self) -> bool:
         """sqlite-vec 확장 (의미 검색, sodam/semsearch.py). 없거나 못 올리면 False → 단어 검색만."""
         try:
@@ -378,14 +409,14 @@ class DB:
     async def _backfill_fts(self) -> None:
         """색인이 없던 예전 기록을 색인에 넣는다 (id 가 늘기만 해서 '색인된 마지막 id 다음'만 보면 됨)."""
         for table, fts, col, where in (("messages", "messages_fts", "text", "is_bot=0"),
-                                       ("knowledge_chunks", "knowledge_fts", "content", "1")):
+                                       ("knowledge_chunks", "knowledge_fts", "content", "1=1")):  # 1=1: PG 는 AND 뒤 불리언 필요(SQLite 도 OK)
             last = (await self._one(f"SELECT COALESCE(MAX(rowid), 0) AS n FROM {fts}"))["n"]
             rows = await self._all(f"SELECT id, {col} AS body FROM {table} WHERE id>? AND {where}", (last,))
             await self.conn.executemany(f"INSERT INTO {fts}(rowid, body) VALUES(?, ?)",
                                         [(r["id"], index_text(r["body"])) for r in rows])
 
-    async def _migrate(self) -> None:
-        """예전 버전 DB에 없는 컬럼 추가."""
+    def _wanted_columns(self) -> dict[str, dict[str, str]]:
+        """있어야 할 컬럼 (예전 DB·기능 모듈 추가분). _migrate(SQLite)·_migrate_pg(PG) 공용 — 한 곳에서만 관리."""
         wanted = {"schedules": {"title": "TEXT NOT NULL DEFAULT ''", "media_type": "TEXT", "media_id": "TEXT",
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
                                 "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
@@ -401,7 +432,11 @@ class DB:
                   "knowledge_docs": {"updated_at": "INTEGER"}}   # 자료 고친 시각 (예전 자료는 NULL → ts)
         for table, cols in EXTRA_COLUMNS.items():
             wanted[table] = {**wanted.get(table, {}), **cols}
-        for table, cols in wanted.items():
+        return wanted
+
+    async def _migrate(self) -> None:
+        """예전 버전 DB에 없는 컬럼 추가 (SQLite)."""
+        for table, cols in self._wanted_columns().items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
                 if col not in have:

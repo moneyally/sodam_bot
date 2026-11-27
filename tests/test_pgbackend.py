@@ -245,6 +245,49 @@ async def full_sodam_schema_creates_on_pg():
         await c.close()
 
 
+@test
+async def db_boots_on_pg_and_atomic_roundtrip():
+    """db.py 자체가 DB_BACKEND=pg 로 켜지고(스키마+컬럼추가+FTS채우기) 쓰기·atomic·읽기가 도는지.
+    SQLite 경로는 안 건드렸으니(조기 반환) 이게 통합의 첫 '진짜 부팅' 증거. PG_TEST=1 opt-in."""
+    pre = _conn()
+    if pre is None:
+        print("  (PG 없음 — 건너뜀)")
+        return
+    dsn = os.getenv("PG_TEST_DSN") or "dbname=sodam_probe"
+    # 깨끗한 스키마로 시작
+    await pre.executescript("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    await pre._run(lambda: pre._pg.cursor().execute(
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector"))
+    await pre.commit()
+    await pre.close()
+
+    import sodam.handlers  # noqa: F401  — register_schema/register_columns 전부
+    from sodam.db import DB
+    os.environ["DB_BACKEND"] = "pg"
+    os.environ["PG_DSN"] = dsn
+    db = DB("unused-on-pg")
+    try:
+        assert db.backend == "pg"
+        await db.open()   # ← 스키마 + _migrate_pg(컬럼) + _backfill_fts 전부 PG 에서
+        await db._write("INSERT INTO members(chat_id,user_id,points) VALUES(?,?,?)", (-10, 7, 1000))
+        # atomic: 포인트 옮기기 (db.py 의 SAVEPOINT 경로 그대로 PG 에서)
+        def move(c):
+            c.execute("UPDATE members SET points=points-? WHERE chat_id=? AND user_id=?", (300, -10, 7))
+            c.execute("INSERT INTO members(chat_id,user_id,points) VALUES(?,?,?)", (-10, 8, 300))
+        await db.atomic(move)
+        a = (await db._one("SELECT points FROM members WHERE chat_id=? AND user_id=?", (-10, 7)))["points"]
+        b = (await db._one("SELECT points FROM members WHERE chat_id=? AND user_id=?", (-10, 8)))["points"]
+        assert a == 700 and b == 300, (a, b)
+        # _migrate_pg 가 schedules 에 나중 컬럼(fmt 등)을 넣었나
+        cols = await db._all("SELECT column_name FROM information_schema.columns WHERE table_name='schedules'")
+        names = {r["column_name"] for r in cols}
+        assert {"fmt", "rich", "buttons", "del_prev"} <= names, names
+    finally:
+        await db.close()
+        os.environ.pop("DB_BACKEND", None)
+        os.environ.pop("PG_DSN", None)
+
+
 if __name__ == "__main__":
     import asyncio
     sys.exit(1 if asyncio.run(run_all()) else 0)
