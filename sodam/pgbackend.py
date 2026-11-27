@@ -40,6 +40,9 @@ def translate(sql: str) -> str:
     # SQLite char(N)=코드포인트 문자 → PG 는 chr(N) (char 는 PG 에선 타입). DDL 엔 CHAR(N) 타입 안 씀(실측).
     s = re.sub(r"\bchar\(", "chr(", s)
     s = re.sub(r"\binstr\(", "strpos(", s, flags=re.I)   # SQLite instr(hay,needle) = PG strpos(hay,needle) (둘 다 1-based·없으면 0)
+    # SQLite json_extract(col, '$.a.b') → PG (col::jsonb #>> '{a,b}') (둘 다 텍스트값, 없으면 NULL)
+    s = re.sub(r"\bjson_extract\(\s*([^,]+?)\s*,\s*'\$\.?([^']*)'\s*\)",
+               lambda m: f"({m.group(1).strip()}::jsonb #>> '{{{m.group(2).replace('.', ',')}}}')", s, flags=re.I)
     # (ON CONFLICT DO UPDATE SET 의 기존행 bare 컬럼 모호성은 SyncConn._qualify_update 가 introspect 로 처리)
     # PRAGMA (유지보수·open) → PG 엔 없음. 통째 no-op (open 의 PRAGMA 는 _open_pg 가 안 부르지만 optimize 등 유지보수용 대비)
     if re.match(r"\s*PRAGMA\b", s, re.I):
@@ -199,6 +202,9 @@ class _Cur:
     @property
     def lastrowid(self):
         return self._last
+
+    def __iter__(self):           # aiosqlite 커서처럼 직접 순회 가능 (for r in cur)
+        return iter(self._rows)
 
 
 # ── 동기 연결 래퍼 (스레드 안에서만 씀. atomic 콜백이 받는 'c' = db.py 의 self.conn._conn) ──
