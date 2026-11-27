@@ -130,7 +130,7 @@ async def bot_leave_ignored():
 @test
 async def captcha_pending_no_farewell():
     svc, bot, ctx = await setup()
-    await svc.db.add_captcha(CHAT, 95, 5, "x", 2_000_000_000)
+    await svc.db.add_captcha(CHAT, 95, 5, 5, 2_000_000_000)   # answer 는 운영에서 항상 정수(captcha.puzzle)
     await member_left(ctx, fake_user(95, "캡차대기"))
     assert farewells(bot) == []
 

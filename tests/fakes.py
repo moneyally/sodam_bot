@@ -371,6 +371,56 @@ atexit.register(shutil.rmtree, tempfile.tempdir, True)
 OPEN_DBS: list[DB] = []
 _VISION_ORIG: dict = {}   # vision 모듈 전역의 원본 (테스트가 가짜로 바꿔 놓은 걸 테스트마다 되돌림)
 
+# ── 🐘 PG 하네스 (DB_BACKEND=pg 로 전체 시험 돌릴 때) — 테스트마다 고유 스키마로 격리 ──
+_PG_HARNESS = (os.getenv("DB_BACKEND", "").strip().lower() == "pg")
+_PG_READY = False
+
+
+def _pg_base_dsn() -> str:
+    return os.getenv("PG_TEST_DSN") or os.getenv("PG_DSN") or "dbname=sodam_harness"
+
+
+def _pg_setup_once() -> None:
+    """하네스 DB + 확장을 한 번만 준비 (psycopg 동기 — 테스트는 순차라 OK)."""
+    global _PG_READY
+    if _PG_READY:
+        return
+    import re
+    import psycopg
+    base = _pg_base_dsn()
+    def _prep(c):
+        c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # public 에 쌓인 과거 실행 잔존 테이블 청소: 테스트는 경로별 스키마(_pg_make)로 격리되는데,
+        # search_path 가 '<스키마>,public' 이라 public 에 남은 테이블이 폴백으로 잡혀 실패주입 무력화·교차오염을 일으킴(확장은 테이블 아니라 안 건드림).
+        for (t,) in c.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall():
+            c.execute(f'DROP TABLE IF EXISTS public."{t}" CASCADE')
+    try:
+        with psycopg.connect(base, autocommit=True) as c:
+            _prep(c)
+    except psycopg.OperationalError:   # DB 자체가 없으면 만든다
+        name = (re.search(r"dbname=(\S+)", base) or [None, "sodam_harness"])[1]
+        with psycopg.connect("dbname=postgres", autocommit=True) as c:
+            c.execute(f'CREATE DATABASE "{name}"')
+        with psycopg.connect(base, autocommit=True) as c:
+            _prep(c)
+    _PG_READY = True
+
+
+def _pg_make(path: str) -> DB:
+    """PG 백엔드 테스트 DB — **경로에서 스키마 유도**(db._open_pg 와 같은 해시) → 같은 path 재오픈=같은 데이터(재시작 시뮬)."""
+    import hashlib
+    import psycopg
+    _pg_setup_once()
+    base = _pg_base_dsn()
+    os.environ["PG_HARNESS_BASE"] = base   # db._open_pg 가 이걸 보고 path→schema 유도 (production 은 안 씀)
+    schema = "t" + hashlib.sha1(path.encode()).hexdigest()[:16]
+    with psycopg.connect(base, autocommit=True) as c:
+        c.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    db = DB(path)   # pg_dsn 안 넘김 → _open_pg 가 PG_HARNESS_BASE + path 로 유도 (재시작 때 DB(path) 도 같은 스키마)
+    db._pg_schema, db._pg_base = schema, base   # close 때 DROP
+    return db
+
 
 def _reset_global_caches() -> None:
     """테스트마다 '새 세상' — production 은 DB 하나라 괜찮지만 테스트는 DB 를 새로 만드는데,
@@ -400,7 +450,8 @@ def _reset_global_caches() -> None:
 
 async def make_db() -> DB:
     _reset_global_caches()
-    db = DB(os.path.join(tempfile.mkdtemp(), "t.db"))
+    path = os.path.join(tempfile.mkdtemp(), "t.db")
+    db = _pg_make(path) if _PG_HARNESS else DB(path)
     await db.open()
     OPEN_DBS.append(db)  # 테스트가 중간에 실패해도 runner 가 닫는다 (안 닫으면 프로세스가 안 끝남)
     return db
@@ -427,6 +478,14 @@ async def close_open_dbs() -> None:
         db = OPEN_DBS.pop()
         dirs.add(os.path.dirname(db.path))
         await db.close()
+        sch = getattr(db, "_pg_schema", None)   # PG 하네스: 그 테스트 스키마 통째로 지움
+        if sch:
+            try:
+                import psycopg
+                with psycopg.connect(db._pg_base, autocommit=True) as c:
+                    c.execute(f'DROP SCHEMA IF EXISTS "{sch}" CASCADE')   # 재시작 테스트는 같은 스키마 공유 → IF EXISTS
+            except Exception:
+                pass
     for d in dirs:
         if d and d != tempfile.tempdir:
             shutil.rmtree(d, ignore_errors=True)

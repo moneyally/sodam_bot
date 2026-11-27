@@ -1,6 +1,7 @@
 """SQLite 저장소. 모든 SQL은 이 파일에만 둔다 (나중에 Postgres로 옮기기 쉽게)."""
 import json
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any, Awaitable, Callable, NamedTuple, TypeVar
 
 import aiosqlite
 
-from .search import index_text, match_query, query_words
+from .search import index_text, query_words
 from .settings import DEFAULTS
 from .util import to_int
 
@@ -217,6 +218,24 @@ REPEAT_SEC = 600
 
 KST_SEC = 32400      # 집계 시간대 기준 = 한국 (봇 tz 는 항상 Asia/Seoul). 시간대 빼기에서 ts → 한국 시(時) 변환용
 
+def _backend() -> str:
+    """DB_BACKEND (self 없는 함수가 방언 고를 때 — 매번 읽어 테스트에서 env 바꿔도 반영). DB.__init__ 은 self.backend."""
+    return (os.getenv("DB_BACKEND") or "sqlite").strip().lower()
+
+
+def hour_sql(ts_expr: str) -> str:
+    """epoch 초(ts_expr)의 시(時) 0~23 정수 SQL. SQLite 와 PG 는 함수가 달라 방언으로 (전체 SQL strftime 은 이 꼴 둘뿐)."""
+    if _backend() == "pg":   # to_timestamp 는 UTC timestamptz → 세션 tz 와 무관하게 UTC 시를 뽑으려 at time zone 'UTC'
+        return f"CAST(extract(hour from to_timestamp({ts_expr}) at time zone 'UTC') AS INTEGER)"
+    return f"CAST(strftime('%H', {ts_expr}, 'unixepoch') AS INTEGER)"
+
+
+def hour_offset_sql(ts_expr: str) -> str:
+    """ts_expr(epoch) 에 ? 로 준 시간대(예 '+9 hours')를 더한 시(時). diary 바쁜시간 1곳."""
+    if _backend() == "pg":
+        return f"CAST(extract(hour from to_timestamp({ts_expr}) at time zone 'UTC' + (?)::interval) AS INTEGER)"
+    return f"CAST(strftime('%H', {ts_expr}, 'unixepoch', ?) AS INTEGER)"
+
 
 class CountRule(NamedTuple):
     """채팅 집계 거르기 (방 설정 chat_min_chars · chat_no_repeat · chat_quiet_hours). no_repeat = 같은 사람이 같은 글을
@@ -251,7 +270,7 @@ def count_filter(t: str = "messages", rule=None) -> str:
     끝: 시간대 빼기 — 한국 시가 [시작, 끝) 안이면 제외 (시작<끝 = 그 사이, 시작>끝 = 자정 넘김).
     rule.boosted 면 최소 글자수를 글 ts 의 부스트 구간별로 (rank_boost). SQL 모양이 rule.args 와 짝이라 둘 다 boosted 로 분기."""
     r = as_rule(rule) if rule is not None else CountRule()
-    h = f"CAST(strftime('%H', {t}.ts+{KST_SEC}, 'unixepoch') AS INTEGER)"
+    h = hour_sql(f"{t}.ts+{KST_SEC}")
     if r.boosted:   # 부스트 구간 있는 방: 글 ts 의 구간 min 이상만 (구간 밖은 방 기본 min)
         mc = f"AND length(replace(replace({t}.text,' ',''),char(10),''))>={_boost_min(t)}"
     else:
@@ -332,8 +351,11 @@ NOT_AUDIT = ("l.action NOT LIKE 'ask!_%' ESCAPE '!' AND l.action NOT LIKE 'press
 # link_del = 사람별 링크 삭제 (타임라인용) · join_info = 입장 경로 · subgate_pass = 입장 때 이미 구독 — 양이 많아 관리 기록엔 안 보임
 
 class DB:
-    def __init__(self, path: str):
+    def __init__(self, path: str, pg_dsn: str | None = None):
         self.path = path
+        # DB_BACKEND=pg 면 PostgreSQL(sodam/pgbackend.py), 아니면 SQLite(기본). 이관 중 env 하나로 1초 롤백.
+        self.backend = (os.getenv("DB_BACKEND") or "sqlite").strip().lower()
+        self._pg_dsn = pg_dsn   # 테스트 하네스가 스키마 격리된 dsn 을 넘길 때 (실서버는 None → env/기본)
         self.conn: aiosqlite.Connection | None = None
         self._settings_cache: dict[int, dict[str, Any]] = {}
         self._settings_at: dict[int, float] = {}   # 읽은 시각 (다른 프로세스가 바꾼 설정도 TTL 뒤 반영)
@@ -342,6 +364,9 @@ class DB:
 
     async def open(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        if self.backend == "pg":
+            await self._open_pg()
+            return
         pending = aiosqlite.connect(self.path)
         # 작업 스레드를 daemon 으로: Ctrl+C 로 정리가 끊겨도 프로세스가 멈춰 있지 않게.
         # (SQLite 는 트랜잭션 단위로 원자적이라 중간에 끊겨도 DB 는 깨지지 않음)
@@ -363,6 +388,53 @@ class DB:
         await self._backfill_fts()
         await self.conn.commit()
 
+    async def _open_pg(self) -> None:
+        """PostgreSQL 로 켜기 (DB_BACKEND=pg). SQLite 의 PRAGMA·WAL·sqlite-vec 는 PG 엔 불필요/서버측 대체.
+        스키마·컬럼 추가·FTS 채우기는 SQLite 와 같은 메서드를 공유 — 변환은 pgbackend 가 처리."""
+        from . import pgbackend
+        harness = os.getenv("PG_HARNESS_BASE")   # 테스트 전용: 경로에서 스키마 유도 → 같은 path 재오픈=같은 데이터(재시작 시뮬). production 은 안 씀.
+        if not self._pg_dsn and harness:
+            import hashlib
+            sch = "t" + hashlib.sha1(self.path.encode()).hexdigest()[:16]
+            dsn = f"{harness} options=-csearch_path={sch},public"
+        else:
+            dsn = self._pg_dsn or os.getenv("PG_DSN") or f"dbname={os.getenv('PG_DB') or 'sodam_main'}"
+        self.conn = pgbackend.PgConnection(dsn)
+        try:
+            await self.conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")   # 전문검색 LIKE 가속(FTS5 대체)
+            await self.conn.commit()
+        except Exception as e:   # 권한 없으면 색인 없이 LIKE 로 (느려도 동작)
+            log.info("pg_trgm 확장 못 켬 — 검색은 색인 없는 LIKE (%s)", e)
+        try:
+            await self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")    # 의미검색(pgvector, sqlite-vec 대체)
+            await self.conn.commit()
+            self.vec = True
+        except Exception as e:
+            self.vec = False
+            log.info("pgvector 없음 → 의미 검색 끔 (%s)", e)
+        await self.conn.executescript(SCHEMA)
+        for extra in EXTRA_SCHEMA:   # 기능 모듈이 register_schema 로 추가한 테이블
+            await self.conn.executescript(extra)
+        await self._migrate_pg()
+        for fts in ("messages_fts", "knowledge_fts"):   # body(bigram) 부분일치 GIN — 긴 구문 검색 가속
+            try:
+                await self.conn.execute(f"CREATE INDEX IF NOT EXISTS {fts}_trgm ON {fts} USING gin (body gin_trgm_ops)")
+            except Exception as e:
+                log.info("%s GIN 색인 생략 (%s)", fts, e)
+        await self._backfill_fts()
+        await self.conn.commit()
+
+    async def _migrate_pg(self) -> None:
+        """있어야 할 컬럼 추가 (PG — PRAGMA table_info 대신 information_schema). 선언은 execute 가 번역(INTEGER→BIGINT)."""
+        for table, cols in self._wanted_columns().items():
+            rows = await self._all(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?",
+                (table,))
+            have = {r["column_name"] for r in rows}
+            for col, decl in cols.items():
+                if col not in have:
+                    await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
     async def _load_vec(self) -> bool:
         """sqlite-vec 확장 (의미 검색, sodam/semsearch.py). 없거나 못 올리면 False → 단어 검색만."""
         try:
@@ -378,14 +450,14 @@ class DB:
     async def _backfill_fts(self) -> None:
         """색인이 없던 예전 기록을 색인에 넣는다 (id 가 늘기만 해서 '색인된 마지막 id 다음'만 보면 됨)."""
         for table, fts, col, where in (("messages", "messages_fts", "text", "is_bot=0"),
-                                       ("knowledge_chunks", "knowledge_fts", "content", "1")):
+                                       ("knowledge_chunks", "knowledge_fts", "content", "1=1")):  # 1=1: PG 는 AND 뒤 불리언 필요(SQLite 도 OK)
             last = (await self._one(f"SELECT COALESCE(MAX(rowid), 0) AS n FROM {fts}"))["n"]
             rows = await self._all(f"SELECT id, {col} AS body FROM {table} WHERE id>? AND {where}", (last,))
             await self.conn.executemany(f"INSERT INTO {fts}(rowid, body) VALUES(?, ?)",
                                         [(r["id"], index_text(r["body"])) for r in rows])
 
-    async def _migrate(self) -> None:
-        """예전 버전 DB에 없는 컬럼 추가."""
+    def _wanted_columns(self) -> dict[str, dict[str, str]]:
+        """있어야 할 컬럼 (예전 DB·기능 모듈 추가분). _migrate(SQLite)·_migrate_pg(PG) 공용 — 한 곳에서만 관리."""
         wanted = {"schedules": {"title": "TEXT NOT NULL DEFAULT ''", "media_type": "TEXT", "media_id": "TEXT",
                                 "action": "TEXT NOT NULL DEFAULT 'post'",   # post 공지 / remind 알람 / ai AI 작업 (cron.py)
                                 "skill": "TEXT", "at_ts": "INTEGER",          # skill: AI 작업 종류 · at_ts: 한 번(once) 시각
@@ -401,7 +473,11 @@ class DB:
                   "knowledge_docs": {"updated_at": "INTEGER"}}   # 자료 고친 시각 (예전 자료는 NULL → ts)
         for table, cols in EXTRA_COLUMNS.items():
             wanted[table] = {**wanted.get(table, {}), **cols}
-        for table, cols in wanted.items():
+        return wanted
+
+    async def _migrate(self) -> None:
+        """예전 버전 DB에 없는 컬럼 추가 (SQLite)."""
+        for table, cols in self._wanted_columns().items():
             have = {r["name"] for r in await self._all(f"PRAGMA table_info({table})")}
             for col, decl in cols.items():
                 if col not in have:
@@ -649,18 +725,30 @@ class DB:
             (chat_id, since, before, user_id, user_id, chat_id, user_id, since, before, limit))
         return list(reversed(rows))
 
+    def _fts_where(self, table: str, alias: str, query: str) -> "tuple[str | None, list, int]":
+        """FTS 검색 조건을 백엔드별로. SQLite = FTS5 MATCH, PG = bigram body 부분일치(LIKE).
+        반환 (where 조각, 파라미터, 낱말수 n). body 는 두 글자 조각을 공백으로 이은 것(search.index_text).
+        PG 는 FTS5 가 없어 평범한 표 + pg_trgm — 각 낱말(구문)을 LIKE '%조각%' OR 로. 관련도는 호출부가 파이썬으로 다시 매김."""
+        words = query_words(query)
+        if not words:
+            return None, [], 0
+        if self.backend == "pg":
+            return "(" + " OR ".join(f"{alias}.body LIKE ?" for _ in words) + ")", [f"%{w}%" for w in words], len(words)
+        return f"{table} MATCH ?", ['"' + '" OR "'.join(words) + '"'], len(words)
+
     async def search_messages(self, chat_id: int, query: str, since: int, limit: int = 10) -> list[aiosqlite.Row]:
         """전문 검색 (sodam/search.py). 낱말 하나면 최신순. 여러 개면 맞는 낱말이 많은 순 → bm25 → 최신순
         (bm25 만으로는 기록이 적을 때 흔한 낱말 가중치가 0 에 가까워져 '둘 다 맞는 글 먼저'가 안 지켜짐)."""
-        match, n = match_query(query)
-        if not match:
+        where, params, n = self._fts_where("messages_fts", "f", query)
+        if not where:
             return []
-        order = "bm25(messages_fts), msg.id DESC" if n > 1 else "msg.id DESC"
+        # PG 는 bm25 없음 → 최신순으로만 후보를 받고(여러 낱말이면 아래 파이썬 재정렬이 관련도 담당)
+        order = "msg.id DESC" if self.backend == "pg" else ("bm25(messages_fts), msg.id DESC" if n > 1 else "msg.id DESC")
         rows = await self._all(
             "SELECT msg.*, u.username, u.first_name FROM messages_fts f JOIN messages msg ON msg.id=f.rowid "
             "LEFT JOIN users u ON u.user_id=msg.user_id "
-            "WHERE messages_fts MATCH ? AND msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? "
-            f"ORDER BY {order} LIMIT ?", (match, chat_id, since, limit if n == 1 else SEARCH_POOL))
+            f"WHERE {where} AND msg.chat_id=? AND msg.flagged=0 AND msg.is_bot=0 AND msg.ts>=? "
+            f"ORDER BY {order} LIMIT ?", (*params, chat_id, since, limit if n == 1 else SEARCH_POOL))
         if n > 1:
             words = query_words(query)
             rows = sorted(rows, key=lambda r: -sum(w in index_text(r["text"]) for w in words))[:limit]  # 안정 정렬
@@ -678,7 +766,7 @@ class DB:
             "SELECT msg.user_id, COUNT(*) AS n, u.username, u.first_name FROM messages msg "
             "LEFT JOIN users u ON u.user_id=msg.user_id " + join +
             "WHERE msg.chat_id=? AND msg.ts>=? AND msg.ts<? AND msg.is_bot=0 " + cut + count_filter("msg", rule) +
-            " GROUP BY msg.user_id ORDER BY n DESC LIMIT ?",
+            " GROUP BY msg.user_id, u.username, u.first_name ORDER BY n DESC LIMIT ?",  # PG 는 GROUP BY 엄격(SQLite 도 무해)
             (chat_id, since, end, *((end,) if user_cuts else ()), *rule.args, limit))
 
     async def chat_totals(self, chat_id: int, since: int, until: int | None = None,
@@ -716,7 +804,8 @@ class DB:
             "LEFT JOIN users fu ON fu.user_id=msg.user_id LEFT JOIN users tu ON tu.user_id=msg.reply_to_user "
             "WHERE msg.chat_id=? AND msg.ts>=? AND msg.is_bot=0 AND msg.reply_to_user IS NOT NULL "
             "AND msg.reply_to_user<>msg.user_id " + who +
-            "GROUP BY msg.user_id, msg.reply_to_user ORDER BY n DESC, from_id LIMIT ?",
+            "GROUP BY msg.user_id, msg.reply_to_user, fu.first_name, fu.username, tu.first_name, tu.username "
+            "ORDER BY n DESC, from_id LIMIT ?",   # PG 는 GROUP BY 엄격(SQLite 도 무해)
             (chat_id, since, *(() if user_id is None else (user_id, user_id)), limit))
 
     async def prune(self, now_ts: int, days: int = KEEP_DAYS) -> None:
@@ -973,13 +1062,14 @@ class DB:
 
     async def knowledge_candidates(self, chat_id: int, terms: list[str], limit: int = 300) -> list[aiosqlite.Row]:
         """검색어 중 하나라도 들어간 조각 (이 방 + 공통). 점수는 knowledge.py 에서 매긴다."""
-        match, _ = match_query(" ".join(terms))
-        if not match:
+        where, params, _ = self._fts_where("knowledge_fts", "f", " ".join(terms))
+        if not where:
             return []
+        order = "doc_ts DESC" if self.backend == "pg" else "bm25(knowledge_fts)"  # PG 는 bm25 없음 → 최신 자료 우선(점수는 knowledge.py)
         return await self._all(
             "SELECT c.content, c.doc_id, c.idx, d.title, COALESCE(d.updated_at, d.ts) AS doc_ts FROM knowledge_fts f JOIN knowledge_chunks c ON c.id=f.rowid "
-            "JOIN knowledge_docs d ON d.id=c.doc_id WHERE knowledge_fts MATCH ? AND c.chat_id IN (?, 0) "
-            "ORDER BY bm25(knowledge_fts) LIMIT ?", (match, chat_id, limit))
+            f"JOIN knowledge_docs d ON d.id=c.doc_id WHERE {where} AND c.chat_id IN (?, 0) "
+            f"ORDER BY {order} LIMIT ?", (*params, chat_id, limit))
 
     # ── 구독 / 결제 ───────────────────────────────────────
     async def start_subscription(self, chat_id: int, trial_until: int, added_by: int | None) -> None:
@@ -1129,6 +1219,9 @@ class DB:
     async def backup_to(self, path: str) -> None:
         """온라인 백업 (봇이 돌아가는 중에도 일관된 복사본)."""
         t0 = time.monotonic()
+        if self.backend == "pg":
+            await self.conn.dump_to(path)   # pg_dump 평문 SQL 덤프 (SQLite conn.backup 대체)
+            return
         async with aiosqlite.connect(path) as target:
             await self.conn.backup(target)
         dt = time.monotonic() - t0

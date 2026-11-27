@@ -15,6 +15,7 @@ import subprocess
 from datetime import datetime, time as dtime
 from pathlib import Path
 
+from . import db as dbmod
 from . import hooks, persist
 from .security import NO_PREVIEW, nonce, strip_unsafe, wrap
 
@@ -92,7 +93,7 @@ async def facts(db, tz, now: datetime) -> dict:
     async def counter(prefix):
         return await one("SELECT SUM(n) FROM counters WHERE day=? AND key LIKE ?", day, prefix)
 
-    busy = await db._one("SELECT CAST(strftime('%H', ts, 'unixepoch', ?) AS INTEGER) h, COUNT(*) n FROM messages "
+    busy = await db._one(f"SELECT {dbmod.hour_offset_sql('ts')} h, COUNT(*) n FROM messages "
                          "WHERE ts>=? AND ts<? AND is_bot=0 GROUP BY h ORDER BY n DESC LIMIT 1",
                          (f"{int(now.utcoffset().total_seconds() // 3600):+d} hours", s, e))
     f = {

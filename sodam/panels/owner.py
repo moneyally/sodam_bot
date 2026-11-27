@@ -87,18 +87,19 @@ def _month_start(c: PanelCtx, back: int = 0) -> tuple[int, str]:
 
 
 # ── 조회 ──────────────────────────────────────────────────
+_UNTIL = "MAX(COALESCE(s.paid_until, 0), COALESCE(s.trial_until, 0))"   # 만료 시각 = max(유료, 체험)
 _ROOMS_SQL = (
     "SELECT c.chat_id, c.title, s.trial_until, s.paid_until, s.added_by, "
-    "MAX(COALESCE(s.paid_until, 0), COALESCE(s.trial_until, 0)) AS until, "
+    f"{_UNTIL} AS until, "
     "(SELECT MAX(COALESCE(block_ts, seen_at)) FROM payments p WHERE p.chat_id=c.chat_id AND " + _MATCHED + ") AS last_paid "
     "FROM chats c LEFT JOIN subscriptions s ON s.chat_id=c.chat_id WHERE c.chat_id<0 ")
+# ORDER BY 식 안에서는 SELECT 별칭(until)을 PG 가 못 씀 → 원식 반복 (SQLite·PG 공통). 이용 중인 방 만료 임박 순, 뒤에 만료된 방 최근순.
+_ROOMS_ORDER = (f"ORDER BY ({_UNTIL} <= ?), CASE WHEN {_UNTIL} > ? THEN {_UNTIL} ELSE -{_UNTIL} END, c.chat_id ")
 
 
 async def all_rooms(c: PanelCtx, page: int) -> list:
-    # 이용 중인 방은 만료 임박 순, 그 뒤에 만료된 방은 최근 만료 순
     return await c.svc.db._all(
-        _ROOMS_SQL + "ORDER BY (until <= ?), CASE WHEN until > ? THEN until ELSE -until END, c.chat_id "
-        "LIMIT ? OFFSET ?", (int(time.time()),) * 2 + (PAGE_SIZE, page * PAGE_SIZE))
+        _ROOMS_SQL + _ROOMS_ORDER + "LIMIT ? OFFSET ?", (int(time.time()),) * 2 + (PAGE_SIZE, page * PAGE_SIZE))
 
 
 async def room(c: PanelCtx, cid: int):

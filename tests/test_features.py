@@ -488,15 +488,22 @@ async def backup_run_verify_prune():
     raw = os.path.join(bdir, "restore.db")
     with gzip.open(files[0], "rb") as src, open(raw, "wb") as dst:
         dst.write(src.read())
-    con = sqlite3.connect(raw)
-    assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert con.execute("SELECT first_name FROM users WHERE user_id=7").fetchone()[0] == "백업확인"
-    con.close()
+    if getattr(db, "backend", "sqlite") == "pg":
+        dump = open(raw, "rb").read()                                   # pg_dump 평문 SQL
+        assert b"PostgreSQL database dump complete" in dump             # 끝까지 떠짐
+        assert "백업확인".encode() in dump                              # 넣은 데이터가 덤프에 있음
+    else:
+        con = sqlite3.connect(raw)
+        assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert con.execute("SELECT first_name FROM users WHERE user_id=7").fetchone()[0] == "백업확인"
+        con.close()
     await db.close()
 
 
 @test
 async def db_migration_adds_columns():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # 옛 sqlite DB 를 직접 만들어 ALTER-ADD-COLUMN 경로를 보는 테스트 — PG 는 _migrate_pg(information_schema) 로 딴 길(test_pgbackend 가 덮음)
     path = os.path.join(tempfile.mkdtemp(), "old.db")
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE schedules (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "

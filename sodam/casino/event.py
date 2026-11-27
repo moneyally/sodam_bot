@@ -189,7 +189,8 @@ async def standings(db, cid: int, start: int, end: int, limit: int = TOP, games:
     return await db._all(
         f"SELECT l.user_id, SUM(l.delta) AS net, u.first_name, u.last_name, u.username FROM casino_ledger l "
         f"LEFT JOIN users u ON u.user_id=l.user_id WHERE l.chat_id=? AND l.ts>=? AND l.ts<? AND {GAME_REASONS}{only} "
-        f"GROUP BY l.user_id HAVING net > 0 ORDER BY net DESC LIMIT ?", (cid, start, end, *names, limit))
+        f"GROUP BY l.user_id, u.first_name, u.last_name, u.username HAVING SUM(l.delta) > 0 ORDER BY net DESC LIMIT ?",
+        (cid, start, end, *names, limit))
 
 
 def _when(svc, ts: int) -> str:

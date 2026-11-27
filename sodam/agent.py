@@ -43,6 +43,11 @@ SLOW_TOOL_SEC = 20.0   # 이보다 오래 걸린 도구는 경고 로그로 (어
 # 화이트라벨 클론은 프로세스마다 이 상한이 따로 — 봇별 자기 동시성만 묶는다(전체 서버는 systemd cgroup 몫). 루프별 세마포어라 테스트 여러 루프에서도 안전.
 MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "24") or "24")
 _SEM_BY_LOOP: dict = {}
+# 세마포어 슬롯을 쥔 채 도는 _run_agent 전체 상한 (초). 내부 CALL_CAP·DEADLINE 이 못 잡는 극단 hang 이
+# 슬롯을 영원히 점유해 결국 24칸을 다 말려버리는 걸 막는 최후 안전망 — 모든 호출자(handlers·social·askchoice)에 공통 적용.
+# handlers 의 REPLY_HARD_TIMEOUT(170)보다 약간 크게 둬서 메인 경로는 거기서 먼저 깔끔히 끊기고, 타임아웃 없이 부르는
+# social(끼어들기·이어말하기)·askchoice 도 여기서 반드시 슬롯을 돌려받게 한다 (2026-11-27 베베방 8분 먹통의 근본 수정).
+RUN_HARD_CAP = float(os.getenv("AGENT_RUN_HARD_CAP", "185") or "185")
 
 
 def _run_sem() -> "asyncio.Semaphore | None":
@@ -397,8 +402,11 @@ async def run_agent(*args, **kwargs) -> str:
     상한을 끄면(0) 바로 통과해 예전과 같다. 세마포어 대기는 바깥 REPLY_HARD_TIMEOUT 안에서 일어난다."""
     sem = _run_sem()
     if sem is None:
-        return await _run_agent(*args, **kwargs)
-    async with sem:
+        return await asyncio.wait_for(_run_agent(*args, **kwargs), RUN_HARD_CAP) if RUN_HARD_CAP > 0 \
+            else await _run_agent(*args, **kwargs)
+    async with sem:   # 슬롯을 쥔 구간을 RUN_HARD_CAP 로 감싸 극단 hang 에도 반드시 반납(타임아웃 없이 부르는 호출자 보호)
+        if RUN_HARD_CAP > 0:
+            return await asyncio.wait_for(_run_agent(*args, **kwargs), RUN_HARD_CAP)
         return await _run_agent(*args, **kwargs)
 
 

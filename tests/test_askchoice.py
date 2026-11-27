@@ -118,7 +118,7 @@ async def press_reruns_agent_with_label_and_context():
     assert ans[3]["reply_parameters"].message_id == qmsg, "질문에 답장"
     turn = await r.db._one("SELECT * FROM ai_turns ORDER BY id DESC LIMIT 1")
     assert turn["request"].startswith("(선택: 철수 (@cs1))") and "으로 할게요" in turn["answer"], dict(turn)
-    run = await r.db._one("SELECT * FROM agent_runs ORDER BY rowid DESC LIMIT 1")
+    run = await r.db._one("SELECT * FROM agent_runs ORDER BY id DESC LIMIT 1")
     assert run is not None and "(선택:" in run["trigger"], "AI 작업 기록에도 한 줄"
 
 

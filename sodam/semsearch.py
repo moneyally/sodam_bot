@@ -35,12 +35,22 @@ def enabled(svc) -> bool:
 
 async def _table(db) -> None:
     if not getattr(db, "_vec_table", False):
-        await db._write(f"CREATE VIRTUAL TABLE IF NOT EXISTS msg_vec USING vec0("
-                        f"chat_id integer partition key, embedding float[{DIM}] distance_metric=cosine)")
+        if getattr(db, "backend", "sqlite") == "pg":   # pgvector: 평범 표 + HNSW(cosine)
+            await db._write(f"CREATE TABLE IF NOT EXISTS msg_vec (rowid BIGINT PRIMARY KEY, chat_id BIGINT, embedding vector({DIM}))")
+            try:
+                await db._write("CREATE INDEX IF NOT EXISTS msg_vec_hnsw ON msg_vec USING hnsw (embedding vector_cosine_ops)")
+            except Exception:
+                log.info("msg_vec HNSW 색인 생략 (순차 스캔으로 동작)")
+        else:
+            await db._write(f"CREATE VIRTUAL TABLE IF NOT EXISTS msg_vec USING vec0("
+                            f"chat_id integer partition key, embedding float[{DIM}] distance_metric=cosine)")
         db._vec_table = True
 
 
-def _blob(v: list[float]) -> bytes:
+def _veclit(db, v: list[float]):
+    """임베딩을 백엔드가 받는 꼴로. PG(pgvector)=문자열 '[...]'(암묵 캐스트), SQLite(vec)=float32 blob."""
+    if getattr(db, "backend", "sqlite") == "pg":
+        return "[" + ",".join(repr(float(x)) for x in v) + "]"
     import sqlite_vec
     return sqlite_vec.serialize_float32(v)
 
@@ -57,7 +67,7 @@ async def index_new(svc, now: float | None = None) -> int:
     if not rows:
         return 0
     vecs = await svc.llm.embed([r["text"][:1000] for r in rows], dims=DIM, model=MODEL)
-    data = [(r["id"], r["chat_id"], _blob(v)) for r, v in zip(rows, vecs)]
+    data = [(r["id"], r["chat_id"], _veclit(db, v)) for r, v in zip(rows, vecs)]
     await db.atomic(lambda c: c.executemany("INSERT OR REPLACE INTO msg_vec(rowid, chat_id, embedding) VALUES(?,?,?)", data))
     await db.set_state(0, CURSOR, rows[-1]["id"])
     if await persist.claim(db, "semsearch_prune", 3600):   # 보관 기간이 지나 지워진 글의 벡터
@@ -75,8 +85,13 @@ async def search(svc, chat_id: int, query: str, since: int, limit: int = 10) -> 
     try:
         await _table(svc.db)
         [qv] = await svc.llm.embed([query], dims=DIM, model=MODEL, purpose="embed_query")
-        near = await svc.db._all("SELECT rowid, distance FROM msg_vec WHERE embedding MATCH ? AND k=? AND chat_id=?",
-                                 (_blob(qv), POOL, chat_id))
+        lit = _veclit(svc.db, qv)
+        if getattr(svc.db, "backend", "sqlite") == "pg":   # pgvector: <=> cosine 거리, ORDER BY + LIMIT
+            near = await svc.db._all("SELECT rowid, (embedding <=> ?) AS distance FROM msg_vec "
+                                     "WHERE chat_id=? ORDER BY embedding <=> ? LIMIT ?", (lit, chat_id, lit, POOL))
+        else:
+            near = await svc.db._all("SELECT rowid, distance FROM msg_vec WHERE embedding MATCH ? AND k=? AND chat_id=?",
+                                     (lit, POOL, chat_id))
     except Exception:   # 예산·연결 오류 → 단어 결과만
         log.exception("semantic search failed")
         return words[:limit]

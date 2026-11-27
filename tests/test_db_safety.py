@@ -4,6 +4,7 @@
 (포인트 차감만 되고 원장이 빠지는 일 없음, 관리자 목록이 반쯤 지워진 채 저장되지 않음)  ③ 디스크 감시·긴급 정리·알림
 ④ 보관 기간 정리  ⑤ SQLite 설정·인덱스  ⑥ 백업이 중간에 실패해도 반쯤 쓴 파일이 남지 않음
 """
+import os
 import time
 from pathlib import Path
 
@@ -26,6 +27,8 @@ async def page_limit(db, extra=0):
 
 @test
 async def disk_full_still_deletes_spam_and_recovers():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite page_limit 로 SQLITE_FULL(디스크 가득) 흉내 — PG 디스크풀은 서버 운영 영역(diskguard 로직 자체는 백엔드 무관)
     r = await Room().open(admins={1}, settings={"link_filter": True, "injection_guard": False})
     await r.say(SPAM, "안녕")
     await page_limit(r.db)                                          # 지금 크기에서 더는 못 커짐 = 가득 참
@@ -38,6 +41,8 @@ async def disk_full_still_deletes_spam_and_recovers():
 
 @test
 async def debit_is_all_or_nothing():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite CREATE TRIGGER RAISE(ABORT) 로 실패 흉내 — PG 는 db.atomic 롤백을 test_pgbackend·onboard apply_is_atomic 이 PG 로 덮음
     db = await make_db()
     await core.credit(db, -1, 7, 1000, "test")
     await db.conn.execute("CREATE TRIGGER boom BEFORE INSERT ON casino_ledger BEGIN SELECT RAISE(ABORT, 'x'); END")
@@ -54,6 +59,8 @@ async def debit_is_all_or_nothing():
 
 @test
 async def admin_list_store_failure_keeps_old_list():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite CREATE TRIGGER 로 저장 실패 흉내 — 원자성은 PG 에서 db.atomic 이 덮음(test_pgbackend)
     db = await make_db()
     svc = await make_svc(db)
     from sodam.permissions import Permissions
@@ -109,6 +116,8 @@ async def daily_prune_keeps_recent_and_ledgers():
 
 @test
 async def sqlite_settings_and_index():
+    if os.getenv("DB_BACKEND", "").strip().lower() == "pg":
+        return   # sqlite 전용 PRAGMA(synchronous·journal_size_limit) 검사 — PG 는 WAL/synchronous 개념이 서버측
     db = await make_db()
     assert (await (await db.conn.execute("PRAGMA synchronous")).fetchone())[0] == 1       # NORMAL
     assert (await (await db.conn.execute("PRAGMA journal_size_limit")).fetchone())[0] == 64 * 1024 * 1024

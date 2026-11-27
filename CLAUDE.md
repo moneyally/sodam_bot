@@ -1091,6 +1091,11 @@ Codex(chatgpt-codex-connector)가 PR 리뷰로 남긴 **미해결(is_resolved=fa
 - **⏸ 뮤비 vs 노래/통화 동시 시작 스트림 충돌** (`voice/worker.py` _music_video #358, **미수정 — 오너 결정 대기**): `.뮤비` 가 chat_id 락 없이 busy 체크 → 느린 검색·fetch 뒤 video_calls 를 늦게(play 후) 세팅해서, 그 사이 들어온 `.노래`/AI통화(chat_id 락으로 직렬화)가 video_calls 를 못 보고 play → 스트림 충돌(한쪽 끊김). 수정하려면 _music_video 를 chat_id 락으로 감싸고 placeholder 예약해야 하는데 **음악/통화 핫패스라 VPS 라이브 통화로 실측해야 안전**(CLAUDE.md 음성 테스트 원칙) → 블라인드 수정 안 함, 오너가 VPS 점검 가능할 때.
 
 ## DB 안전 규칙
+- **🐘 PostgreSQL 이관 진행 중** (docs/HANDOFF.md 맨 위·docs/POSTGRES_MIGRATION.md). 봇은 아직 SQLite(`DB_BACKEND` 기본 sqlite), `sodam/pgbackend.py` 가 PG 백엔드.
+  **새 SQL 을 추가하면 PG 에서도 되는지 꼭 확인**: `DB_BACKEND=pg PG_TEST_DSN="dbname=sodam_harness" ~/venv/bin/python tests/run_all.py <모듈>`.
+  translate(`pgbackend.py`)가 흔한 SQLite 방언(?·OR IGNORE/REPLACE·strftime·char·instr·MAX/MIN·SUM(불리언)·COLLATE·IS·json_extract·**LIKE→ILIKE**·AUTOINCREMENT)을 자동 변환하지만,
+  **GROUP BY 는 bare 컬럼을 다 넣어야**(PG 엄격) 하고 **SELECT DISTINCT 는 ORDER BY 컬럼을 SELECT 에 넣어야** 함. 못 잡는 새 방언이면 translate 에 규칙 + test_pgbackend.translate_rules 뮤테이션 추가.
+  **놓치면 월 240만원 사업이 깨짐** — SQLite 전용 문법 하나라도 PG 에서 안 되면 그 쿼리 쓰는 순간 터짐.
 - 여러 문장 쓰기는 반드시 `db.atomic(fn)` (DB 스레드에서 SAVEPOINT 로 전부/전무). 연결을 코루틴들이 같이 써서
   `conn.execute` 여러 번 + `commit` 은 반쯤 된 변경이 다른 코루틴 commit 에 묻어 저장될 수 있음 (포인트만 빠지고 원장 없음 등).
 - 디스크 가득 참(SQLITE_FULL): DB 는 안 깨지고 쓰기만 실패. 대화·멤버 기록은 `handlers._record` 로 실패해도 관리·명령·AI 계속.

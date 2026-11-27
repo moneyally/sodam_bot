@@ -143,7 +143,7 @@ async def tool_empty_room_no_card():
 async def card_press_runs_bulk_approve():
     db, svc, bot = await setup()
     await P.t_join_requests(tctx(svc, bot, ADMIN), {"action": "approve", "scope": "all"})
-    row = await svc.db._one("SELECT card FROM ai_cards WHERE tool='join_requests' ORDER BY rowid DESC LIMIT 1")
+    row = await svc.db._one("SELECT card FROM ai_cards WHERE tool='join_requests' ORDER BY created DESC LIMIT 1")
     spec = {"action": "approve", "scope": "all", "card": row["card"]}
     captured = []
     orig = P.persist.spawn
@@ -165,7 +165,7 @@ async def card_press_runs_bulk_approve():
 async def card_press_blocks_non_admin():
     db, svc, bot = await setup()
     await P.t_join_requests(tctx(svc, bot, ADMIN), {"action": "approve", "scope": "all"})
-    row = await svc.db._one("SELECT card FROM ai_cards WHERE tool='join_requests' ORDER BY rowid DESC LIMIT 1")
+    row = await svc.db._one("SELECT card FROM ai_cards WHERE tool='join_requests' ORDER BY created DESC LIMIT 1")
     spec = {"action": "approve", "scope": "all", "card": row["card"]}
     c = SimpleNamespace(svc=svc, bot=bot, cid=CHAT, uid=MEMBER)   # 관리자 아님
     scr = await P.jreq_ok(c, spec)
