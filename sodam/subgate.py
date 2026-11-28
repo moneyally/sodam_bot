@@ -45,6 +45,9 @@ register_setting("subgate_mode", "off", "채널 구독 필수",
                  choices={"off": "off", "끔": "off", "끄기": "off", "on": "on", "켬": "on", "켜기": "on"},
                  choice_labels={"off": "끔", "on": "켬"})
 register_setting("subgate_channel", "", "구독할 채널", validator=_channel)
+# True(기본) = 입장하자마자 채팅 금지(백악관 요청, 예전 동작) / False = 입장 땐 안 막고 '말할 때' 지우고 안내
+# (2026-11-28 뉴월드 '입장하면 바로 막혀서 애들이 떠남 — 채팅 한번 치면 안내 나오게')
+register_setting("subgate_on_join", True, "입장하자마자 막기")
 
 # 구독 전 채팅 금지한 사람 기록 → 채널 구독 필수를 끄면(mode off) 틱이 자동으로 풀어 줌
 # (예전엔 끄면 '새로 안 막음'만 하고 이미 막은 사람은 그대로라 "off 인데 막힘" 상태로 남았음 — 2026-11-22 오너)
@@ -172,7 +175,10 @@ async def on_join(svc: Services, bot, chat_id: int, user, s: dict) -> None:
         return
     got = await check(svc, bot, chat_id, user, s)
     if got is False:
-        await _block(svc, bot, chat_id, user, s["subgate_channel"], after_greet=True)
+        if s.get("subgate_on_join", True):
+            await _block(svc, bot, chat_id, user, s["subgate_channel"], after_greet=True)
+        else:   # 입장 땐 안 막음 → 첫 글에서 gate 가 지우고 안내 (NASA '채팅 한번 치면 나오게')
+            await svc.db.log_mod(chat_id, None, user.id, "subgate_softjoin", "입장 땐 안 막음 (말하면 안내)")
     else:   # 입장 때 구독 여부도 기록 (막은 건 _block 이 'subgate' 로)
         await svc.db.log_mod(chat_id, None, user.id, "subgate_pass" if got else "subgate_unknown",
                              "입장 때 이미 구독" if got else "구독 여부 확인 못 함 (소담이 채널 관리자 아님?)")
