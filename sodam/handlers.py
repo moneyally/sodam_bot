@@ -27,7 +27,7 @@ from . import (accountage, addressee, anomaly, cards, casino, channel, cleanup, 
                stats, subscription, vision)
 from .cas import ALLOW_KEY, blocks as cas_blocks
 from . import addguard, agent, aiqueue, apikeys, subgate
-from . import autoreply, cleanservice, disable, emojilab, joinpending, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
+from . import autoreply, cleanservice, disable, dmai, emojilab, joinpending, karma, leavelock, mediastore, medialog, modactions, notes, ownerlock, report, translate
 from .panels import motionbanner
 from .panels import repost as _repost
 
@@ -47,6 +47,7 @@ autoreply.register_commands()   # .reply 명령 (commands → menu → panels �
 notes.register_commands()       # .저장 명령 (#이름 노트)
 disable.register_commands()     # .명령끄기 · .명령켜기 · .꺼진명령
 karma.register_commands()       # .평판 · .평판순위 (+1 추천)
+dmai.register_commands()        # .AI허용 · .AI허용해제 · .AI허용목록 (오너: 1:1 AI 허용 명단)
 from .panels import sportsdm as _sportsdm  # noqa: E402
 _sportsdm.register_commands()   # .맞히기 · .맞히기순위 · .분석
 from .panels import lottery as _lottery  # noqa: E402
@@ -813,6 +814,12 @@ async def _within_ai_quota(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     # 오너는 위에서 이미 통과. 버튼·메뉴·결제·명령·딥링크는 이 함수를 안 거치므로 그대로 작동한다.
     # 안내는 사람마다 DM_AI_BLOCK_GAP 에 한 번만 (연타해도 도배 안 되게), 나머지는 조용히 무시.
     if svc.cfg.dm_ai_owner_only:
+        if await dmai.is_allowed(svc.db, user_id):   # 오너가 콕 집어 허락한 사람 → 넉넉한 하루 한도 안에서 통과 (오너 권한은 아님)
+            day = datetime.now(svc.cfg.tz).strftime("%Y-%m-%d")
+            if await svc.db.bump(day, user_id, "dm_ai_allow") <= await dmai.per_day(svc.db):
+                return True
+            await send_temp(context, chat_id, "오늘 1:1 대화량을 다 썼어요. 내일 또 이야기해요 🙏", 30)
+            return False
         if await persist.claim(svc.db, f"dm_ai_block:{user_id}", DM_AI_BLOCK_GAP):
             await send_temp(context, chat_id, "1:1 AI 대화는 운영자 전용이에요. 봇은 그룹방에서 써주세요 🙂", 30)
         return False
