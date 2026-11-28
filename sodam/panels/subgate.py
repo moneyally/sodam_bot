@@ -13,6 +13,7 @@ from ..util import esc
 from .greet import _save
 
 menu.register_preset("subgate_mode", [("on", "✅ 켜기"), ("off", "❌ 끄기")], "sgt")
+menu.register_toggle("subgate_on_join", "sgt")   # ✅ 입장 즉시 막기 / ❌ 채팅하면 막기
 
 
 async def s_sgt(c: PanelCtx) -> Screen:
@@ -28,8 +29,15 @@ async def s_sgt(c: PanelCtx) -> Screen:
         lines.append("✅ 소담이 채널 관리자라 구독 여부를 확인할 수 있어요." if ok else
                      "⚠️ 소담이 그 채널 <b>관리자</b>가 아니라 구독 여부를 못 봐요 — 채널에 소담을 관리자로 넣어 주세요. "
                      "(그 전엔 아무도 막지 않아요)")
+    if s["subgate_mode"] == "on":
+        lines += ["",
+                  "🟢 <b>입장하자마자 막기</b>: 들어오면 바로 채팅 금지 + 안내.",
+                  "⚪ <b>끄면</b>: 들어와도 안 막고, <b>채팅을 한 번 치면</b> 그 글을 지우고 안내가 떠요 "
+                  "(입장 즉시 막혀서 떠나는 걸 막아요)."]
     rows = [menu._preset_row(s, c.cid, "subgate_mode"),
             [B("📢 채널 바꾸기" if ch else "📢 채널 정하기", f"m:in:{c.cid}:sgc")]]
+    if s["subgate_mode"] == "on":
+        rows += menu._toggle_rows(s, c.cid, ["subgate_on_join"])
     if ch:
         rows.append([B("🗑 채널 지우기 (구독 필수 끔)", f"m:sgcx:{c.cid}")])
     rows.append(menu._back(c.cid))

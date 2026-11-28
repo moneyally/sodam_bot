@@ -211,5 +211,35 @@ async def clear_channel_button_removes_channel_and_releases_blocked():
     assert any(x[0] == "restrict" and x[2] == NEW.id and x[3].can_send_messages for x in r.bot.calls), r.bot.calls
 
 
+@test
+async def soft_join_does_not_block_but_first_chat_does():
+    # 2026-11-28 뉴월드(NASA): 입장 즉시 막으면 애들이 '채팅 안 쳐진다'며 떠남
+    # → subgate_on_join=False 면 입장 땐 안 막고, 채팅 한 번 치면 그때 지우고 안내+막기.
+    SUBS["@wh_channel"] = set()
+    r = await room(subgate_on_join=False)
+    await r.join(NEW)
+    await join(r, NEW)                                         # 입장 이벤트
+    assert not any(c[0] == "restrict" and c[2] == NEW.id for c in r.bot.calls), "입장 땐 안 막음"
+    assert not any("채널 구독" in c[2] for c in r.bot.named("send_message")), "입장 땐 안내도 안 뜸"
+    assert await r.db._one("SELECT 1 AS x FROM mod_log WHERE target_id=? AND action='subgate_softjoin'", (NEW.id,))
+    await r.say(NEW, "안녕하세요")                              # 채팅 한 번 → 그때 막힘 + 안내
+    assert any(c[0] == "restrict" and c[2] == NEW.id and not c[3].can_send_messages for c in r.bot.calls), "채팅하면 막힘"
+    assert any("채널 구독" in c[2] for c in r.bot.named("send_message")), "채팅하면 안내 뜸"
+
+
+@test
+async def default_still_blocks_on_join_and_toggle_shows_when_on():
+    SUBS["@wh_channel"] = set()
+    r = await room()                                          # 기본값 = 입장 즉시 막기 유지
+    await join(r, NEW)
+    assert any(c[0] == "restrict" and c[2] == NEW.id for c in r.bot.calls), "기본은 입장 즉시 막기"
+    c = menu.PanelCtx(r.svc, r.bot, BOSS.id, r.CHAT, [])
+    data = [b.callback_data for row in (await subgate_panel.s_sgt(c)).kb.inline_keyboard for b in row]
+    assert any(d and d.startswith(f"m:t:{r.CHAT}:subgate_on_join:") for d in data), data   # 켜지면 토글 보임
+    off = await room(subgate_mode="off")
+    doff = [b.callback_data for row in (await subgate_panel.s_sgt(menu.PanelCtx(off.svc, off.bot, BOSS.id, off.CHAT, []))).kb.inline_keyboard for b in row]
+    assert not any(d and "subgate_on_join" in d for d in doff), "꺼진 방엔 토글 숨김"
+
+
 if __name__ == "__main__":
     run_all()
