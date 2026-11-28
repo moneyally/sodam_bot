@@ -87,6 +87,7 @@
   `.설정`·`.설정변경`·AI change_setting·room_checkup·📒 어디에도 안 뜨고 **대화 속 어떤 지시문으로도 못 켜고 못 끔**(오너 지시). 오너만 `.비욕 켜/꺼/상태`(Role.OWNER, 명령 메시지 즉시 삭제 + 결과는 오너 1:1 — '나만 알게'). 지킬 선(안 풂): ① 미성년 ② 그만·싫다는·안 낀 멤버 ③ 먼저 시비 X ④ 실제 가족 신상·협박 X(선빵 친 본인에게만).
 - 사용자가 `prompt.py` 에서 "송금·코인·도박 안내 금지" 규칙을 직접 지웠음 → 되돌리지 말 것. 출력 필터(링크·지갑주소 제거)는 별개로 유지.
 - 1:1 채팅 AI 는 결제 여부와 무관하게 하루 무료 한도 적용(외부인이 전체 예산 소모 방지). 오너는 무제한.
+  **지금 서버는 `dm_ai_owner_only` 켬 = 1:1 AI 오너 전용**(2026-11-26 외부인 악용). **🗣 1:1 AI 허용 명단** (`dmai.py`·`panels/dmai.py`, tests/test_dmai.py · 뮤테이션 3개, 2026-11-28 오너 '내가 추가한 사람만 1:1 AI 되게'): 오너가 콕 집은 사람만 `dm_ai_allow` 표에 넣어 1:1 AI 통과 — `handlers._within_ai_quota` 의 owner_only 분기에서 is_allowed 면 **하루 한도 dm_ai_allow_per_day(기본 200, chat_state(0))** 안에서 True. **추가된 사람은 역할 그대로 멤버**(오너 권한 0, tools.offered 가 안 줌 — 수다만). 관리 오너만: 명령 `.AI허용`/`.AI허용해제`/`.AI허용목록`(_target outside=True 로 @/ID/답장) · AI 도구 `dm_ai_allow(name, on)`(where=owner_dm) · 메인 🗣 m:dai(비스코프 OWNER 라우트 = uid∉owners 자동 차단, 🗑 빼기). 전역 집합 30초 캐시(add/remove 즉시 비움). 명단은 봇 DB 단위(클론 자동 분리).
 - 야간 모드는 사용자 요청으로 **제외**됨.
 - 이름·아이디 기록(SangMata 방식)은 **누구나 전부 조회** 가능 (사용자 결정 2026-09-27: 익명 닉네임 방이라 사칭 확인 우선).
   범위를 좁히려면 `namehist.can_view` 한 곳만 바꾸면 됨.
