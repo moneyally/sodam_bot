@@ -18,6 +18,9 @@ from sodam.voice import audio, music, musicq
 test, run_all = runner()
 CHAT = -100778
 VAL = {"a": 1000, "b": 3000, "c": 6000, "d": 1000}             # 곡마다 다른 크기 → 보낸 조각으로 어느 곡인지 앎
+# 재생 루프는 가짜 시계라 보통 1초 안에 끝남 — 이 숫자는 '행 걸림 방지' 안전망일 뿐.
+# 서버 전체 테스트가 과부하 땐 40분+ 걸려 이벤트 루프가 굶어 10초를 넘기던 걸(queue_change FAIL) 넉넉히. (2026-11-28)
+RUN_TO = 60
 
 
 class XDec:
@@ -107,7 +110,7 @@ def music_span(levels):
 @test
 async def songs_overlap_with_no_gap_and_the_next_decoder_is_reused():
     db, pl, sent = await setup("ab")
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     lv = heard(sent)
     first, last = music_span(lv)
     gap = [i for i in range(first, last) if lv[i] == 0]
@@ -125,7 +128,7 @@ async def songs_overlap_with_no_gap_and_the_next_decoder_is_reused():
 @test
 async def overlap_keeps_total_loudness_steady():
     db, pl, sent = await setup("ad")                      # 같은 크기 두 곡 → 겹치는 동안도 크기가 확 줄거나 늘지 않음
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     lv = heard(sent)
     first, last = music_span(lv)
     body = lv[first + 60: last - 5]                        # 처음 키우는 구간 빼고
@@ -141,7 +144,7 @@ async def skip_during_overlap_continues_the_incoming_song():
             state["done"] = True
             assert pl.skip()
     db, pl, sent = await setup("ab", on_send=on_send)
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     assert state["done"]
     assert XDec.opened == ["a", "b"], XDec.opened
     rows = await db._all("SELECT title, state FROM music_queue ORDER BY id")
@@ -160,7 +163,7 @@ async def queue_change_before_the_end_is_respected():
             state["done"] = True
             await musicq.remove_nth(pl.db, CHAT, 1, 1, True)   # 미리 풀어 둔 b 를 뺌 (재생 전 확실히 반영)
     db, pl, sent = await setup("abc", on_send=on_send)
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     rows = await db._all("SELECT title, state FROM music_queue ORDER BY id")
     assert [(r["title"], r["state"]) for r in rows] == [("a", "done"), ("b", "removed"), ("c", "done")], [dict(r) for r in rows]
     lv = heard(sent)
@@ -172,7 +175,7 @@ async def queue_change_before_the_end_is_respected():
 async def loop_disables_overlap_and_replays_the_same_song():
     db, pl, sent = await setup("ab")
     pl.loop = 1
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     assert XDec.opened.count("a") == 2, XDec.opened
     lv = heard(sent)
     first_b = next(i for i, v in enumerate(lv) if abs(v - 3000) < 30 or (v > 1000 + 30 and v != 0))
@@ -188,7 +191,7 @@ async def loop_turned_on_during_overlap_cancels_it():
             state["done"] = True
             pl.loop = 1                                    # 겹치는 도중에 '.반복'
     db, pl, sent = await setup("ab", on_send=on_send)
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     assert state["done"] and XDec.opened.count("a") == 2, XDec.opened
     lv = heard(sent)
     loud_b = next(i for i, v in enumerate(lv) if v >= 2900)
@@ -212,7 +215,7 @@ async def stopping_while_measuring_the_next_song_cancels_that_work():
             pl.stop("end")
     db, pl, sent = await setup("ab", src=Slow(), on_send=on_send)
     t0 = time.monotonic()
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     took = time.monotonic() - t0
     left = set(pl._bg)
     gate.set()
@@ -226,7 +229,7 @@ async def without_overlap_the_ready_decoder_is_still_adopted():
     music.XFADE = 0
     try:
         db, pl, sent = await setup("ab")
-        await asyncio.wait_for(pl.run(), 10)
+        await asyncio.wait_for(pl.run(), RUN_TO)
     finally:
         music.XFADE = old
     assert pl.stats["xfade"] == 0 and pl.stats["gapless"] == 1, pl.stats
@@ -236,7 +239,7 @@ async def without_overlap_the_ready_decoder_is_still_adopted():
 @test
 async def per_song_loudness_is_matched():
     db, pl, sent = await setup("ab", src=Src({"a": -14.0, "b": -8.0}))    # b 가 6dB 큼 → 절반으로
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     lv = heard(sent)
     tail = [v for v in lv if v > 0][-20:]
     assert all(abs(v - 1500) < 40 for v in tail), f"b(3000)는 0.5배 → 1500 {tail[:3]}"
@@ -250,7 +253,7 @@ async def stopping_with_a_ready_next_song_closes_everything():
         if pl._next is not None:
             pl.stop("end")
     db, pl, sent = await setup("ab", on_send=on_send)
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     assert sorted(XDec.closed) == sorted(XDec.opened) == ["a", "b"], (XDec.opened, XDec.closed)
     assert not pl._bg, "뒤에서 하던 일도 끝남"
 
@@ -261,7 +264,7 @@ async def restart_right_after_handing_over_finishes_the_old_song():
         if pl._carry is not None and not pl.done:
             pl.stop("restart")
     db, pl, sent = await setup("ab", on_send=on_send)
-    await asyncio.wait_for(pl.run(), 10)
+    await asyncio.wait_for(pl.run(), RUN_TO)
     rows = {r["title"]: r for r in await db._all("SELECT * FROM music_queue")}
     if pl.stats["xfade"]:                                  # 넘긴 바로 그 순간에 멈췄으면: a 는 끝, b 는 처음부터 이어 틀기
         assert rows["a"]["state"] in ("done",), dict(rows["a"])
@@ -283,7 +286,7 @@ async def stop_while_a_slow_download_is_running_ends_right_away():
     loop.call_later(0.2, pl.stop, "chat_closed")
     t0 = time.monotonic()
     try:
-        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        assert await asyncio.wait_for(pl.run(), RUN_TO) == "chat_closed"
         took = time.monotonic() - t0
     finally:
         gate.set()
@@ -308,7 +311,7 @@ async def a_hanging_announce_does_not_keep_a_stopped_dj_alive():
     loop.call_later(0.3, pl.stop, "chat_closed")
     t0 = time.monotonic()
     try:
-        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        assert await asyncio.wait_for(pl.run(), RUN_TO) == "chat_closed"
     finally:
         music.ANNOUNCE_TIMEOUT, music.STOP_GRACE = old
     assert time.monotonic() - t0 < 3, "멈춤 뒤 붙잡히지 않음"
@@ -333,7 +336,7 @@ async def a_conductor_that_ignores_cancel_does_not_keep_the_dj_alive():
     asyncio.get_running_loop().call_later(0.3, pl.stop, "chat_closed")
     t0 = time.monotonic()
     try:
-        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        assert await asyncio.wait_for(pl.run(), RUN_TO) == "chat_closed"
         took = time.monotonic() - t0
     finally:
         music.ANNOUNCE_TIMEOUT, music.STOP_GRACE, music.CLEANUP_WAIT = old
@@ -361,7 +364,7 @@ async def a_decoder_whose_close_hangs_does_not_keep_the_dj_alive():
     music.CLEANUP_WAIT = 0.2
     asyncio.get_running_loop().call_later(0.3, pl.stop, "chat_closed")
     try:
-        assert await asyncio.wait_for(pl.run(), 10) == "chat_closed"
+        assert await asyncio.wait_for(pl.run(), RUN_TO) == "chat_closed"
     finally:
         music.CLEANUP_WAIT = old
 
@@ -376,7 +379,7 @@ async def a_hanging_announce_times_out_and_the_song_still_plays():
     old = music.ANNOUNCE_TIMEOUT
     music.ANNOUNCE_TIMEOUT = 0.2
     try:
-        assert await asyncio.wait_for(pl.run(), 10) == "idle"
+        assert await asyncio.wait_for(pl.run(), RUN_TO) == "idle"
     finally:
         music.ANNOUNCE_TIMEOUT = old
     assert pl.tracks == 1 and len(sent) > 50, "안내가 막혀도 곡은 끝까지"
